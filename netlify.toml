@@ -1,0 +1,30 @@
+# Static UI only — no provider keys here.
+# Backend runs elsewhere (Railway / Render / VPS). Set web/config.js apiBase first.
+
+[build]
+  publish = "web"
+  # No build command; pure static files
+  command = "echo Static UI only — keys stay on the API host"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"
+    # Allow page to call your API origin (browser still enforces CORS from API)
+    # Permissions-Policy can be tightened later if needed
+
+[[headers]]
+  for = "/*.js"
+  [headers.values]
+    Cache-Control = "public, max-age=300"
+
+[[headers]]
+  for = "/*.css"
+  [headers.values]
+    Cache-Control = "public, max-age=300"
+
+[[headers]]
+  for = "/logo.svg"
+  [headers.values]
+    Cache-Control = "public, max-age=86400"
