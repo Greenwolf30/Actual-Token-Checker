@@ -39,8 +39,13 @@ It does NOT trade for you, custody funds, or guarantee a token is safe.
 
 
 
-Navigation bar
-  Analyze | Documentation | Stats API | Badge
+Navigation bar (compact)
+  [logo] | GitHub | Stats API | Badge
+
+  GitHub → https://github.com/Greenwolf30/Actual-Token-Checker
+  (repo home; open DOCUMENTATION.txt there for this guide)
+  No separate Documentation page on the Analyze site.
+  Analyze is only the search button under the title — not in the top nav.
 
 
 --------------------------------------------------------------------------------

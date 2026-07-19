@@ -99,6 +99,17 @@ function pctPriorityClass(n) {
   return "";
 }
 
+function colorPctTokens(html) {
+  // Color bare supply % tokens (skip signed +/- price change)
+  return html.replace(/([+\-])?(\d+(?:\.\d+)?)(%)/g, (full, sign, num, pct) => {
+    if (sign === "+" || sign === "-") return full;
+    const n = Number(num);
+    const cls = pctPriorityClass(n);
+    if (!cls) return full;
+    return `<span class="${cls}">${num}${pct}</span>`;
+  });
+}
+
 function colorWalletHolderPcts(html) {
   if (!html) return html;
   // Priority subtitles in Alerts: [low priority], [medium priority], …
@@ -109,14 +120,7 @@ function colorWalletHolderPcts(html) {
       return `<span class="pri-${b}">[${b} priority]</span>`;
     }
   );
-  // Supply % — skip signed price-change (+1.2% / -3%) and partial numbers
-  out = out.replace(/([+\-])?(\d+(?:\.\d+)?)(%)/g, (full, sign, num, pct) => {
-    if (sign === "+" || sign === "-") return full;
-    const n = Number(num);
-    const cls = pctPriorityClass(n);
-    if (!cls) return full;
-    return `<span class="${cls}">${num}${pct}</span>`;
-  });
+  out = colorPctTokens(out);
   // " · low priority" etc. next to holder lines
   out = out.replace(
     /·\s*(low|medium|high|critical)\s+priority/gi,
@@ -128,13 +132,55 @@ function colorWalletHolderPcts(html) {
   return out;
 }
 
+/**
+ * Bundles tab: color ONLY
+ *  - Total % bundles line
+ *  - Suspect wallets header + per-wallet suspect lines
+ * Other wallet % in clusters / similar groups stay uncolored.
+ */
+function colorBundlesSelectivePcts(html) {
+  if (!html) return html;
+  const lines = html.split("\n");
+  let inSuspect = false;
+  return lines
+    .map((line) => {
+      // Strip tags only for section detection
+      const plain = line.replace(/<[^>]*>/g, "");
+      if (/Total\s*%\s*bundles\s*:/i.test(plain)) {
+        inSuspect = false;
+        return colorPctTokens(line);
+      }
+      if (/Suspect\s+wallets/i.test(plain)) {
+        inSuspect = true;
+        return colorPctTokens(line);
+      }
+      if (inSuspect) {
+        // End suspect block on a new major section (2-space label, not 4-space wallet row)
+        if (/^  [A-Za-z\[%]/.test(plain) && !/^    /.test(plain) && !/Suspect/i.test(plain)) {
+          inSuspect = false;
+          return line;
+        }
+        if (/^\s*$/.test(plain)) return line;
+        // Wallet rows under suspects (indented)
+        if (/^    /.test(plain) || /\d+(?:\.\d+)?%/.test(plain)) {
+          return colorPctTokens(line);
+        }
+      }
+      return line;
+    })
+    .join("\n");
+}
+
 function setPanelText(tab, text) {
   const el = $("text-" + tab);
   if (!el) return;
   let html = linkify(text || "(empty)");
-  // Color wallet holder % on holders / alerts / bundles only (not overview price %)
-  if (tab === "holders" || tab === "alerts" || tab === "bundles") {
+  // Holders + Alerts: full wallet % colors
+  if (tab === "holders" || tab === "alerts") {
     html = colorWalletHolderPcts(html);
+  } else if (tab === "bundles") {
+    // Bundles: only total bundle % + suspect wallets
+    html = colorBundlesSelectivePcts(html);
   }
   el.innerHTML = html;
 }

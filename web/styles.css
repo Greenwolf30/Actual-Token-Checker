@@ -62,7 +62,7 @@ body::before {
   gap: 16px;
 }
 
-/* ── Site navigation ────────────────────────────────────── */
+/* ── Site navigation (compact: logo + short links) ──────── */
 .site-nav {
   margin: -8px 0 4px;
   border: 1px solid var(--border);
@@ -70,46 +70,55 @@ body::before {
   background: var(--bg-elevated);
   box-shadow: var(--shadow);
 }
+.site-nav-compact {
+  max-width: 100%;
+}
 .site-nav-inner {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px 16px;
-  padding: 10px 14px;
+  justify-content: flex-start;
+  gap: 6px 10px;
+  padding: 6px 10px;
 }
 .nav-brand {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   color: var(--text);
   text-decoration: none;
   font-weight: 600;
   font-size: 0.88rem;
   letter-spacing: -0.01em;
+  flex-shrink: 0;
+}
+.nav-brand-icon {
+  padding: 2px;
+  border-radius: 8px;
 }
 .nav-brand:hover { color: var(--accent); }
 .logo-sm {
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   border-radius: 7px;
   box-shadow: none;
 }
 .nav-links {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  flex-wrap: nowrap;
+  gap: 2px;
   align-items: center;
 }
 .nav-link {
   color: var(--text-muted);
   text-decoration: none;
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   font-weight: 500;
-  padding: 7px 12px;
-  border-radius: 8px;
+  padding: 5px 10px;
+  border-radius: 7px;
   border: 1px solid transparent;
   transition: color 0.12s, background 0.12s, border-color 0.12s;
+  white-space: nowrap;
 }
 .nav-link:hover {
   color: var(--text);
@@ -536,25 +545,25 @@ button, .ghost, .primary {
 }
 .report a:hover { text-decoration: underline; }
 
-/* Wallet holder % priority colors (supply share) */
+/* Wallet holder % priority colors — lighter shades (easier on dark UI) */
 .report .pct-low,
 .report .pri-low {
-  color: #34c759;
+  color: #8ee4a8; /* light green */
   font-weight: 600;
 }
 .report .pct-medium,
 .report .pri-medium {
-  color: #ffd60a;
+  color: #ffe88a; /* light yellow */
   font-weight: 600;
 }
 .report .pct-high,
 .report .pri-high {
-  color: #ff9f0a;
+  color: #ffc266; /* light orange */
   font-weight: 600;
 }
 .report .pct-critical,
 .report .pri-critical {
-  color: #ff453a;
+  color: #ff8a84; /* light red */
   font-weight: 600;
 }
 
