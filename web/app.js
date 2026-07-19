@@ -178,6 +178,68 @@ function renderSections(data) {
   else switchTab("overview");
 }
 
+function formatViews(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return "—";
+  if (x >= 1e6) return (x / 1e6).toFixed(1) + "M";
+  if (x >= 1e3) return (x / 1e3).toFixed(1) + "K";
+  return String(x);
+}
+
+function renderPublicStats(j) {
+  if (!j || !j.ok) return;
+  const views = j.profile_views ?? 0;
+  const analyzes = j.analyzes ?? 0;
+  const uniques = j.unique_visitors_today;
+  const pill = $("viewStats");
+  if (pill) {
+    pill.textContent = "views " + formatViews(views);
+    pill.className = "pill ok";
+    pill.title =
+      "Public profile views: " +
+      views +
+      " · Analyzes: " +
+      analyzes +
+      (uniques != null ? " · Unique today: " + uniques : "") +
+      " · Open /api/stats for JSON";
+  }
+  const foot = $("footerStats");
+  if (foot) {
+    foot.textContent =
+      "Profile views: " +
+      formatViews(views) +
+      " · Analyzes: " +
+      formatViews(analyzes) +
+      (uniques != null ? " · Unique today: " + uniques : "");
+  }
+  const statsLink = $("statsLink");
+  if (statsLink) statsLink.href = apiUrl("/api/stats");
+  const badgeLink = $("badgeLink");
+  if (badgeLink) badgeLink.href = apiUrl("/badge.svg");
+}
+
+async function recordAndLoadStats() {
+  // Count this browser load as a profile view (public counter)
+  try {
+    const r = await fetch(apiUrl("/api/view"), {
+      method: "POST",
+      headers: headers(false),
+    });
+    const j = await r.json();
+    renderPublicStats(j);
+    return;
+  } catch {
+    /* fall through to GET stats */
+  }
+  try {
+    const r = await fetch(apiUrl("/api/stats"), { headers: headers(false) });
+    const j = await r.json();
+    renderPublicStats(j);
+  } catch {
+    /* ignore */
+  }
+}
+
 async function checkHealth() {
   const el = $("serverStatus");
   try {
@@ -195,6 +257,13 @@ async function checkHealth() {
       el.className = "pill ok";
       if (p.site_gate) el.title = "Site gate enabled — set passcode via ⚙";
       else if (apiBase()) el.title = "API: " + apiBase();
+      if (j.profile_views != null) {
+        renderPublicStats({
+          ok: true,
+          profile_views: j.profile_views,
+          analyzes: j.analyzes,
+        });
+      }
     } else {
       el.textContent = "server error";
       el.className = "pill bad";
@@ -289,6 +358,7 @@ function init() {
   initSettings();
   $("searchForm").addEventListener("submit", analyze);
   checkHealth();
+  recordAndLoadStats();
 
   // Deep link: ?q=mint or #mint
   const params = new URLSearchParams(location.search);

@@ -25,6 +25,7 @@
         </div>
       </div>
       <div class="status-row">
+        <span id="viewStats" class="pill muted" title="Public profile views for this site">views —</span>
         <span id="serverStatus" class="pill muted">checking…</span>
         <button type="button" id="settingsBtn" class="ghost" title="Site passcode (optional)" aria-label="Settings">⚙</button>
       </div>
@@ -109,7 +110,12 @@
 
     <footer class="foot">
       <span id="disclaimer">Heuristics only · not financial advice · provider keys never leave the server.</span>
-      <span id="generatedAt" class="muted"></span>
+      <span class="muted">
+        <span id="footerStats">Profile views: — · Analyzes: —</span>
+        · <a id="statsLink" href="/api/stats" target="_blank" rel="noopener">public stats</a>
+        · <a id="badgeLink" href="/badge.svg" target="_blank" rel="noopener">badge</a>
+        · <span id="generatedAt"></span>
+      </span>
     </footer>
   </div>
 

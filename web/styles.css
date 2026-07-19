@@ -441,6 +441,14 @@ button, .ghost, .primary {
   padding-top: 4px;
   letter-spacing: 0.01em;
 }
+.foot a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.foot a:hover { text-decoration: underline; }
+#viewStats {
+  font-variant-numeric: tabular-nums;
+}
 .muted { color: var(--text-muted); }
 .sr-only {
   position: absolute;
