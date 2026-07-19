@@ -72,11 +72,13 @@ function buildHistoryEntry(data, query) {
   let holdersSnap = hm.holders_snapshot || null;
   let bundlesSnap = hm.bundles_snapshot || null;
   if (!holdersSnap && sections.holders) {
-    holdersSnap = clipSnap(sections.holders, 10000);
+    holdersSnap = sections.holders;
   }
   if (!bundlesSnap && sections.bundles) {
-    bundlesSnap = clipSnap(sections.bundles, 7000);
+    bundlesSnap = sections.bundles;
   }
+  holdersSnap = clipSnap(holdersSnap, 10000);
+  bundlesSnap = clipSnap(bundlesSnap, 7000);
 
   return {
     ts: new Date().toISOString(),
@@ -115,11 +117,73 @@ function buildHistoryEntry(data, query) {
 
 function clipSnap(text, maxChars) {
   if (!text) return null;
-  const s = String(text).trim();
+  let s = cleanLogsSnapshot(String(text));
   if (!s) return null;
   if (s.length <= maxChars) return s;
   return s.slice(0, maxChars - 80).replace(/\s+$/, "") +
     "\n\n  … [snapshot truncated for Logs storage] …\n";
+}
+
+/**
+ * Clean Logs snapshots — KEEP full holders/bundles content.
+ * Only drop: provider status lines, Note: lines, RugWatch flagged section.
+ */
+function cleanLogsSnapshot(text) {
+  if (!text) return "";
+  const lines = String(text).split("\n");
+  const out = [];
+  // RugWatch block is always near the end of holders report — skip from header to end
+  let skipRugwatch = false;
+  for (const line of lines) {
+    const t = line.trim();
+
+    // Start of RugWatch flagged-wallets section → drop rest of that section
+    if (
+      /flagged wallets\s*\(rugwatch\)/i.test(t) ||
+      /──+\s*flagged wallets/i.test(t)
+    ) {
+      skipRugwatch = true;
+      continue;
+    }
+    if (skipRugwatch) {
+      // Entire rugwatch appendix is after top holders; keep skipping to end
+      continue;
+    }
+
+    // Provider status / API key tips only
+    if (/^\s*providers\s*:/i.test(t)) continue;
+    if (/birdeye:\s*skipped/i.test(t)) continue;
+    if (/solscan:\s*set\s+solscan/i.test(t)) continue;
+    if (/set\s+helius_api_key/i.test(t)) continue;
+    if (/provider issues\s*:/i.test(t)) continue;
+    if (/^\s*source:\s*/i.test(t) && /helius|rugcheck|solscan|birdeye|\+/i.test(t)) {
+      // keep simple "Source: multi" style if short; drop long multi-provider lines
+      // always keep Source line for context — user asked only providers/notes/rugwatch
+    }
+
+    // Standalone note lines (not the wallet list)
+    if (/^\s*note\s*:/i.test(t)) continue;
+    if (/^\s*notes\s*:/i.test(t)) continue;
+
+    // One-line RugWatch status in flags (not the full top-holder list)
+    if (/^•\s*rugwatch:/i.test(t) || /^\*\s*rugwatch:/i.test(t)) continue;
+    if (/rugwatch:\s*\d+\s*flagged/i.test(t)) continue;
+
+    out.push(line);
+  }
+  // Collapse excess blank lines
+  const collapsed = [];
+  let blanks = 0;
+  for (const line of out) {
+    if (!line.trim()) {
+      blanks += 1;
+      if (blanks <= 1) collapsed.push(line);
+      continue;
+    }
+    blanks = 0;
+    collapsed.push(line);
+  }
+  return collapsed.join("\n").trim();
 }
 
 function pushHistoryLog(entry) {
@@ -133,11 +197,13 @@ function pushHistoryLog(entry) {
 
 function formatHistoryLogText(items) {
   const rows = items != null ? items : loadHistoryLog();
+  const entrySep =
+    "[[============================================================]]";
   const lines = [
-    "========================================================================",
+    entrySep,
     "  LOGS",
     "  Last " + HISTORY_MAX + " token searches on this browser (oldest dropped when full)",
-    "========================================================================",
+    entrySep,
     "",
   ];
   if (!rows.length) {
@@ -150,6 +216,11 @@ function formatHistoryLogText(items) {
   lines.push("  Entries: " + rows.length + " / " + HISTORY_MAX);
   lines.push("");
   rows.forEach((e, idx) => {
+    // Double-bracket horizontal line between entries
+    lines.push(entrySep);
+    lines.push(entrySep);
+    lines.push("");
+
     let ts = String(e.ts || "").slice(0, 19).replace("T", " ");
     if (ts) ts = ts + " UTC";
     const sym = e.symbol || e.query || "token";
@@ -224,7 +295,8 @@ function formatHistoryLogText(items) {
     }
     if (e.pair_url) lines.push("      Link:    " + e.pair_url);
 
-    const hSnap = String(e.holders_snapshot || "").trim();
+    // Clean again on display (covers older stored snapshots)
+    const hSnap = cleanLogsSnapshot(e.holders_snapshot || "");
     if (hSnap) {
       lines.push("");
       lines.push("      ── HOLDERS SNAPSHOT (at lookup) ──");
@@ -235,7 +307,7 @@ function formatHistoryLogText(items) {
       lines.push("      Holders snapshot: (none saved for this entry)");
     }
 
-    const bSnap = String(e.bundles_snapshot || "").trim();
+    const bSnap = cleanLogsSnapshot(e.bundles_snapshot || "");
     if (bSnap) {
       lines.push("");
       lines.push("      ── BUNDLES SNAPSHOT (at lookup) ──");
@@ -247,9 +319,9 @@ function formatHistoryLogText(items) {
     }
 
     lines.push("");
-    lines.push("  " + "-".repeat(40));
-    lines.push("");
   });
+  lines.push(entrySep);
+  lines.push(entrySep);
   lines.push("  — end of logs —");
   lines.push("  Download saves this view (or JSON) to a file.");
   return lines.join("\n") + "\n";
