@@ -1319,10 +1319,26 @@ def format_holders_text(data: dict[str, Any]) -> str:
     )
     lines.append(f"  Unique wallets in top set: {summary.get('unique_wallets_in_top')}")
     meta = data.get("meta") or {}
+
+    def _authority_lines(label: str, value: Any) -> list[str]:
+        """Format mint/freeze so addresses are clickable (own line + Solscan)."""
+        if value is None:
+            return [f"  {label}: None"]
+        raw = str(value).strip()
+        if not raw or raw.lower() in {"none", "null", "n/a"}:
+            return [f"  {label}: None"]
+        if re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{32,44}", raw):
+            return [
+                f"  {label}:",
+                f"         {raw}",
+                f"         https://solscan.io/account/{raw}",
+            ]
+        return [f"  {label}: {raw}"]
+
     if meta.get("mint_authority") is not None or "mint_authority" in meta:
-        lines.append(f"  Mint authority: {meta.get('mint_authority')}")
+        lines.extend(_authority_lines("Mint authority", meta.get("mint_authority")))
     if meta.get("freeze_authority") is not None or "freeze_authority" in meta:
-        lines.append(f"  Freeze authority: {meta.get('freeze_authority')}")
+        lines.extend(_authority_lines("Freeze authority", meta.get("freeze_authority")))
     pct_by_wallet = _holder_pct_map(list(data.get("holders") or []))
     creator = (meta.get("creator") or "").strip()
     if creator:
@@ -1333,10 +1349,14 @@ def format_holders_text(data: dict[str, Any]) -> str:
                 if w.lower() == creator.lower():
                     c_pct = p
                     break
-        lines.append(
-            f"  Creator: {creator}  ·  owns {_pct(c_pct)}"
-            + ("  (not in top-holder snapshot)" if c_pct is None else "")
-        )
+        # Same layout as top-holder rows so UI treats the wallet as a link
+        lines.append("  Creator wallet:")
+        lines.append(f"         {creator}")
+        if re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{32,44}", creator):
+            lines.append(f"         https://solscan.io/account/{creator}")
+        own = _pct(c_pct)
+        note = "  (not in top-holder snapshot)" if c_pct is None else ""
+        lines.append(f"         owns {own}{note}")
     # Do not display RPC host / local filesystem paths (privacy)
     if meta.get("risks"):
         lines.append(f"  Rugcheck risks: {', '.join(str(r) for r in meta['risks'][:5])}")

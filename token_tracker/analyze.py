@@ -731,7 +731,21 @@ def analyze_token(
 
     try:
         alerts_data = alrt.build_alerts(
-            holders_data, bundles_data, socials=socials
+            holders_data,
+            bundles_data,
+            socials=socials,
+            pumpfun=pump_meta,
+            token_address=token_addr,
+            dex_id=pair_summary.get("dex_id"),
+            dexes=list(pump_meta.get("dexes_seen") or [])
+            or ([pair_summary.get("dex_id")] if pair_summary.get("dex_id") else None),
+            market={
+                "dex_id": pair_summary.get("dex_id"),
+                "pair": {
+                    "dex_id": pair_summary.get("dex_id"),
+                    "pair_address": pair_summary.get("pair_address"),
+                },
+            },
         )
     except Exception as exc:  # noqa: BLE001
         alerts_data = {

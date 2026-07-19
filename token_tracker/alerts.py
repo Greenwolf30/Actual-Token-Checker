@@ -25,16 +25,148 @@ _RUGGER_RISK_RE = re.compile(
 )
 
 
+# DexScreener / internal ids for Pump.fun bonding curve and PumpSwap pools
+_PUMP_POOL_DEXES = frozenset(
+    {
+        "pumpfun",
+        "pumpswap",
+        "pump",
+        "pumpswap-v2",
+        "pump-fun",
+        "pump_swap",
+    }
+)
+
+
+def _norm_dex(value: Any) -> str:
+    return str(value or "").strip().lower().replace(" ", "").replace("_", "").replace("-", "")
+
+
+def _is_pump_pool_dex(value: Any) -> bool:
+    """True if dex/pool id is Pump.fun bonding curve or PumpSwap."""
+    d = _norm_dex(value)
+    if not d:
+        return False
+    # Normalize variants: pump-fun → pumpfun, pump_swap → pumpswap
+    for name in _PUMP_POOL_DEXES:
+        if _norm_dex(name) == d:
+            return True
+    # Substring fallback for odd labels (e.g. "pumpswapamm")
+    return d.startswith("pumpfun") or d.startswith("pumpswap") or d == "pump"
+
+
+def _collect_pool_dexes(
+    *,
+    pumpfun: dict[str, Any] | None = None,
+    dex_id: str | None = None,
+    dexes: list[str] | tuple[str, ...] | None = None,
+    market: dict[str, Any] | None = None,
+) -> list[str]:
+    """Gather primary + alternate pool dex ids for pump-pool detection."""
+    out: list[str] = []
+    if dex_id:
+        out.append(str(dex_id))
+    for d in dexes or []:
+        if d:
+            out.append(str(d))
+    pf = pumpfun or {}
+    if pf.get("dex_id"):
+        out.append(str(pf["dex_id"]))
+    for d in pf.get("dexes_seen") or []:
+        if d:
+            out.append(str(d))
+    m = market or {}
+    pair = m.get("pair") if isinstance(m.get("pair"), dict) else {}
+    if pair.get("dex_id"):
+        out.append(str(pair["dex_id"]))
+    if m.get("dex_id"):
+        out.append(str(m["dex_id"]))
+    # de-dupe, preserve order
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for d in out:
+        key = d.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(d)
+    return uniq
+
+
+def skip_lp_unlock_for_pump_pool(
+    holders_data: dict[str, Any] | None = None,
+    pumpfun: dict[str, Any] | None = None,
+    token_address: str | None = None,
+    *,
+    dex_id: str | None = None,
+    dexes: list[str] | tuple[str, ...] | None = None,
+    market: dict[str, Any] | None = None,
+) -> bool:
+    """
+    Skip liquidity-unlocked alert for Pump.fun ecosystem tokens/pools.
+
+    True when any of:
+      - mint ends with 'pump' (classic Pump.fun mint)
+      - pumpfun meta marks is_pump_mint / on bonding curve
+      - primary or known pool dex is pumpfun / pumpswap (not all mints end in pump)
+    """
+    pf = pumpfun or {}
+    if pf.get("is_pump_mint") is True:
+        return True
+    if pf.get("on_bonding_curve") is True:
+        return True
+
+    mint = (token_address or "").strip()
+    if not mint and holders_data:
+        mint = str(holders_data.get("token_address") or "").strip()
+    if mint:
+        try:
+            from .pumpfun import is_pump_mint
+
+            if is_pump_mint(mint):
+                return True
+        except Exception:  # noqa: BLE001
+            if mint.lower().endswith("pump"):
+                return True
+
+    # Pool / venue check — covers pump tokens whose mint does NOT end with "pump"
+    pool_dexes = _collect_pool_dexes(
+        pumpfun=pf, dex_id=dex_id, dexes=dexes, market=market
+    )
+    if any(_is_pump_pool_dex(d) for d in pool_dexes):
+        return True
+
+    return False
+
+
 def build_alerts(
     holders_data: dict[str, Any] | None,
     bundles_data: dict[str, Any] | None = None,
     socials: dict[str, Any] | None = None,
+    pumpfun: dict[str, Any] | None = None,
+    token_address: str | None = None,
+    *,
+    dex_id: str | None = None,
+    dexes: list[str] | tuple[str, ...] | None = None,
+    market: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return structured alerts from holder/bundle/Rugcheck + DexScreener socials."""
+    """Return structured alerts from holder/bundle/Rugcheck + DexScreener socials.
+
+    Pass dex_id / dexes / market so Pump.fun + PumpSwap pools skip LP-unlock
+    even when the mint does not end with 'pump'.
+    """
     holders_data = holders_data or {}
     bundles_data = bundles_data or {}
     socials = socials or {}
     alerts: list[dict[str, Any]] = []
+    is_pump = skip_lp_unlock_for_pump_pool(
+        holders_data,
+        pumpfun,
+        token_address,
+        dex_id=dex_id,
+        dexes=dexes,
+        market=market,
+    )
 
     # Socials can still be checked even if holders failed
     social_alert = _dexscreener_socials_alert(socials)
@@ -66,19 +198,41 @@ def build_alerts(
     holders = list(holders_data.get("holders") or [])
 
     # ── 1) Liquidity unlocked ─────────────────────────────────────────
+    # Skip for Pump.fun / PumpSwap: mint ends with pump OR pool dex is
+    # pumpfun/pumpswap (some pump tokens lack the pump suffix). LP lock
+    # metrics from Rugcheck are often misleading on these venues.
+    # Uses the *worst* meaningful pool (min LP locked). Showing "max locked"
+    # used to read like "LP is 100% locked" even when another pool was open.
     lp = meta.get("lp_lock") or {}
-    if lp.get("checked"):
+    if lp.get("checked") and not is_pump:
         unlocked = bool(lp.get("liquidity_unlocked"))
-        locked_pct = lp.get("lp_locked_pct_max")
-        unlocked_pct = lp.get("lp_unlocked_pct_max")
+        min_locked = lp.get("lp_locked_pct_min")
+        max_locked = lp.get("lp_locked_pct_max")
+        markets_unlocked = int(lp.get("markets_unlocked") or 0)
+        markets_scanned = int(lp.get("markets_scanned") or 0)
         if unlocked:
-            detail_bits = []
-            if locked_pct is not None:
-                detail_bits.append(f"max LP locked ≈ {float(locked_pct):.1f}%")
-            if unlocked_pct is not None:
-                detail_bits.append(f"max LP unlocked ≈ {float(unlocked_pct):.1f}%")
-            if lp.get("markets_unlocked"):
-                detail_bits.append(f"{lp['markets_unlocked']} market(s) show unlocked LP")
+            detail_bits: list[str] = []
+            if min_locked is not None:
+                detail_bits.append(
+                    f"worst pool LP locked ≈ {float(min_locked):.1f}%"
+                )
+            if (
+                max_locked is not None
+                and min_locked is not None
+                and float(max_locked) - float(min_locked) > 0.5
+            ):
+                detail_bits.append(
+                    f"best pool ≈ {float(max_locked):.1f}% locked"
+                )
+            if markets_scanned > 0 and markets_unlocked > 0:
+                detail_bits.append(
+                    f"{markets_unlocked} of {markets_scanned} market(s) "
+                    f"under 50% LP locked"
+                )
+            elif markets_unlocked > 0:
+                detail_bits.append(
+                    f"{markets_unlocked} market(s) under 50% LP locked"
+                )
             alerts.append(
                 {
                     "id": "liquidity_unlocked",
@@ -86,9 +240,13 @@ def build_alerts(
                     "severity": "high",
                     "title": "Liquidity unlocked",
                     "detail": (
-                        "Liquidity appears unlocked (or mostly unlocked) — "
-                        "LP can often be removed. "
-                        + (" · ".join(detail_bits) if detail_bits else "Check lock status on Rugcheck.")
+                        "At least one meaningful market has mostly unlocked LP "
+                        "(can often be removed). "
+                        + (
+                            " · ".join(detail_bits)
+                            if detail_bits
+                            else "Check lock status on Rugcheck."
+                        )
                     ),
                 }
             )
@@ -242,30 +400,43 @@ def build_alerts(
     if priority_count:
         summary = f"{priority_count} top-priority warning(s) — review immediately."
     else:
+        lp_clause = (
+            ""
+            if is_pump
+            else "liquidity is unlocked, "
+        )
         summary = (
             "No top-priority warnings from current checks. "
-            "Top priority will show here if liquidity is unlocked, a single holder "
+            f"Top priority will show here if {lp_clause}a single holder "
             "is over 5%, bundle share exceeds 20%, DexScreener socials are missing, "
             "similar wallets hold a large %, or a wallet is linked to known rug signals."
         )
+
+    checks = [
+        "holders_over_2_pct",
+        "single_holder_over_5",
+        "similar_wallets_large",
+        "bundle_pct_threshold",
+        "dexscreener_socials_missing",
+        "serial_rugger_link",
+    ]
+    if not is_pump:
+        checks.insert(0, "liquidity_unlocked")
 
     return {
         "ok": True,
         "priority_count": priority_count,
         "alerts": alerts,
         "summary": summary,
-        "checks": [
-            "liquidity_unlocked",
-            "holders_over_2_pct",
-            "single_holder_over_5",
-            "similar_wallets_large",
-            "bundle_pct_threshold",
-            "dexscreener_socials_missing",
-            "serial_rugger_link",
-        ],
+        "checks": checks,
         "notes": (
             "Alerts are heuristics from Rugcheck + top-holder snapshot + bundle % + "
             "DexScreener profile socials. Not financial advice."
+            + (
+                " Liquidity-unlocked check skipped for Pump.fun / PumpSwap pools."
+                if is_pump
+                else ""
+            )
         ),
     }
 
@@ -457,7 +628,16 @@ def format_alerts_text(data: dict[str, Any]) -> str:
         lines.append("  ✓ No immediate top-priority alerts from current data.")
         lines.append("")
         lines.append("  Checked:")
-        lines.append("    • Liquidity unlocked")
+        checks_done = set(data.get("checks") or [])
+        # Prefer explicit checks list (e.g. skip LP unlock for Pump.fun)
+        if not checks_done or "liquidity_unlocked" in checks_done:
+            lines.append("    • Liquidity unlocked")
+        elif data.get("notes") and (
+            "Pump.fun" in str(data.get("notes")) or "PumpSwap" in str(data.get("notes"))
+        ):
+            lines.append(
+                "    • Liquidity unlocked (skipped — Pump.fun / PumpSwap pool)"
+            )
         lines.append("    • All non-LP wallets holding over 2% (with % + priority)")
         lines.append("    • Single holder over 5% (excluding known program/LP)")
         lines.append("    • Bundle share 5–20% (low–moderate) / >20% / >27% / ≥50%")
