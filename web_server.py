@@ -238,14 +238,64 @@ def _safe_links(report: dict[str, Any]) -> dict[str, str]:
     return {k: redact_text(v) for k, v in links.items() if v}
 
 
+def _clean_logs_snapshot(text: Any) -> str:
+    """Keep full holders/bundles content; drop only noise for Logs.
+
+    Removed: Providers: lines, Note: lines, RugWatch flagged-wallets section.
+    Kept: totals, concentration, creator, flags, top holder wallets, bundles body.
+    """
+    if text is None:
+        return ""
+    lines = str(text).splitlines()
+    out: list[str] = []
+    skip_rw = False
+    for line in lines:
+        t = line.strip()
+        low = t.lower()
+
+        # RugWatch appendix starts after top holders — skip that section only
+        if "flagged wallets (rugwatch)" in low or "── flagged wallets" in low:
+            skip_rw = True
+            continue
+        if skip_rw:
+            continue
+
+        if low.startswith("providers:"):
+            continue
+        if "birdeye: skipped" in low:
+            continue
+        if "solscan: set solscan" in low:
+            continue
+        if "provider issues" in low:
+            continue
+        if low.startswith("note:") or low.startswith("notes:"):
+            continue
+        # Flag bullet that is only a rugwatch count (not wallet list)
+        if "rugwatch:" in low and "flagged" in low and t.startswith(("•", "*", "-")):
+            continue
+
+        out.append(line)
+
+    collapsed: list[str] = []
+    blanks = 0
+    for line in out:
+        if not line.strip():
+            blanks += 1
+            if blanks <= 1:
+                collapsed.append(line)
+            continue
+        blanks = 0
+        collapsed.append(line)
+    return "\n".join(collapsed).strip()
+
+
 def _clip_log_snapshot(text: Any, *, max_chars: int = 10_000) -> str | None:
-    """Trim Holders/Bundles text for website Logs localStorage."""
+    """Clean + trim Holders/Bundles text for website Logs localStorage."""
     if text is None:
         return None
-    s = str(text).strip()
+    s = _clean_logs_snapshot(redact_text(str(text)))
     if not s:
         return None
-    s = redact_text(s)
     if len(s) <= max_chars:
         return s
     return (
