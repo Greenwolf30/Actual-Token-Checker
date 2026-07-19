@@ -289,11 +289,6 @@ def format_bundles_text(data: dict[str, Any]) -> str:
         lines.append("")
         lines.append("  Similar-size wallet groups:")
         for g in groups[:6]:
-            lines.append(
-                f"    • {len(g.get('wallets') or g.get('members') or [])} wallets ≈ "
-                f"{_pct(g.get('avg_pct'))} each "
-                f"(range {_pct(g.get('min_pct'))}–{_pct(g.get('max_pct'))})"
-            )
             # Prefer members (wallet + pct); fall back to address-only list
             member_rows = list(g.get("members") or [])
             if not member_rows:
@@ -301,6 +296,19 @@ def format_bundles_text(data: dict[str, Any]) -> str:
                     {"wallet": w, "pct_supply": g.get("avg_pct")}
                     for w in (g.get("wallets") or [])
                 ]
+            # Sum of holdings for this group (right side of header)
+            group_sum = g.get("total_pct")
+            if group_sum is None:
+                group_sum = _similar_group_sum_pct(g, member_rows)
+            n_w = len(g.get("wallets") or member_rows or [])
+            header = (
+                f"    • {n_w} wallets ≈ {_pct(g.get('avg_pct'))} each "
+                f"(range {_pct(g.get('min_pct'))}–{_pct(g.get('max_pct'))})"
+            )
+            if group_sum is not None:
+                # Right side: combined % of all wallets in this similar-size group
+                header += f"  ·  sum {_pct(group_sum)}"
+            lines.append(header)
             for m in member_rows[:6]:
                 w = m.get("wallet") if isinstance(m, dict) else m
                 pct = m.get("pct_supply") if isinstance(m, dict) else None
@@ -500,6 +508,46 @@ def _enrich_clusters(
     return sorted(out, key=lambda x: (-(x.get("accounts") or 0), -(x.get("pct_supply") or 0)))
 
 
+def _similar_group_sum_pct(
+    group: dict[str, Any],
+    member_rows: list[Any] | None = None,
+) -> float | None:
+    """Sum of percent holdings for wallets in one similar-size group."""
+    if group.get("total_pct") is not None:
+        try:
+            v = float(group["total_pct"])
+            return min(100.0, round(v, 4))
+        except (TypeError, ValueError):
+            pass
+    rows = list(member_rows or group.get("members") or [])
+    total = 0.0
+    n = 0
+    for m in rows:
+        if not isinstance(m, dict):
+            continue
+        try:
+            pct = float(m["pct_supply"]) if m.get("pct_supply") is not None else None
+        except (TypeError, ValueError):
+            pct = None
+        if pct is None:
+            continue
+        total += pct
+        n += 1
+    if n:
+        return min(100.0, round(total, 4))
+    # Fallback: count × average (approx when per-wallet % missing)
+    try:
+        avg = float(group["avg_pct"]) if group.get("avg_pct") is not None else None
+    except (TypeError, ValueError):
+        avg = None
+    if avg is None:
+        return None
+    count = int(group.get("count") or len(group.get("wallets") or []) or 0)
+    if count <= 0:
+        return None
+    return min(100.0, round(avg * count, 4))
+
+
 def _similar_size_total_percent(
     groups: list[dict[str, Any]],
 ) -> tuple[float | None, int]:
@@ -585,6 +633,9 @@ def _similar_size_groups(holders: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 if not w:
                     continue
                 wallet_rows.append({"wallet": w, "pct_supply": m.get("pct")})
+            total_pct = round(sum(pcts), 4) if pcts else None
+            if total_pct is not None and total_pct > 100.0:
+                total_pct = 100.0
             groups.append(
                 {
                     "wallets": [r["wallet"] for r in wallet_rows],
@@ -593,6 +644,8 @@ def _similar_size_groups(holders: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "avg_pct": (sum(pcts) / len(pcts)) if pcts else None,
                     "min_pct": min(pcts) if pcts else None,
                     "max_pct": max(pcts) if pcts else None,
+                    # Sum of this group's wallet holdings (% of supply)
+                    "total_pct": total_pct,
                 }
             )
     return sorted(groups, key=lambda g: -int(g.get("count") or 0))
