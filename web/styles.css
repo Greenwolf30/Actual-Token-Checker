@@ -77,9 +77,13 @@ body::before {
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: flex-end; /* links flush to far right */
   gap: 6px 10px;
   padding: 6px 10px;
+  width: 100%;
+}
+.site-nav-inner .nav-brand {
+  margin-right: auto; /* logo stays left; links pack to the right */
 }
 .nav-brand {
   display: inline-flex;
@@ -545,26 +549,26 @@ button, .ghost, .primary {
 }
 .report a:hover { text-decoration: underline; }
 
-/* Wallet holder % priority colors — lighter shades (easier on dark UI) */
+/* Wallet holder % priority colors — dim / muted shades on dark UI */
 .report .pct-low,
 .report .pri-low {
-  color: #8ee4a8; /* light green */
-  font-weight: 600;
+  color: #6a9e78; /* dim green */
+  font-weight: 500;
 }
 .report .pct-medium,
 .report .pri-medium {
-  color: #ffe88a; /* light yellow */
-  font-weight: 600;
+  color: #b8a85c; /* dim yellow */
+  font-weight: 500;
 }
 .report .pct-high,
 .report .pri-high {
-  color: #ffc266; /* light orange */
-  font-weight: 600;
+  color: #b8864a; /* dim orange */
+  font-weight: 500;
 }
 .report .pct-critical,
 .report .pri-critical {
-  color: #ff8a84; /* light red */
-  font-weight: 600;
+  color: #b86b66; /* dim red */
+  font-weight: 500;
 }
 
 /* Custom scrollbar for report */

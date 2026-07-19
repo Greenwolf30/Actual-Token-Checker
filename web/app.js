@@ -112,59 +112,28 @@ function colorPctTokens(html) {
 
 function colorWalletHolderPcts(html) {
   if (!html) return html;
-  // Priority subtitles in Alerts: [low priority], [medium priority], …
-  let out = html.replace(
-    /\[(low|medium|high|critical)\s+priority\]/gi,
-    (_, band) => {
-      const b = String(band).toLowerCase();
-      return `<span class="pri-${b}">[${b} priority]</span>`;
-    }
-  );
-  out = colorPctTokens(out);
-  // " · low priority" etc. next to holder lines
-  out = out.replace(
-    /·\s*(low|medium|high|critical)\s+priority/gi,
-    (_, band) => {
-      const b = String(band).toLowerCase();
-      return `· <span class="pri-${b}">${b} priority</span>`;
-    }
-  );
-  return out;
+  // Color supply % only — leave "[low priority]" / "· high priority" text uncolored
+  return colorPctTokens(html);
 }
 
 /**
  * Bundles tab: color ONLY
  *  - Total % bundles line
- *  - Suspect wallets header + per-wallet suspect lines
- * Other wallet % in clusters / similar groups stay uncolored.
+ *  - Suspect wallets TOTAL line ("Suspect wallets — total X%")
+ * Individual suspect wallet rows stay uncolored.
  */
 function colorBundlesSelectivePcts(html) {
   if (!html) return html;
-  const lines = html.split("\n");
-  let inSuspect = false;
-  return lines
+  return html
+    .split("\n")
     .map((line) => {
-      // Strip tags only for section detection
       const plain = line.replace(/<[^>]*>/g, "");
       if (/Total\s*%\s*bundles\s*:/i.test(plain)) {
-        inSuspect = false;
         return colorPctTokens(line);
       }
-      if (/Suspect\s+wallets/i.test(plain)) {
-        inSuspect = true;
+      // Header total only — not the wallet list under it
+      if (/Suspect\s+wallets/i.test(plain) && /total/i.test(plain)) {
         return colorPctTokens(line);
-      }
-      if (inSuspect) {
-        // End suspect block on a new major section (2-space label, not 4-space wallet row)
-        if (/^  [A-Za-z\[%]/.test(plain) && !/^    /.test(plain) && !/Suspect/i.test(plain)) {
-          inSuspect = false;
-          return line;
-        }
-        if (/^\s*$/.test(plain)) return line;
-        // Wallet rows under suspects (indented)
-        if (/^    /.test(plain) || /\d+(?:\.\d+)?%/.test(plain)) {
-          return colorPctTokens(line);
-        }
       }
       return line;
     })
