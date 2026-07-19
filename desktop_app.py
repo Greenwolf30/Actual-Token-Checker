@@ -215,11 +215,11 @@ def run_gui() -> None:
     DANGER = "#f07178"
     WARNING = "#e0b35a"
     ORANGE = "#ff9f0a"
-    # Lighter shades for wallet-holder % only (holders / alerts / bundle total+suspect)
-    PCT_LOW = "#8ee4a8"
-    PCT_MEDIUM = "#ffe88a"
-    PCT_HIGH = "#ffc266"
-    PCT_CRITICAL = "#ff8a84"
+    # Dim / muted shades for wallet-holder % only (holders / alerts / bundle total)
+    PCT_LOW = "#6a9e78"
+    PCT_MEDIUM = "#b8a85c"
+    PCT_HIGH = "#b8864a"
+    PCT_CRITICAL = "#b86b66"
     ENTRY_BG = "#0e141c"
     # Supply % (not price change): 2–5 low, 5–10 medium, 10–15 high, ≥15 critical
     HOLDER_PCT_RE = re.compile(r"(?<![+\-\d.])(\d+(?:\.\d+)?)(%)")
@@ -1078,27 +1078,20 @@ def run_gui() -> None:
 
     def _bundle_colorable_ranges(content: str) -> list[tuple[int, int]]:
         """
-        Bundles tab: only Total % bundles + Suspect wallets sections get % colors.
-        Returns list of (start, end) character ranges that may be colored.
+        Bundles tab: only Total % bundles + Suspect wallets TOTAL line get % colors.
+        Per-wallet suspect rows stay uncolored.
         """
         ranges: list[tuple[int, int]] = []
         lines = content.splitlines(keepends=True)
         pos = 0
-        in_suspect = False
         for line in lines:
             end = pos + len(line)
             if re.search(r"Total\s*%\s*bundles\s*:", line, re.I):
-                in_suspect = False
                 ranges.append((pos, end))
-            elif re.search(r"Suspect\s+wallets", line, re.I):
-                in_suspect = True
+            elif re.search(r"Suspect\s+wallets", line, re.I) and re.search(
+                r"total", line, re.I
+            ):
                 ranges.append((pos, end))
-            elif in_suspect:
-                if re.match(r"  [A-Za-z\[]", line) and not line.startswith("    "):
-                    if not re.search(r"Suspect", line, re.I):
-                        in_suspect = False
-                elif line.startswith("    ") or re.search(r"\d+(?:\.\d+)?%", line):
-                    ranges.append((pos, end))
             pos = end
         return ranges
 
@@ -1151,17 +1144,7 @@ def run_gui() -> None:
                 tag = _pct_priority_tag(n)
                 if tag:
                     spans.append((m.start(), m.end(), tag))
-            if color_mode != "bundles":
-                for m in HOLDER_PRI_RE.finditer(content):
-                    if m.group(1):  # [low priority]
-                        band = m.group(1).strip("[]").split()[0].lower()
-                        spans.append((m.start(), m.end(), f"pri_{band}"))
-                    else:
-                        band = (m.group(3) or "").lower()
-                        mid = m.start(3)
-                        end = m.end(4) if m.group(4) is not None else m.end()
-                        if band:
-                            spans.append((mid, end, f"pri_{band}"))
+            # Do not color "[low priority]" / "· medium priority" labels — % only
 
         spans.sort(key=lambda t: (t[0], -(t[1] - t[0])))
         cleaned: list[tuple[int, int, str | None]] = []
