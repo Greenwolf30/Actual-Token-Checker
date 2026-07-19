@@ -338,7 +338,11 @@ def analyze_token(
     maps_data: dict[str, Any]
 
     def _fetch_history() -> tuple[dict[str, Any], Any]:
-        """Pump.fun mcap or GeckoTerminal OHLCV (1 pool, fewer candles)."""
+        """
+        ATH / initial MC estimate — optimized for speed (no ATH price UI).
+        Prefer Pump.fun API; else Gecko OHLCV on known pair only (skip extra
+        Gecko token lookup when Dex pair works). Wallet scans unchanged.
+        """
         hist: dict[str, Any] = {
             "candles_used": 0,
             "ath_price_usd": None,
@@ -373,23 +377,43 @@ def analyze_token(
                     None,
                 )
         if network and token_addr:
-            gtok = gt.fetch_token(network, token_addr)
+            # Fast path: use DexScreener pair address first (no Gecko token hop)
             pools = _candidate_pools(
-                gtok, pair_summary.get("pair_address"), pairs
+                None, pair_summary.get("pair_address"), pairs
             )
-            # Single best pool + fewer candles (was 2 pools × day+hour)
             pool = pools[0] if pools else None
+            candles: list = []
             if pool:
+                # Fewer day candles; hour fallback only if day is empty
                 candles = gt.fetch_ohlcv(
-                    network, pool, timeframe="day", limit=400
+                    network, pool, timeframe="day", limit=90
                 )
                 if len(candles) < 3:
                     candles = (
                         gt.fetch_ohlcv(
-                            network, pool, timeframe="hour", limit=200
+                            network, pool, timeframe="hour", limit=72
                         )
                         or candles
                     )
+            # One fallback: Gecko top pool if pair OHLCV empty
+            if len(candles) < 3:
+                try:
+                    gtok = gt.fetch_token(network, token_addr)
+                except Exception:  # noqa: BLE001
+                    gtok = None
+                pools2 = _candidate_pools(
+                    gtok, pair_summary.get("pair_address"), pairs
+                )
+                for p2 in pools2[:2]:
+                    if pool and p2 == pool:
+                        continue
+                    candles = gt.fetch_ohlcv(
+                        network, p2, timeframe="day", limit=90
+                    )
+                    if len(candles) >= 3:
+                        pool = p2
+                        break
+            if pool and candles:
                 cand = gt.analyze_price_history(
                     candles,
                     current_price=pair_summary.get("price_usd"),
@@ -397,6 +421,7 @@ def analyze_token(
                     current_fdv=pair_summary.get("fdv_usd"),
                 )
                 hist = cand or hist
+                # ATH price kept for internal analytics; Overview UI shows MC only
                 hist["network"] = network
                 hist["pool_address"] = pool
                 hist.setdefault("source", "geckoterminal_ohlcv")

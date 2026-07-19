@@ -1332,10 +1332,12 @@ def format_holders_text(data: dict[str, Any]) -> str:
     for h in listed:
         label = f"  [{h['label']}]" if h.get("label") else ""
         pct = _pct(h.get("pct_supply"))
+        pri = holding_priority_label(h.get("pct_supply"))
+        pri_s = f" · {pri} priority" if pri in {"low", "medium", "high", "critical"} else ""
         bal = h.get("balance")
         bal_s = f"{bal:,.4f}" if isinstance(bal, (int, float)) else str(bal)
         w = h.get("wallet") or ""
-        lines.append(f"    #{h.get('rank')} {bal_s} ({pct}){label}")
+        lines.append(f"    #{h.get('rank')} {bal_s} ({pct}{pri_s}){label}")
         lines.append(f"         {w}")
         if w:
             lines.append(f"         https://solscan.io/account/{w}")

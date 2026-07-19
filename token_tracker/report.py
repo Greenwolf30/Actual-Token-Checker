@@ -122,7 +122,7 @@ def format_pretty(report: dict[str, Any]) -> str:
 
     lines.append("")
     lines.append("ALL-TIME HIGH (estimate over available history)")
-    lines.append(f"  ATH price:       {_usd(ath.get('estimated_price_usd'))}")
+    # Price omitted — MC is the primary estimate shown in Overview
     lines.append(f"  ATH market cap:  {_usd(ath.get('estimated_market_cap_usd'))}")
     lines.append(f"  As of:           {ath.get('as_of') or 'n/a'}")
     lines.append(f"  Candles used:    {ath.get('candles_used')}")
@@ -359,7 +359,7 @@ def format_overview(report: dict[str, Any]) -> str:
 
     lines.append("")
     lines.append("ALL-TIME HIGH (estimate)")
-    lines.append(f"  ATH price:       {_usd(ath.get('estimated_price_usd'))}")
+    # Price omitted — Overview shows ATH market cap only (faster path, clearer UI)
     lines.append(f"  ATH market cap:  {_usd(ath.get('estimated_market_cap_usd'))}")
     lines.append(f"  As of:           {ath.get('as_of') or 'n/a'}")
     lines.append(f"  Candles used:    {ath.get('candles_used')}")

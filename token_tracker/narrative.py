@@ -642,7 +642,9 @@ def _build_storyline(
             if t:
                 snippets.append(t[:140] + ("…" if len(t) > 140 else ""))
         if snippets:
-            paras.append("Voices from chatter: “" + "” · “".join(snippets) + "”.")
+            paras.append(
+                "Community sentiment: “" + "” · “".join(snippets) + "”."
+            )
 
     if twitter:
         handle = twitter.lstrip("@")
