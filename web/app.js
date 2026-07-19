@@ -135,7 +135,12 @@ function renderSummary(data) {
   const links = data.links || {};
   const order = [
     "dexscreener",
+    "dexscreener_chain",
     "solscan",
+    "explorer",
+    "etherscan",
+    "basescan",
+    "arbiscan",
     "bubblemaps",
     "twitter",
     "website",
