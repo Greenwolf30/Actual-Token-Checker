@@ -140,6 +140,8 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
         suspects=suspect_wallets,
     )
     suspect_pct, suspect_n = _suspect_total_percent(suspect_wallets)
+    # Combined % of unique wallets that sit in similar-size groups
+    similar_total_pct, similar_wallet_n = _similar_size_total_percent(similar_groups)
 
     return {
         "ok": True,
@@ -152,6 +154,8 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
             "bundle_risk": risk,
             "multi_account_clusters": len(multi_clusters),
             "similar_size_groups": len(similar_groups),
+            "similar_size_total_pct": similar_total_pct,
+            "similar_size_wallet_count": similar_wallet_n,
             "insider_accounts": len(insiders),
             "non_lp_top_wallets": len(non_lp),
             "top10_pct_excluding_known_programs": top10_ex_f,
@@ -217,11 +221,29 @@ def format_bundles_text(data: dict[str, Any]) -> str:
         total_line,
         f"  Clusters:        {s.get('multi_account_clusters')} multi-ATA wallet(s)",
         f"  Similar groups:  {s.get('similar_size_groups')}",
-        f"  Insider accts:   {s.get('insider_accounts')}",
-        f"  Top10 ex-LP:     {_pct(s.get('top10_pct_excluding_known_programs'))}",
-        "",
-        "  Signals:",
     ]
+    # Total % of unique wallets that sit in similar-size groups (combined supply)
+    sim_pct = s.get("similar_size_total_pct")
+    sim_n = s.get("similar_size_wallet_count")
+    if sim_pct is None and (data.get("similar_size_groups") or []):
+        sim_pct, sim_n = _similar_size_total_percent(
+            list(data.get("similar_size_groups") or [])
+        )
+    if sim_pct is not None:
+        lines.append(
+            f"  Similar-size total: {_pct(sim_pct)}"
+            + (f"  ({sim_n} wallet(s))" if sim_n else "")
+        )
+    else:
+        lines.append("  Similar-size total: n/a")
+    lines.extend(
+        [
+            f"  Insider accts:   {s.get('insider_accounts')}",
+            f"  Top10 ex-LP:     {_pct(s.get('top10_pct_excluding_known_programs'))}",
+            "",
+            "  Signals:",
+        ]
+    )
     for sig in data.get("signals") or []:
         sev = (sig.get("severity") or "info").upper()
         lines.append(f"    [{sev}] {sig.get('title')}")
@@ -249,12 +271,12 @@ def format_bundles_text(data: dict[str, Any]) -> str:
         lines.append("  Multi-account clusters (same wallet → several large ATAs):")
         for c in clusters[:10]:
             w = c.get("wallet") or ""
+            # Wallet + percent holdings on one line (site colors the %)
             lines.append(
-                f"    • {w}"
+                f"    • {w}  holds {_pct(c.get('pct_supply'))}"
             )
             lines.append(
-                f"      {c.get('accounts')} accounts · bal {c.get('combined_balance')} · "
-                f"~{_pct(c.get('pct_supply'))}"
+                f"      {c.get('accounts')} accounts · bal {c.get('combined_balance')}"
             )
             accts = c.get("token_accounts") or []
             for a in accts[:4]:
@@ -268,11 +290,26 @@ def format_bundles_text(data: dict[str, Any]) -> str:
         lines.append("  Similar-size wallet groups:")
         for g in groups[:6]:
             lines.append(
-                f"    • {len(g.get('wallets') or [])} wallets ≈ {_pct(g.get('avg_pct'))} each "
+                f"    • {len(g.get('wallets') or g.get('members') or [])} wallets ≈ "
+                f"{_pct(g.get('avg_pct'))} each "
                 f"(range {_pct(g.get('min_pct'))}–{_pct(g.get('max_pct'))})"
             )
-            for w in (g.get("wallets") or [])[:6]:
-                lines.append(f"         {w}")
+            # Prefer members (wallet + pct); fall back to address-only list
+            member_rows = list(g.get("members") or [])
+            if not member_rows:
+                member_rows = [
+                    {"wallet": w, "pct_supply": g.get("avg_pct")}
+                    for w in (g.get("wallets") or [])
+                ]
+            for m in member_rows[:6]:
+                w = m.get("wallet") if isinstance(m, dict) else m
+                pct = m.get("pct_supply") if isinstance(m, dict) else None
+                if pct is None:
+                    pct = g.get("avg_pct")
+                lines.append(f"         {w}  holds {_pct(pct)}")
+            n_show = len(member_rows)
+            if n_show > 6:
+                lines.append(f"         … +{n_show - 6} more")
 
     insiders = data.get("insider_wallets") or []
     if insiders:
@@ -280,7 +317,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
         lines.append("  Insider-flagged (Rugcheck):")
         for h in insiders[:10]:
             lines.append(
-                f"    #{h.get('rank')} {h.get('wallet')}  {_pct(h.get('pct_supply'))}"
+                f"    #{h.get('rank')} {h.get('wallet')}  holds {_pct(h.get('pct_supply'))}"
             )
 
     suspects = data.get("suspect_wallets") or []
@@ -297,8 +334,12 @@ def format_bundles_text(data: dict[str, Any]) -> str:
         )
         for sw in suspects[:12]:
             reasons = ", ".join(sw.get("reasons") or [])
-            lines.append(f"    • {sw.get('wallet')}")
-            lines.append(f"      {_pct(sw.get('pct_supply'))} · {reasons}")
+            # Wallet + percent holdings; reasons on next line
+            lines.append(
+                f"    • {sw.get('wallet')}  holds {_pct(sw.get('pct_supply'))}"
+            )
+            if reasons:
+                lines.append(f"      {reasons}")
         if len(suspects) > 12:
             lines.append(f"    … +{len(suspects) - 12} more")
 
@@ -459,6 +500,35 @@ def _enrich_clusters(
     return sorted(out, key=lambda x: (-(x.get("accounts") or 0), -(x.get("pct_supply") or 0)))
 
 
+def _similar_size_total_percent(
+    groups: list[dict[str, Any]],
+) -> tuple[float | None, int]:
+    """
+    Combined supply % of unique wallets that appear in similar-size groups.
+    Uses each group's avg_pct per unique wallet (first group wins if overlap).
+    """
+    seen: set[str] = set()
+    total = 0.0
+    for g in groups or []:
+        try:
+            avg = float(g.get("avg_pct")) if g.get("avg_pct") is not None else None
+        except (TypeError, ValueError):
+            avg = None
+        if avg is None:
+            continue
+        for w in g.get("wallets") or []:
+            addr = (w or "").strip()
+            if not addr or addr in seen:
+                continue
+            seen.add(addr)
+            total += avg
+    if not seen:
+        return None, 0
+    if total > 100.0:
+        total = 100.0
+    return round(total, 4), len(seen)
+
+
 def _similar_size_groups(holders: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Group non-program top wallets with nearly equal pct_supply / balance."""
     rows: list[dict[str, Any]] = []
@@ -508,9 +578,17 @@ def _similar_size_groups(holders: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 used.add(j)
         if len(members) >= 3:
             pcts = [m["pct"] for m in members if m.get("pct") is not None]
+            # Keep address list for callers; members include per-wallet % holdings
+            wallet_rows = []
+            for m in members:
+                w = m.get("wallet")
+                if not w:
+                    continue
+                wallet_rows.append({"wallet": w, "pct_supply": m.get("pct")})
             groups.append(
                 {
-                    "wallets": [m["wallet"] for m in members if m.get("wallet")],
+                    "wallets": [r["wallet"] for r in wallet_rows],
+                    "members": wallet_rows,
                     "count": len(members),
                     "avg_pct": (sum(pcts) / len(pcts)) if pcts else None,
                     "min_pct": min(pcts) if pcts else None,
