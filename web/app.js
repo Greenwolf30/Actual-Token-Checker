@@ -374,9 +374,9 @@ function refreshHistoryPanel() {
 
     // Overview: clickable mint + light % colors (not Top1/5/10 style lines)
     const overviewHtml = formatHoldersRichHtml(overview);
-    // Holders/Bundles: same as Holders tab (no Solscan URL rows, clickable addrs, yellow amounts, % colors)
+    // Holders: % colors + yellow amounts; Bundles: group % colors + Top10 ex-LP uncolored
     const holdersHtml = formatHoldersRichHtml(holdersPlain);
-    const bundlesHtml = formatHoldersRichHtml(bundlesPlain);
+    const bundlesHtml = formatBundlesRichHtml(bundlesPlain);
 
     // Subline mint clickable when present
     let subHtml = escHtml((ts || "—") + " · " + (e.chain || "—") + " · ");
@@ -648,12 +648,21 @@ function isTopSummaryLine(line) {
   );
 }
 
+/** Lines whose % should stay uncolored (summary concentration / ex-LP). */
+function isUncoloredPctLine(line) {
+  const plain = String(line || "").replace(/<[^>]*>/g, "");
+  if (isTopSummaryLine(plain)) return true;
+  // Bundles / Logs: Top10 ex-LP is a summary metric, not a wallet holding band
+  if (/\bTop\s*10\s*ex[-\s]?LP\b/i.test(plain)) return true;
+  return false;
+}
+
 function colorWalletHolderPcts(html) {
   if (!html) return html;
-  // Color supply % on wallet rows only — Top1/Top5/Top10 summary stays default color
+  // Color supply % on wallet rows; Top1/Top5/Top10 + Top10 ex-LP stay default
   return html
     .split("\n")
-    .map((line) => (isTopSummaryLine(line) ? line : colorPctTokens(line)))
+    .map((line) => (isUncoloredPctLine(line) ? line : colorPctTokens(line)))
     .join("\n");
 }
 
@@ -662,7 +671,8 @@ function colorWalletHolderPcts(html) {
  *  - drop Solscan URL lines (keep addresses)
  *  - clickable wallet addresses
  *  - yellow token amounts
- *  - % color bands except Top1/Top5/Top10 lines
+ *  - % color bands except Top1/Top5/Top10 and Top10 ex-LP
+ *  - Creator "owns X%" uses % color scheme
  */
 function formatHoldersRichHtml(text) {
   if (!text) return "";
@@ -673,27 +683,30 @@ function formatHoldersRichHtml(text) {
 }
 
 /**
- * Bundles tab: color ONLY
- *  - Total % bundles line
- *  - Suspect wallets TOTAL line ("Suspect wallets — total X%")
- * Individual suspect wallet rows stay uncolored.
+ * Bundles tab % color scheme (same priority bands as Holders):
+ *  - Summary: Total % bundles, Similar-size total, Suspect total
+ *  - Each wallet percent holdings in groups: "holds X%" on clusters,
+ *    similar-size members, insiders, suspects (+ group avg/range headers)
+ *  - Top10 ex-LP stays uncolored (summary concentration, not a wallet bag)
+ * Also yellows cluster "bal …" amounts.
  */
 function colorBundlesSelectivePcts(html) {
   if (!html) return html;
   return html
     .split("\n")
     .map((line) => {
-      const plain = line.replace(/<[^>]*>/g, "");
-      if (/Total\s*%\s*bundles\s*:/i.test(plain)) {
-        return colorPctTokens(line);
-      }
-      // Header total only — not the wallet list under it
-      if (/Suspect\s+wallets/i.test(plain) && /total/i.test(plain)) {
-        return colorPctTokens(line);
-      }
-      return line;
+      if (isUncoloredPctLine(line)) return line;
+      return colorPctTokens(line);
     })
     .join("\n");
+}
+
+function formatBundlesRichHtml(text) {
+  if (!text) return "";
+  let html = linkify(text);
+  html = colorBundlesSelectivePcts(html);
+  html = colorHoldingAmounts(html);
+  return html;
 }
 
 function setPanelText(tab, text) {
@@ -709,8 +722,8 @@ function setPanelText(tab, text) {
     html = colorWalletHolderPcts(html);
     html = colorHoldingAmounts(html);
   } else if (tab === "bundles") {
-    html = linkify(raw);
-    html = colorBundlesSelectivePcts(html);
+    // Summary + each wallet group % colored; Top10 ex-LP uncolored; bal yellow
+    html = formatBundlesRichHtml(raw);
   } else {
     html = linkify(raw);
   }
