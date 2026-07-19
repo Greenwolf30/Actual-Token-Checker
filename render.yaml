@@ -1,19 +1,13 @@
-# Backend API only (keys live here as Render env vars — never on Netlify/Vercel).
-# After deploy, set web/config.js apiBase to this service URL and redeploy the static UI.
-
 services:
   - type: web
-    name: adtc-api
+    name: actual-data-token-checker
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python run_web.py --host 0.0.0.0 --port $PORT
+    startCommand: python run_web.py --host 0.0.0.0
     envVars:
-      - key: WEB_API_TOKEN
-        generateValue: true
-      - key: WEB_CORS_ORIGINS
-        sync: false
-        # Set to https://your-site.netlify.app
+      - key: PYTHON_VERSION
+        value: "3.12.8"
       - key: WEB_TRUST_PROXY
         value: "1"
       - key: HELIUS_API_KEY

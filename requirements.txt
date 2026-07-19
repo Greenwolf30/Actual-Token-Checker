@@ -1,14 +1,5 @@
-# Core tracker: standard library only.
-# GUI:
-streamlit>=1.32.0
-
-# TLS CA bundle (Helius / modern HTTPS on some Windows Python installs)
+# Web / cloud (Render, Railway, etc.) — keep this lean so builds succeed.
 certifi>=2024.0.0
 
-# Website (python run_web.py) — stdlib HTTP server, no extra package required.
-# Optional: in-app Bubblemaps window (Maps tab). Without it, map opens in browser.
-# pywebview>=5.0
-
-# Optional: set X_BEARER_TOKEN for broader X community search via the official API.
-# Optional: HELIUS_API_KEY in .env for reliable Solana top-holder RPC.
-# Optional web site gate: WEB_API_TOKEN (browser X-API-Token; not a provider key).
+# Desktop Streamlit UI is optional; uncomment if you run leonidas/streamlit locally:
+# streamlit>=1.32.0

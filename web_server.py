@@ -524,44 +524,87 @@ def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     import os
 
+    # Unbuffered-ish logs for Render / Railway
+    try:
+        sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+        sys.stderr.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        pass
+
     p = argparse.ArgumentParser(description="Actual Data Token Checker web server")
+    default_host = (
+        os.environ.get("HOST")
+        or os.environ.get("WEB_HOST")
+        or "0.0.0.0"  # cloud-friendly default (local: pass --host 127.0.0.1 if needed)
+    )
+    port_raw = (os.environ.get("PORT") or os.environ.get("WEB_PORT") or "8080").strip()
+    try:
+        default_port = int(port_raw)
+    except ValueError:
+        print(f"Invalid PORT={port_raw!r}; falling back to 8080", flush=True)
+        default_port = 8080
+
     p.add_argument(
         "--host",
-        default=os.environ.get("HOST") or os.environ.get("WEB_HOST") or "127.0.0.1",
-        help="Bind host (default 127.0.0.1; use 0.0.0.0 on Railway/Render)",
+        default=default_host,
+        help="Bind host (default 0.0.0.0 for cloud; use 127.0.0.1 only for local)",
     )
     p.add_argument(
         "--port",
         type=int,
-        default=int(os.environ.get("PORT") or os.environ.get("WEB_PORT") or "8080"),
-        help="Port (default 8080; platforms set PORT)",
+        default=default_port,
+        help="Port (default from PORT env or 8080)",
     )
     args = p.parse_args(argv)
 
+    print("Starting Actual Data Token Checker web…", flush=True)
+    print(f"  cwd={Path.cwd()}", flush=True)
+    print(f"  root={ROOT}", flush=True)
+    print(f"  web_dir={WEB_DIR} exists={WEB_DIR.is_dir()}", flush=True)
+    print(f"  bind={args.host}:{args.port}", flush=True)
+
     if not WEB_DIR.is_dir():
-        print(f"Missing web UI folder: {WEB_DIR}", file=sys.stderr)
+        # Still run API-only so the service does not crash-loop if web/ was omitted
+        print(
+            f"WARNING: web UI folder missing at {WEB_DIR} — serving API only.",
+            file=sys.stderr,
+            flush=True,
+        )
+        try:
+            print("  repo top-level:", [x.name for x in ROOT.iterdir()][:40], flush=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  (could not list root: {exc})", flush=True)
+
+    try:
+        httpd = ThreadingHTTPServer((args.host, args.port), WebHandler)
+    except OSError as exc:
+        print(f"FATAL: cannot bind {args.host}:{args.port}: {exc}", file=sys.stderr, flush=True)
         return 1
 
-    httpd = ThreadingHTTPServer((args.host, args.port), WebHandler)
-    # Long Analyze requests (holders/about) must not die mid-flight on some hosts
     httpd.timeout = 300
-    print("Actual Data Token Checker — web API + optional UI")
-    print(f"  UI:  http://{args.host}:{args.port}/")
-    print(f"  API: http://{args.host}:{args.port}/api/health")
-    print("  Keys load from server env/.env only (never sent to the browser).")
+    print("Actual Data Token Checker — web API + optional UI", flush=True)
+    print(f"  UI:  http://{args.host}:{args.port}/", flush=True)
+    print(f"  API: http://{args.host}:{args.port}/api/health", flush=True)
+    print("  Keys load from server env/.env only (never sent to the browser).", flush=True)
     cors = _cors_allowed_origins()
     if cors:
-        print(f"  CORS allowlist: {', '.join(cors)}")
+        print(f"  CORS allowlist: {', '.join(cors)}", flush=True)
     else:
-        print("  CORS: open (set WEB_CORS_ORIGINS to your Netlify/Vercel URL in prod).")
+        print(
+            "  CORS: open (set WEB_CORS_ORIGINS to your Netlify/Vercel URL in prod).",
+            flush=True,
+        )
     if _web_api_token():
-        print("  Site gate ON (WEB_API_TOKEN required as X-API-Token header).")
+        print("  Site gate ON (WEB_API_TOKEN required as X-API-Token header).", flush=True)
     else:
-        print("  Site gate OFF — set WEB_API_TOKEN in env so public users cannot burn API quota.")
+        print(
+            "  Site gate OFF — set WEB_API_TOKEN in env so public users cannot burn API quota.",
+            flush=True,
+        )
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        print("\nShutting down.")
+        print("\nShutting down.", flush=True)
     finally:
         httpd.server_close()
     return 0
