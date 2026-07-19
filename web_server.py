@@ -29,7 +29,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
-
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -312,11 +311,25 @@ def run_analyze(query: str, *, chain: str | None, quick: bool) -> dict[str, Any]
     return build_public_payload(report)
 
 
+class _ThreadedServer(ThreadingHTTPServer):
+    """Daemon threads so a stuck Analyze cannot pin the process forever."""
+
+    daemon_threads = True
+    allow_reuse_address = True
+    request_queue_size = 32
+
+
 class WebHandler(BaseHTTPRequestHandler):
     server_version = "ActualDataTokenCheckerWeb/1.0"
+    # Close connections promptly (better behind Render's proxy)
+    protocol_version = "HTTP/1.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
+        try:
+            sys.stderr.flush()
+        except Exception:  # noqa: BLE001
+            pass
 
     def _client_ip(self) -> str:
         # Honor reverse-proxy only if you set WEB_TRUST_PROXY=1
@@ -409,11 +422,14 @@ class WebHandler(BaseHTTPRequestHandler):
         path = unquote(parsed.path) or "/"
         qs = parse_qs(parsed.query)
 
+        # Ultra-light ping — must never hang (use this to debug Render free tier)
+        if path in {"/api/ping", "/ping"}:
+            return self._json(200, {"ok": True, "pong": True})
+
         if path in {"/health", "/api/health"}:
             load_dotenv()
             import os
 
-            # Never list key values — only whether optional integrations are configured
             providers = {
                 "helius": bool((os.environ.get("HELIUS_API_KEY") or "").strip()),
                 "birdeye": bool((os.environ.get("BIRDEYE_API_KEY") or "").strip()),
@@ -433,30 +449,50 @@ class WebHandler(BaseHTTPRequestHandler):
                 ),
                 "site_gate": bool(_web_api_token()),
             }
-            stats = public_stats()
+            views = analyzes = None
+            try:
+                stats = public_stats()
+                views = stats.get("profile_views")
+                analyzes = stats.get("analyzes")
+            except Exception:  # noqa: BLE001
+                pass
             return self._json(
                 200,
                 {
                     "ok": True,
                     "service": "actual-data-token-checker-web",
                     "providers_configured": providers,
-                    "profile_views": stats.get("profile_views"),
-                    "analyzes": stats.get("analyzes"),
+                    "profile_views": views,
+                    "analyzes": analyzes,
                     "note": "Provider keys are server-side only and never returned.",
                 },
             )
 
         # Public counters (no auth — intentionally publicized)
         if path in {"/api/stats", "/stats.json"}:
-            return self._json(200, public_stats())
+            try:
+                return self._json(200, public_stats())
+            except Exception as exc:  # noqa: BLE001
+                return self._json(
+                    200,
+                    {"ok": True, "profile_views": 0, "analyzes": 0, "error": str(exc)[:120]},
+                )
 
         if path in {"/api/view", "/api/hit"}:
-            # Record a profile/page view (called once by the UI on load)
-            stats = record_profile_view(self._client_ip())
-            return self._json(200, stats)
+            try:
+                stats = record_profile_view(self._client_ip())
+                return self._json(200, stats)
+            except Exception as exc:  # noqa: BLE001
+                return self._json(
+                    200,
+                    {"ok": True, "profile_views": 0, "analyzes": 0, "error": str(exc)[:120]},
+                )
 
         if path in {"/badge.svg", "/api/badge.svg"}:
-            svg = badge_svg().encode("utf-8")
+            try:
+                svg = badge_svg().encode("utf-8")
+            except Exception:  # noqa: BLE001
+                svg = b'<svg xmlns="http://www.w3.org/2000/svg" width="90" height="20"></svg>'
             self.send_response(200)
             self.send_header("Content-Type", "image/svg+xml; charset=utf-8")
             self.send_header("Content-Length", str(len(svg)))
@@ -613,7 +649,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  (could not list root: {exc})", flush=True)
 
     try:
-        httpd = ThreadingHTTPServer((args.host, args.port), WebHandler)
+        httpd = _ThreadedServer((args.host, args.port), WebHandler)
     except OSError as exc:
         print(f"FATAL: cannot bind {args.host}:{args.port}: {exc}", file=sys.stderr, flush=True)
         return 1
