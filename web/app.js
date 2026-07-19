@@ -89,10 +89,54 @@ function linkify(text) {
   );
 }
 
+/** Wallet-holder % bands: low green · medium yellow · high orange · critical red */
+function pctPriorityClass(n) {
+  if (!Number.isFinite(n)) return "";
+  if (n >= 15) return "pct-critical";
+  if (n >= 10) return "pct-high";
+  if (n > 5) return "pct-medium";
+  if (n >= 2) return "pct-low";
+  return "";
+}
+
+function colorWalletHolderPcts(html) {
+  if (!html) return html;
+  // Priority subtitles in Alerts: [low priority], [medium priority], …
+  let out = html.replace(
+    /\[(low|medium|high|critical)\s+priority\]/gi,
+    (_, band) => {
+      const b = String(band).toLowerCase();
+      return `<span class="pri-${b}">[${b} priority]</span>`;
+    }
+  );
+  // Supply % — skip signed price-change (+1.2% / -3%) and partial numbers
+  out = out.replace(/([+\-])?(\d+(?:\.\d+)?)(%)/g, (full, sign, num, pct) => {
+    if (sign === "+" || sign === "-") return full;
+    const n = Number(num);
+    const cls = pctPriorityClass(n);
+    if (!cls) return full;
+    return `<span class="${cls}">${num}${pct}</span>`;
+  });
+  // " · low priority" etc. next to holder lines
+  out = out.replace(
+    /·\s*(low|medium|high|critical)\s+priority/gi,
+    (_, band) => {
+      const b = String(band).toLowerCase();
+      return `· <span class="pri-${b}">${b} priority</span>`;
+    }
+  );
+  return out;
+}
+
 function setPanelText(tab, text) {
   const el = $("text-" + tab);
   if (!el) return;
-  el.innerHTML = linkify(text || "(empty)");
+  let html = linkify(text || "(empty)");
+  // Color wallet holder % on holders / alerts / bundles only (not overview price %)
+  if (tab === "holders" || tab === "alerts" || tab === "bundles") {
+    html = colorWalletHolderPcts(html);
+  }
+  el.innerHTML = html;
 }
 
 function switchTab(name) {

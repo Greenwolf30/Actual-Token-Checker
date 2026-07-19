@@ -16,6 +16,21 @@
 </head>
 <body>
   <div class="app">
+    <nav class="site-nav" aria-label="Main">
+      <div class="site-nav-inner">
+        <a class="nav-brand" href="/">
+          <img class="logo logo-sm" src="/logo.svg" width="28" height="28" alt="" />
+          <span>Actual Data Token Checker</span>
+        </a>
+        <div class="nav-links">
+          <a class="nav-link active" href="/" aria-current="page">Analyze</a>
+          <a class="nav-link" href="/docs.html">Documentation</a>
+          <a class="nav-link" href="/api/stats" target="_blank" rel="noopener">Stats API</a>
+          <a class="nav-link" href="/badge.svg" target="_blank" rel="noopener">Badge</a>
+        </div>
+      </div>
+    </nav>
+
     <header class="top">
       <div class="brand">
         <img class="logo" src="/logo.svg" width="40" height="40" alt="Actual Data Token Checker" />
@@ -114,7 +129,8 @@
     <footer class="foot">
       <span id="disclaimer">Heuristics only · not financial advice · provider keys never leave the server.</span>
       <span class="muted">
-        <span id="footerStats">Profile views: — · Analyzes: —</span>
+        <a href="/docs.html">Documentation</a>
+        · <span id="footerStats">Profile views: — · Analyzes: —</span>
         · <a id="statsLink" href="/api/stats" target="_blank" rel="noopener">public stats</a>
         · <a id="badgeLink" href="/badge.svg" target="_blank" rel="noopener">badge</a>
         · <span id="generatedAt"></span>

@@ -1,0 +1,456 @@
+================================================================================
+  ACTUAL DATA TOKEN CHECKER — USER GUIDE
+================================================================================
+  Live site:   https://actual-token-checker.onrender.com
+  Local site:  python run_web.py  →  http://127.0.0.1:8080/
+  Desktop app: python desktop_app.py
+
+  This guide explains what each part of the app does, in plain language —
+  including Quick mode, social scores, news, wallets, Rugcheck / creators,
+  and the About tab.
+
+  Everything here is a HEURISTIC from public data. Not financial advice.
+================================================================================
+
+
+--------------------------------------------------------------------------------
+1. WHAT THIS APP IS
+--------------------------------------------------------------------------------
+
+A research tool for crypto tokens (especially Solana, plus other chains like
+Ethereum, Base, and Robinhood Chain). You paste a contract or ticker; the app
+pulls public market and risk data and shows it in tabs:
+
+  Overview · Holders · Bundles · Alerts · Maps · About
+
+It does NOT trade for you, custody funds, or guarantee a token is safe.
+
+
+--------------------------------------------------------------------------------
+2. HOW TO USE THE SITE
+--------------------------------------------------------------------------------
+
+  1. Open the site (wait ~1 minute if Free hosting is waking up).
+  2. Paste a mint address, 0x address, or name/ticker.
+  3. Optional: pick a chain (auto / solana / robinhood / ethereum / …).
+  4. Optional: check Quick (faster, less detail — see §3).
+  5. Click Analyze.
+  6. Read the tabs. Click blue links to open explorers / X / news.
+
+
+
+Navigation bar
+  Analyze | Documentation | Stats API | Badge
+
+
+--------------------------------------------------------------------------------
+3. WHAT “QUICK” MEANS
+--------------------------------------------------------------------------------
+
+Quick ON (checked)
+  - Faster first look.
+  - Loads market / Overview-style data.
+  - SKIPS slow holder scans, full bundles, and much of the heavy About
+    social/news scraping.
+  - Use when: you only need price, liquidity, socials, or DexScreener is
+    rate-limiting you.
+
+Quick OFF (full Analyze)
+  - Full holders, bundles, alerts, and richer About narrative.
+  - Can take 30–90+ seconds.
+  - Use when: you care about wallet concentration, rugs, or story/news.
+
+
+--------------------------------------------------------------------------------
+4. OVERVIEW TAB
+--------------------------------------------------------------------------------
+
+Shows market structure from DexScreener (and Pump.fun when useful):
+
+  Price, market cap / FDV, liquidity, 24h volume, price % changes
+  Pair / DEX (e.g. Raydium, Pump.fun, Uniswap)
+  Social links from the pair profile (X, Telegram, website)
+  Pump.fun status when relevant: still on bonding curve vs graduated
+
+Pump.fun fallback
+  - If DexScreener is rate-limited (HTTP 429) and the mint looks like a
+    Pump.fun token (often ends in "pump"), the app may still load a basic
+    snapshot from Pump.fun’s public coin API.
+  - That snapshot is thinner than full DexScreener data.
+
+DexScreener cache
+  - Same search/pair is remembered ~2–3 minutes so re-analyzing the same
+    mint does not spam DexScreener as hard.
+
+
+--------------------------------------------------------------------------------
+5. HOLDERS TAB & WALLET SCHEME
+--------------------------------------------------------------------------------
+
+Purpose
+  Show who holds the token (top wallets) and how concentrated supply is.
+
+Solana
+  Multi-source fusion when possible:
+    Helius / Solana RPC, Rugcheck top holders, Solscan, Birdeye, Pump.fun
+  Known LP / AMM / program wallets are labeled and usually treated as
+  “not a random human bag” for risk lists.
+
+Other chains (Ethereum, Base, Robinhood, …)
+  Market works via DexScreener.
+  Full holder fusion is mainly Solana today; you may get an explorer link
+  instead of a full holder table.
+
+WALLET PRIORITY SCHEME (used in Alerts, not next to every address)
+  Only non-LP wallets with meaningful size are ranked by % of supply:
+
+    Under 2%     → ignored for the “over 2%” list
+    2% – 5%      → [low priority]
+    5% – under 10% → [medium priority]
+    10% – under 15% → [high priority]
+    15% or more  → [critical priority]
+
+  In Alerts, those labels appear as a SUBTITLE above groups of wallets
+  (e.g. a line “[low priority]” then the wallets under it).
+
+What people often ask
+  “Is a 3% wallet bad?”
+    → Flagged as low priority for attention; not automatic proof of a rug.
+  “Why is the Raydium vault huge?”
+    → LP/program wallets are filtered out of the risk list when recognized.
+  “Why no holders on Robinhood?”
+    → Holder APIs are Solana-focused; use the explorer link for EVM chains.
+
+
+--------------------------------------------------------------------------------
+6. BUNDLES TAB — FULL BUNDLE SCHEME
+--------------------------------------------------------------------------------
+
+6.1 What “bundle” means in this app
+  A bundle estimate is a HEURISTIC for “how much supply might be controlled by
+  coordinated wallets,” not a proof that one person owns those wallets.
+
+  The app looks at top-holder snapshots and risk tags, then estimates a
+  total_bundle_pct (% of total supply). That single number drives the
+  Alerts “bundle band” messages below.
+
+  This is NOT:
+    - A professional sniper-graph product
+    - On-chain legal proof of collusion
+    - Guaranteed accurate for every launchpad
+
+6.2 Where bundle data comes from (Solana)
+  When a full Analyze runs, Bundles may fuse:
+
+    - Helius / RPC top holders
+    - Rugcheck (insiders, rugged flag, risk names, networks)
+    - Birdeye (optional): bundler / sniper / insider / dev tags, security flags
+    - Heuristics on the holder list:
+        * Multi-account clusters (one wallet, several large ATAs)
+        * Similar-sized non-LP top wallets (look like coordinated buys)
+        * Concentration of top wallets excluding known LP / programs
+        * Same-slot multi-buy style signals when available (Jito-style / Helius)
+
+  If holders fail, bundles usually cannot run.
+
+  Non-Solana chains (Ethereum, Robinhood, …): market works; full bundle fusion
+  is Solana-focused.
+
+6.3 What the Bundles tab shows
+  - Summary: estimated total bundle % of supply (when available)
+  - Signals: e.g. multi-ATA clusters, similar-size groups, Rugcheck insiders,
+    Birdeye bundler/sniper tags, rugged flag
+  - Lists of suspect / flagged wallets (heuristic)
+  - Notes that methods are partial
+
+6.4 Bundle % alert scheme (Alerts tab)
+  Alerts use ONE number: estimated bundle % of supply
+  (summary.total_bundle_pct; if missing, a fallback from the largest
+  similar-size group: count × average %).
+
+  Only ONE bundle-band alert fires — the highest matching tier.
+
+  ┌─────────────────────────┬──────────────────────────────────────────────────┐
+  │ Bundle % of supply      │ Alert title / meaning                            │
+  ├─────────────────────────┼──────────────────────────────────────────────────┤
+  │ Under 5%                │ No bundle-% band alert from this check           │
+  │                         │ (other alerts can still fire)                    │
+  ├─────────────────────────┼──────────────────────────────────────────────────┤
+  │ 5% through 20%          │ “Bundle amount low to moderate”                  │
+  │ (inclusive band)        │ Severity: medium                                 │
+  │                         │ Worth watching; not extreme by itself            │
+  ├─────────────────────────┼──────────────────────────────────────────────────┤
+  │ Above 20% up to 27%     │ “Bundle higher than 20%”                         │
+  │ Example: 21%, 26%       │ Severity: high                                   │
+  │                         │ High possibility of rug / coordinated dumps      │
+  ├─────────────────────────┼──────────────────────────────────────────────────┤
+  │ Above 27% under 50%     │ “DANGER — bundle 27% or higher”                  │
+  │ Example: 28%, 40%       │ Severity: critical                               │
+  │                         │ “Most likely rug” style language                 │
+  ├─────────────────────────┼──────────────────────────────────────────────────┤
+  │ 50% or more             │ “RUG IMMINENT — bundle ≥ 50%”                    │
+  │ Example: 50%, 70%       │ Severity: critical                               │
+  │                         │ Extremely concentrated coordinated supply        │
+  └─────────────────────────┴──────────────────────────────────────────────────┘
+
+  Exact code cutoffs:
+    pct < 5.0           → no band alert
+    5.0 ≤ pct ≤ 20.0    → low–moderate
+    20.0 < pct ≤ 27.0   → higher than 20%
+    27.0 < pct < 50.0   → danger 27%+
+    pct ≥ 50.0          → rug imminent
+
+6.5 Worked examples
+  4% bundle   → no bundle-band alert
+  12% bundle  → “low to moderate”
+  21% bundle  → “Bundle higher than 20%” (high)
+  26% bundle  → still “higher than 20%” (not yet 27% danger)
+  30% bundle  → “DANGER — 27% or higher”
+  55% bundle  → “RUG IMMINENT — ≥ 50%”
+
+6.6 Bundle vs single-wallet alerts (different systems)
+  Bundle %     = estimated coordinated slice of supply (scheme above)
+  Wallet %     = each non-LP holder’s own share:
+
+    > 2%  → appears on “wallets over 2%” list with priority band
+    > 5%  → also “single holder over 5%” alert
+    Priority bands for individual wallets:
+      2–5% low · 5–10% medium · 10–15% high · ≥15% critical
+
+  A token can have:
+    - Low bundle % but one 12% whale, or
+    - High bundle % with many smaller similar wallets
+
+6.7 Extra signals that feed risk (not the same as the % bands)
+  - Multi-ATA clusters (one owner, several accounts)
+  - Similar-sized top wallets
+  - Rugcheck insider_count, rugged=true, risk names (bundle/sniper/insider/…)
+  - Birdeye bundler/sniper/insider/dev % tags (if API key set)
+  - Mint/freeze authority style security flags (Birdeye)
+  These appear as signals/details; the % ladder in §6.4 is what titles the
+  main bundle severity alert.
+
+6.8 What people often misunderstand
+  “Is 21% a danger alert?”
+    → No. 21% is the “higher than 20%” band, not the 27% DANGER title.
+  “Under 26% means safe?”
+    → No. 21–26% is already high-severity language; under 5% only skips
+      the bundle-band alert, not all risk checks.
+  “Bundle % is exact on-chain truth?”
+    → No. Estimated from snapshots + tags + heuristics.
+
+
+--------------------------------------------------------------------------------
+7. ALERTS TAB (WHAT FIRES AND WHY)
+--------------------------------------------------------------------------------
+
+Alerts are “things to look at first.” They combine holders + bundles +
+Rugcheck + socials.
+
+7.1 Liquidity unlocked
+  - Uses Rugcheck market LP lock stats on pools with meaningful USD size
+    (dust pools under ~$5k are ignored).
+  - If little LP is locked, the app warns that liquidity may be removable.
+  - This is NOT the same as “Pump.fun bonding curve = unlocked” in the
+    classic LP sense; curve launches can look “unlocked” in that model.
+
+7.2 Wallets over 2% of supply
+  - Full list of non-LP wallets above 2%, grouped by priority (§5).
+
+7.3 Single holder over 5%
+  - One non-LP wallet owns more than 5%. Severity higher if ≥ 15%.
+
+7.4 Similar wallets with large combined %
+  - Several wallets hold nearly the same size and together are large
+    (group of at least 3; combined ≥ 5% or average ≥ 2%).
+
+7.5 Bundle % bands
+  - Full scheme in §6 (5–20% / >20–27% / >27% / ≥50%; examples 21% and 26%).
+
+7.6 Socials missing on DexScreener
+  - No website / X / Telegram / socials on the pair profile.
+
+7.7 Rug / creator / serial-rug style signals (see §8)
+
+
+--------------------------------------------------------------------------------
+8. RUGCHECK, CREATORS, INSIDERS — HOW FLAGGING WORKS
+--------------------------------------------------------------------------------
+
+The app does NOT have a private “serial rugger police database.”
+It reads PUBLIC Rugcheck (and optional Birdeye) fields and turns them into
+alerts you can read.
+
+8.1 Rugcheck mint flags
+  - rugged = true          → strong “this mint was marked rugged” signal
+  - risks[] name/description matching words like:
+      scam, rug, serial, known scammer, malicious, honeypot,
+      creator history, dev sold, bundle, sniper, blacklist, phishing
+    → listed as rug-related risks
+
+8.2 Creator / insider style signals
+  - Top holders marked insider=true (Rugcheck graph) → listed with % owned
+    (often related to creator-linked clusters — still a heuristic).
+  - Insider networks (transfer graphs): large networks (e.g. size ≥ 10)
+    are called out.
+  - known_accounts labels that look scammer-like → flagged if they also
+    appear in top holders.
+
+8.3 Birdeye (if BIRDEYE_API_KEY is set)
+  - Holder tags: bundler / sniper / insider / dev % of supply
+  - Security fields such as mint still enabled, freeze authority, owner
+    still holding supply
+
+8.4 What this does NOT mean
+  - A flag is not a court verdict.
+  - Clean report is not a green light to buy.
+  - Missing data is not the same as “safe.”
+
+
+--------------------------------------------------------------------------------
+9. MAPS TAB
+--------------------------------------------------------------------------------
+
+Links to Bubblemaps (and similar) wallet-cluster visualizations when the
+chain is supported. Click through to explore holders visually.
+Robinhood / EVM maps depend on Bubblemaps support for that chain.
+
+
+--------------------------------------------------------------------------------
+10. ABOUT TAB — SECTIONS EXPLAINED
+--------------------------------------------------------------------------------
+
+About is split into story + community + news + links.
+
+10.1 NARRATIVE (“What this token is about”)
+  - Multi-paragraph storyline from official descriptions first, then
+    filtered community/web text.
+  - Sources can include: CoinGecko, on-chain metadata URI, Pump.fun,
+    Birdeye, DexScreener profile, website meta/OG, Jupiter tags,
+    Rugcheck meta, etc.
+  - Theme labels (politics, AI, animal meme, CTO, …) come from keyword
+    matching on name/description/posts — see theme keywords in the app’s
+    narrative module if you need the full lists.
+  - Confidence: high / medium / low depending on whether real project
+    copy was found.
+  - If no official description exists, the app refuses to invent a
+    backstory.
+
+10.2 Description sources / listing tags / risk notes
+  - Short labeled quotes from each string source.
+  - Jupiter-style tags when present.
+  - Rugcheck risk text (context, not a novel).
+
+10.3 X / COMMUNITY POSTS (social / web score)
+  Where: About → “X / COMMUNITY POSTS”
+
+  Fields you see
+    Label   bullish | bearish | mixed | neutral | unknown
+    Score   about −1.0 (bearish) to +1.0 (bullish)
+    Kind    how the score was made (see below)
+    Posts analyzed   how many texts were scored
+    Sample posts     recent snippets (may include links)
+
+  Kind: text-based (x_text / social_web_text)
+    - Reads posts (project X via free mirrors, optional X API, search).
+    - Counts positive vs negative keyword hits (lexicon).
+    - score = (positive − negative) / (positive + negative)
+    - Labels:
+        score ≥ +0.25 → bullish
+        score ≤ −0.25 → bearish
+        else if keywords exist → mixed
+        posts but no keywords → neutral
+
+  Kind: market_crowd
+    - Used when almost no posts could be fetched.
+    - Uses buy vs sell count (weight ~55%) + 24h price change (weight ~45%).
+    - Same bullish/bearish cutoffs at ±0.25.
+    - This is market flow, NOT reading tweets.
+
+  Positive-leaning sample words (partial list)
+    bull, bullish, moon, pump, ath, gem, lfg, buy, long, diamond, hands,
+    rally, listing, partnership, organic, gains, …
+
+  Negative-leaning sample words (partial list)
+    bear, dump, rug, scam, honeypot, rekt, sell, short, jeet, ngmi,
+    fraud, avoid, warning, crash, …
+
+  Important
+    - Keyword scoring is crude (slang, sarcasm, and bots break it).
+    - Empty posts → score may fall back to market_crowd or unknown.
+
+10.4 PUBLIC NEWS
+  Where: About → “PUBLIC NEWS”
+
+  What it is
+    - Public headlines and search blurbs that appear to mention this token.
+    - Shown with a source tag (e.g. google_news) and a clickable URL when
+      available (up to about 12 items).
+
+  Where it comes from
+    - Google News RSS (crypto/token-oriented query)
+    - DuckDuckGo-style web snippets
+    - Other public web hits tagged as news/web in the narrative scrape
+    - Must usually mention ticker, name, or contract (filters noise)
+
+  How it relates to the narrative
+    - Official descriptions = “what the project claims.”
+    - News = “what the public web is saying right now.”
+    - News is secondary context, not an official press feed.
+
+  When empty
+    - New or obscure tokens often have zero hits.
+    - Search APIs can be blocked or empty; empty ≠ “no news on earth.”
+
+  What it is not
+    - Not Bloomberg/Reuters paid wires
+    - Not verified PR unless it shows up in public search
+    - Not a trading signal by itself
+
+10.5 LINKS
+  Website, X, Telegram, DexScreener, Solscan / explorers (including
+  Robinhood Blockscout when chain is robinhood), etc.
+
+
+--------------------------------------------------------------------------------
+11. ROBINHOOD CHAIN (BRIEF)
+--------------------------------------------------------------------------------
+
+  - DexScreener chain id: robinhood (EVM mainnet id 4663)
+  - Select chain “robinhood” or use robinhood:0x…
+  - Market/Overview/About work; holders/bundles are limited vs Solana
+  - Explorer: https://robinhoodchain.blockscout.com
+
+
+--------------------------------------------------------------------------------
+12. COMMON QUESTIONS
+--------------------------------------------------------------------------------
+
+Q: Can visitors add their own Helius keys?
+A: No. Keys stay on the server. Gear = site passcode only (if enabled).
+
+Q: Why DexScreener 429 / bad response?
+A: Public rate limits. Wait, use Quick, use full mint, enable site passcode
+   so fewer people spam Analyze. Cache reduces repeat hits.
+
+Q: Do view counts reset daily?
+A: Total views do not reset daily. “Unique today” does. Free hosting may
+   reset totals after redeploy.
+
+Q: Why is LP unlocked on a Pump.fun coin?
+A: LP-lock check is classic pool lock %, not a full bonding-curve model.
+
+Q: Does a clean Alerts tab mean safe?
+A: No. Absence of flags ≠ safety.
+
+
+--------------------------------------------------------------------------------
+13. DISCLAIMER
+--------------------------------------------------------------------------------
+
+  Heuristics only. Data can be wrong, late, or incomplete.
+  Not financial advice. Do your own research.
+
+================================================================================
+  End of user guide — Actual Data Token Checker
+================================================================================

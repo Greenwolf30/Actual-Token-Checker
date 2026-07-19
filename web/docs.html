@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="referrer" content="no-referrer" />
+  <title>Documentation — Actual Data Token Checker</title>
+  <link rel="icon" href="/logo.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+  <script src="/config.js"></script>
+</head>
+<body>
+  <div class="app app-docs">
+    <nav class="site-nav" aria-label="Main">
+      <div class="site-nav-inner">
+        <a class="nav-brand" href="/">
+          <img class="logo logo-sm" src="/logo.svg" width="28" height="28" alt="" />
+          <span>Actual Data Token Checker</span>
+        </a>
+        <div class="nav-links">
+          <a class="nav-link" href="/">Analyze</a>
+          <a class="nav-link active" href="/docs.html" aria-current="page">Documentation</a>
+          <a class="nav-link" href="/api/stats" target="_blank" rel="noopener">Stats API</a>
+          <a class="nav-link" href="/badge.svg" target="_blank" rel="noopener">Badge</a>
+          <a class="nav-link" href="/documentation.txt" target="_blank" rel="noopener">Raw .txt</a>
+        </div>
+      </div>
+    </nav>
+
+    <header class="docs-hero">
+      <h1>Documentation</h1>
+      <p class="tag">
+        How to use the site · holder &amp; wallet thresholds · bundle bands ·
+        alert checks · About keywords · chains · API keys · rate limits
+      </p>
+      <p class="docs-meta muted">
+        Full parameter reference for visitors. Heuristics only — not financial advice.
+      </p>
+    </header>
+
+    <div class="docs-toolbar">
+      <input
+        type="search"
+        id="docsSearch"
+        placeholder="Search docs (e.g. 2%, bundle, robinhood, keywords)…"
+        autocomplete="off"
+      />
+      <span id="docsStatus" class="muted">Loading…</span>
+    </div>
+
+    <article class="docs-panel">
+      <pre class="docs-body" id="docsBody">Loading documentation…</pre>
+    </article>
+
+    <footer class="foot">
+      <span>Actual Data Token Checker · public documentation</span>
+      <a href="/">← Back to Analyze</a>
+    </footer>
+  </div>
+
+  <script>
+    (function () {
+      const bodyEl = document.getElementById("docsBody");
+      const statusEl = document.getElementById("docsStatus");
+      const searchEl = document.getElementById("docsSearch");
+      let fullText = "";
+
+      function render(text) {
+        bodyEl.textContent = text || "(empty)";
+      }
+
+      function filter(q) {
+        const needle = (q || "").trim().toLowerCase();
+        if (!needle) {
+          render(fullText);
+          statusEl.textContent = fullText
+            ? fullText.split(/\r?\n/).length + " lines"
+            : "";
+          return;
+        }
+        const lines = fullText.split(/\r?\n/);
+        const out = [];
+        let i = 0;
+        while (i < lines.length) {
+          if (lines[i].toLowerCase().includes(needle)) {
+            const start = Math.max(0, i - 1);
+            let end = Math.min(lines.length, i + 2);
+            while (end < lines.length && lines[end].toLowerCase().includes(needle)) {
+              end++;
+            }
+            if (out.length) out.push("…");
+            for (let j = start; j < end; j++) out.push(lines[j]);
+            i = end;
+          } else {
+            i++;
+          }
+        }
+        render(out.length ? out.join("\n") : "No matches for “" + q + "”.");
+        statusEl.textContent = out.length ? "Filtered" : "No matches";
+      }
+
+      fetch("/documentation.txt", { cache: "no-store" })
+        .then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.text();
+        })
+        .then(function (t) {
+          fullText = t;
+          render(fullText);
+          statusEl.textContent = t.split(/\r?\n/).length + " lines · public";
+        })
+        .catch(function (e) {
+          bodyEl.textContent =
+            "Could not load documentation.txt (" + e.message + ").\n" +
+            "Try /documentation.txt directly or re-deploy with web/documentation.txt on the server.";
+          statusEl.textContent = "Load failed";
+        });
+
+      searchEl.addEventListener("input", function () {
+        filter(searchEl.value);
+      });
+    })();
+  </script>
+</body>
+</html>
