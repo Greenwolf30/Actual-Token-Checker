@@ -16,6 +16,7 @@ import re
 import sys
 import threading
 import webbrowser
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -111,6 +112,8 @@ QUICK = ["BONK", "WIF", "POPCAT", "PEPE", "TRUMP", "FARTCOIN"]
 
 # Desktop search bar history (local file; not shipped in share package)
 SEARCH_HISTORY_MAX = 5
+# History Log tab: last N full analyzes (drops oldest when over limit)
+HISTORY_LOG_MAX = 20
 
 
 def _app_data_dir() -> Path:
@@ -122,6 +125,10 @@ def _app_data_dir() -> Path:
 
 def _search_history_path() -> Path:
     return _app_data_dir() / "search_history.json"
+
+
+def _history_log_path() -> Path:
+    return _app_data_dir() / "history_log.json"
 
 
 def load_search_history() -> list[dict[str, Any]]:
@@ -197,9 +204,234 @@ def _history_label(h: dict[str, Any]) -> str:
     return "  ·  ".join(parts)
 
 
+def load_history_log() -> list[dict[str, Any]]:
+    """Load History Log entries (newest first), max HISTORY_LOG_MAX."""
+    path = _history_log_path()
+    try:
+        if not path.is_file():
+            return []
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return [h for h in data if isinstance(h, dict)][:HISTORY_LOG_MAX]
+    except (OSError, json.JSONDecodeError, TypeError):
+        pass
+    return []
+
+
+def save_history_log(items: list[dict[str, Any]]) -> None:
+    path = _history_log_path()
+    try:
+        path.write_text(
+            json.dumps(items[:HISTORY_LOG_MAX], indent=2, default=str),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+def _fmt_usd_short(v: Any) -> str | None:
+    try:
+        if v is None or v == "":
+            return None
+        n = float(v)
+    except (TypeError, ValueError):
+        return None
+    if n >= 1_000_000_000:
+        return f"${n / 1_000_000_000:.2f}B"
+    if n >= 1_000_000:
+        return f"${n / 1_000_000:.2f}M"
+    if n >= 1_000:
+        return f"${n / 1_000:.2f}K"
+    if n >= 1:
+        return f"${n:.4f}"
+    return f"${n:.8f}".rstrip("0").rstrip(".")
+
+
+def _fmt_pct_short(v: Any) -> str | None:
+    try:
+        if v is None or v == "":
+            return None
+        return f"{float(v):.2f}%"
+    except (TypeError, ValueError):
+        return None
+
+
+def build_history_log_entry(
+    report: dict[str, Any],
+    *,
+    query: str | None = None,
+) -> dict[str, Any] | None:
+    """Summarize one successful Analyze into a History Log row."""
+    if not report or not report.get("ok"):
+        return None
+    tok = report.get("token") or {}
+    mkt = report.get("market") or {}
+    pair = mkt.get("pair") if isinstance(mkt.get("pair"), dict) else {}
+    holders = report.get("holders") or {}
+    hsum = holders.get("summary") or {}
+    bundles = report.get("bundles") or {}
+    bsum = bundles.get("summary") or {}
+    alerts = report.get("alerts") or {}
+    pf = report.get("pumpfun") or {}
+    pc = mkt.get("price_change_pct") or {}
+
+    address = (tok.get("address") or "").strip()
+    symbol = (tok.get("symbol") or "").strip()
+    name = (tok.get("name") or "").strip()
+    chain = (tok.get("chain_id") or "").strip()
+    q = (query or symbol or address or "").strip()
+    if not q and not address and not symbol:
+        return None
+
+    entry: dict[str, Any] = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "query": q,
+        "symbol": symbol or None,
+        "name": name or None,
+        "address": address or None,
+        "chain": chain or None,
+        "dex_id": (pair.get("dex_id") or pf.get("dex_id") or None),
+        "pair_address": pair.get("pair_address"),
+        "price_usd": mkt.get("price_usd"),
+        "market_cap_usd": mkt.get("market_cap_usd") or mkt.get("fdv_usd"),
+        "liquidity_usd": mkt.get("liquidity_usd"),
+        "volume_h24_usd": mkt.get("volume_h24_usd"),
+        "price_change_h24_pct": pc.get("h24") if isinstance(pc, dict) else None,
+        "concentration_risk": hsum.get("concentration_risk"),
+        "top1_pct": hsum.get("top1_pct"),
+        "top5_pct": hsum.get("top5_pct"),
+        "top10_pct": hsum.get("top10_pct"),
+        "holders_ok": bool(holders.get("ok")),
+        "bundle_risk": bsum.get("bundle_risk"),
+        "bundle_pct": bsum.get("estimated_bundle_pct")
+        or bsum.get("total_bundle_pct")
+        or bsum.get("bundle_pct"),
+        "alerts_priority_count": int(alerts.get("priority_count") or 0),
+        "pumpfun": {
+            "is_pump_mint": pf.get("is_pump_mint"),
+            "status": pf.get("status"),
+            "graduated": pf.get("graduated"),
+            "on_bonding_curve": pf.get("on_bonding_curve"),
+        }
+        if pf
+        else None,
+        "pair_url": pair.get("url"),
+    }
+    return entry
+
+
+def push_history_log(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    Prepend entry; keep only HISTORY_LOG_MAX (drop oldest when over 20).
+    Returns the updated list (newest first).
+    """
+    if not entry:
+        return load_history_log()
+    items = load_history_log()
+    # Prefer unique by address when present, else query+chain+ts keeps separate runs
+    addr = (entry.get("address") or "").strip().lower()
+    # Always add a new search row (history of searches), do not merge same token
+    items.insert(0, entry)
+    items = items[:HISTORY_LOG_MAX]
+    save_history_log(items)
+    return items
+
+
+def format_history_log_text(items: list[dict[str, Any]] | None = None) -> str:
+    """Human-readable History Log for the tab."""
+    rows = items if items is not None else load_history_log()
+    lines = [
+        "=" * 72,
+        "  HISTORY LOG",
+        f"  Last {HISTORY_LOG_MAX} token searches (oldest dropped when full)",
+        f"  Stored: {_history_log_path()}",
+        "=" * 72,
+        "",
+    ]
+    if not rows:
+        lines.append("  No searches yet.")
+        lines.append("  Run Analyze — each successful lookup is logged here.")
+        lines.append("")
+        lines.append("  Use Download to save this log as a text/JSON file.")
+        return "\n".join(lines) + "\n"
+
+    lines.append(f"  Entries: {len(rows)} / {HISTORY_LOG_MAX}")
+    lines.append("")
+    for i, e in enumerate(rows, 1):
+        ts = (e.get("ts") or "")[:19].replace("T", " ")
+        if ts:
+            ts = f"{ts} UTC"
+        sym = e.get("symbol") or e.get("query") or "token"
+        name = e.get("name") or ""
+        chain = e.get("chain") or "—"
+        addr = e.get("address") or ""
+        title = f"{sym}"
+        if name and name.upper() != str(sym).upper():
+            title = f"{sym}  ({name})"
+        lines.append(f"  {i:2}. {title}")
+        lines.append(f"      When:   {ts or '—'}")
+        lines.append(f"      Chain:  {chain}  ·  DEX: {e.get('dex_id') or '—'}")
+        if addr:
+            lines.append(f"      Mint:   {addr}")
+        if e.get("query") and str(e.get("query")) not in {sym, addr}:
+            lines.append(f"      Query:  {e.get('query')}")
+        price = _fmt_usd_short(e.get("price_usd"))
+        mcap = _fmt_usd_short(e.get("market_cap_usd"))
+        liq = _fmt_usd_short(e.get("liquidity_usd"))
+        vol = _fmt_usd_short(e.get("volume_h24_usd"))
+        chg = _fmt_pct_short(e.get("price_change_h24_pct"))
+        mbits = []
+        if price:
+            mbits.append(f"price {price}")
+        if mcap:
+            mbits.append(f"mcap {mcap}")
+        if liq:
+            mbits.append(f"liq {liq}")
+        if vol:
+            mbits.append(f"vol24 {vol}")
+        if chg:
+            mbits.append(f"24h {chg}")
+        if mbits:
+            lines.append(f"      Market: {' · '.join(mbits)}")
+        t1 = _fmt_pct_short(e.get("top1_pct"))
+        t5 = _fmt_pct_short(e.get("top5_pct"))
+        t10 = _fmt_pct_short(e.get("top10_pct"))
+        risk = e.get("concentration_risk") or "—"
+        if e.get("holders_ok") or t1 or t5 or t10:
+            lines.append(
+                f"      Holders: risk {risk}  ·  "
+                f"Top1 {t1 or '—'} · Top5 {t5 or '—'} · Top10 {t10 or '—'}"
+            )
+        br = e.get("bundle_risk")
+        bp = _fmt_pct_short(e.get("bundle_pct"))
+        if br or bp:
+            lines.append(
+                f"      Bundles: risk {br or '—'}  ·  share {bp or '—'}"
+            )
+        ac = int(e.get("alerts_priority_count") or 0)
+        lines.append(f"      Alerts:  {ac} top-priority warning(s)")
+        pfm = e.get("pumpfun") or {}
+        if isinstance(pfm, dict) and (
+            pfm.get("is_pump_mint")
+            or pfm.get("status")
+            or pfm.get("on_bonding_curve")
+        ):
+            lines.append(
+                f"      Pump:    mint={pfm.get('is_pump_mint')}  "
+                f"status={pfm.get('status') or '—'}  "
+                f"graduated={pfm.get('graduated')}"
+            )
+        if e.get("pair_url"):
+            lines.append(f"      Link:    {e.get('pair_url')}")
+        lines.append("")
+    lines.append("  — end of history —")
+    lines.append("  Download saves this view (or JSON) to a file.")
+    return "\n".join(lines) + "\n"
+
+
 def run_gui() -> None:
     import tkinter as tk
-    from tkinter import messagebox, scrolledtext, ttk
+    from tkinter import filedialog, messagebox, scrolledtext, ttk
 
     # Professional slate / indigo palette (sleek, low-glare)
     BG = "#0b0f14"
@@ -351,7 +583,10 @@ def run_gui() -> None:
     ).pack(anchor="w")
     tk.Label(
         brand,
-        text="Token intelligence  ·  Overview · Holders · Bundles · Alerts · Maps · About",
+        text=(
+            "Token intelligence  ·  Overview · Holders · Bundles · Alerts · "
+            "Maps · About · History"
+        ),
         bg=BG,
         fg=MUTED,
         font=(FONT, 9),
@@ -1101,6 +1336,28 @@ def run_gui() -> None:
                 return True
         return False
 
+    def _line_containing(content: str, idx: int) -> str:
+        """Return the full line of text that contains character index idx."""
+        start = content.rfind("\n", 0, idx) + 1
+        end = content.find("\n", idx)
+        if end < 0:
+            end = len(content)
+        return content[start:end]
+
+    def _is_top_summary_line(line: str) -> bool:
+        """
+        True for concentration summary lines like:
+          Top1 12.34% · Top5 30.00% · Top10 50.00%
+        Those percentages stay default text color (no priority palette).
+        """
+        # Match Top1 / Top5 / Top10 appearing together or as a summary row
+        has_top1 = bool(re.search(r"\bTop\s*1\b", line, re.I))
+        has_top5 = bool(re.search(r"\bTop\s*5\b", line, re.I))
+        has_top10 = bool(re.search(r"\bTop\s*10\b", line, re.I))
+        return (has_top1 and has_top5) or (has_top1 and has_top10) or (
+            has_top5 and has_top10
+        ) or bool(re.search(r"\bTop\s*1\b.*\bTop\s*5\b.*\bTop\s*10\b", line, re.I))
+
     def _insert_text_with_wallet_links(
         box: Any,
         content: str,
@@ -1108,12 +1365,32 @@ def run_gui() -> None:
         error: bool = False,
         color_holder_pct: bool = True,
         color_mode: str = "all",
+        link_urls: bool = False,
     ) -> None:
         """
         Insert report text; Solana wallets + optional holder % priority colors.
         color_mode: "all" | "none" | "bundles" (total + suspect only)
+        Top1/Top5/Top10 summary % values are never colored.
+        link_urls: also make http(s) Solscan/etc. lines clickable (Holders).
         """
         _configure_link_tags(box)
+        if link_urls:
+            # Ensure URL clicks work (Creator / top-holder Solscan lines)
+            box.tag_bind(
+                "url_link",
+                "<Button-1>",
+                lambda e, b=box: _open_url_for_index(b, e),
+            )
+            box.tag_bind(
+                "url_link",
+                "<Enter>",
+                lambda _e, b=box: b.configure(cursor="hand2"),
+            )
+            box.tag_bind(
+                "url_link",
+                "<Leave>",
+                lambda _e, b=box: b.configure(cursor="arrow"),
+            )
         box.configure(state="normal")
         box.delete("1.0", "end")
         if error:
@@ -1127,15 +1404,28 @@ def run_gui() -> None:
             _bundle_colorable_ranges(content) if color_mode == "bundles" else []
         )
 
-        # Spans: (start, end, tag_or_None) — wallets + supply % + priority labels
+        # Spans: (start, end, tag_or_None) — URLs + wallets + supply %
         spans: list[tuple[int, int, str | None]] = []
+        if link_urls:
+            for m in URL_RE.finditer(content):
+                raw = m.group(0)
+                url = raw.rstrip(".,;:)>\"'")
+                spans.append((m.start(), m.start() + len(url), "url_link"))
         for m in SOL_ADDR_RE.finditer(content):
-            spans.append((m.start(), m.end(), "wallet_link"))
+            s, e = m.start(), m.end()
+            # Skip address if it sits inside an already-tagged URL
+            if any(s < pe and e > ps and tag == "url_link" for ps, pe, tag in spans):
+                continue
+            spans.append((s, e, "wallet_link"))
         if allow_pct:
             for m in HOLDER_PCT_RE.finditer(content):
                 if color_mode == "bundles" and not _in_any_range(
                     m.start(), bundle_ranges
                 ):
+                    continue
+                # Leave Top1 / Top5 / Top10 summary line percentages uncolored
+                line = _line_containing(content, m.start())
+                if _is_top_summary_line(line):
                     continue
                 try:
                     n = float(m.group(1))
@@ -1241,7 +1531,10 @@ def run_gui() -> None:
         box = tab_widgets.get("holders")
         if box is None:
             return
-        _insert_text_with_wallet_links(box, content, error=error)
+        # Wallets + Solscan URLs clickable (Creator wallet, top holders, authorities)
+        _insert_text_with_wallet_links(
+            box, content, error=error, link_urls=True
+        )
 
     def _render_about_text(content: str, *, error: bool = False) -> None:
         box = tab_widgets.get("about")
@@ -1486,6 +1779,136 @@ def run_gui() -> None:
         "Run Analyze to load official coin facts and community tone.",
     )
 
+    # ── History Log tab (last 20 searches + download) ─────────────────
+    history_frame = tk.Frame(notebook, bg=PANEL)
+    notebook.add(history_frame, text="History")
+    history_bar = tk.Frame(
+        history_frame, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1
+    )
+    history_bar.pack(fill="x", padx=8, pady=(8, 4))
+    hist_inner = tk.Frame(history_bar, bg=SURFACE)
+    hist_inner.pack(fill="x", padx=8, pady=6)
+    tk.Label(
+        hist_inner,
+        text="HISTORY LOG",
+        bg=SURFACE,
+        fg=MUTED,
+        font=(FONT, 8, "bold"),
+    ).pack(side="left", padx=(0, 10))
+    tk.Label(
+        hist_inner,
+        text=f"Keeps last {HISTORY_LOG_MAX} searches · oldest removed when full",
+        bg=SURFACE,
+        fg=MUTED,
+        font=(FONT, 8),
+    ).pack(side="left", fill="x", expand=True)
+
+    def refresh_history_tab() -> None:
+        try:
+            set_tab_text("history", format_history_log_text())
+        except Exception:  # noqa: BLE001
+            try:
+                _plain_set_tab_text("history", format_history_log_text())
+            except Exception:  # noqa: BLE001
+                pass
+
+    def download_history_log() -> None:
+        items = load_history_log()
+        if not items:
+            messagebox.showinfo(
+                APP_NAME,
+                "History Log is empty.\nRun Analyze first, then download.",
+            )
+            return
+        default_name = (
+            f"adtc_history_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        )
+        path = filedialog.asksaveasfilename(
+            title="Download History Log",
+            defaultextension=".txt",
+            initialfile=default_name,
+            initialdir=str(Path.home() / "Desktop"),
+            filetypes=[
+                ("Text log", "*.txt"),
+                ("JSON", "*.json"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not path:
+            return
+        out = Path(path)
+        try:
+            if out.suffix.lower() == ".json":
+                out.write_text(
+                    json.dumps(items, indent=2, default=str),
+                    encoding="utf-8",
+                )
+            else:
+                out.write_text(format_history_log_text(items), encoding="utf-8")
+            messagebox.showinfo(APP_NAME, f"History Log saved to:\n{out}")
+            status_var.set(f"History Log downloaded · {len(items)} entries")
+        except OSError as exc:
+            messagebox.showerror(APP_NAME, f"Could not save history:\n{exc}")
+
+    def clear_history_log() -> None:
+        if not load_history_log():
+            messagebox.showinfo(APP_NAME, "History Log is already empty.")
+            return
+        if not messagebox.askyesno(
+            APP_NAME,
+            f"Clear all {len(load_history_log())} History Log entries?",
+        ):
+            return
+        save_history_log([])
+        refresh_history_tab()
+        status_var.set("History Log cleared")
+
+    ttk.Button(
+        hist_inner,
+        text="Download",
+        style="Ghost.TButton",
+        command=download_history_log,
+        width=10,
+    ).pack(side="right", padx=(4, 0))
+    ttk.Button(
+        hist_inner,
+        text="Clear",
+        style="Ghost.TButton",
+        command=clear_history_log,
+        width=7,
+    ).pack(side="right", padx=2)
+    ttk.Button(
+        hist_inner,
+        text="Refresh",
+        style="Ghost.TButton",
+        command=refresh_history_tab,
+        width=8,
+    ).pack(side="right", padx=2)
+
+    history_box = scrolledtext.ScrolledText(
+        history_frame,
+        wrap="word",
+        bg=PANEL,
+        fg=FG,
+        insertbackground=FG,
+        relief="flat",
+        font=(FONT_MONO, 10),
+        padx=16,
+        pady=14,
+        borderwidth=0,
+        highlightthickness=0,
+        selectbackground=ACCENT_DIM,
+        selectforeground=FG,
+        cursor="arrow",
+    )
+    history_box.pack(fill="both", expand=True)
+    history_box.tag_configure("muted", foreground=MUTED)
+    history_box.tag_configure("err", foreground="#c45c5c")
+    history_box.insert("end", format_history_log_text())
+    history_box.configure(state="disabled")
+    tab_widgets["history"] = history_box
+    tab_frames["history"] = history_frame
+
     TAB_INDEX = {
         "overview": 0,
         "holders": 1,
@@ -1493,6 +1916,7 @@ def run_gui() -> None:
         "alerts": 3,
         "maps": 4,
         "about": 5,
+        "history": 6,
     }
 
     # ── Bottom actions ─────────────────────────────────────────────────
@@ -1609,10 +2033,19 @@ def run_gui() -> None:
                 from token_tracker.alerts import build_alerts
 
                 report = dict(report)
+                tok = report.get("token") or {}
+                mkt = report.get("market") or {}
+                pair = mkt.get("pair") if isinstance(mkt.get("pair"), dict) else {}
+                pf = report.get("pumpfun") or {}
                 report["alerts"] = build_alerts(
                     report.get("holders") or {},
                     report.get("bundles") or {},
                     socials=report.get("socials") or {},
+                    pumpfun=pf,
+                    token_address=tok.get("address"),
+                    dex_id=pair.get("dex_id") or mkt.get("dex_id") or pf.get("dex_id"),
+                    dexes=list(pf.get("dexes_seen") or []),
+                    market=mkt,
                 )
             except Exception:  # noqa: BLE001
                 pass
@@ -1815,7 +2248,9 @@ def run_gui() -> None:
                     _unlock_analyze()
                     status_var.set("Error — fetch failed")
                     set_output(f"Lookup failed:\n{payload}", error=True, tab="overview")
-                    for tab in ("holders", "bundles", "alerts", "maps", "about"):
+                    for tab in ("holders", "bundles", "alerts", "maps", "about", "history"):
+                        if tab == "history":
+                            continue
                         set_tab_text(tab, f"Lookup failed:\n{payload}", error=True)
                     continue
 
@@ -1874,6 +2309,20 @@ def run_gui() -> None:
                         )
                     except Exception:  # noqa: BLE001
                         pass
+                    # History Log: record completed searches only (full phase)
+                    if is_full:
+                        try:
+                            entry = build_history_log_entry(
+                                report,
+                                query=query_var.get().strip()
+                                or tok.get("symbol")
+                                or tok.get("address"),
+                            )
+                            if entry:
+                                push_history_log(entry)
+                                refresh_history_tab()
+                        except Exception:  # noqa: BLE001
+                            pass
                     focus = report.get("_focus_tab")
                     if report.get("_raw_bundles_text") and not report.get("market", {}).get("price_usd"):
                         focus = focus or "bundles"
@@ -2154,7 +2603,11 @@ def run_gui() -> None:
                             "bundles": bdata,
                             "alerts": __import__(
                                 "token_tracker.alerts", fromlist=["build_alerts"]
-                            ).build_alerts(data, bdata),
+                            ).build_alerts(
+                                data,
+                                bdata,
+                                token_address=addr,
+                            ),
                             "community_sentiment_x": {
                                 "sentiment": {"label": "n/a", "score": None, "summary": ""},
                                 "posts_analyzed": 0,
@@ -2274,7 +2727,11 @@ def run_gui() -> None:
                             "bundles": bdata,
                             "alerts": __import__(
                                 "token_tracker.alerts", fromlist=["build_alerts"]
-                            ).build_alerts(hdata, bdata),
+                            ).build_alerts(
+                                hdata,
+                                bdata,
+                                token_address=addr,
+                            ),
                             "community_sentiment_x": {
                                 "sentiment": {"label": "n/a", "score": None, "summary": ""},
                                 "posts_analyzed": 0,

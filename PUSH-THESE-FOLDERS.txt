@@ -1,0 +1,6 @@
+﻿GitHub repo Greenwolf30/Actual-Token-Checker is MISSING these folders:
+  - token_tracker/   (REQUIRED - analyze engine)
+  - web/             (REQUIRED - website UI)
+  - market_data/     (optional but used by desktop)
+
+Top-level .py files alone are not enough. Upload/push the whole folders.

@@ -21,7 +21,7 @@ A research tool for crypto tokens (especially Solana, plus other chains like
 Ethereum, Base, and Robinhood Chain). You paste a contract or ticker; the app
 pulls public market and risk data and shows it in tabs:
 
-  Overview · Holders · Bundles · Alerts · Maps · About
+  Overview · Holders · Bundles · Alerts · Maps · About · History
 
 It does NOT trade for you, custody funds, or guarantee a token is safe.
 
@@ -418,7 +418,86 @@ About is split into story + community + news + links.
 
 
 --------------------------------------------------------------------------------
-11. ROBINHOOD CHAIN (BRIEF)
+11. HISTORY
+--------------------------------------------------------------------------------
+
+Subtitle: History
+
+The History tab is a private log of tokens you have already searched.
+It sits next to Overview, Holders, Bundles, Alerts, Maps, and About on
+the desktop app. Use it to look back at recent analyzes without typing
+every mint again.
+
+What History is for
+  - See a list of your last token searches in one place.
+  - Review market, holder, bundle, and alert snapshots from those runs.
+  - Download the list to a file for your own notes.
+
+When a search is saved
+  - A row is added only after a successful full Analyze finishes
+    (status shows OK / full data loaded).
+  - Failed searches (not found, errors) are not saved.
+  - Quick or partial loads wait until the full run completes before
+    they appear in History.
+  - Searching the same token again adds another row (each run is kept
+    as its own entry).
+
+What each entry shows
+  A snapshot from the moment you searched — not live prices:
+
+    · When you searched (UTC)
+    · Symbol, name, mint address, chain
+    · DEX / pool when known
+    · Price, market cap, liquidity, 24h volume and change
+    · Holder concentration and Top1 / Top5 / Top10 %
+    · Bundle risk and share %
+    · How many top-priority alerts fired
+    · Pump.fun status when known
+    · Pair link when known
+
+  These numbers freeze at search time. To refresh a token, run Analyze
+  again.
+
+How many entries
+  - History keeps up to 20 searches.
+  - Newest is at the top.
+  - When you go past 20, the oldest entry is removed automatically.
+
+Where it lives on your computer
+  - Saved as history_log.json next to the app.
+  - Only on your machine; other people using the app do not see your log.
+  - Different from the small search-bar dropdown (that only remembers a
+    few recent queries for typing). History is the full tab.
+
+Buttons
+  Download
+    Save the current History to a file you choose.
+    · .txt — easy to read (same layout as the tab)
+    · .json — structured data for other tools
+
+  Refresh
+    Reload the list from the saved file on disk.
+
+  Clear
+    Delete every History entry after you confirm. This cannot be undone.
+
+How to use it
+  1. Analyze a token and wait until the run finishes successfully.
+  2. Open the History tab — that token should be first on the list.
+  3. Keep analyzing other tokens (up to 20 kept).
+  4. Use Download if you want a copy of the log.
+  5. Use Clear only if you want an empty History.
+
+What History is not
+  - Not a live price feed.
+  - Not a full export of every report field (use Export JSON for the
+    current token if you need the full dump).
+  - Not a safety rating or “safe list.” Past results are for your
+    reference only.
+
+
+--------------------------------------------------------------------------------
+12. ROBINHOOD CHAIN (BRIEF)
 --------------------------------------------------------------------------------
 
   - DexScreener chain id: robinhood (EVM mainnet id 4663)
@@ -428,7 +507,7 @@ About is split into story + community + news + links.
 
 
 --------------------------------------------------------------------------------
-12. COMMON QUESTIONS
+13. COMMON QUESTIONS
 --------------------------------------------------------------------------------
 
 Q: Can visitors add their own Helius keys?
@@ -444,13 +523,21 @@ A: Total views do not reset daily. “Unique today” does. Free hosting may
 
 Q: Why is LP unlocked on a Pump.fun coin?
 A: LP-lock check is classic pool lock %, not a full bonding-curve model.
+   On desktop Alerts, that LP-unlock warning is skipped for Pump.fun /
+   PumpSwap pools (and classic “…pump” mints) because those venues do
+   not map cleanly to locked LP pools.
 
 Q: Does a clean Alerts tab mean safe?
 A: No. Absence of flags ≠ safety.
 
+Q: Where did my History go after reinstall or moving the app?
+A: History is saved in history_log.json next to the app. If you move or
+   delete that folder, the log may be gone. Use Download to keep a
+   backup copy.
+
 
 --------------------------------------------------------------------------------
-13. DISCLAIMER
+14. DISCLAIMER
 --------------------------------------------------------------------------------
 
   Heuristics only. Data can be wrong, late, or incomplete.
