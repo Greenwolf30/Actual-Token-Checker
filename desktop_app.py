@@ -256,12 +256,32 @@ def _fmt_pct_short(v: Any) -> str | None:
         return None
 
 
+# Cap text snapshots so 20 Logs entries stay reasonable on disk / browser storage
+_LOGS_HOLDERS_SNAP_MAX = 12_000
+_LOGS_BUNDLES_SNAP_MAX = 8_000
+
+
+def _clip_snapshot(text: str | None, max_chars: int) -> str | None:
+    """Trim a holders/bundles text snapshot for Logs storage."""
+    if not text:
+        return None
+    s = str(text).strip()
+    if not s:
+        return None
+    if len(s) <= max_chars:
+        return s
+    return (
+        s[: max_chars - 80].rstrip()
+        + "\n\n  … [snapshot truncated for Logs storage] …\n"
+    )
+
+
 def build_history_log_entry(
     report: dict[str, Any],
     *,
     query: str | None = None,
 ) -> dict[str, Any] | None:
-    """Summarize one successful Analyze into a History Log row."""
+    """Summarize one successful Analyze into a Logs row (incl. holders/bundles snaps)."""
     if not report or not report.get("ok"):
         return None
     tok = report.get("token") or {}
@@ -282,6 +302,22 @@ def build_history_log_entry(
     q = (query or symbol or address or "").strip()
     if not q and not address and not symbol:
         return None
+
+    # Text snapshots at lookup time (frozen copy — not live)
+    holders_snap = None
+    bundles_snap = None
+    try:
+        holders_snap = _clip_snapshot(
+            format_holders_section(report), _LOGS_HOLDERS_SNAP_MAX
+        )
+    except Exception:  # noqa: BLE001
+        holders_snap = None
+    try:
+        bundles_snap = _clip_snapshot(
+            format_bundles_section(report), _LOGS_BUNDLES_SNAP_MAX
+        )
+    except Exception:  # noqa: BLE001
+        bundles_snap = None
 
     entry: dict[str, Any] = {
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -316,6 +352,9 @@ def build_history_log_entry(
         if pf
         else None,
         "pair_url": pair.get("url"),
+        # Frozen text "screenshots" of Holders + Bundles at Analyze time
+        "holders_snapshot": holders_snap,
+        "bundles_snapshot": bundles_snap,
     }
     return entry
 
@@ -423,8 +462,31 @@ def format_history_log_text(items: list[dict[str, Any]] | None = None) -> str:
             )
         if e.get("pair_url"):
             lines.append(f"      Link:    {e.get('pair_url')}")
+
+        # Frozen Holders snapshot (text screenshot from lookup time)
+        h_snap = (e.get("holders_snapshot") or "").strip()
+        if h_snap:
+            lines.append("")
+            lines.append("      ── HOLDERS SNAPSHOT (at lookup) ──")
+            for hl in h_snap.splitlines():
+                lines.append(f"      {hl}" if hl.strip() else "")
+        else:
+            lines.append("      Holders snapshot: (none saved for this entry)")
+
+        # Frozen Bundles snapshot
+        b_snap = (e.get("bundles_snapshot") or "").strip()
+        if b_snap:
+            lines.append("")
+            lines.append("      ── BUNDLES SNAPSHOT (at lookup) ──")
+            for bl in b_snap.splitlines():
+                lines.append(f"      {bl}" if bl.strip() else "")
+        else:
+            lines.append("      Bundles snapshot: (none saved for this entry)")
+
         lines.append("")
-    lines.append("  — end of history —")
+        lines.append("  " + ("-" * 40))
+        lines.append("")
+    lines.append("  — end of logs —")
     lines.append("  Download saves this view (or JSON) to a file.")
     return "\n".join(lines) + "\n"
 

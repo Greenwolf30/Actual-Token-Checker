@@ -238,6 +238,22 @@ def _safe_links(report: dict[str, Any]) -> dict[str, str]:
     return {k: redact_text(v) for k, v in links.items() if v}
 
 
+def _clip_log_snapshot(text: Any, *, max_chars: int = 10_000) -> str | None:
+    """Trim Holders/Bundles text for website Logs localStorage."""
+    if text is None:
+        return None
+    s = str(text).strip()
+    if not s:
+        return None
+    s = redact_text(s)
+    if len(s) <= max_chars:
+        return s
+    return (
+        s[: max_chars - 80].rstrip()
+        + "\n\n  … [snapshot truncated for Logs storage] …\n"
+    )
+
+
 def build_public_payload(report: dict[str, Any]) -> dict[str, Any]:
     """Client-safe analyze response (formatted tabs + summary, no keys)."""
     if not report.get("ok"):
@@ -281,7 +297,8 @@ def build_public_payload(report: dict[str, Any]) -> dict[str, Any]:
             "priority_count": alerts.get("priority_count") or 0,
             "summary": redact_text(str(alerts.get("summary") or "")),
         },
-        # Compact fields for the website History tab (browser localStorage)
+        # Fields for website Logs tab (browser localStorage)
+        # Text snapshots are clipped so ~20 entries fit in localStorage.
         "history_meta": {
             "holders_ok": bool(holders.get("ok")),
             "concentration_risk": hsum.get("concentration_risk"),
@@ -301,6 +318,13 @@ def build_public_payload(report: dict[str, Any]) -> dict[str, Any]:
             }
             if pf
             else None,
+            # Frozen Holders + Bundles text at lookup time (not live)
+            "holders_snapshot": _clip_log_snapshot(
+                sections.get("holders"), max_chars=10_000
+            ),
+            "bundles_snapshot": _clip_log_snapshot(
+                sections.get("bundles"), max_chars=7_000
+            ),
         },
         "about_meta": {
             "headline": narrative.get("headline"),
