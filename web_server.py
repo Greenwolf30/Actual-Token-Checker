@@ -273,6 +273,9 @@ def _clean_logs_snapshot(text: Any) -> str:
         # Flag bullet that is only a rugwatch count (not wallet list)
         if "rugwatch:" in low and "flagged" in low and t.startswith(("•", "*", "-")):
             continue
+        # Solscan URL rows (keep wallet addresses elsewhere)
+        if re.match(r"^https?://(www\.)?solscan\.io/(account|token)/", t, re.I):
+            continue
 
         out.append(line)
 
