@@ -4,6 +4,18 @@ Local + web token research tool (DexScreener markets, holders, bundles, alerts, 
 
 **This repo has no API keys.** Copy `.env.example` → `.env` and add your own.
 
+## Chains
+
+| Chain | Market (DexScreener) | Holders / bundles |
+|-------|----------------------|-------------------|
+| **Solana** | Yes | Yes (Helius / Rugcheck / …) |
+| **Robinhood Chain** (`robinhood`, chain id **4663**) | Yes | Explorer link only for now |
+| Ethereum / Base / Arbitrum / … | Yes | Not fully wired |
+
+Examples:
+- Chain filter: **robinhood**
+- Query: `0x…` token on Robinhood, or `robinhood:0x…`
+
 ## Setup
 
 ```bash

@@ -195,6 +195,17 @@ def _safe_links(report: dict[str, Any]) -> dict[str, str]:
     chain = (token.get("chain_id") or "solana").lower()
     if addr and chain in {"solana", "sol"}:
         links["solscan"] = f"https://solscan.io/token/{addr}"
+    elif addr and chain in {"robinhood", "rh", "robinhood-chain"}:
+        # Robinhood Chain explorer (Blockscout)
+        a = addr if addr.startswith("0x") else addr
+        links["explorer"] = f"https://robinhoodchain.blockscout.com/token/{a}"
+        links["dexscreener_chain"] = f"https://dexscreener.com/robinhood/{a}"
+    elif addr and chain in {"ethereum", "eth"} and addr.startswith("0x"):
+        links["etherscan"] = f"https://etherscan.io/token/{addr}"
+    elif addr and chain == "base" and addr.startswith("0x"):
+        links["basescan"] = f"https://basescan.org/token/{addr}"
+    elif addr and chain in {"arbitrum", "arb"} and addr.startswith("0x"):
+        links["arbiscan"] = f"https://arbiscan.io/token/{addr}"
     if maps.get("bubblemaps_url"):
         links["bubblemaps"] = str(maps["bubblemaps_url"])
     elif maps.get("url"):
