@@ -169,6 +169,9 @@ function cleanLogsSnapshot(text) {
     if (/^•\s*rugwatch:/i.test(t) || /^\*\s*rugwatch:/i.test(t)) continue;
     if (/rugwatch:\s*\d+\s*flagged/i.test(t)) continue;
 
+    // Solscan URL rows (addresses kept separately)
+    if (/^https?:\/\/(www\.)?solscan\.io\/(account|token)\//i.test(t)) continue;
+
     out.push(line);
   }
   // Collapse excess blank lines
@@ -291,13 +294,19 @@ function formatHistoryLogText(items) {
     lines.push(entrySep);
     lines.push("");
     lines.push("  " + String(idx + 1).padStart(2) + ".");
-    lines.push(entryOverviewText(e));
+    lines.push(stripSolscanUrlLines(entryOverviewText(e)));
     lines.push("");
     lines.push("  --- HOLDERS SNAPSHOT ---");
-    lines.push(cleanLogsSnapshot(e.holders_snapshot || "") || "(none)");
+    lines.push(
+      stripSolscanUrlLines(cleanLogsSnapshot(e.holders_snapshot || "")) ||
+        "(none)"
+    );
     lines.push("");
     lines.push("  --- BUNDLES SNAPSHOT ---");
-    lines.push(cleanLogsSnapshot(e.bundles_snapshot || "") || "(none)");
+    lines.push(
+      stripSolscanUrlLines(cleanLogsSnapshot(e.bundles_snapshot || "")) ||
+        "(none)"
+    );
     lines.push("");
   });
   lines.push(entrySep);
@@ -356,12 +365,31 @@ function refreshHistoryPanel() {
     if (ts) ts += " UTC";
 
     const overview = entryOverviewText(e);
-    const holders =
+    const holdersPlain =
       cleanLogsSnapshot(e.holders_snapshot || "") ||
       "(no holders snapshot for this entry)";
-    const bundles =
+    const bundlesPlain =
       cleanLogsSnapshot(e.bundles_snapshot || "") ||
       "(no bundles snapshot for this entry)";
+
+    // Overview: clickable mint + light % colors (not Top1/5/10 style lines)
+    const overviewHtml = formatHoldersRichHtml(overview);
+    // Holders/Bundles: same as Holders tab (no Solscan URL rows, clickable addrs, yellow amounts, % colors)
+    const holdersHtml = formatHoldersRichHtml(holdersPlain);
+    const bundlesHtml = formatHoldersRichHtml(bundlesPlain);
+
+    // Subline mint clickable when present
+    let subHtml = escHtml((ts || "—") + " · " + (e.chain || "—") + " · ");
+    if (e.address) {
+      subHtml +=
+        '<a class="wallet-link" href="https://solscan.io/account/' +
+        encodeURIComponent(e.address) +
+        '" target="_blank" rel="noopener noreferrer">' +
+        escHtml(e.address) +
+        "</a>";
+    } else {
+      subHtml += "—";
+    }
 
     html +=
       '<article class="logs-entry">' +
@@ -369,23 +397,23 @@ function refreshHistoryPanel() {
       escHtml(String(idx + 1).padStart(2, "0") + ". " + title) +
       "</h3>" +
       '<p class="logs-entry-sub">' +
-      escHtml((ts || "—") + " · " + (e.chain || "—") + " · " + (e.address || "")) +
+      subHtml +
       "</p>" +
       '<div class="logs-row">' +
       '<div class="logs-col">' +
       '<div class="logs-col-title">Overview</div>' +
       '<pre class="logs-col-body">' +
-      escHtml(overview) +
+      overviewHtml +
       "</pre></div>" +
       '<div class="logs-col">' +
       '<div class="logs-col-title">Holders snapshot</div>' +
       '<pre class="logs-col-body">' +
-      escHtml(holders) +
+      holdersHtml +
       "</pre></div>" +
       '<div class="logs-col">' +
       '<div class="logs-col-title">Bundles snapshot</div>' +
       '<pre class="logs-col-body">' +
-      escHtml(bundles) +
+      bundlesHtml +
       "</pre></div>" +
       "</div></article>";
   });
@@ -513,25 +541,55 @@ function showError(msg) {
   box.textContent = msg;
 }
 
+/** Remove standalone Solscan URL lines; keep wallet addresses. */
+function stripSolscanUrlLines(text) {
+  if (!text) return "";
+  return String(text)
+    .split("\n")
+    .filter((line) => {
+      const t = line.trim();
+      if (!t) return true;
+      // Drop lines that are only a Solscan account/token URL
+      if (/^https?:\/\/(www\.)?solscan\.io\/(account|token)\//i.test(t)) {
+        return false;
+      }
+      return true;
+    })
+    .join("\n");
+}
+
 function linkify(text) {
   if (!text) return "";
-  const esc = text
+  // Never show Solscan URL rows; addresses stay and become clickable below
+  const plain = stripSolscanUrlLines(text);
+  const esc = plain
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
-  // http(s) URLs first
+  // Other http(s) URLs (not solscan account lines — already stripped)
   let html = esc.replace(
     /(https?:\/\/[^\s<>"']+)/g,
-    '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
+    (url) => {
+      if (/solscan\.io\/(account|token)\//i.test(url)) {
+        return url; // should be rare after strip; leave plain if any leftover
+      }
+      return (
+        '<a href="' +
+        url +
+        '" target="_blank" rel="noopener noreferrer">' +
+        url +
+        "</a>"
+      );
+    }
   );
-  // Solana base58 wallets → Solscan (Creator + top holders); skip inside tags
+  // Solana base58 wallets → clickable Solscan (address text stays)
   html = html.replace(
     /(^|>)([^<]*?)(?=<|$)/g,
     (full, prefix, chunk) => {
       const linked = chunk.replace(
         /\b([1-9A-HJ-NP-Za-km-z]{32,44})\b/g,
         (addr) =>
-          `<a href="https://solscan.io/account/${addr}" target="_blank" rel="noopener noreferrer">${addr}</a>`
+          `<a class="wallet-link" href="https://solscan.io/account/${addr}" target="_blank" rel="noopener noreferrer">${addr}</a>`
       );
       return prefix + linked;
     }
@@ -560,6 +618,22 @@ function colorPctTokens(html) {
   });
 }
 
+/** Token balance amounts (not %) → yellow */
+function colorHoldingAmounts(html) {
+  if (!html) return html;
+  // Holder rows: "#1 1,234.5678 ("
+  let out = html.replace(
+    /(#[0-9]+\s+)([\d,]+\.\d+|[\d,]{1,}|\d+)(\s*\()/g,
+    '$1<span class="hold-amt">$2</span>$3'
+  );
+  // Cluster lines: "bal 1234.5"
+  out = out.replace(
+    /(\bbal\s+)([\d,]+\.?\d*)/gi,
+    '$1<span class="hold-amt">$2</span>'
+  );
+  return out;
+}
+
 /** True for concentration summary lines: Top1 …% · Top5 …% · Top10 …% */
 function isTopSummaryLine(line) {
   const plain = String(line || "").replace(/<[^>]*>/g, "");
@@ -581,6 +655,21 @@ function colorWalletHolderPcts(html) {
     .split("\n")
     .map((line) => (isTopSummaryLine(line) ? line : colorPctTokens(line)))
     .join("\n");
+}
+
+/**
+ * Holders + Logs rich formatting:
+ *  - drop Solscan URL lines (keep addresses)
+ *  - clickable wallet addresses
+ *  - yellow token amounts
+ *  - % color bands except Top1/Top5/Top10 lines
+ */
+function formatHoldersRichHtml(text) {
+  if (!text) return "";
+  let html = linkify(text);
+  html = colorWalletHolderPcts(html);
+  html = colorHoldingAmounts(html);
+  return html;
 }
 
 /**
@@ -610,13 +699,20 @@ function colorBundlesSelectivePcts(html) {
 function setPanelText(tab, text) {
   const el = $("text-" + tab);
   if (!el) return;
-  let html = linkify(text || "(empty)");
-  // Holders + Alerts: full wallet % colors
-  if (tab === "holders" || tab === "alerts") {
+  const raw = text || "(empty)";
+  let html;
+  if (tab === "holders") {
+    // No Solscan URL rows; clickable addresses; yellow amounts; % colors (not Top1/5/10)
+    html = formatHoldersRichHtml(raw);
+  } else if (tab === "alerts") {
+    html = linkify(raw);
     html = colorWalletHolderPcts(html);
+    html = colorHoldingAmounts(html);
   } else if (tab === "bundles") {
-    // Bundles: only total bundle % + suspect wallets
+    html = linkify(raw);
     html = colorBundlesSelectivePcts(html);
+  } else {
+    html = linkify(raw);
   }
   el.innerHTML = html;
 }
