@@ -184,6 +184,8 @@ What people often ask
   - Each wallet’s percent holdings in every group is colored the same way:
       multi-account clusters, similar-size group members, insiders, suspects
       (lines look like “wallet  holds X%”)
+  - Similar-size group header (right side): “sum X%” = combined holdings of
+      all wallets in that group; colored with the same priority bands
   - Group headers (≈ avg % / range) also use the bands
   - Cluster balances ("bal …") shown in yellow
   - Top10 ex-LP stays uncolored (summary only — see §6.3a)

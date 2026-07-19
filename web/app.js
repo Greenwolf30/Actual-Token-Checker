@@ -687,6 +687,7 @@ function formatHoldersRichHtml(text) {
  *  - Summary: Total % bundles, Similar-size total, Suspect total
  *  - Each wallet percent holdings in groups: "holds X%" on clusters,
  *    similar-size members, insiders, suspects (+ group avg/range headers)
+ *  - Similar-size group header right side: "sum X%" (combined group holdings)
  *  - Top10 ex-LP stays uncolored (summary concentration, not a wallet bag)
  * Also yellows cluster "bal …" amounts.
  */
