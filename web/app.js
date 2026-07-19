@@ -219,24 +219,39 @@ function renderPublicStats(j) {
 }
 
 async function recordAndLoadStats() {
-  // Count this browser load as a profile view (public counter)
+  // Short timeout so a hung API cannot freeze the whole UI
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
   try {
     const r = await fetch(apiUrl("/api/view"), {
       method: "POST",
       headers: headers(false),
+      signal: ctrl.signal,
     });
     const j = await r.json();
     renderPublicStats(j);
     return;
   } catch {
-    /* fall through to GET stats */
+    /* fall through */
+  } finally {
+    clearTimeout(timer);
   }
   try {
-    const r = await fetch(apiUrl("/api/stats"), { headers: headers(false) });
+    const ctrl2 = new AbortController();
+    const t2 = setTimeout(() => ctrl2.abort(), 5000);
+    const r = await fetch(apiUrl("/api/stats"), {
+      headers: headers(false),
+      signal: ctrl2.signal,
+    });
+    clearTimeout(t2);
     const j = await r.json();
     renderPublicStats(j);
   } catch {
-    /* ignore */
+    const pill = $("viewStats");
+    if (pill) {
+      pill.textContent = "views n/a";
+      pill.title = "Stats API timed out — service may be waking up. Try refresh.";
+    }
   }
 }
 
