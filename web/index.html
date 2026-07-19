@@ -129,7 +129,7 @@
         <section class="panel" id="panel-about" data-panel="about" role="tabpanel">
           <pre class="report" id="text-about">About narrative loads after Analyze (coin facts + X + news).</pre>
         </section>
-        <section class="panel" id="panel-history" data-panel="history" role="tabpanel">
+        <section class="panel panel-logs" id="panel-history" data-panel="history" role="tabpanel">
           <div class="history-bar">
             <span class="history-bar-label">LOGS · last 20 searches on this browser</span>
             <div class="history-bar-actions">
@@ -138,7 +138,12 @@
               <button type="button" id="historyDownload" class="ghost history-btn">Download</button>
             </div>
           </div>
-          <pre class="report" id="text-history">Run Analyze — successful searches are logged here (max 20).</pre>
+          <!-- 3-column row layout: Overview | Holders | Bundles (filled by app.js) -->
+          <div id="historyList" class="logs-list" aria-live="polite">
+            <p class="logs-empty">Run Analyze — successful searches are logged here (max 20).</p>
+          </div>
+          <!-- Keep for setPanelText fallback / accessibility hidden dump -->
+          <pre class="report" id="text-history" hidden></pre>
         </section>
       </main>
     </div>

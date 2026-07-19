@@ -195,7 +195,78 @@ function pushHistoryLog(entry) {
   return next;
 }
 
+function entryOverviewText(e) {
+  const lines = [];
+  let ts = String(e.ts || "").slice(0, 19).replace("T", " ");
+  if (ts) ts = ts + " UTC";
+  const sym = e.symbol || e.query || "token";
+  const name = e.name || "";
+  let title = sym;
+  if (name && name.toUpperCase() !== String(sym).toUpperCase()) {
+    title = sym + "  (" + name + ")";
+  }
+  lines.push(title);
+  lines.push("When:   " + (ts || "—"));
+  lines.push("Chain:  " + (e.chain || "—") + "  ·  DEX: " + (e.dex_id || "—"));
+  if (e.address) lines.push("Mint:   " + e.address);
+  if (e.query && e.query !== sym && e.query !== e.address) {
+    lines.push("Query:  " + e.query);
+  }
+  const mbits = [];
+  const price = fmtUsdHist(e.price_usd);
+  const mcap = fmtUsdHist(e.market_cap_usd);
+  const liq = fmtUsdHist(e.liquidity_usd);
+  const vol = fmtUsdHist(e.volume_h24_usd);
+  const chg = fmtPctHist(e.price_change_h24_pct);
+  if (price) mbits.push("price " + price);
+  if (mcap) mbits.push("mcap " + mcap);
+  if (liq) mbits.push("liq " + liq);
+  if (vol) mbits.push("vol24 " + vol);
+  if (chg) mbits.push("24h " + chg);
+  if (mbits.length) lines.push("Market: " + mbits.join(" · "));
+  const t1 = fmtPctHist(e.top1_pct);
+  const t5 = fmtPctHist(e.top5_pct);
+  const t10 = fmtPctHist(e.top10_pct);
+  if (e.holders_ok || t1 || t5 || t10) {
+    lines.push(
+      "Holders: risk " +
+        (e.concentration_risk || "—") +
+        "  ·  Top1 " +
+        (t1 || "—") +
+        " · Top5 " +
+        (t5 || "—") +
+        " · Top10 " +
+        (t10 || "—")
+    );
+  }
+  const bp = fmtPctHist(e.bundle_pct);
+  if (e.bundle_risk || bp) {
+    lines.push(
+      "Bundles: risk " + (e.bundle_risk || "—") + "  ·  share " + (bp || "—")
+    );
+  }
+  lines.push(
+    "Alerts:  " +
+      (Number(e.alerts_priority_count) || 0) +
+      " top-priority warning(s)"
+  );
+  const pfm = e.pumpfun || {};
+  if (pfm.is_pump_mint || pfm.status) {
+    lines.push(
+      "Pump:    mint=" +
+        pfm.is_pump_mint +
+        "  status=" +
+        (pfm.status || "—") +
+        "  graduated=" +
+        pfm.graduated
+    );
+  }
+  if (e.pair_url) lines.push("Link:    " + e.pair_url);
+  return lines.join("\n");
+}
+
 function formatHistoryLogText(items) {
+  /** Plain-text export (Download .txt) — single bracket separators */
   const rows = items != null ? items : loadHistoryLog();
   const entrySep =
     "[[============================================================]]";
@@ -216,119 +287,110 @@ function formatHistoryLogText(items) {
   lines.push("  Entries: " + rows.length + " / " + HISTORY_MAX);
   lines.push("");
   rows.forEach((e, idx) => {
-    // Double-bracket horizontal line between entries
-    lines.push(entrySep);
+    // Single bracket line between entries
     lines.push(entrySep);
     lines.push("");
+    lines.push("  " + String(idx + 1).padStart(2) + ".");
+    lines.push(entryOverviewText(e));
+    lines.push("");
+    lines.push("  --- HOLDERS SNAPSHOT ---");
+    lines.push(cleanLogsSnapshot(e.holders_snapshot || "") || "(none)");
+    lines.push("");
+    lines.push("  --- BUNDLES SNAPSHOT ---");
+    lines.push(cleanLogsSnapshot(e.bundles_snapshot || "") || "(none)");
+    lines.push("");
+  });
+  lines.push(entrySep);
+  lines.push("  — end of logs —");
+  return lines.join("\n") + "\n";
+}
 
-    let ts = String(e.ts || "").slice(0, 19).replace("T", " ");
-    if (ts) ts = ts + " UTC";
+function escHtml(s) {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function refreshHistoryPanel() {
+  const list = $("historyList");
+  const dump = $("text-history");
+  const rows = loadHistoryLog();
+  // Keep plain text dump for download parity / debugging
+  if (dump) dump.textContent = formatHistoryLogText(rows);
+
+  if (!list) {
+    setPanelText("history", formatHistoryLogText(rows));
+    return;
+  }
+
+  if (!rows.length) {
+    list.innerHTML =
+      '<p class="logs-empty">Run Analyze — successful searches are logged here (max 20).<br/>' +
+      "Each entry shows Overview · Holders · Bundles side by side.</p>";
+    return;
+  }
+
+  const sep =
+    "[[============================================================]]";
+  let html =
+    '<p class="logs-meta">Entries: ' +
+    rows.length +
+    " / " +
+    HISTORY_MAX +
+    " · Overview | Holders | Bundles in a row</p>";
+
+  rows.forEach((e, idx) => {
+    // Single separator between entries (not double)
+    html +=
+      '<div class="logs-sep" aria-hidden="true">' + escHtml(sep) + "</div>";
+
     const sym = e.symbol || e.query || "token";
     const name = e.name || "";
     let title = sym;
     if (name && name.toUpperCase() !== String(sym).toUpperCase()) {
       title = sym + "  (" + name + ")";
     }
-    lines.push("  " + String(idx + 1).padStart(2) + ". " + title);
-    lines.push("      When:   " + (ts || "—"));
-    lines.push(
-      "      Chain:  " +
-        (e.chain || "—") +
-        "  ·  DEX: " +
-        (e.dex_id || "—")
-    );
-    if (e.address) lines.push("      Mint:   " + e.address);
-    if (e.query && e.query !== sym && e.query !== e.address) {
-      lines.push("      Query:  " + e.query);
-    }
-    const mbits = [];
-    const price = fmtUsdHist(e.price_usd);
-    const mcap = fmtUsdHist(e.market_cap_usd);
-    const liq = fmtUsdHist(e.liquidity_usd);
-    const vol = fmtUsdHist(e.volume_h24_usd);
-    const chg = fmtPctHist(e.price_change_h24_pct);
-    if (price) mbits.push("price " + price);
-    if (mcap) mbits.push("mcap " + mcap);
-    if (liq) mbits.push("liq " + liq);
-    if (vol) mbits.push("vol24 " + vol);
-    if (chg) mbits.push("24h " + chg);
-    if (mbits.length) lines.push("      Market: " + mbits.join(" · "));
-    const t1 = fmtPctHist(e.top1_pct);
-    const t5 = fmtPctHist(e.top5_pct);
-    const t10 = fmtPctHist(e.top10_pct);
-    if (e.holders_ok || t1 || t5 || t10) {
-      lines.push(
-        "      Holders: risk " +
-          (e.concentration_risk || "—") +
-          "  ·  Top1 " +
-          (t1 || "—") +
-          " · Top5 " +
-          (t5 || "—") +
-          " · Top10 " +
-          (t10 || "—")
-      );
-    }
-    const bp = fmtPctHist(e.bundle_pct);
-    if (e.bundle_risk || bp) {
-      lines.push(
-        "      Bundles: risk " +
-          (e.bundle_risk || "—") +
-          "  ·  share " +
-          (bp || "—")
-      );
-    }
-    lines.push(
-      "      Alerts:  " +
-        (Number(e.alerts_priority_count) || 0) +
-        " top-priority warning(s)"
-    );
-    const pfm = e.pumpfun || {};
-    if (pfm.is_pump_mint || pfm.status) {
-      lines.push(
-        "      Pump:    mint=" +
-          pfm.is_pump_mint +
-          "  status=" +
-          (pfm.status || "—") +
-          "  graduated=" +
-          pfm.graduated
-      );
-    }
-    if (e.pair_url) lines.push("      Link:    " + e.pair_url);
+    let ts = String(e.ts || "").slice(0, 19).replace("T", " ");
+    if (ts) ts += " UTC";
 
-    // Clean again on display (covers older stored snapshots)
-    const hSnap = cleanLogsSnapshot(e.holders_snapshot || "");
-    if (hSnap) {
-      lines.push("");
-      lines.push("      ── HOLDERS SNAPSHOT (at lookup) ──");
-      hSnap.split("\n").forEach((hl) => {
-        lines.push(hl.trim() ? "      " + hl : "");
-      });
-    } else {
-      lines.push("      Holders snapshot: (none saved for this entry)");
-    }
+    const overview = entryOverviewText(e);
+    const holders =
+      cleanLogsSnapshot(e.holders_snapshot || "") ||
+      "(no holders snapshot for this entry)";
+    const bundles =
+      cleanLogsSnapshot(e.bundles_snapshot || "") ||
+      "(no bundles snapshot for this entry)";
 
-    const bSnap = cleanLogsSnapshot(e.bundles_snapshot || "");
-    if (bSnap) {
-      lines.push("");
-      lines.push("      ── BUNDLES SNAPSHOT (at lookup) ──");
-      bSnap.split("\n").forEach((bl) => {
-        lines.push(bl.trim() ? "      " + bl : "");
-      });
-    } else {
-      lines.push("      Bundles snapshot: (none saved for this entry)");
-    }
-
-    lines.push("");
+    html +=
+      '<article class="logs-entry">' +
+      '<h3 class="logs-entry-head">' +
+      escHtml(String(idx + 1).padStart(2, "0") + ". " + title) +
+      "</h3>" +
+      '<p class="logs-entry-sub">' +
+      escHtml((ts || "—") + " · " + (e.chain || "—") + " · " + (e.address || "")) +
+      "</p>" +
+      '<div class="logs-row">' +
+      '<div class="logs-col">' +
+      '<div class="logs-col-title">Overview</div>' +
+      '<pre class="logs-col-body">' +
+      escHtml(overview) +
+      "</pre></div>" +
+      '<div class="logs-col">' +
+      '<div class="logs-col-title">Holders snapshot</div>' +
+      '<pre class="logs-col-body">' +
+      escHtml(holders) +
+      "</pre></div>" +
+      '<div class="logs-col">' +
+      '<div class="logs-col-title">Bundles snapshot</div>' +
+      '<pre class="logs-col-body">' +
+      escHtml(bundles) +
+      "</pre></div>" +
+      "</div></article>";
   });
-  lines.push(entrySep);
-  lines.push(entrySep);
-  lines.push("  — end of logs —");
-  lines.push("  Download saves this view (or JSON) to a file.");
-  return lines.join("\n") + "\n";
-}
 
-function refreshHistoryPanel() {
-  setPanelText("history", formatHistoryLogText());
+  list.innerHTML = html;
 }
 
 function downloadHistoryLog() {
