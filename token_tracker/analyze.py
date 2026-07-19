@@ -22,22 +22,116 @@ from . import social_sources as socials_src
 
 ADDRESS_RE = re.compile(r"^(0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})$")
 
+# Normalize UI / user chain aliases → DexScreener chainId
+_CHAIN_ALIASES: dict[str, str] = {
+    "rh": "robinhood",
+    "robinhood-chain": "robinhood",
+    "robinhoodchain": "robinhood",
+    "4663": "robinhood",  # Robinhood Chain mainnet id
+    "eth": "ethereum",
+    "sol": "solana",
+    "bnb": "bsc",
+    "arb": "arbitrum",
+    "matic": "polygon",
+    "poly": "polygon",
+    "avax": "avalanche",
+    "op": "optimism",
+}
+
+# EVM chains to probe when user pastes 0x… without selecting a chain
+_EVM_PROBE_CHAINS = (
+    "ethereum",
+    "base",
+    "bsc",
+    "arbitrum",
+    "robinhood",
+    "polygon",
+    "optimism",
+    "avalanche",
+)
+
+
+def _normalize_chain(chain: str | None) -> str | None:
+    if not chain:
+        return None
+    c = chain.strip().lower()
+    if c in {"", "any", "auto", "all"}:
+        return None
+    return _CHAIN_ALIASES.get(c, c)
+
 
 def resolve_pairs(query: str, chain: str | None = None) -> list[dict[str, Any]]:
+    """
+    Resolve market pairs. Uses DexScreener (cached) first; on 429 / empty for
+    pump-style mints, falls back to Pump.fun native coin API.
+    Supports Solana, EVM, and Robinhood Chain (DexScreener chainId=robinhood).
+    """
     q = query.strip()
     if not q:
         return []
+    chain = _normalize_chain(chain)
 
-    # Direct chain:address form
+    last_err: Exception | None = None
+
+    def _pump_fallback(mint_q: str) -> list[dict[str, Any]]:
+        try:
+            return pf.pairs_from_pump_fallback(mint_q)
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _direct_token_pairs(addr: str, preferred: str | None) -> list[dict[str, Any]]:
+        """Hit DexScreener token-pairs for one or several chains."""
+        chains: list[str] = []
+        if preferred:
+            chains.append(preferred)
+        is_evm = addr.lower().startswith("0x") and len(addr) == 42
+        if is_evm:
+            for c in _EVM_PROBE_CHAINS:
+                if c not in chains:
+                    chains.append(c)
+        else:
+            if "solana" not in chains:
+                chains.append("solana")
+        out: list[dict[str, Any]] = []
+        for c in chains:
+            try:
+                got = dx.pairs_for_token(c, addr)
+            except Exception as exc:  # noqa: BLE001
+                nonlocal last_err
+                last_err = exc
+                continue
+            if got:
+                # Prefer exact chain hits; return first successful probe list
+                return got
+        return out
+
+    # Direct chain:address form (e.g. robinhood:0xabc… or solana:Mint…)
     if ":" in q and not q.startswith("http"):
         maybe_chain, maybe_addr = q.split(":", 1)
+        maybe_chain = _normalize_chain(maybe_chain) or maybe_chain.lower()
         if maybe_chain and maybe_addr:
-            pairs = dx.pairs_for_token(maybe_chain, maybe_addr)
-            if pairs:
-                return pairs
+            try:
+                pairs = dx.pairs_for_token(maybe_chain, maybe_addr)
+                if pairs:
+                    return pairs
+            except Exception as exc:  # noqa: BLE001
+                last_err = exc
+            fb = _pump_fallback(maybe_addr)
+            if fb:
+                return fb
 
     # Looks like an address — search, optionally filter chain
-    pairs = dx.search_pairs(q)
+    pairs: list[dict[str, Any]] = []
+    try:
+        pairs = dx.search_pairs(q)
+    except Exception as exc:  # noqa: BLE001
+        last_err = exc
+        pairs = []
+        # Immediate pump fallback on DexScreener failure (esp. 429)
+        fb = _pump_fallback(q)
+        if fb:
+            return fb
+
     if chain:
         pairs = [p for p in pairs if (p.get("chainId") or "").lower() == chain.lower()]
 
@@ -49,33 +143,58 @@ def resolve_pairs(query: str, chain: str | None = None) -> list[dict[str, Any]]:
             if ((p.get("baseToken") or {}).get("address") or "").lower() == q.lower()
         ]
         if exact:
-            pairs = exact
-        elif chain:
-            # fallback direct endpoint
-            direct = dx.pairs_for_token(chain, q)
-            if direct:
-                pairs = direct
+            return exact
+        direct = _direct_token_pairs(q, chain)
+        if direct:
+            return direct
+        fb = _pump_fallback(q)
+        if fb:
+            return fb
+        if last_err and not pairs:
+            raise last_err
         return pairs
 
     # Symbol / name: DexScreener search is noisy (copycats). GeckoTerminal pool
     # search ranks by real reserves/volume and usually hits the canonical mint.
     looks_short_ticker = len(q) <= 12 and " " not in q
     if looks_short_ticker or not pairs:
-        hit = gt.search_top_token(q, chain=chain)
+        try:
+            hit = gt.search_top_token(q, chain=chain)
+        except Exception:  # noqa: BLE001
+            hit = None
         if hit:
-            resolved = dx.pairs_for_token(hit["chain_id"], hit["token_address"])
+            try:
+                resolved = dx.pairs_for_token(hit["chain_id"], hit["token_address"])
+            except Exception as exc:  # noqa: BLE001
+                last_err = exc
+                resolved = []
             if not resolved:
-                resolved = dx.search_pairs(hit["token_address"])
-                if chain:
-                    resolved = [
-                        p
-                        for p in resolved
-                        if (p.get("chainId") or "").lower() == chain.lower()
-                    ]
+                try:
+                    resolved = dx.search_pairs(hit["token_address"])
+                    if chain:
+                        resolved = [
+                            p
+                            for p in resolved
+                            if (p.get("chainId") or "").lower() == chain.lower()
+                        ]
+                except Exception as exc:  # noqa: BLE001
+                    last_err = exc
+                    resolved = []
+            if not resolved:
+                fb = _pump_fallback(hit["token_address"])
+                if fb:
+                    return fb
             # Trust GeckoTerminal ticker resolution — DexScreener search is full of
             # same-symbol clones, and per-pair volume there can under-report majors.
             if resolved:
                 return resolved
+
+    if not pairs:
+        fb = _pump_fallback(q)
+        if fb:
+            return fb
+        if last_err:
+            raise last_err
 
     return pairs
 
@@ -94,11 +213,25 @@ def analyze_token(
     quick=True: market + basic fields only (fast first paint for the GUI).
     Skips slow OHLCV history, social scrape, holders, and bundles.
     """
-    pairs = resolve_pairs(query, chain=chain)
+    try:
+        pairs = resolve_pairs(query, chain=chain)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "ok": False,
+            "error": (
+                f"Market lookup failed: {exc}. "
+                "If this is DexScreener 429, wait a minute or use a full pump mint "
+                "(Pump.fun fallback applies when possible)."
+            ),
+            "query": query,
+        }
     if not pairs:
         return {
             "ok": False,
-            "error": f"No pairs found on DexScreener for query: {query!r}",
+            "error": (
+                f"No pairs found for query: {query!r} "
+                "(DexScreener empty; Pump.fun fallback also missed)."
+            ),
             "query": query,
         }
 

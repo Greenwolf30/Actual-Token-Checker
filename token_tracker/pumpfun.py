@@ -287,17 +287,121 @@ def pair_to_pump_record(pair: dict[str, Any]) -> dict[str, Any]:
 
 def try_native_coin(mint: str) -> dict[str, Any] | None:
     urls = [
-        f"https://frontend-api.pump.fun/coins/{mint}",
         f"https://frontend-api-v3.pump.fun/coins/{mint}",
+        f"https://frontend-api.pump.fun/coins/{mint}",
+        f"https://client-api-2-74b1891ee9f9.herokuapp.com/coins/{mint}",
     ]
     for url in urls:
         try:
-            data = get_json(url, retries=0, timeout=10.0)
-            if isinstance(data, dict) and (data.get("mint") or data.get("symbol")):
+            data = get_json(url, retries=1, timeout=8.0)
+            if isinstance(data, dict) and (
+                data.get("mint") or data.get("symbol") or data.get("name")
+            ):
                 return data
         except Exception:  # noqa: BLE001
             continue
     return None
+
+
+def synthetic_pair_from_native(mint: str, native: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """
+    Build a DexScreener-shaped pair dict from Pump.fun coin JSON so Analyze
+    can continue when DexScreener is rate-limited (429).
+    """
+    coin = native if isinstance(native, dict) else try_native_coin(mint)
+    if not coin:
+        return None
+    addr = str(coin.get("mint") or mint or "").strip()
+    if not addr:
+        return None
+
+    name = coin.get("name") or "Unknown"
+    symbol = coin.get("symbol") or "?"
+    # price / mcap fields vary by API version
+    usd_mc = _f(coin.get("usd_market_cap")) or _f(coin.get("market_cap"))
+    price = _f(coin.get("price_usd") or coin.get("usd_price") or coin.get("price"))
+    if price is None and usd_mc:
+        # rough: total supply often 1e9 for pump tokens
+        try:
+            supply = float(coin.get("total_supply") or 1_000_000_000)
+            # total_supply may be raw with 6 decimals
+            if supply > 1e12:
+                supply = supply / 1e6
+            if supply > 0:
+                price = usd_mc / supply
+        except (TypeError, ValueError):
+            pass
+
+    complete = bool(coin.get("complete") or coin.get("raydium_pool"))
+    dex_id = "pumpswap" if complete else "pumpfun"
+
+    websites = []
+    socials = []
+    if coin.get("website"):
+        websites.append({"label": "Website", "url": str(coin["website"])})
+    if coin.get("twitter"):
+        tw = str(coin["twitter"])
+        if not tw.startswith("http"):
+            tw = f"https://x.com/{tw.lstrip('@')}"
+        socials.append({"type": "twitter", "url": tw})
+    if coin.get("telegram"):
+        tg = str(coin["telegram"])
+        if not tg.startswith("http"):
+            tg = f"https://t.me/{tg.lstrip('@')}"
+        socials.append({"type": "telegram", "url": tg})
+
+    image = coin.get("image_uri") or coin.get("image") or coin.get("uri")
+    pair: dict[str, Any] = {
+        "chainId": "solana",
+        "dexId": dex_id,
+        "pairAddress": coin.get("bonding_curve") or coin.get("raydium_pool") or addr,
+        "url": f"https://pump.fun/{addr}",
+        "baseToken": {
+            "address": addr,
+            "name": name,
+            "symbol": symbol,
+        },
+        "quoteToken": {
+            "address": "So11111111111111111111111111111111111111112",
+            "name": "Wrapped SOL",
+            "symbol": "SOL",
+        },
+        "priceUsd": str(price) if price is not None else None,
+        "marketCap": usd_mc,
+        "fdv": usd_mc,
+        "liquidity": {"usd": None},
+        "volume": {"h24": _f(coin.get("volume_24h") or coin.get("volume"))},
+        "priceChange": {},
+        "txns": {"h24": {}},
+        "pairCreatedAt": coin.get("created_timestamp"),
+        "info": {
+            "imageUrl": image,
+            "websites": websites,
+            "socials": socials,
+            "description": (coin.get("description") or "")[:500],
+        },
+        "_source": "pumpfun_native_api",
+        "_fallback": True,
+        "_is_pump_mint": True,
+        "_graduated": complete,
+    }
+    return pair
+
+
+def pairs_from_pump_fallback(query: str) -> list[dict[str, Any]]:
+    """
+    When DexScreener is unavailable, try Pump.fun native API for a mint.
+    """
+    q = (query or "").strip()
+    if ":" in q and not q.startswith("http"):
+        q = q.split(":", 1)[-1].strip()
+    if not q or len(q) < 32:
+        return []
+    # Prefer pump-suffix mints; still try any solana-looking address
+    if not (is_pump_mint(q) or (len(q) >= 32 and " " not in q)):
+        return []
+    pair = synthetic_pair_from_native(q)
+    return [pair] if pair else []
 
 
 # Classic Pump.fun bonding-curve virtual reserves at launch (lamports / raw token units)

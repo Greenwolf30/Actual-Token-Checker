@@ -46,6 +46,9 @@ _CHAIN_TO_CG: dict[str, str] = {
     "avalanche": "avalanche",
     "optimism": "optimistic-ethereum",
     "fantom": "fantom",
+    # Robinhood Chain (Arbitrum L2, chain id 4663) — may not list on CoinGecko yet
+    "robinhood": "robinhood",
+    "rh": "robinhood",
     "sui": "sui",
     "ton": "the-open-network",
     "tron": "tron",

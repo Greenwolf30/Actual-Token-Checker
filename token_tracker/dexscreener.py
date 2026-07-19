@@ -1,51 +1,109 @@
-"""DexScreener API client."""
+"""DexScreener API client with TTL cache (cuts repeat 429s)."""
 
 from __future__ import annotations
 
 from typing import Any
 
+from .api_cache import TTL_NEGATIVE, TTL_PAIRS, TTL_SEARCH, cache_get, cache_set
 from .http_util import encode_query, get_json
 
 BASE = "https://api.dexscreener.com"
 
 
+def _is_rate_limit_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "429" in msg or "rate-limited" in msg or "too many requests" in msg
+
+
 def search_pairs(query: str) -> list[dict[str, Any]]:
-    # Extra retries — free DexScreener rate limits shared cloud IPs (Render 429)
-    data = get_json(
-        f"{BASE}/latest/dex/search?{encode_query({'q': query})}",
-        timeout=18.0,
-        retries=4,
-    )
-    return list(data.get("pairs") or []) if isinstance(data, dict) else []
+    """Search DexScreener. Cached ~3 min. Raises on 429 after short retries."""
+    q = (query or "").strip()
+    if not q:
+        return []
+    key = f"dx:search:{q.lower()}"
+    hit = cache_get(key)
+    if hit is not None:
+        return list(hit)
+
+    try:
+        data = get_json(
+            f"{BASE}/latest/dex/search?{encode_query({'q': q})}",
+            timeout=14.0,
+            retries=2,
+        )
+    except Exception as exc:  # noqa: BLE001
+        cache_set(key, [], TTL_NEGATIVE)
+        raise
+
+    pairs = list(data.get("pairs") or []) if isinstance(data, dict) else []
+    cache_set(key, pairs, TTL_SEARCH if pairs else TTL_NEGATIVE)
+    return pairs
 
 
 def pairs_for_token(chain_id: str, token_address: str) -> list[dict[str, Any]]:
-    data = get_json(
-        f"{BASE}/token-pairs/v1/{chain_id}/{token_address}",
-        timeout=18.0,
-        retries=3,
-    )
+    chain = (chain_id or "").strip().lower()
+    addr = (token_address or "").strip()
+    if not chain or not addr:
+        return []
+    key = f"dx:pairs:{chain}:{addr.lower()}"
+    hit = cache_get(key)
+    if hit is not None:
+        return list(hit)
+
+    try:
+        data = get_json(
+            f"{BASE}/token-pairs/v1/{chain}/{addr}",
+            timeout=14.0,
+            retries=2,
+        )
+    except Exception as exc:  # noqa: BLE001
+        cache_set(key, [], TTL_NEGATIVE)
+        if _is_rate_limit_error(exc):
+            raise
+        return []
+
     if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        return list(data.get("pairs") or [])
-    return []
+        pairs = data
+    elif isinstance(data, dict):
+        pairs = list(data.get("pairs") or [])
+    else:
+        pairs = []
+    cache_set(key, pairs, TTL_PAIRS if pairs else TTL_NEGATIVE)
+    return pairs
 
 
 def tokens_by_addresses(chain_id: str, addresses: list[str]) -> list[dict[str, Any]]:
     if not addresses:
         return []
-    joined = ",".join(addresses[:30])
-    data = get_json(
-        f"{BASE}/tokens/v1/{chain_id}/{joined}",
-        timeout=18.0,
-        retries=3,
-    )
+    chain = (chain_id or "").strip().lower()
+    joined = ",".join(a.strip() for a in addresses[:30] if a and str(a).strip())
+    if not chain or not joined:
+        return []
+    key = f"dx:tokens:{chain}:{joined.lower()}"
+    hit = cache_get(key)
+    if hit is not None:
+        return list(hit)
+
+    try:
+        data = get_json(
+            f"{BASE}/tokens/v1/{chain}/{joined}",
+            timeout=14.0,
+            retries=2,
+        )
+    except Exception as exc:  # noqa: BLE001
+        cache_set(key, [], TTL_NEGATIVE)
+        if _is_rate_limit_error(exc):
+            raise
+        return []
+
     if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        return list(data.get("pairs") or [])
-    return []
+        pairs = data
+    elif isinstance(data, dict):
+        pairs = list(data.get("pairs") or [])
+    else:
+        pairs = []
+    cache_set(key, pairs, TTL_PAIRS if pairs else TTL_NEGATIVE)
+    return pairs
 
 
 # Common quote assets — pairs against these are usually the real market.
@@ -58,8 +116,9 @@ _PREFERRED_QUOTES = {
     "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",  # USDC eth
     "0xdac17f958d2ee523a2206206994597c13d831ec7",  # USDT eth
     "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",  # USDC base
-    "0x4200000000000000000000000000000000000006",  # WETH base/op
+    "0x4200000000000000000000000000000000000006",  # WETH base/op / many L2s
     "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",  # WBNB
+    # Robinhood Chain uses ETH as gas; WETH-style quotes score higher when present
 }
 
 

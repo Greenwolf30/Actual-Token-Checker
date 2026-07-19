@@ -221,21 +221,49 @@ def analyze_holders(
         "arbitrum",
         "polygon",
         "optimism",
-        "robinhood",  # Robinhood Chain (EVM L2) — market via DexScreener; holders not wired yet
+        "avalanche",
+        "robinhood",  # Robinhood Chain (Arbitrum L2, chain id 4663)
+        "rh",
     }:
+        explorer = (
+            "https://robinhoodchain.blockscout.com/token/"
+            if chain in {"robinhood", "rh"}
+            else "https://etherscan.io/token/"
+            if chain in {"ethereum", "eth"}
+            else "https://basescan.org/token/"
+            if chain == "base"
+            else "https://arbiscan.io/token/"
+            if chain in {"arbitrum"}
+            else None
+        )
+        note_bits = [
+            "Market / Overview / About work via DexScreener for this chain.",
+            "Top-holder fusion (Helius/Rugcheck) is Solana-only right now.",
+        ]
+        if chain in {"robinhood", "rh"}:
+            note_bits.append(
+                "Robinhood Chain explorer: https://robinhoodchain.blockscout.com"
+            )
         return {
             "ok": False,
             "chain_id": chain,
             "token_address": token_address,
             "error": (
-                "EVM holder lists need an explorer API key (Etherscan/Basescan). "
-                "Solana works via Rugcheck + optional Helius. "
-                "Robinhood Chain market data works on Live; holders/bundles are Solana-focused for now."
+                f"Holder lists for '{chain}' are not wired to an explorer API yet. "
+                "Use Overview for market data. "
+                + (
+                    f"Token page: {explorer}{token_address}"
+                    if explorer and token_address
+                    else ""
+                )
             ),
             "holders": [],
             "summary": {},
             "flags": [],
-            "notes": "EVM support can be added with ETHERSCAN_API_KEY / chain explorer.",
+            "notes": " ".join(note_bits),
+            "explorer_url": (
+                f"{explorer}{token_address}" if explorer and token_address else None
+            ),
         }
 
     return _empty(f"Holder analysis not implemented for chain '{chain}'.")
