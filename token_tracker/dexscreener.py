@@ -10,12 +10,21 @@ BASE = "https://api.dexscreener.com"
 
 
 def search_pairs(query: str) -> list[dict[str, Any]]:
-    data = get_json(f"{BASE}/latest/dex/search?{encode_query({'q': query})}")
+    # Extra retries — free DexScreener rate limits shared cloud IPs (Render 429)
+    data = get_json(
+        f"{BASE}/latest/dex/search?{encode_query({'q': query})}",
+        timeout=18.0,
+        retries=4,
+    )
     return list(data.get("pairs") or []) if isinstance(data, dict) else []
 
 
 def pairs_for_token(chain_id: str, token_address: str) -> list[dict[str, Any]]:
-    data = get_json(f"{BASE}/token-pairs/v1/{chain_id}/{token_address}")
+    data = get_json(
+        f"{BASE}/token-pairs/v1/{chain_id}/{token_address}",
+        timeout=18.0,
+        retries=3,
+    )
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
@@ -27,7 +36,11 @@ def tokens_by_addresses(chain_id: str, addresses: list[str]) -> list[dict[str, A
     if not addresses:
         return []
     joined = ",".join(addresses[:30])
-    data = get_json(f"{BASE}/tokens/v1/{chain_id}/{joined}")
+    data = get_json(
+        f"{BASE}/tokens/v1/{chain_id}/{joined}",
+        timeout=18.0,
+        retries=3,
+    )
     if isinstance(data, list):
         return data
     if isinstance(data, dict):

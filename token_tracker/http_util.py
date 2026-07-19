@@ -79,9 +79,16 @@ def get_json(
                 return json.loads(raw.decode("utf-8", errors="replace"))
         except urllib.error.HTTPError as exc:
             last_err = exc
-            # Back off harder on rate limits
+            # Back off harder on rate limits (DexScreener 429 is common on shared IPs)
             if exc.code == 429 and attempt < retries:
-                time.sleep(1.5 * (attempt + 1))
+                wait = 2.5 * (attempt + 1)
+                try:
+                    ra = exc.headers.get("Retry-After") if exc.headers else None
+                    if ra is not None:
+                        wait = max(wait, float(ra))
+                except (TypeError, ValueError):
+                    pass
+                time.sleep(min(wait, 30.0))
                 continue
             if attempt < retries and exc.code in {500, 502, 503, 504}:
                 time.sleep(0.6 * (attempt + 1))
@@ -95,6 +102,13 @@ def get_json(
                 if isinstance(exc, (ssl.SSLError, urllib.error.URLError)):
                     _SSL_CTX = None
                     ctx = ssl_context()
+    # Friendlier message for rate limits
+    if isinstance(last_err, urllib.error.HTTPError) and last_err.code == 429:
+        raise RuntimeError(
+            "DexScreener (or another API) rate-limited this server (HTTP 429). "
+            "Wait 30–60 seconds and try Analyze again. "
+            "Shared cloud IPs get throttled if many searches run close together."
+        ) from last_err
     raise RuntimeError(f"GET JSON failed for {url}: {last_err}") from last_err
 
 
