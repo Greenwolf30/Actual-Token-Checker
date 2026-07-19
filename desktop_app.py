@@ -211,10 +211,18 @@ def run_gui() -> None:
     MUTED = "#8b9bb0"
     ACCENT = "#5b8def"
     ACCENT_DIM = "#3d5f9a"
-    SUCCESS = "#3dd68c"
-    DANGER = "#f07178"
-    WARNING = "#e0b35a"
+    SUCCESS = "#3dd68c"  # low priority holder %
+    DANGER = "#f07178"  # critical holder %
+    WARNING = "#e0b35a"  # medium priority holder %
+    ORANGE = "#ff9f0a"  # high priority holder %
     ENTRY_BG = "#0e141c"
+    # Supply % (not price change): 2–5 low, 5–10 medium, 10–15 high, ≥15 critical
+    HOLDER_PCT_RE = re.compile(r"(?<![+\-\d.])(\d+(?:\.\d+)?)(%)")
+    HOLDER_PRI_RE = re.compile(
+        r"(\[(?:low|medium|high|critical)\s+priority\])"
+        r"|(·\s*)(low|medium|high|critical)(\s+priority)",
+        re.I,
+    )
     FONT = "Segoe UI"
     FONT_MONO = "Cascadia Mono"
 
@@ -960,6 +968,27 @@ def run_gui() -> None:
             underline=True,
         )
         box.tag_configure("hint", foreground=MUTED)
+        # Wallet holder % / priority labels
+        box.tag_configure("pct_low", foreground=SUCCESS)
+        box.tag_configure("pct_medium", foreground=WARNING)
+        box.tag_configure("pct_high", foreground=ORANGE)
+        box.tag_configure("pct_critical", foreground=DANGER)
+        box.tag_configure("pri_low", foreground=SUCCESS)
+        box.tag_configure("pri_medium", foreground=WARNING)
+        box.tag_configure("pri_high", foreground=ORANGE)
+        box.tag_configure("pri_critical", foreground=DANGER)
+
+    def _pct_priority_tag(pct_value: float) -> str | None:
+        """Map supply % → Text tag name (wallet holder bands)."""
+        if pct_value >= 15:
+            return "pct_critical"
+        if pct_value >= 10:
+            return "pct_high"
+        if pct_value > 5:
+            return "pct_medium"
+        if pct_value >= 2:
+            return "pct_low"
+        return None
 
     def _tag_range_under_cursor(box: Any, event: Any, tag: str) -> str | None:
         """Return text of `tag` under cursor, if any."""
@@ -1042,8 +1071,11 @@ def run_gui() -> None:
                 lambda _e, b=box: b.configure(cursor="arrow"),
             )
 
-    def _insert_text_with_wallet_links(box: Any, content: str, *, error: bool = False) -> None:
-        """Insert report text; tag Solana addresses as clickable Solscan links."""
+    def _insert_text_with_wallet_links(
+        box: Any, content: str, *, error: bool = False, color_holder_pct: bool = True
+    ) -> None:
+        """Insert report text; Solana wallets + optional holder % priority colors."""
+        _configure_link_tags(box)
         box.configure(state="normal")
         box.delete("1.0", "end")
         if error:
@@ -1051,13 +1083,52 @@ def run_gui() -> None:
             box.configure(state="disabled")
             box.see("1.0")
             return
-        pos = 0
+
+        # Spans: (start, end, tag_or_None) — wallets + supply % + priority labels
+        spans: list[tuple[int, int, str | None]] = []
         for m in SOL_ADDR_RE.finditer(content):
-            if m.start() > pos:
-                box.insert("end", content[pos : m.start()])
-            addr = m.group(0)
-            box.insert("end", addr, "wallet_link")
-            pos = m.end()
+            spans.append((m.start(), m.end(), "wallet_link"))
+        if color_holder_pct:
+            for m in HOLDER_PCT_RE.finditer(content):
+                try:
+                    n = float(m.group(1))
+                except ValueError:
+                    continue
+                tag = _pct_priority_tag(n)
+                if tag:
+                    spans.append((m.start(), m.end(), tag))
+            for m in HOLDER_PRI_RE.finditer(content):
+                if m.group(1):  # [low priority]
+                    band = m.group(1).strip("[]").split()[0].lower()
+                    spans.append((m.start(), m.end(), f"pri_{band}"))
+                else:
+                    # · low priority
+                    band = (m.group(3) or "").lower()
+                    # color only the band+priority words, keep the ·
+                    mid = m.start(3)
+                    end = m.end(4) if m.group(4) is not None else m.end()
+                    if band:
+                        spans.append((mid, end, f"pri_{band}"))
+
+        spans.sort(key=lambda t: (t[0], -(t[1] - t[0])))
+        cleaned: list[tuple[int, int, str | None]] = []
+        last_end = -1
+        for s, e, tag in spans:
+            if s < last_end:
+                continue
+            cleaned.append((s, e, tag))
+            last_end = e
+
+        pos = 0
+        for s, e, tag in cleaned:
+            if s > pos:
+                box.insert("end", content[pos:s])
+            piece = content[s:e]
+            if tag:
+                box.insert("end", piece, tag)
+            else:
+                box.insert("end", piece)
+            pos = e
         if pos < len(content):
             box.insert("end", content[pos:])
         box.configure(state="disabled")
@@ -1411,9 +1482,15 @@ def run_gui() -> None:
         if box is None:
             return
         try:
-            # Holders: clickable Solana addresses → Solscan
+            # Holders: clickable Solana addresses → Solscan + colored supply %
             if key == "holders":
                 _render_holders_text(content, error=error)
+                return
+            # Alerts / bundles: wallet links + holder % priority colors
+            if key in {"alerts", "bundles"}:
+                _insert_text_with_wallet_links(
+                    box, content, error=error, color_holder_pct=True
+                )
                 return
             # About / News: clickable http(s) links → browser
             if key == "about":
