@@ -45,6 +45,24 @@ Public deploy notes: see `DEPLOY.md`.
 | `market_data/` | Optional local market/intel DB stack |
 | `.env.example` | Key names only |
 
+## Public view counter
+
+The website tracks **profile views** (page loads) and **analyzes**, shown on the UI and via public endpoints (no keys, no raw IPs):
+
+| URL | What |
+|-----|------|
+| `/api/stats` | JSON counters |
+| `/badge.svg` | Embeddable badge |
+| `/api/view` | Records one profile view |
+
+Example badge markdown (after deploy):
+
+```markdown
+![views](https://YOUR-RENDER-URL/badge.svg)
+```
+
+Counts live in `data/view_stats.json` (gitignored). On free hosts they may reset on redeploy without a persistent disk.
+
 ## Disclaimer
 
 Heuristics only. Not financial advice.

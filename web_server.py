@@ -43,6 +43,12 @@ from token_tracker.report import (  # noqa: E402
     format_maps_section,
     format_overview,
 )
+from view_counter import (  # noqa: E402
+    badge_svg,
+    public_stats,
+    record_analyze,
+    record_profile_view,
+)
 
 WEB_DIR = ROOT / "web"
 STATIC_TYPES = {
@@ -427,15 +433,38 @@ class WebHandler(BaseHTTPRequestHandler):
                 ),
                 "site_gate": bool(_web_api_token()),
             }
+            stats = public_stats()
             return self._json(
                 200,
                 {
                     "ok": True,
                     "service": "actual-data-token-checker-web",
                     "providers_configured": providers,
+                    "profile_views": stats.get("profile_views"),
+                    "analyzes": stats.get("analyzes"),
                     "note": "Provider keys are server-side only and never returned.",
                 },
             )
+
+        # Public counters (no auth — intentionally publicized)
+        if path in {"/api/stats", "/stats.json"}:
+            return self._json(200, public_stats())
+
+        if path in {"/api/view", "/api/hit"}:
+            # Record a profile/page view (called once by the UI on load)
+            stats = record_profile_view(self._client_ip())
+            return self._json(200, stats)
+
+        if path in {"/badge.svg", "/api/badge.svg"}:
+            svg = badge_svg().encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "image/svg+xml; charset=utf-8")
+            self.send_header("Content-Length", str(len(svg)))
+            self.send_header("Cache-Control", "no-cache")
+            self._cors()
+            self.end_headers()
+            self.wfile.write(svg)
+            return None
 
         if path in {"/api/analyze", "/api/analyze/"}:
             q = (qs.get("q") or qs.get("query") or [""])[0]
@@ -458,6 +487,10 @@ class WebHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = unquote(parsed.path).rstrip("/") or "/"
+
+        if path in {"/api/view", "/api/hit"}:
+            stats = record_profile_view(self._client_ip())
+            return self._json(200, stats)
 
         if path == "/api/analyze":
             body = self._read_json()
@@ -494,6 +527,10 @@ class WebHandler(BaseHTTPRequestHandler):
 
         # Analyze can take a while (holders / narrative)
         result = run_analyze(query.strip(), chain=chain, quick=quick)
+        try:
+            record_analyze(ok=bool(result.get("ok")))
+        except Exception:  # noqa: BLE001
+            pass
         code = 200 if result.get("ok") else 422
         if result.get("error") and "Rate limit" in str(result.get("error")):
             code = 429
