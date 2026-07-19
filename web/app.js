@@ -82,11 +82,24 @@ function linkify(text) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
-  // http(s) URLs
-  return esc.replace(
+  // http(s) URLs first
+  let html = esc.replace(
     /(https?:\/\/[^\s<>"']+)/g,
     '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
   );
+  // Solana base58 wallets → Solscan (Creator + top holders); skip inside tags
+  html = html.replace(
+    /(^|>)([^<]*?)(?=<|$)/g,
+    (full, prefix, chunk) => {
+      const linked = chunk.replace(
+        /\b([1-9A-HJ-NP-Za-km-z]{32,44})\b/g,
+        (addr) =>
+          `<a href="https://solscan.io/account/${addr}" target="_blank" rel="noopener noreferrer">${addr}</a>`
+      );
+      return prefix + linked;
+    }
+  );
+  return html;
 }
 
 /** Wallet-holder % bands: low green · medium yellow · high orange · critical red */
@@ -110,10 +123,27 @@ function colorPctTokens(html) {
   });
 }
 
+/** True for concentration summary lines: Top1 …% · Top5 …% · Top10 …% */
+function isTopSummaryLine(line) {
+  const plain = String(line || "").replace(/<[^>]*>/g, "");
+  const hasTop1 = /\bTop\s*1\b/i.test(plain);
+  const hasTop5 = /\bTop\s*5\b/i.test(plain);
+  const hasTop10 = /\bTop\s*10\b/i.test(plain);
+  return (
+    (hasTop1 && hasTop5) ||
+    (hasTop1 && hasTop10) ||
+    (hasTop5 && hasTop10) ||
+    /\bTop\s*1\b.*\bTop\s*5\b.*\bTop\s*10\b/i.test(plain)
+  );
+}
+
 function colorWalletHolderPcts(html) {
   if (!html) return html;
-  // Color supply % only — leave "[low priority]" / "· high priority" text uncolored
-  return colorPctTokens(html);
+  // Color supply % on wallet rows only — Top1/Top5/Top10 summary stays default color
+  return html
+    .split("\n")
+    .map((line) => (isTopSummaryLine(line) ? line : colorPctTokens(line)))
+    .join("\n");
 }
 
 /**
