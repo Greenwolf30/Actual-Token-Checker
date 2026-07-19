@@ -342,7 +342,7 @@ def format_history_log_text(items: list[dict[str, Any]] | None = None) -> str:
     rows = items if items is not None else load_history_log()
     lines = [
         "=" * 72,
-        "  HISTORY LOG",
+        "  LOGS",
         f"  Last {HISTORY_LOG_MAX} token searches (oldest dropped when full)",
         f"  Stored: {_history_log_path()}",
         "=" * 72,
@@ -585,7 +585,7 @@ def run_gui() -> None:
         brand,
         text=(
             "Token intelligence  ·  Overview · Holders · Bundles · Alerts · "
-            "Maps · About · History"
+            "Maps · About · Logs"
         ),
         bg=BG,
         fg=MUTED,
@@ -1781,7 +1781,7 @@ def run_gui() -> None:
 
     # ── History Log tab (last 20 searches + download) ─────────────────
     history_frame = tk.Frame(notebook, bg=PANEL)
-    notebook.add(history_frame, text="History")
+    notebook.add(history_frame, text="Logs")
     history_bar = tk.Frame(
         history_frame, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1
     )
@@ -1790,7 +1790,7 @@ def run_gui() -> None:
     hist_inner.pack(fill="x", padx=8, pady=6)
     tk.Label(
         hist_inner,
-        text="HISTORY LOG",
+        text="LOGS",
         bg=SURFACE,
         fg=MUTED,
         font=(FONT, 8, "bold"),
@@ -1817,14 +1817,14 @@ def run_gui() -> None:
         if not items:
             messagebox.showinfo(
                 APP_NAME,
-                "History Log is empty.\nRun Analyze first, then download.",
+                "Logs is empty.\nRun Analyze first, then download.",
             )
             return
         default_name = (
-            f"adtc_history_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            f"adtc_logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
         )
         path = filedialog.asksaveasfilename(
-            title="Download History Log",
+            title="Download Logs",
             defaultextension=".txt",
             initialfile=default_name,
             initialdir=str(Path.home() / "Desktop"),
@@ -1845,23 +1845,23 @@ def run_gui() -> None:
                 )
             else:
                 out.write_text(format_history_log_text(items), encoding="utf-8")
-            messagebox.showinfo(APP_NAME, f"History Log saved to:\n{out}")
-            status_var.set(f"History Log downloaded · {len(items)} entries")
+            messagebox.showinfo(APP_NAME, f"Logs saved to:\n{out}")
+            status_var.set(f"Logs downloaded · {len(items)} entries")
         except OSError as exc:
-            messagebox.showerror(APP_NAME, f"Could not save history:\n{exc}")
+            messagebox.showerror(APP_NAME, f"Could not save logs:\n{exc}")
 
     def clear_history_log() -> None:
         if not load_history_log():
-            messagebox.showinfo(APP_NAME, "History Log is already empty.")
+            messagebox.showinfo(APP_NAME, "Logs is already empty.")
             return
         if not messagebox.askyesno(
             APP_NAME,
-            f"Clear all {len(load_history_log())} History Log entries?",
+            f"Clear all {len(load_history_log())} Logs entries?",
         ):
             return
         save_history_log([])
         refresh_history_tab()
-        status_var.set("History Log cleared")
+        status_var.set("Logs cleared")
 
     ttk.Button(
         hist_inner,

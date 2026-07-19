@@ -261,6 +261,13 @@ def build_public_payload(report: dict[str, Any]) -> dict[str, Any]:
     alerts = report.get("alerts") or {}
     narrative = report.get("narrative") or {}
     x = report.get("community_sentiment_x") or {}
+    holders = report.get("holders") or {}
+    hsum = holders.get("summary") or {}
+    bundles = report.get("bundles") or {}
+    bsum = bundles.get("summary") or {}
+    pf = report.get("pumpfun") or {}
+    market = report.get("market") or {}
+    pair = market.get("pair") if isinstance(market.get("pair"), dict) else {}
 
     return {
         "ok": True,
@@ -273,6 +280,27 @@ def build_public_payload(report: dict[str, Any]) -> dict[str, Any]:
         "alerts_meta": {
             "priority_count": alerts.get("priority_count") or 0,
             "summary": redact_text(str(alerts.get("summary") or "")),
+        },
+        # Compact fields for the website History tab (browser localStorage)
+        "history_meta": {
+            "holders_ok": bool(holders.get("ok")),
+            "concentration_risk": hsum.get("concentration_risk"),
+            "top1_pct": hsum.get("top1_pct"),
+            "top5_pct": hsum.get("top5_pct"),
+            "top10_pct": hsum.get("top10_pct"),
+            "bundle_risk": bsum.get("bundle_risk"),
+            "bundle_pct": bsum.get("total_bundle_pct")
+            or bsum.get("estimated_bundle_pct")
+            or bsum.get("bundle_pct"),
+            "dex_id": pair.get("dex_id") or pf.get("dex_id"),
+            "pumpfun": {
+                "is_pump_mint": pf.get("is_pump_mint"),
+                "status": pf.get("status"),
+                "graduated": pf.get("graduated"),
+                "on_bonding_curve": pf.get("on_bonding_curve"),
+            }
+            if pf
+            else None,
         },
         "about_meta": {
             "headline": narrative.get("headline"),

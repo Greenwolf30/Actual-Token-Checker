@@ -21,7 +21,7 @@ A research tool for crypto tokens (especially Solana, plus other chains like
 Ethereum, Base, and Robinhood Chain). You paste a contract or ticker; the app
 pulls public market and risk data and shows it in tabs:
 
-  Overview · Holders · Bundles · Alerts · Maps · About · History
+  Overview · Holders · Bundles · Alerts · Maps · About · Logs
 
 It does NOT trade for you, custody funds, or guarantee a token is safe.
 
@@ -418,17 +418,20 @@ About is split into story + community + news + links.
 
 
 --------------------------------------------------------------------------------
-11. HISTORY
+11. LOGS
 --------------------------------------------------------------------------------
 
-Subtitle: History
+Subtitle: Logs
 
-The History tab is a private log of tokens you have already searched.
+The Logs tab is a private log of tokens you have already searched.
 It sits next to Overview, Holders, Bundles, Alerts, Maps, and About on
-the desktop app. Use it to look back at recent analyzes without typing
-every mint again.
+the desktop app and the website. Use it to look back at recent analyzes
+without typing every mint again.
 
-What History is for
+  Desktop: saved in history_log.json next to the app.
+  Website: saved in this browser only (localStorage).
+
+What Logs is for
   - See a list of your last token searches in one place.
   - Review market, holder, bundle, and alert snapshots from those runs.
   - Download the list to a file for your own notes.
@@ -438,7 +441,7 @@ When a search is saved
     (status shows OK / full data loaded).
   - Failed searches (not found, errors) are not saved.
   - Quick or partial loads wait until the full run completes before
-    they appear in History.
+    they appear in Logs.
   - Searching the same token again adds another row (each run is kept
     as its own entry).
 
@@ -459,36 +462,38 @@ What each entry shows
   again.
 
 How many entries
-  - History keeps up to 20 searches.
+  - Logs keeps up to 20 searches.
   - Newest is at the top.
   - When you go past 20, the oldest entry is removed automatically.
 
-Where it lives on your computer
+Where it lives
+  Desktop
   - Saved as history_log.json next to the app.
-  - Only on your machine; other people using the app do not see your log.
-  - Different from the small search-bar dropdown (that only remembers a
-    few recent queries for typing). History is the full tab.
+  Website
+  - Saved in your browser only (not on the server, not shared with others).
+  - Clearing site data / another browser / private mode starts empty.
+  - Different from the small search-bar dropdown (desktop only).
 
 Buttons
   Download
-    Save the current History to a file you choose.
+    Save the current Logs list to a file you choose.
     · .txt — easy to read (same layout as the tab)
     · .json — structured data for other tools
 
   Refresh
-    Reload the list from the saved file on disk.
+    Reload the list from storage.
 
   Clear
-    Delete every History entry after you confirm. This cannot be undone.
+    Delete every Logs entry after you confirm. This cannot be undone.
 
 How to use it
   1. Analyze a token and wait until the run finishes successfully.
-  2. Open the History tab — that token should be first on the list.
+  2. Open the Logs tab — that token should be first on the list.
   3. Keep analyzing other tokens (up to 20 kept).
   4. Use Download if you want a copy of the log.
-  5. Use Clear only if you want an empty History.
+  5. Use Clear only if you want an empty Logs list.
 
-What History is not
+What Logs is not
   - Not a live price feed.
   - Not a full export of every report field (use Export JSON for the
     current token if you need the full dump).
@@ -530,10 +535,10 @@ A: LP-lock check is classic pool lock %, not a full bonding-curve model.
 Q: Does a clean Alerts tab mean safe?
 A: No. Absence of flags ≠ safety.
 
-Q: Where did my History go after reinstall or moving the app?
-A: History is saved in history_log.json next to the app. If you move or
-   delete that folder, the log may be gone. Use Download to keep a
-   backup copy.
+Q: Where did my Logs go after reinstall or moving the app?
+A: Desktop Logs are saved in history_log.json next to the app. Website
+   Logs live in the browser only. If you move the app folder or clear
+   site data, the list may be gone. Use Download to keep a backup.
 
 
 --------------------------------------------------------------------------------
