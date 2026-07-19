@@ -523,6 +523,32 @@ button, .ghost, .primary {
 }
 .panel.active { display: block; }
 
+/* History tab toolbar */
+.history-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px 0;
+  border-bottom: 1px solid var(--border, #2a3544);
+}
+.history-bar-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, #8b9bb0);
+  text-transform: uppercase;
+}
+.history-bar-actions {
+  display: flex;
+  gap: 6px;
+}
+.history-btn {
+  font-size: 0.75rem !important;
+  padding: 4px 10px !important;
+}
+
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }

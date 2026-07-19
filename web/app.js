@@ -3,10 +3,266 @@
  * apiBase comes from config.js (empty = same origin as this static site).
  */
 
-const TABS = ["overview", "holders", "bundles", "alerts", "maps", "about"];
+const TABS = ["overview", "holders", "bundles", "alerts", "maps", "about", "history"];
 const TOKEN_KEY = "adtc_site_token";
+const HISTORY_KEY = "adtc_history_log";
+const HISTORY_MAX = 20;
 
 const $ = (id) => document.getElementById(id);
+
+// ── History log (browser localStorage, max 20) ───────────────────────
+
+function loadHistoryLog() {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    if (!raw) return [];
+    const data = JSON.parse(raw);
+    if (!Array.isArray(data)) return [];
+    return data.filter((x) => x && typeof x === "object").slice(0, HISTORY_MAX);
+  } catch {
+    return [];
+  }
+}
+
+function saveHistoryLog(items) {
+  try {
+    localStorage.setItem(
+      HISTORY_KEY,
+      JSON.stringify((items || []).slice(0, HISTORY_MAX))
+    );
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+function fmtUsdHist(n) {
+  if (n == null || n === "") return null;
+  const x = Number(n);
+  if (!Number.isFinite(x)) return null;
+  const a = Math.abs(x);
+  if (a >= 1e9) return "$" + (x / 1e9).toFixed(2) + "B";
+  if (a >= 1e6) return "$" + (x / 1e6).toFixed(2) + "M";
+  if (a >= 1e3) return "$" + (x / 1e3).toFixed(2) + "K";
+  if (a >= 1) return "$" + x.toFixed(4);
+  return "$" + x.toPrecision(4);
+}
+
+function fmtPctHist(n) {
+  if (n == null || n === "") return null;
+  const x = Number(n);
+  if (!Number.isFinite(x)) return null;
+  return x.toFixed(2) + "%";
+}
+
+function buildHistoryEntry(data, query) {
+  if (!data || !data.ok) return null;
+  const t = data.token || {};
+  const m = data.market || {};
+  const hm = data.history_meta || {};
+  const alerts = data.alerts_meta || {};
+  const pf = hm.pumpfun || data.pumpfun || {};
+  const pair = (m.pair && typeof m.pair === "object" ? m.pair : {}) || {};
+  const pc = m.price_change_pct || {};
+  const address = (t.address || "").trim();
+  const symbol = (t.symbol || "").trim();
+  const q = (query || data.query || symbol || address || "").trim();
+  if (!q && !address && !symbol) return null;
+  return {
+    ts: new Date().toISOString(),
+    query: q,
+    symbol: symbol || null,
+    name: (t.name || "").trim() || null,
+    address: address || null,
+    chain: (t.chain_id || m.chain_id || "").trim() || null,
+    dex_id: hm.dex_id || pair.dex_id || m.dex_id || null,
+    price_usd: m.price_usd,
+    market_cap_usd: m.market_cap_usd || m.fdv_usd,
+    liquidity_usd: m.liquidity_usd,
+    volume_h24_usd: m.volume_h24_usd,
+    price_change_h24_pct: pc.h24 != null ? pc.h24 : null,
+    concentration_risk: hm.concentration_risk || null,
+    top1_pct: hm.top1_pct,
+    top5_pct: hm.top5_pct,
+    top10_pct: hm.top10_pct,
+    holders_ok: !!hm.holders_ok,
+    bundle_risk: hm.bundle_risk || null,
+    bundle_pct: hm.bundle_pct != null ? hm.bundle_pct : null,
+    alerts_priority_count: Number(alerts.priority_count || 0) || 0,
+    pumpfun:
+      pf && (pf.is_pump_mint != null || pf.status)
+        ? {
+            is_pump_mint: pf.is_pump_mint,
+            status: pf.status,
+            graduated: pf.graduated,
+          }
+        : null,
+    pair_url: pair.url || (data.links && data.links.dexscreener) || null,
+  };
+}
+
+function pushHistoryLog(entry) {
+  if (!entry) return loadHistoryLog();
+  const items = loadHistoryLog();
+  items.unshift(entry);
+  const next = items.slice(0, HISTORY_MAX);
+  saveHistoryLog(next);
+  return next;
+}
+
+function formatHistoryLogText(items) {
+  const rows = items != null ? items : loadHistoryLog();
+  const lines = [
+    "========================================================================",
+    "  LOGS",
+    "  Last " + HISTORY_MAX + " token searches on this browser (oldest dropped when full)",
+    "========================================================================",
+    "",
+  ];
+  if (!rows.length) {
+    lines.push("  No searches yet.");
+    lines.push("  Run Analyze — each successful lookup is logged here.");
+    lines.push("");
+    lines.push("  Use Download to save this log as a text or JSON file.");
+    return lines.join("\n") + "\n";
+  }
+  lines.push("  Entries: " + rows.length + " / " + HISTORY_MAX);
+  lines.push("");
+  rows.forEach((e, idx) => {
+    let ts = String(e.ts || "").slice(0, 19).replace("T", " ");
+    if (ts) ts = ts + " UTC";
+    const sym = e.symbol || e.query || "token";
+    const name = e.name || "";
+    let title = sym;
+    if (name && name.toUpperCase() !== String(sym).toUpperCase()) {
+      title = sym + "  (" + name + ")";
+    }
+    lines.push("  " + String(idx + 1).padStart(2) + ". " + title);
+    lines.push("      When:   " + (ts || "—"));
+    lines.push(
+      "      Chain:  " +
+        (e.chain || "—") +
+        "  ·  DEX: " +
+        (e.dex_id || "—")
+    );
+    if (e.address) lines.push("      Mint:   " + e.address);
+    if (e.query && e.query !== sym && e.query !== e.address) {
+      lines.push("      Query:  " + e.query);
+    }
+    const mbits = [];
+    const price = fmtUsdHist(e.price_usd);
+    const mcap = fmtUsdHist(e.market_cap_usd);
+    const liq = fmtUsdHist(e.liquidity_usd);
+    const vol = fmtUsdHist(e.volume_h24_usd);
+    const chg = fmtPctHist(e.price_change_h24_pct);
+    if (price) mbits.push("price " + price);
+    if (mcap) mbits.push("mcap " + mcap);
+    if (liq) mbits.push("liq " + liq);
+    if (vol) mbits.push("vol24 " + vol);
+    if (chg) mbits.push("24h " + chg);
+    if (mbits.length) lines.push("      Market: " + mbits.join(" · "));
+    const t1 = fmtPctHist(e.top1_pct);
+    const t5 = fmtPctHist(e.top5_pct);
+    const t10 = fmtPctHist(e.top10_pct);
+    if (e.holders_ok || t1 || t5 || t10) {
+      lines.push(
+        "      Holders: risk " +
+          (e.concentration_risk || "—") +
+          "  ·  Top1 " +
+          (t1 || "—") +
+          " · Top5 " +
+          (t5 || "—") +
+          " · Top10 " +
+          (t10 || "—")
+      );
+    }
+    const bp = fmtPctHist(e.bundle_pct);
+    if (e.bundle_risk || bp) {
+      lines.push(
+        "      Bundles: risk " +
+          (e.bundle_risk || "—") +
+          "  ·  share " +
+          (bp || "—")
+      );
+    }
+    lines.push(
+      "      Alerts:  " +
+        (Number(e.alerts_priority_count) || 0) +
+        " top-priority warning(s)"
+    );
+    const pfm = e.pumpfun || {};
+    if (pfm.is_pump_mint || pfm.status) {
+      lines.push(
+        "      Pump:    mint=" +
+          pfm.is_pump_mint +
+          "  status=" +
+          (pfm.status || "—") +
+          "  graduated=" +
+          pfm.graduated
+      );
+    }
+    if (e.pair_url) lines.push("      Link:    " + e.pair_url);
+    lines.push("");
+  });
+  lines.push("  — end of history —");
+  lines.push("  Download saves this view (or JSON) to a file.");
+  return lines.join("\n") + "\n";
+}
+
+function refreshHistoryPanel() {
+  setPanelText("history", formatHistoryLogText());
+}
+
+function downloadHistoryLog() {
+  const items = loadHistoryLog();
+  if (!items.length) {
+    showError("Logs is empty. Run Analyze first, then download.");
+    return;
+  }
+  showError("");
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "");
+  const asJson = window.confirm(
+    "OK = save as JSON\nCancel = save as readable text (.txt)"
+  );
+  let blob;
+  let name;
+  if (asJson) {
+    blob = new Blob([JSON.stringify(items, null, 2)], {
+      type: "application/json",
+    });
+    name = "adtc_history_log_" + stamp + ".json";
+  } else {
+    blob = new Blob([formatHistoryLogText(items)], {
+      type: "text/plain;charset=utf-8",
+    });
+    name = "adtc_history_log_" + stamp + ".txt";
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+function clearHistoryLog() {
+  if (!loadHistoryLog().length) {
+    showError("Logs is already empty.");
+    return;
+  }
+  if (!window.confirm("Clear all Logs entries on this browser?")) return;
+  saveHistoryLog([]);
+  refreshHistoryPanel();
+  showError("");
+}
+
+function initHistory() {
+  refreshHistoryPanel();
+  const r = $("historyRefresh");
+  const c = $("historyClear");
+  const d = $("historyDownload");
+  if (r) r.addEventListener("click", () => refreshHistoryPanel());
+  if (c) c.addEventListener("click", () => clearHistoryLog());
+  if (d) d.addEventListener("click", () => downloadHistoryLog());
+}
 
 function apiBase() {
   const cfg = window.ADTC_CONFIG || {};
@@ -261,11 +517,32 @@ function renderSummary(data) {
   if (data.generated_at) $("generatedAt").textContent = "Generated: " + data.generated_at;
 }
 
-function renderSections(data) {
+function renderSections(data, query) {
   const sections = (data && data.sections) || {};
   for (const tab of TABS) {
+    if (tab === "history") continue;
     if (sections[tab]) setPanelText(tab, sections[tab]);
   }
+  // Log successful Analyze into browser History (max 20)
+  try {
+    // Prefer full analyze (not quick-only empty holders) when possible
+    const isQuick = !!(data.quick || data._phase === "quick");
+    const holdersOk = !!(
+      (data.holders && data.holders.ok) ||
+      (sections.holders && !/unavailable|skipped|quick/i.test(sections.holders || ""))
+    );
+    if (!isQuick || holdersOk || data.ok) {
+      const entry = buildHistoryEntry(data, query);
+      if (entry) {
+        // Skip pure quick market-only if already have empty market-only noise:
+        // still record — user searched it
+        pushHistoryLog(entry);
+      }
+    }
+  } catch {
+    /* ignore history failures */
+  }
+  refreshHistoryPanel();
   // Prefer Alerts tab when there are top-priority warnings
   const n = (data.alerts_meta && data.alerts_meta.priority_count) || 0;
   if (n > 0) switchTab("alerts");
@@ -429,7 +706,7 @@ async function analyze(ev) {
       return;
     }
     renderSummary(data);
-    renderSections(data);
+    renderSections(data, query);
   } catch (e) {
     showError(String(e.message || e));
   } finally {
@@ -440,7 +717,10 @@ async function analyze(ev) {
 
 function initTabs() {
   document.querySelectorAll(".tab").forEach((b) => {
-    b.addEventListener("click", () => switchTab(b.dataset.tab));
+    b.addEventListener("click", () => {
+      switchTab(b.dataset.tab);
+      if (b.dataset.tab === "history") refreshHistoryPanel();
+    });
   });
 }
 
@@ -465,6 +745,7 @@ function initSettings() {
 function init() {
   initTabs();
   initSettings();
+  initHistory();
   $("searchForm").addEventListener("submit", analyze);
   checkHealth();
   recordAndLoadStats();
