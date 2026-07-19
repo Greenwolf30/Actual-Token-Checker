@@ -45,18 +45,21 @@ def fetch_solscan_holders(mint: str, *, limit: int = 40) -> dict[str, Any]:
 
     Pro:  GET /v2.0/token/holders  (header token: KEY)
     Also tries public v2 if pro fails / no key.
+
+    Used as primary holder list when Helius/RPC fails (see holders._fuse_holder_sources).
     """
     key = solscan_api_key()
+    page_size = min(max(limit, 1), 50)
     params = urlencode(
         {
             "address": mint,
             "page": 1,
-            "page_size": min(max(limit, 1), 40),
+            "page_size": page_size,
         }
     )
     errors: list[str] = []
 
-    # Pro API
+    # Pro API (preferred — set SOLSCAN_API_KEY on server)
     if key:
         try:
             data = get_json(
@@ -68,12 +71,13 @@ def fetch_solscan_holders(mint: str, *, limit: int = 40) -> dict[str, Any]:
                     "Accept": "application/json",
                 },
                 timeout=18.0,
-                retries=1,
+                retries=2,
             )
             parsed = _parse_solscan_holders(data, mint)
             if parsed.get("holders"):
                 parsed["ok"] = True
                 parsed["api"] = "solscan_pro_v2"
+                parsed["notes"] = "Solscan Pro holders"
                 return parsed
             errors.append("pro returned no holders")
         except Exception as exc:  # noqa: BLE001

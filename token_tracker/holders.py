@@ -292,7 +292,8 @@ def _solana_holders(mint: str, *, pair_address: str | None = None) -> dict[str, 
         return _solana_via_rugcheck(mint, pair_address=pair_address)
 
     def _solscan() -> dict[str, Any]:
-        return hsrc.fetch_solscan_holders(mint, limit=40)
+        # Slightly larger page so Solscan can carry the list if Helius/RPC fails
+        return hsrc.fetch_solscan_holders(mint, limit=50)
 
     def _birdeye() -> dict[str, Any]:
         return hsrc.fetch_birdeye_holders(mint, limit=40)
@@ -351,15 +352,26 @@ def _solana_holders(mint: str, *, pair_address: str | None = None) -> dict[str, 
     if fused.get("ok"):
         return fused
 
-    # Fallbacks if fusion empty
+    # Fallbacks if fusion empty — prefer Solscan when Helius/RPC failed
+    if solscan_result and solscan_result.get("ok") and solscan_result.get("holders"):
+        out = dict(solscan_result)
+        out["source"] = solscan_result.get("api") or "solscan"
+        out["notes"] = (
+            (out.get("notes") or "")
+            + " Primary list from Solscan (Helius/RPC unavailable or empty)."
+        ).strip()
+        return out
     if rpc_result and rpc_result.get("ok"):
         return rpc_result
     if rug_result and rug_result.get("ok"):
         return rug_result
+    if birdeye_result and birdeye_result.get("ok") and birdeye_result.get("holders"):
+        return birdeye_result
 
     return _empty(
         "Holder scan failed. "
         + " · ".join(f"{k}: {v}" for k, v in errors.items())
+        + " Tip: set HELIUS_API_KEY and/or SOLSCAN_API_KEY on the server."
     )
 
 
@@ -377,11 +389,16 @@ def _fuse_holder_sources(
     """
     Merge wallets from all providers.
 
-    Prefer Helius/RPC balances when present; fill gaps from Solscan/Birdeye/Rugcheck;
-    overlay Rugcheck insider flags + Birdeye security meta.
+    Prefer Helius/RPC balances when present.
+    If Helius/RPC is down or empty, Solscan becomes the primary balance/% source.
+    Rugcheck/Birdeye still fill gaps and flags.
     """
     by_wallet: dict[str, dict[str, Any]] = {}
     sources_used: list[str] = []
+    rpc_ok = bool(rpc and rpc.get("ok") and rpc.get("holders"))
+    solscan_ok = bool(solscan and solscan.get("ok") and solscan.get("holders"))
+    # When Helius fails, lean on Solscan for balances and %
+    solscan_primary = solscan_ok and not rpc_ok
 
     def _ingest(rows: list[dict[str, Any]], provider: str, *, prefer_balance: bool = False) -> None:
         for h in rows:
@@ -431,15 +448,23 @@ def _fuse_holder_sources(
                 elif new_pct > old_pct:
                     cur["pct_supply"] = new_pct
 
-    if rpc and rpc.get("ok") and rpc.get("holders"):
-        sources_used.append(rpc.get("source") or "solana_rpc")
-        _ingest(list(rpc.get("holders") or []), "helius_rpc", prefer_balance=True)
+    if rpc_ok:
+        sources_used.append(rpc.get("source") or "solana_rpc")  # type: ignore[union-attr]
+        _ingest(list(rpc.get("holders") or []), "helius_rpc", prefer_balance=True)  # type: ignore[union-attr]
+    if solscan_ok:
+        # Ingest Solscan early when it is primary so ranks follow Solscan %
+        if solscan_primary:
+            sources_used.insert(0, "solscan")
+        else:
+            sources_used.append("solscan")
+        _ingest(
+            list(solscan.get("holders") or []),  # type: ignore[union-attr]
+            "solscan",
+            prefer_balance=solscan_primary,
+        )
     if rug and rug.get("ok") and rug.get("holders"):
         sources_used.append("rugcheck")
         _ingest(list(rug.get("holders") or []), "rugcheck")
-    if solscan and solscan.get("ok") and solscan.get("holders"):
-        sources_used.append("solscan")
-        _ingest(list(solscan.get("holders") or []), "solscan")
     if birdeye and birdeye.get("ok") and birdeye.get("holders"):
         sources_used.append("birdeye")
         _ingest(list(birdeye.get("holders") or []), "birdeye")
@@ -634,23 +659,34 @@ def _fuse_holder_sources(
             "high_risk_db": [],
         }
 
+    primary_note = (
+        "Balances prefer Solscan (Helius/RPC unavailable or empty). "
+        if solscan_primary
+        else "Balances prefer Helius/RPC; Solscan & Birdeye fill gaps. "
+    )
     result["notes"] = (
         "Multi-source holders: "
         + (", ".join(sources_used) if sources_used else "none")
         + ". "
-        + "Balances prefer Helius/RPC; Solscan & Birdeye fill gaps; Rugcheck adds insiders/risks. "
+        + primary_note
+        + "Rugcheck adds insiders/risks. "
         + "Total wallet counts from Pump.fun + Birdeye + DexScreener + Solscan when available. "
         + "Flagged wallets section reads local RugWatch DB. "
         + (result.get("notes") or "")
     ).strip()
     if errors:
         result["notes"] += " Provider issues: " + "; ".join(f"{k}={v}" for k, v in errors.items())
+    if solscan_primary:
+        result["primary_holder_source"] = "solscan"
+    elif rpc_ok:
+        result["primary_holder_source"] = "helius_rpc"
     # provider status for UI
     result["provider_status"] = {
         "helius_rpc": bool(rpc and rpc.get("ok")),
         "rugcheck": bool(rug and rug.get("ok")),
         "solscan": bool(solscan and solscan.get("ok")),
         "birdeye": bool(birdeye and birdeye.get("ok")),
+        "primary": "solscan" if solscan_primary else ("helius_rpc" if rpc_ok else "mixed"),
         "birdeye_skipped": bool(birdeye and birdeye.get("skipped")),
         "solscan_needs_key": bool(solscan and solscan.get("needs_key")),
         "holder_totals_ok": best_total is not None,
