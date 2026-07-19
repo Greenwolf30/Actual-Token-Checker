@@ -67,6 +67,17 @@ function buildHistoryEntry(data, query) {
   const symbol = (t.symbol || "").trim();
   const q = (query || data.query || symbol || address || "").trim();
   if (!q && !address && !symbol) return null;
+  // Prefer API snapshots; fall back to sections text from this response
+  const sections = data.sections || {};
+  let holdersSnap = hm.holders_snapshot || null;
+  let bundlesSnap = hm.bundles_snapshot || null;
+  if (!holdersSnap && sections.holders) {
+    holdersSnap = clipSnap(sections.holders, 10000);
+  }
+  if (!bundlesSnap && sections.bundles) {
+    bundlesSnap = clipSnap(sections.bundles, 7000);
+  }
+
   return {
     ts: new Date().toISOString(),
     query: q,
@@ -97,7 +108,18 @@ function buildHistoryEntry(data, query) {
           }
         : null,
     pair_url: pair.url || (data.links && data.links.dexscreener) || null,
+    holders_snapshot: holdersSnap,
+    bundles_snapshot: bundlesSnap,
   };
+}
+
+function clipSnap(text, maxChars) {
+  if (!text) return null;
+  const s = String(text).trim();
+  if (!s) return null;
+  if (s.length <= maxChars) return s;
+  return s.slice(0, maxChars - 80).replace(/\s+$/, "") +
+    "\n\n  … [snapshot truncated for Logs storage] …\n";
 }
 
 function pushHistoryLog(entry) {
@@ -201,9 +223,34 @@ function formatHistoryLogText(items) {
       );
     }
     if (e.pair_url) lines.push("      Link:    " + e.pair_url);
+
+    const hSnap = String(e.holders_snapshot || "").trim();
+    if (hSnap) {
+      lines.push("");
+      lines.push("      ── HOLDERS SNAPSHOT (at lookup) ──");
+      hSnap.split("\n").forEach((hl) => {
+        lines.push(hl.trim() ? "      " + hl : "");
+      });
+    } else {
+      lines.push("      Holders snapshot: (none saved for this entry)");
+    }
+
+    const bSnap = String(e.bundles_snapshot || "").trim();
+    if (bSnap) {
+      lines.push("");
+      lines.push("      ── BUNDLES SNAPSHOT (at lookup) ──");
+      bSnap.split("\n").forEach((bl) => {
+        lines.push(bl.trim() ? "      " + bl : "");
+      });
+    } else {
+      lines.push("      Bundles snapshot: (none saved for this entry)");
+    }
+
+    lines.push("");
+    lines.push("  " + "-".repeat(40));
     lines.push("");
   });
-  lines.push("  — end of history —");
+  lines.push("  — end of logs —");
   lines.push("  Download saves this view (or JSON) to a file.");
   return lines.join("\n") + "\n";
 }

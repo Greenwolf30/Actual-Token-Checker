@@ -458,8 +458,17 @@ What each entry shows
     · Pump.fun status when known
     · Pair link when known
 
-  These numbers freeze at search time. To refresh a token, run Analyze
-  again.
+  Plus frozen text “screenshots” saved at lookup time:
+
+    · HOLDERS SNAPSHOT — the Holders report as it looked when you
+      Analyzed (top wallets, %, creator, flags when available).
+      Long reports may be truncated so 20 entries still fit in storage.
+    · BUNDLES SNAPSHOT — the Bundles report as it looked at that same
+      moment (totals, risk, suspect signals when available). Also may
+      be truncated for space.
+
+  These freeze at search time. They do not update later. To get a fresh
+  holders/bundles list, run Analyze again and open Holders / Bundles.
 
 How many entries
   - Logs keeps up to 20 searches.
@@ -475,28 +484,40 @@ Where it lives
   - Different from the small search-bar dropdown (desktop only).
 
 Buttons
-  Download
-    Save the current Logs list to a file you choose.
-    · .txt — easy to read (same layout as the tab)
-    · .json — structured data for other tools
-
   Refresh
-    Reload the list from storage.
+    Reloads the Logs list from storage (desktop: history_log.json on
+    disk; website: this browser’s saved data). Use if the tab looks
+    stale after Analyze, or after you reopened the app. Does not
+    re-scan tokens and does not call APIs.
 
   Clear
-    Delete every Logs entry after you confirm. This cannot be undone.
+    After you confirm, deletes ALL Logs entries for this app/browser.
+    Cannot be undone. Desktop empties history_log.json; website clears
+    localStorage. Does not affect Overview/Holders for the token you
+    currently have open.
+
+  Download
+    Saves the current Logs list to a file you choose.
+    · .txt — readable text (same layout as the tab, including
+      holders/bundles snapshots)
+    · .json — full structured data for backup or tools
+    Does not delete Logs from the app. Does not re-fetch market data.
 
 How to use it
   1. Analyze a token and wait until the run finishes successfully.
-  2. Open the Logs tab — that token should be first on the list.
+  2. Open the Logs tab — that token should be first on the list, with
+     holders and bundles snapshots under the summary.
   3. Keep analyzing other tokens (up to 20 kept).
   4. Use Download if you want a copy of the log.
   5. Use Clear only if you want an empty Logs list.
+  6. Use Refresh if the list did not update after Analyze.
 
 What Logs is not
-  - Not a live price feed.
-  - Not a full export of every report field (use Export JSON for the
-    current token if you need the full dump).
+  - Not a live price feed or live holders feed.
+  - Not a camera image — “snapshot” means a frozen text copy of the
+    Holders / Bundles report at Analyze time.
+  - Not a full export of every report field beyond what was stored
+    (use Export JSON on desktop for the full current report).
   - Not a safety rating or “safe list.” Past results are for your
     reference only.
 
