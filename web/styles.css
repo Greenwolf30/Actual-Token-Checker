@@ -719,13 +719,12 @@ button, .ghost, .primary {
   border-radius: 8px;
   scroll-margin-top: 12px;
 }
-/* Yellow copyable CA — summary bar + Ruggers + Logs */
+/* Yellow copyable CA — Ruggers + Logs */
 a.copy-mint,
 .copy-mint,
 .rug-title a.copy-mint,
 .logs-entry-sub a.copy-mint,
-.logs-ca-copy,
-#sumAddr.copy-mint {
+.logs-ca-copy {
   color: #c4a84a !important;
   cursor: pointer;
   text-decoration: underline;
@@ -736,8 +735,19 @@ a.copy-mint:hover,
 .copy-mint:hover,
 .rug-title a.copy-mint:hover,
 .logs-entry-sub a.copy-mint:hover,
-.logs-ca-copy:hover,
-#sumAddr.copy-mint:hover {
+.logs-ca-copy:hover {
+  color: #d4bc6a !important;
+}
+/* Top summary mint — yellow, opens Solscan (address text only, no URL shown) */
+#sumAddr a.sum-mint-link {
+  color: #c4a84a !important;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-weight: 500;
+  word-break: break-all;
+}
+#sumAddr a.sum-mint-link:hover {
   color: #d4bc6a !important;
 }
 

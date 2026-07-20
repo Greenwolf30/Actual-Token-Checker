@@ -2423,13 +2423,21 @@ function renderSummary(data) {
   const mint = (t.address || m.address || "").trim();
   const sumAddr = $("sumAddr");
   if (sumAddr) {
-    // Top summary mint — yellow + copyable (original placement under name)
-    sumAddr.textContent = mint;
-    sumAddr.classList.add("copy-mint");
-    sumAddr.setAttribute("data-copy", mint);
-    sumAddr.title = mint ? "Left-click to copy mint / CA" : "";
+    // Top summary mint — yellow text link to Solscan (no raw URL shown)
+    sumAddr.textContent = "";
+    sumAddr.classList.remove("copy-mint");
+    sumAddr.removeAttribute("data-copy");
     sumAddr.dataset.copyWired = "";
-    if (mint) wireCopyMintClicks(sumAddr.parentElement || document);
+    if (mint) {
+      const a = document.createElement("a");
+      a.className = "sum-mint-link mono";
+      a.href = "https://solscan.io/token/" + encodeURIComponent(mint);
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = mint;
+      a.title = "Open on Solscan";
+      sumAddr.appendChild(a);
+    }
   }
   $("sumPrice").textContent = fmtUsd(m.price_usd);
   $("sumMc").textContent = fmtUsd(m.market_cap_usd);
