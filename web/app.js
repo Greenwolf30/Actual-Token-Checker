@@ -125,52 +125,98 @@ function clipSnap(text, maxChars) {
 }
 
 /**
- * Clean Logs snapshots — KEEP full holders/bundles content.
- * Only drop: provider status lines, Note: lines, RugWatch flagged section.
+ * Strip noise from Holders/Bundles text for Logs:
+ * provider status, notes, RugWatch flagged-wallet section.
  */
 function cleanLogsSnapshot(text) {
   if (!text) return "";
   const lines = String(text).split("\n");
   const out = [];
-  // RugWatch block is always near the end of holders report — skip from header to end
   let skipRugwatch = false;
-  for (const line of lines) {
+  for (const raw of lines) {
+    const line = raw;
     const t = line.trim();
+    const low = t.toLowerCase();
 
-    // Start of RugWatch flagged-wallets section → drop rest of that section
+    // RugWatch flagged block — drop until blank line after section ends
+    // or until a clear non-rugwatch header
     if (
       /flagged wallets\s*\(rugwatch\)/i.test(t) ||
-      /──+\s*flagged wallets/i.test(t)
+      /──\s*flagged wallets/i.test(t) ||
+      /^rugwatch:/i.test(t)
     ) {
       skipRugwatch = true;
       continue;
     }
     if (skipRugwatch) {
-      // Entire rugwatch appendix is after top holders; keep skipping to end
-      continue;
+      // End rugwatch section when we hit a plain Note: or end-ish headers
+      // Keep skipping until a major unrelated section or double blank
+      if (
+        /^note:/i.test(t) ||
+        /^flags\b/i.test(t) ||
+        /^top holders/i.test(t) ||
+        /^multi-account/i.test(t) ||
+        /^concentration risk/i.test(t) ||
+        /^──\s*total wallets/i.test(t)
+      ) {
+        // If it's a Note, still skip; flags/top holders might be main content
+        // that appeared after rugwatch — only re-enter for top holders style
+        if (/^note:/i.test(t)) {
+          continue;
+        }
+        if (/^top holders/i.test(t) || /^──\s*total wallets/i.test(t)) {
+          skipRugwatch = false;
+          // fall through to keep this line
+        } else if (/^flags\b/i.test(t) || /^multi-account/i.test(t)) {
+          skipRugwatch = false;
+        } else {
+          continue;
+        }
+      } else {
+        // Skip rugwatch tips, scores, addresses under that section
+        if (
+          /rugwatch/i.test(t) ||
+          /known lp \/ program/i.test(t) ||
+          /click any blue wallet/i.test(t) ||
+          /flagged wallet/i.test(t) ||
+          /\[this mint\]/i.test(t) ||
+          /\[creator\]/i.test(t) ||
+          /not bundlers/i.test(t) ||
+          /heuristic/i.test(t) ||
+          /set RUGWATCH/i.test(t) ||
+          /scan rugs/i.test(t) ||
+          /^#\d+\s+holds/i.test(t) ||
+          /^tip:/i.test(t)
+        ) {
+          continue;
+        }
+        // indented addresses under rugwatch list
+        if (/^\s{4,}/.test(line) && skipRugwatch) {
+          continue;
+        }
+        if (!t) {
+          continue;
+        }
+        // unknown line while in rugwatch — keep skipping
+        continue;
+      }
     }
 
-    // Provider status / API key tips only
+    // Provider status / key tips
     if (/^\s*providers\s*:/i.test(t)) continue;
     if (/birdeye:\s*skipped/i.test(t)) continue;
     if (/solscan:\s*set\s+solscan/i.test(t)) continue;
     if (/set\s+helius_api_key/i.test(t)) continue;
     if (/provider issues\s*:/i.test(t)) continue;
-    if (/^\s*source:\s*/i.test(t) && /helius|rugcheck|solscan|birdeye|\+/i.test(t)) {
-      // keep simple "Source: multi" style if short; drop long multi-provider lines
-      // always keep Source line for context — user asked only providers/notes/rugwatch
-    }
+    if (/provider status/i.test(t)) continue;
 
-    // Standalone note lines (not the wallet list)
+    // Notes
     if (/^\s*note\s*:/i.test(t)) continue;
     if (/^\s*notes\s*:/i.test(t)) continue;
 
-    // One-line RugWatch status in flags (not the full top-holder list)
-    if (/^•\s*rugwatch:/i.test(t) || /^\*\s*rugwatch:/i.test(t)) continue;
-    if (/rugwatch:\s*\d+\s*flagged/i.test(t)) continue;
-
-    // Solscan URL rows (addresses kept separately)
-    if (/^https?:\/\/(www\.)?solscan\.io\/(account|token)\//i.test(t)) continue;
+    // RugWatch leftovers outside the block
+    if (/rugwatch/i.test(t)) continue;
+    if (/flagged wallet/i.test(t) && /rugwatch|watchlist/i.test(t)) continue;
 
     out.push(line);
   }
@@ -198,78 +244,7 @@ function pushHistoryLog(entry) {
   return next;
 }
 
-function entryOverviewText(e) {
-  const lines = [];
-  let ts = String(e.ts || "").slice(0, 19).replace("T", " ");
-  if (ts) ts = ts + " UTC";
-  const sym = e.symbol || e.query || "token";
-  const name = e.name || "";
-  let title = sym;
-  if (name && name.toUpperCase() !== String(sym).toUpperCase()) {
-    title = sym + "  (" + name + ")";
-  }
-  lines.push(title);
-  lines.push("When:   " + (ts || "—"));
-  lines.push("Chain:  " + (e.chain || "—") + "  ·  DEX: " + (e.dex_id || "—"));
-  if (e.address) lines.push("Mint:   " + e.address);
-  if (e.query && e.query !== sym && e.query !== e.address) {
-    lines.push("Query:  " + e.query);
-  }
-  const mbits = [];
-  const price = fmtUsdHist(e.price_usd);
-  const mcap = fmtUsdHist(e.market_cap_usd);
-  const liq = fmtUsdHist(e.liquidity_usd);
-  const vol = fmtUsdHist(e.volume_h24_usd);
-  const chg = fmtPctHist(e.price_change_h24_pct);
-  if (price) mbits.push("price " + price);
-  if (mcap) mbits.push("mcap " + mcap);
-  if (liq) mbits.push("liq " + liq);
-  if (vol) mbits.push("vol24 " + vol);
-  if (chg) mbits.push("24h " + chg);
-  if (mbits.length) lines.push("Market: " + mbits.join(" · "));
-  const t1 = fmtPctHist(e.top1_pct);
-  const t5 = fmtPctHist(e.top5_pct);
-  const t10 = fmtPctHist(e.top10_pct);
-  if (e.holders_ok || t1 || t5 || t10) {
-    lines.push(
-      "Holders: risk " +
-        (e.concentration_risk || "—") +
-        "  ·  Top1 " +
-        (t1 || "—") +
-        " · Top5 " +
-        (t5 || "—") +
-        " · Top10 " +
-        (t10 || "—")
-    );
-  }
-  const bp = fmtPctHist(e.bundle_pct);
-  if (e.bundle_risk || bp) {
-    lines.push(
-      "Bundles: risk " + (e.bundle_risk || "—") + "  ·  share " + (bp || "—")
-    );
-  }
-  lines.push(
-    "Alerts:  " +
-      (Number(e.alerts_priority_count) || 0) +
-      " top-priority warning(s)"
-  );
-  const pfm = e.pumpfun || {};
-  if (pfm.is_pump_mint || pfm.status) {
-    lines.push(
-      "Pump:    mint=" +
-        pfm.is_pump_mint +
-        "  status=" +
-        (pfm.status || "—") +
-        "  graduated=" +
-        pfm.graduated
-    );
-  }
-  if (e.pair_url) lines.push("Link:    " + e.pair_url);
-  return lines.join("\n");
-}
-
 function formatHistoryLogText(items) {
-  /** Plain-text export (Download .txt) — single bracket separators */
   const rows = items != null ? items : loadHistoryLog();
   const entrySep =
     "[[============================================================]]";
@@ -290,135 +265,119 @@ function formatHistoryLogText(items) {
   lines.push("  Entries: " + rows.length + " / " + HISTORY_MAX);
   lines.push("");
   rows.forEach((e, idx) => {
-    // Single bracket line between entries
+    // Double-bracket horizontal line between entries
+    lines.push(entrySep);
     lines.push(entrySep);
     lines.push("");
-    lines.push("  " + String(idx + 1).padStart(2) + ".");
-    lines.push(stripSolscanUrlLines(entryOverviewText(e)));
-    lines.push("");
-    lines.push("  --- HOLDERS SNAPSHOT ---");
-    lines.push(
-      stripSolscanUrlLines(cleanLogsSnapshot(e.holders_snapshot || "")) ||
-        "(none)"
-    );
-    lines.push("");
-    lines.push("  --- BUNDLES SNAPSHOT ---");
-    lines.push(
-      stripSolscanUrlLines(cleanLogsSnapshot(e.bundles_snapshot || "")) ||
-        "(none)"
-    );
-    lines.push("");
-  });
-  lines.push(entrySep);
-  lines.push("  — end of logs —");
-  return lines.join("\n") + "\n";
-}
 
-function escHtml(s) {
-  return String(s || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-function refreshHistoryPanel() {
-  const list = $("historyList");
-  const dump = $("text-history");
-  const rows = loadHistoryLog();
-  // Keep plain text dump for download parity / debugging
-  if (dump) dump.textContent = formatHistoryLogText(rows);
-
-  if (!list) {
-    setPanelText("history", formatHistoryLogText(rows));
-    return;
-  }
-
-  if (!rows.length) {
-    list.innerHTML =
-      '<p class="logs-empty">Run Analyze — successful searches are logged here (max 20).<br/>' +
-      "Each entry shows Overview · Holders · Bundles side by side.</p>";
-    return;
-  }
-
-  const sep =
-    "[[============================================================]]";
-  let html =
-    '<p class="logs-meta">Entries: ' +
-    rows.length +
-    " / " +
-    HISTORY_MAX +
-    " · Overview | Holders | Bundles in a row</p>";
-
-  rows.forEach((e, idx) => {
-    // Single separator between entries (not double)
-    html +=
-      '<div class="logs-sep" aria-hidden="true">' + escHtml(sep) + "</div>";
-
+    let ts = String(e.ts || "").slice(0, 19).replace("T", " ");
+    if (ts) ts = ts + " UTC";
     const sym = e.symbol || e.query || "token";
     const name = e.name || "";
     let title = sym;
     if (name && name.toUpperCase() !== String(sym).toUpperCase()) {
       title = sym + "  (" + name + ")";
     }
-    let ts = String(e.ts || "").slice(0, 19).replace("T", " ");
-    if (ts) ts += " UTC";
+    lines.push("  " + String(idx + 1).padStart(2) + ". " + title);
+    lines.push("      When:   " + (ts || "—"));
+    lines.push(
+      "      Chain:  " +
+        (e.chain || "—") +
+        "  ·  DEX: " +
+        (e.dex_id || "—")
+    );
+    if (e.address) lines.push("      Mint:   " + e.address);
+    if (e.query && e.query !== sym && e.query !== e.address) {
+      lines.push("      Query:  " + e.query);
+    }
+    const mbits = [];
+    const price = fmtUsdHist(e.price_usd);
+    const mcap = fmtUsdHist(e.market_cap_usd);
+    const liq = fmtUsdHist(e.liquidity_usd);
+    const vol = fmtUsdHist(e.volume_h24_usd);
+    const chg = fmtPctHist(e.price_change_h24_pct);
+    if (price) mbits.push("price " + price);
+    if (mcap) mbits.push("mcap " + mcap);
+    if (liq) mbits.push("liq " + liq);
+    if (vol) mbits.push("vol24 " + vol);
+    if (chg) mbits.push("24h " + chg);
+    if (mbits.length) lines.push("      Market: " + mbits.join(" · "));
+    const t1 = fmtPctHist(e.top1_pct);
+    const t5 = fmtPctHist(e.top5_pct);
+    const t10 = fmtPctHist(e.top10_pct);
+    if (e.holders_ok || t1 || t5 || t10) {
+      lines.push(
+        "      Holders: risk " +
+          (e.concentration_risk || "—") +
+          "  ·  Top1 " +
+          (t1 || "—") +
+          " · Top5 " +
+          (t5 || "—") +
+          " · Top10 " +
+          (t10 || "—")
+      );
+    }
+    const bp = fmtPctHist(e.bundle_pct);
+    if (e.bundle_risk || bp) {
+      lines.push(
+        "      Bundles: risk " +
+          (e.bundle_risk || "—") +
+          "  ·  share " +
+          (bp || "—")
+      );
+    }
+    lines.push(
+      "      Alerts:  " +
+        (Number(e.alerts_priority_count) || 0) +
+        " top-priority warning(s)"
+    );
+    const pfm = e.pumpfun || {};
+    if (pfm.is_pump_mint || pfm.status) {
+      lines.push(
+        "      Pump:    mint=" +
+          pfm.is_pump_mint +
+          "  status=" +
+          (pfm.status || "—") +
+          "  graduated=" +
+          pfm.graduated
+      );
+    }
+    if (e.pair_url) lines.push("      Link:    " + e.pair_url);
 
-    const overview = entryOverviewText(e);
-    const holdersPlain =
-      cleanLogsSnapshot(e.holders_snapshot || "") ||
-      "(no holders snapshot for this entry)";
-    const bundlesPlain =
-      cleanLogsSnapshot(e.bundles_snapshot || "") ||
-      "(no bundles snapshot for this entry)";
-
-    // Overview: clickable mint + light % colors (not Top1/5/10 style lines)
-    const overviewHtml = formatHoldersRichHtml(overview);
-    // Holders: % colors + yellow amounts; Bundles: group % colors + Top10 ex-LP uncolored
-    const holdersHtml = formatHoldersRichHtml(holdersPlain);
-    const bundlesHtml = formatBundlesRichHtml(bundlesPlain);
-
-    // Subline mint clickable when present
-    let subHtml = escHtml((ts || "—") + " · " + (e.chain || "—") + " · ");
-    if (e.address) {
-      subHtml +=
-        '<a class="wallet-link" href="https://solscan.io/account/' +
-        encodeURIComponent(e.address) +
-        '" target="_blank" rel="noopener noreferrer">' +
-        escHtml(e.address) +
-        "</a>";
+    // Clean again on display (covers older stored snapshots)
+    const hSnap = cleanLogsSnapshot(e.holders_snapshot || "");
+    if (hSnap) {
+      lines.push("");
+      lines.push("      ── HOLDERS SNAPSHOT (at lookup) ──");
+      hSnap.split("\n").forEach((hl) => {
+        lines.push(hl.trim() ? "      " + hl : "");
+      });
     } else {
-      subHtml += "—";
+      lines.push("      Holders snapshot: (none saved for this entry)");
     }
 
-    html +=
-      '<article class="logs-entry">' +
-      '<h3 class="logs-entry-head">' +
-      escHtml(String(idx + 1).padStart(2, "0") + ". " + title) +
-      "</h3>" +
-      '<p class="logs-entry-sub">' +
-      subHtml +
-      "</p>" +
-      '<div class="logs-row">' +
-      '<div class="logs-col">' +
-      '<div class="logs-col-title">Overview</div>' +
-      '<pre class="logs-col-body">' +
-      overviewHtml +
-      "</pre></div>" +
-      '<div class="logs-col">' +
-      '<div class="logs-col-title">Holders snapshot</div>' +
-      '<pre class="logs-col-body">' +
-      holdersHtml +
-      "</pre></div>" +
-      '<div class="logs-col">' +
-      '<div class="logs-col-title">Bundles snapshot</div>' +
-      '<pre class="logs-col-body">' +
-      bundlesHtml +
-      "</pre></div>" +
-      "</div></article>";
-  });
+    const bSnap = cleanLogsSnapshot(e.bundles_snapshot || "");
+    if (bSnap) {
+      lines.push("");
+      lines.push("      ── BUNDLES SNAPSHOT (at lookup) ──");
+      bSnap.split("\n").forEach((bl) => {
+        lines.push(bl.trim() ? "      " + bl : "");
+      });
+    } else {
+      lines.push("      Bundles snapshot: (none saved for this entry)");
+    }
 
-  list.innerHTML = html;
+    lines.push("");
+  });
+  lines.push(entrySep);
+  lines.push(entrySep);
+  lines.push("  — end of logs —");
+  lines.push("  Download saves this view (or JSON) to a file.");
+  return lines.join("\n") + "\n";
+}
+
+function refreshHistoryPanel() {
+  setPanelText("history", formatHistoryLogText());
 }
 
 function downloadHistoryLog() {
@@ -541,55 +500,25 @@ function showError(msg) {
   box.textContent = msg;
 }
 
-/** Remove standalone Solscan URL lines; keep wallet addresses. */
-function stripSolscanUrlLines(text) {
-  if (!text) return "";
-  return String(text)
-    .split("\n")
-    .filter((line) => {
-      const t = line.trim();
-      if (!t) return true;
-      // Drop lines that are only a Solscan account/token URL
-      if (/^https?:\/\/(www\.)?solscan\.io\/(account|token)\//i.test(t)) {
-        return false;
-      }
-      return true;
-    })
-    .join("\n");
-}
-
 function linkify(text) {
   if (!text) return "";
-  // Never show Solscan URL rows; addresses stay and become clickable below
-  const plain = stripSolscanUrlLines(text);
-  const esc = plain
+  const esc = text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
-  // Other http(s) URLs (not solscan account lines — already stripped)
+  // http(s) URLs first
   let html = esc.replace(
     /(https?:\/\/[^\s<>"']+)/g,
-    (url) => {
-      if (/solscan\.io\/(account|token)\//i.test(url)) {
-        return url; // should be rare after strip; leave plain if any leftover
-      }
-      return (
-        '<a href="' +
-        url +
-        '" target="_blank" rel="noopener noreferrer">' +
-        url +
-        "</a>"
-      );
-    }
+    '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
   );
-  // Solana base58 wallets → clickable Solscan (address text stays)
+  // Solana base58 wallets → Solscan (Creator + top holders); skip inside tags
   html = html.replace(
     /(^|>)([^<]*?)(?=<|$)/g,
     (full, prefix, chunk) => {
       const linked = chunk.replace(
         /\b([1-9A-HJ-NP-Za-km-z]{32,44})\b/g,
         (addr) =>
-          `<a class="wallet-link" href="https://solscan.io/account/${addr}" target="_blank" rel="noopener noreferrer">${addr}</a>`
+          `<a href="https://solscan.io/account/${addr}" target="_blank" rel="noopener noreferrer">${addr}</a>`
       );
       return prefix + linked;
     }
@@ -618,22 +547,6 @@ function colorPctTokens(html) {
   });
 }
 
-/** Token balance amounts (not %) → yellow */
-function colorHoldingAmounts(html) {
-  if (!html) return html;
-  // Holder rows: "#1 1,234.5678 ("
-  let out = html.replace(
-    /(#[0-9]+\s+)([\d,]+\.\d+|[\d,]{1,}|\d+)(\s*\()/g,
-    '$1<span class="hold-amt">$2</span>$3'
-  );
-  // Cluster lines: "bal 1234.5"
-  out = out.replace(
-    /(\bbal\s+)([\d,]+\.?\d*)/gi,
-    '$1<span class="hold-amt">$2</span>'
-  );
-  return out;
-}
-
 /** True for concentration summary lines: Top1 …% · Top5 …% · Top10 …% */
 function isTopSummaryLine(line) {
   const plain = String(line || "").replace(/<[^>]*>/g, "");
@@ -648,85 +561,49 @@ function isTopSummaryLine(line) {
   );
 }
 
-/** Lines whose % should stay uncolored (summary concentration / ex-LP). */
-function isUncoloredPctLine(line) {
-  const plain = String(line || "").replace(/<[^>]*>/g, "");
-  if (isTopSummaryLine(plain)) return true;
-  // Bundles / Logs: Top10 ex-LP is a summary metric, not a wallet holding band
-  if (/\bTop\s*10\s*ex[-\s]?LP\b/i.test(plain)) return true;
-  return false;
-}
-
 function colorWalletHolderPcts(html) {
   if (!html) return html;
-  // Color supply % on wallet rows; Top1/Top5/Top10 + Top10 ex-LP stay default
+  // Color supply % on wallet rows only — Top1/Top5/Top10 summary stays default color
   return html
     .split("\n")
-    .map((line) => (isUncoloredPctLine(line) ? line : colorPctTokens(line)))
+    .map((line) => (isTopSummaryLine(line) ? line : colorPctTokens(line)))
     .join("\n");
 }
 
 /**
- * Holders + Logs rich formatting:
- *  - drop Solscan URL lines (keep addresses)
- *  - clickable wallet addresses
- *  - yellow token amounts
- *  - % color bands except Top1/Top5/Top10 and Top10 ex-LP
- *  - Creator "owns X%" uses % color scheme
- */
-function formatHoldersRichHtml(text) {
-  if (!text) return "";
-  let html = linkify(text);
-  html = colorWalletHolderPcts(html);
-  html = colorHoldingAmounts(html);
-  return html;
-}
-
-/**
- * Bundles tab % color scheme (same priority bands as Holders):
- *  - Summary: Total % bundles, Similar-size total, Suspect total
- *  - Each wallet percent holdings in groups: "holds X%" on clusters,
- *    similar-size members, insiders, suspects (+ group avg/range headers)
- *  - Similar-size group header right side: "sum X%" (combined group holdings)
- *  - Top10 ex-LP stays uncolored (summary concentration, not a wallet bag)
- * Also yellows cluster "bal …" amounts.
+ * Bundles tab: color ONLY
+ *  - Total % bundles line
+ *  - Suspect wallets TOTAL line ("Suspect wallets — total X%")
+ * Individual suspect wallet rows stay uncolored.
  */
 function colorBundlesSelectivePcts(html) {
   if (!html) return html;
   return html
     .split("\n")
     .map((line) => {
-      if (isUncoloredPctLine(line)) return line;
-      return colorPctTokens(line);
+      const plain = line.replace(/<[^>]*>/g, "");
+      if (/Total\s*%\s*bundles\s*:/i.test(plain)) {
+        return colorPctTokens(line);
+      }
+      // Header total only — not the wallet list under it
+      if (/Suspect\s+wallets/i.test(plain) && /total/i.test(plain)) {
+        return colorPctTokens(line);
+      }
+      return line;
     })
     .join("\n");
-}
-
-function formatBundlesRichHtml(text) {
-  if (!text) return "";
-  let html = linkify(text);
-  html = colorBundlesSelectivePcts(html);
-  html = colorHoldingAmounts(html);
-  return html;
 }
 
 function setPanelText(tab, text) {
   const el = $("text-" + tab);
   if (!el) return;
-  const raw = text || "(empty)";
-  let html;
-  if (tab === "holders") {
-    // No Solscan URL rows; clickable addresses; yellow amounts; % colors (not Top1/5/10)
-    html = formatHoldersRichHtml(raw);
-  } else if (tab === "alerts") {
-    html = linkify(raw);
+  let html = linkify(text || "(empty)");
+  // Holders + Alerts: full wallet % colors
+  if (tab === "holders" || tab === "alerts") {
     html = colorWalletHolderPcts(html);
-    html = colorHoldingAmounts(html);
   } else if (tab === "bundles") {
-    // Summary + each wallet group % colored; Top10 ex-LP uncolored; bal yellow
-    html = formatBundlesRichHtml(raw);
-  } else {
-    html = linkify(raw);
+    // Bundles: only total bundle % + suspect wallets
+    html = colorBundlesSelectivePcts(html);
   }
   el.innerHTML = html;
 }

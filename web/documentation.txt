@@ -95,14 +95,6 @@ DexScreener cache
 Purpose
   Show who holds the token (top wallets) and how concentrated supply is.
 
-Display (website)
-  - Wallet addresses stay visible and are clickable (open Solscan).
-  - Standalone Solscan URL lines are hidden (address is enough).
-  - Token holding amounts (balances) are shown in yellow.
-  - Supply % uses the priority color bands (see below), including the
-    Creator wallet “owns X%” line.
-  - Top1 / Top5 / Top10 summary % stay uncolored (summary only).
-
 Solana
   Multi-source fusion when possible:
     Helius / Solana RPC, Rugcheck top holders, Solscan, Birdeye, Pump.fun
@@ -171,44 +163,10 @@ What people often ask
 
 6.3 What the Bundles tab shows
   - Summary: estimated total bundle % of supply (when available)
-  - Similar-size total %: combined supply of unique wallets that sit in
-    similar-size groups (wallets with nearly the same holding size)
   - Signals: e.g. multi-ATA clusters, similar-size groups, Rugcheck insiders,
     Birdeye bundler/sniper tags, rugged flag
   - Lists of suspect / flagged wallets (heuristic)
-  - Top10 ex-LP (see §6.3a)
   - Notes that methods are partial
-
-  Display (website) — % color bands (same as Holders priority scheme)
-  - Total % bundles, Similar-size total, Suspect total: colored by %
-  - Each wallet’s percent holdings in every group is colored the same way:
-      multi-account clusters, similar-size group members, insiders, suspects
-      (lines look like “wallet  holds X%”)
-  - Similar-size group header (right side): “sum X%” = combined holdings of
-      all wallets in that group; colored with the same priority bands
-  - Group headers (≈ avg % / range) also use the bands
-  - Cluster balances ("bal …") shown in yellow
-  - Top10 ex-LP stays uncolored (summary only — see §6.3a)
-
-6.3a What “Top10 ex-LP” means
-  Top10 ex-LP = combined % of supply held by the top non-LP / non-program
-  wallets in the top-holder snapshot (LP vaults and known DEX/program
-  accounts are excluded).
-
-  Why it exists
-    - Plain Top10 often includes a huge liquidity-pool wallet.
-    - That pool % is not the same as “whales who can dump.”
-    - Top10 ex-LP answers: how concentrated are the top human-ish wallets
-      after removing known LP / program addresses?
-
-  Example
-    - Top10 (all accounts): 80% (pool may be most of it)
-    - Top10 ex-LP: 35% (top non-LP wallets only)
-
-  On the site
-    - Shown on Bundles (and may appear in Logs bundles snapshot).
-    - That % is NOT colored with the wallet holding priority bands
-      (same idea as Top1 / Top5 / Top10 summary lines).
 
 6.4 Bundle % alert scheme (Alerts tab)
   Alerts use ONE number: estimated bundle % of supply
