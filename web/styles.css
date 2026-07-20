@@ -142,41 +142,41 @@ body::before {
   border-color: var(--accent-border);
 }
 
-/* RugWatch nav tab — yellow letters (same family as site font) */
+/* RugWatch nav tab — dimmer yellow */
 .nav-link-rugwatch {
-  color: #f5c542;
-  font-weight: 700;
+  color: #c4a84a;
+  font-weight: 600;
   letter-spacing: 0.02em;
-  border-color: rgba(245, 197, 66, 0.35);
-  background: rgba(245, 197, 66, 0.08);
+  border-color: rgba(180, 150, 60, 0.28);
+  background: rgba(180, 150, 60, 0.06);
   margin: 0;
 }
 .nav-link-rugwatch:hover {
-  color: #ffe08a;
-  background: rgba(245, 197, 66, 0.16);
-  border-color: rgba(245, 197, 66, 0.55);
+  color: #d4bc6a;
+  background: rgba(180, 150, 60, 0.12);
+  border-color: rgba(180, 150, 60, 0.4);
 }
 
 .check-rugwatch {
-  color: #f5c542;
-  font-weight: 600;
+  color: #c4a84a;
+  font-weight: 500;
 }
 .check-rugwatch input {
-  accent-color: #f5c542;
+  accent-color: #c4a84a;
 }
 
-/* Ruggers → yellow Upload to RugWatch cloud */
+/* Ruggers → dimmer yellow Upload */
 .rug-upload-btn {
-  color: #1a1400 !important;
-  font-weight: 700 !important;
-  background: #f5c542 !important;
-  border: 1px solid #d4a017 !important;
+  color: #1c1810 !important;
+  font-weight: 600 !important;
+  background: #c4a84a !important;
+  border: 1px solid #9a8438 !important;
   border-radius: 7px;
   padding: 5px 12px !important;
 }
 .rug-upload-btn:hover:not(:disabled) {
-  background: #ffe08a !important;
-  border-color: #f5c542 !important;
+  background: #d4bc6a !important;
+  border-color: #c4a84a !important;
 }
 .rug-upload-btn:disabled {
   opacity: 0.55;
@@ -636,20 +636,20 @@ button, .ghost, .primary {
 }
 a.copy-mint,
 .copy-mint {
-  color: #f5c542;
+  color: #c4a84a;
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 2px;
-  font-weight: 600;
+  font-weight: 500;
 }
 a.copy-mint:hover {
-  color: #ffe08a;
+  color: #d4bc6a;
 }
 #sumAddr.copy-mint {
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 2px;
-  color: #f5c542;
+  color: #c4a84a;
 }
 
 .ruggers-body {
@@ -793,14 +793,14 @@ a.copy-mint:hover {
   flex-shrink: 0;
 }
 .rug-tag-seller {
-  background: rgba(255, 69, 58, 0.15);
-  color: #ff6b63;
-  border: 1px solid rgba(255, 69, 58, 0.35);
+  background: rgba(180, 80, 75, 0.12);
+  color: #c47a7a;
+  border: 1px solid rgba(180, 80, 75, 0.28);
 }
 .rug-tag-swing {
-  background: rgba(255, 159, 10, 0.15);
-  color: #ffb340;
-  border: 1px solid rgba(255, 159, 10, 0.4);
+  background: rgba(180, 140, 50, 0.12);
+  color: #c4a84a;
+  border: 1px solid rgba(180, 140, 50, 0.28);
 }
 .rug-footer-meta {
   margin: 12px 0 0;
@@ -808,11 +808,21 @@ a.copy-mint:hover {
   color: var(--text-muted);
 }
 .ruggers-body a.wallet-link {
-  color: var(--accent);
+  color: #6a8fc4;
   text-decoration: none;
 }
 .ruggers-body a.wallet-link:hover {
   text-decoration: underline;
+  color: #8aa8d4;
+}
+.rug-wallet-main {
+  color: #b8c0cc;
+}
+.rug-section-title {
+  color: #c8ced8;
+}
+.rug-section-hint {
+  color: #7a8494;
 }
 
 /* History / Logs tab toolbar */
