@@ -85,6 +85,31 @@ def resolve_pairs(query: str, chain: str | None = None) -> list[dict[str, Any]]:
         except Exception:  # noqa: BLE001
             return []
 
+    def _pump_prebond_first(mint_q: str) -> list[dict[str, Any]]:
+        """Pre-bond *pump mints: native Pump.fun only (skip Dex/Raydium)."""
+        try:
+            return pf.pairs_for_prebond_mint(mint_q)
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _prefer_pumpfun_pairs(
+        pairs_in: list[dict[str, Any]], mint_q: str
+    ) -> list[dict[str, Any]]:
+        """If list has pumpfun bonding pairs, put them first for prebond mints."""
+        if not pairs_in or not pf.is_pump_mint(mint_q):
+            return pairs_in
+        pumpfun = [
+            p
+            for p in pairs_in
+            if (p.get("dexId") or "").lower() in {"pumpfun", "pump"}
+            or p.get("_prebond")
+            or p.get("_source") == "pumpfun_native_api"
+        ]
+        if pumpfun:
+            rest = [p for p in pairs_in if p not in pumpfun]
+            return pumpfun + rest
+        return pairs_in
+
     def _direct_token_pairs(addr: str, preferred: str | None) -> list[dict[str, Any]]:
         """Hit DexScreener token-pairs for one or several chains (cached)."""
         chains: list[str] = []
@@ -116,6 +141,10 @@ def resolve_pairs(query: str, chain: str | None = None) -> list[dict[str, Any]]:
         maybe_chain, maybe_addr = q.split(":", 1)
         maybe_chain = _normalize_chain(maybe_chain) or maybe_chain.lower()
         if maybe_chain and maybe_addr:
+            # Pre-bond pump: native Pump.fun is source of truth
+            pre = _pump_prebond_first(maybe_addr)
+            if pre:
+                return pre
             if pf.is_pump_mint(maybe_addr):
                 fb = _pump_fallback(maybe_addr)
                 if fb:
@@ -123,23 +152,37 @@ def resolve_pairs(query: str, chain: str | None = None) -> list[dict[str, Any]]:
             try:
                 pairs = dx.pairs_for_token(maybe_chain, maybe_addr)
                 if pairs:
-                    return pairs
+                    return _prefer_pumpfun_pairs(pairs, maybe_addr)
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
             fb = _pump_fallback(maybe_addr)
             if fb:
                 return fb
 
-    # Pure address: targeted token-pairs / pump BEFORE broad DexScreener search
-    # (search is noisier and costs an extra free-API hit).
+    # Pure address: prebond Pump → graduated pump native → Dex/Raydium
     looks_like_addr = bool(ADDRESS_RE.match(q)) or (
         len(q) >= 32 and " " not in q and not q.startswith("http")
     )
     if looks_like_addr:
         mint = q.split(":")[-1] if ":" in q else q
+        # 1) Still on bonding curve → Pump.fun native only
+        pre = _pump_prebond_first(mint)
+        if pre:
+            return pre
+        # 2) Graduated / unknown: native pump synthetic, then indexes
         if pf.is_pump_mint(mint):
             fb = _pump_fallback(mint)
             if fb:
+                # Graduated synthetic OK; still allow Dex enrich below only if empty
+                if fb[0].get("_prebond") or not fb[0].get("_graduated"):
+                    return fb
+                # Graduated: try Dex for better pool depth, but keep pump first
+                try:
+                    direct_g = _direct_token_pairs(mint, chain or "solana")
+                except Exception:  # noqa: BLE001
+                    direct_g = []
+                if direct_g:
+                    return _prefer_pumpfun_pairs(fb + direct_g, mint)
                 return fb
         direct = _direct_token_pairs(mint, chain)
         if direct:
@@ -149,7 +192,7 @@ def resolve_pairs(query: str, chain: str | None = None) -> list[dict[str, Any]]:
                 if ((p.get("baseToken") or {}).get("address") or "").lower()
                 == mint.lower()
             ]
-            return exact or direct
+            return _prefer_pumpfun_pairs(exact or direct, mint)
         # Broad search only if direct pairs missed
         pairs_addr: list[dict[str, Any]] = []
         try:
@@ -170,7 +213,7 @@ def resolve_pairs(query: str, chain: str | None = None) -> list[dict[str, Any]]:
             == mint.lower()
         ]
         if exact:
-            return exact
+            return _prefer_pumpfun_pairs(exact, mint)
         fb = _pump_fallback(mint)
         if fb:
             return fb

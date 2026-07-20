@@ -106,9 +106,10 @@ DexScreener / Analyze cache (server, in-memory)
   - Mint addresses use targeted token-pairs / Pump before broad DexScreener
     search to cut free-API pings.
   - DexScreener soft budget (~400 calls/hour) + ~90s cooldown after HTTP 429;
-    Solana mints then fall back to Raydium API v3 (pools/price). Pump.fun
-    fallback still used for pump mints. Env: DEXSCREENER_HOUR_BUDGET,
-    DEXSCREENER_COOLDOWN_SEC.
+    Solana mints then fall back to Raydium API v3 (pools/price). Env:
+    DEXSCREENER_HOUR_BUDGET, DEXSCREENER_COOLDOWN_SEC.
+  - Pre-bond *pump tokens: native Pump.fun API is primary (price/mcap/curve);
+    DexScreener/Raydium are not required while still on the bonding curve.
 
 
 --------------------------------------------------------------------------------

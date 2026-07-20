@@ -329,21 +329,90 @@ def pair_to_pump_record(pair: dict[str, Any]) -> dict[str, Any]:
 
 
 def try_native_coin(mint: str) -> dict[str, Any] | None:
+    """Fetch Pump.fun coin JSON (cached briefly)."""
+    m = (mint or "").strip()
+    if not m:
+        return None
+    try:
+        from .api_cache import TTL_PAIRS, cache_get, cache_set
+
+        key = f"pump:coin:{m.lower()}"
+        hit = cache_get(key)
+        if isinstance(hit, dict):
+            return hit
+        if hit == "":
+            return None
+    except Exception:  # noqa: BLE001
+        key = None
+        cache_set = None  # type: ignore[assignment]
+
     urls = [
-        f"https://frontend-api-v3.pump.fun/coins/{mint}",
-        f"https://frontend-api.pump.fun/coins/{mint}",
-        f"https://client-api-2-74b1891ee9f9.herokuapp.com/coins/{mint}",
+        f"https://frontend-api-v3.pump.fun/coins/{m}",
+        f"https://frontend-api.pump.fun/coins/{m}",
+        f"https://client-api-2-74b1891ee9f9.herokuapp.com/coins/{m}",
     ]
     for url in urls:
         try:
-            data = get_json(url, retries=1, timeout=8.0)
+            data = get_json(url, retries=1, timeout=10.0)
             if isinstance(data, dict) and (
                 data.get("mint") or data.get("symbol") or data.get("name")
             ):
+                if key and cache_set:
+                    cache_set(key, data, TTL_PAIRS)
                 return data
         except Exception:  # noqa: BLE001
             continue
+    if key and cache_set:
+        try:
+            from .api_cache import TTL_NEGATIVE
+
+            cache_set(key, "", TTL_NEGATIVE)
+        except Exception:  # noqa: BLE001
+            pass
     return None
+
+
+def is_prebond_coin(native: dict[str, Any] | None) -> bool:
+    """True while still on Pump.fun bonding curve (not migrated)."""
+    if not isinstance(native, dict):
+        return False
+    if native.get("complete") is True:
+        return False
+    # Some payloads only set pool fields after migrate
+    if native.get("complete") is False:
+        return True
+    # complete missing: treat as prebond if no graduate pool yet
+    if native.get("pump_swap_pool") or native.get("raydium_pool"):
+        return False
+    return True
+
+
+def pairs_for_prebond_mint(mint: str) -> list[dict[str, Any]]:
+    """
+    Market pairs for a *pump mint still on the bonding curve.
+
+    Prefer native Pump.fun API (price/mcap/curve) — do not wait on DexScreener
+    or Raydium for prebond tokens.
+    """
+    m = (mint or "").strip()
+    if not m or not is_pump_mint(m):
+        return []
+    native = try_native_coin(m)
+    if not native or not is_prebond_coin(native):
+        return []
+    pair = synthetic_pair_from_native(m, native)
+    if not pair:
+        return []
+    pair = dict(pair)
+    pair["dexId"] = "pumpfun"
+    pair["_source"] = "pumpfun_native_api"
+    pair["_prebond"] = True
+    pair["_graduated"] = False
+    pair["_is_pump_mint"] = True
+    # Bonding curve account is the "pair" for prebond
+    if native.get("bonding_curve"):
+        pair["pairAddress"] = native.get("bonding_curve")
+    return [pair]
 
 
 def synthetic_pair_from_native(mint: str, native: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -433,7 +502,8 @@ def synthetic_pair_from_native(mint: str, native: dict[str, Any] | None = None) 
 
 def pairs_from_pump_fallback(query: str) -> list[dict[str, Any]]:
     """
-    When DexScreener is unavailable, try Pump.fun native API for a mint.
+    Pump.fun native market pairs for a mint (prebond preferred, else graduated).
+    Used when DexScreener is empty/429 or as primary for *pump mints.
     """
     q = (query or "").strip()
     if ":" in q and not q.startswith("http"):
@@ -443,6 +513,11 @@ def pairs_from_pump_fallback(query: str) -> list[dict[str, Any]]:
     # Prefer pump-suffix mints; still try any solana-looking address
     if not (is_pump_mint(q) or (len(q) >= 32 and " " not in q)):
         return []
+    # Pre-bond: dedicated path
+    if is_pump_mint(q):
+        pre = pairs_for_prebond_mint(q)
+        if pre:
+            return pre
     pair = synthetic_pair_from_native(q)
     return [pair] if pair else []
 
