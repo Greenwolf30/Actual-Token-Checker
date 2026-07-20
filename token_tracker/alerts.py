@@ -358,39 +358,6 @@ def build_alerts(
     if large_groups:
         large_groups.sort(key=lambda x: -float(x.get("combined_pct_est") or 0))
         g0 = large_groups[0]
-        # Flatten members so the Alerts formatter can list every wallet
-        flat_wallets: list[dict[str, Any]] = []
-        seen_w: set[str] = set()
-        for g in large_groups[:4]:
-            member_rows = list(g.get("members") or [])
-            if not member_rows:
-                member_rows = [
-                    {"wallet": w, "pct_supply": g.get("avg_pct")}
-                    for w in (g.get("wallets") or [])
-                ]
-            for m in member_rows:
-                if not isinstance(m, dict):
-                    continue
-                addr = (m.get("wallet") or "").strip()
-                if not addr or addr in seen_w:
-                    continue
-                seen_w.add(addr)
-                try:
-                    pct_v = (
-                        float(m["pct_supply"])
-                        if m.get("pct_supply") is not None
-                        else float(g.get("avg_pct") or 0)
-                    )
-                except (TypeError, ValueError):
-                    pct_v = None
-                flat_wallets.append(
-                    {
-                        "wallet": addr,
-                        "pct": pct_v,
-                        "rank": m.get("rank"),
-                        "label": m.get("label") or "similar-size group",
-                    }
-                )
         alerts.append(
             {
                 "id": "similar_wallets_large",
@@ -401,11 +368,9 @@ def build_alerts(
                     f"{g0.get('count')} wallets hold nearly the same size "
                     f"(~{float(g0.get('avg_pct') or 0):.2f}% each, "
                     f"combined ≈ {float(g0.get('combined_pct_est') or 0):.1f}%). "
-                    "Can look like a coordinated bundle. Wallets listed below."
+                    "Can look like a coordinated bundle."
                 ),
                 "groups": large_groups[:4],
-                "wallets": flat_wallets,
-                "list_all": True,
             }
         )
 
@@ -774,81 +739,17 @@ def format_alerts_text(data: dict[str, Any]) -> str:
                     )
             lines.append("")
             return
-        # Similar-size groups: list each group header + member wallets
-        alert_groups = a.get("groups") or []
-        if alert_groups and a.get("id") == "similar_wallets_large":
-            for gi, g in enumerate(alert_groups[:4], start=1):
-                try:
-                    avg = float(g.get("avg_pct") or 0)
-                except (TypeError, ValueError):
-                    avg = 0.0
-                try:
-                    combined = float(
-                        g.get("combined_pct_est")
-                        if g.get("combined_pct_est") is not None
-                        else g.get("total_pct")
-                        or 0
-                    )
-                except (TypeError, ValueError):
-                    combined = 0.0
-                member_rows = list(g.get("members") or [])
-                if not member_rows:
-                    member_rows = [
-                        {"wallet": w, "pct_supply": g.get("avg_pct")}
-                        for w in (g.get("wallets") or [])
-                    ]
-                n_w = int(
-                    g.get("count")
-                    or len(member_rows)
-                    or len(g.get("wallets") or [])
-                    or 0
-                )
-                lines.append(
-                    f"     Group {gi}: {n_w} wallets ≈ {avg:.2f}% each "
-                    f"(combined ≈ {combined:.1f}%)"
-                )
-                for m in member_rows[:24]:
-                    if isinstance(m, dict):
-                        addr = (m.get("wallet") or "").strip()
-                        try:
-                            mp = (
-                                float(m["pct_supply"])
-                                if m.get("pct_supply") is not None
-                                else avg
-                            )
-                            pct_s = f"{mp:.2f}%"
-                        except (TypeError, ValueError):
-                            pct_s = f"{avg:.2f}%"
-                    else:
-                        addr = str(m or "").strip()
-                        pct_s = f"{avg:.2f}%"
-                    if not addr:
-                        continue
-                    lines.append(f"       • holds {pct_s}  {addr}")
-                if len(member_rows) > 24:
-                    lines.append(
-                        f"       … and {len(member_rows) - 24} more in this group"
-                    )
-            lines.append("")
-            return
-
         wallets = a.get("wallets") or []
         if not wallets and a.get("id") in {
             "holders_over_2_pct",
             "single_holder_over_5",
-            "similar_wallets_large",
         }:
             lines.append(
                 "     Wallet list will show here if value returns True"
             )
             lines.append("")
             return
-        max_w = (
-            40
-            if a.get("list_all")
-            or a.get("id") in {"holders_over_2_pct", "similar_wallets_large"}
-            else 8
-        )
+        max_w = 40 if a.get("list_all") or a.get("id") == "holders_over_2_pct" else 8
         _pri_order = {
             "critical": 0,
             "high": 1,
