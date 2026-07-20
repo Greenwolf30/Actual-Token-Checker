@@ -1878,6 +1878,42 @@ async function checkHealth() {
   }
 }
 
+const RUGWATCH_PREF_KEY = "adtc_use_rugwatch";
+
+function useRugwatchEnabled() {
+  const el = $("useRugwatch");
+  if (!el) return true;
+  return !!el.checked;
+}
+
+function initRugwatchPref() {
+  const el = $("useRugwatch");
+  if (!el) return;
+  try {
+    const saved = localStorage.getItem(RUGWATCH_PREF_KEY);
+    if (saved === "0" || saved === "false") el.checked = false;
+    else if (saved === "1" || saved === "true") el.checked = true;
+    // default: checked (on)
+  } catch (_) {
+    /* ignore */
+  }
+  el.addEventListener("change", () => {
+    try {
+      localStorage.setItem(RUGWATCH_PREF_KEY, el.checked ? "1" : "0");
+    } catch (_) {
+      /* ignore */
+    }
+  });
+}
+
+function initRugwatchNav() {
+  const a = $("navRugwatch");
+  if (!a) return;
+  const cfg = window.ADTC_CONFIG || {};
+  const url = (cfg.rugwatchUrl || "http://127.0.0.1:8790/").trim();
+  if (url) a.href = url;
+}
+
 async function analyze(ev) {
   if (ev) ev.preventDefault();
   showError("");
@@ -1888,6 +1924,7 @@ async function analyze(ev) {
   }
   const chain = $("chain").value || null;
   const quick = $("quick").checked;
+  const include_rugwatch = useRugwatchEnabled();
   const btn = $("analyzeBtn");
   btn.disabled = true;
   btn.textContent = quick ? "Quick…" : "Analyzing…";
@@ -1897,7 +1934,7 @@ async function analyze(ev) {
     const r = await fetch(apiUrl("/api/analyze"), {
       method: "POST",
       headers: headers(true),
-      body: JSON.stringify({ query, chain, quick }),
+      body: JSON.stringify({ query, chain, quick, include_rugwatch }),
     });
     let data;
     try {
@@ -1963,6 +2000,8 @@ function init() {
   initSettings();
   initHistory();
   initRuggers();
+  initRugwatchPref();
+  initRugwatchNav();
   $("searchForm").addEventListener("submit", analyze);
   checkHealth();
   recordAndLoadStats();

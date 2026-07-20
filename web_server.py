@@ -570,7 +570,13 @@ def build_public_payload(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def run_analyze(query: str, *, chain: str | None, quick: bool) -> dict[str, Any]:
+def run_analyze(
+    query: str,
+    *,
+    chain: str | None,
+    quick: bool,
+    include_rugwatch: bool = True,
+) -> dict[str, Any]:
     load_dotenv()
     from token_tracker.analyze import analyze_token
 
@@ -586,6 +592,7 @@ def run_analyze(query: str, *, chain: str | None, quick: bool) -> dict[str, Any]
             chain=chain or None,
             include_holders=not quick,
             quick=quick,
+            include_rugwatch=bool(include_rugwatch),
         )
     except Exception as exc:  # noqa: BLE001
         return {
@@ -791,7 +798,17 @@ class WebHandler(BaseHTTPRequestHandler):
             q = (qs.get("q") or qs.get("query") or [""])[0]
             chain = (qs.get("chain") or [None])[0]
             quick = (qs.get("quick") or ["0"])[0] in {"1", "true", "yes"}
-            return self._handle_analyze(q, chain=chain, quick=quick)
+            # Default on when param omitted; only "0/false/no" disables
+            rw_raw = (qs.get("rugwatch") or qs.get("include_rugwatch") or ["1"])[0]
+            include_rugwatch = str(rw_raw).strip().lower() not in {
+                "0",
+                "false",
+                "no",
+                "off",
+            }
+            return self._handle_analyze(
+                q, chain=chain, quick=quick, include_rugwatch=include_rugwatch
+            )
 
         # Static files from /web
         if path == "/" or path == "/index.html":
@@ -824,12 +841,29 @@ class WebHandler(BaseHTTPRequestHandler):
             chain = body.get("chain")
             chain_s = str(chain).strip() if chain else None
             quick = bool(body.get("quick"))
-            return self._handle_analyze(q, chain=chain_s, quick=quick)
+            # Default True; explicit false/0/off disables RugWatch flags
+            if "include_rugwatch" in body:
+                include_rugwatch = bool(body.get("include_rugwatch"))
+            elif "rugwatch" in body:
+                include_rugwatch = bool(body.get("rugwatch"))
+            else:
+                include_rugwatch = True
+            return self._handle_analyze(
+                q,
+                chain=chain_s,
+                quick=quick,
+                include_rugwatch=include_rugwatch,
+            )
 
         return self._json(404, {"ok": False, "error": "not found"})
 
     def _handle_analyze(
-        self, query: str, *, chain: str | None, quick: bool
+        self,
+        query: str,
+        *,
+        chain: str | None,
+        quick: bool,
+        include_rugwatch: bool = True,
     ) -> None:
         if not self._check_gate():
             return self._json(
@@ -852,7 +886,12 @@ class WebHandler(BaseHTTPRequestHandler):
             return self._json(400, {"ok": False, "error": "query is required"})
 
         # Analyze can take a while (holders / narrative)
-        result = run_analyze(query.strip(), chain=chain, quick=quick)
+        result = run_analyze(
+            query.strip(),
+            chain=chain,
+            quick=quick,
+            include_rugwatch=include_rugwatch,
+        )
         try:
             record_analyze(ok=bool(result.get("ok")))
         except Exception:  # noqa: BLE001

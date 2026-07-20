@@ -205,13 +205,18 @@ def analyze_holders(
     token_address: str | None,
     *,
     pair_address: str | None = None,
+    include_rugwatch: bool = True,
 ) -> dict[str, Any]:
     if not chain_id or not token_address:
         return _empty("Missing chain or token address.")
 
     chain = chain_id.lower()
     if chain in {"solana", "sol"}:
-        return _solana_holders(token_address, pair_address=pair_address)
+        return _solana_holders(
+            token_address,
+            pair_address=pair_address,
+            include_rugwatch=include_rugwatch,
+        )
 
     if chain in {
         "ethereum",
@@ -269,7 +274,12 @@ def analyze_holders(
     return _empty(f"Holder analysis not implemented for chain '{chain}'.")
 
 
-def _solana_holders(mint: str, *, pair_address: str | None = None) -> dict[str, Any]:
+def _solana_holders(
+    mint: str,
+    *,
+    pair_address: str | None = None,
+    include_rugwatch: bool = True,
+) -> dict[str, Any]:
     """
     Multi-source Solana holders:
       Helius/RPC + Rugcheck + Solscan + Birdeye (best-effort each).
@@ -617,52 +627,78 @@ def _fuse_holder_sources(
     result["summary"] = summary
     result["holder_totals"] = base_extra["holder_totals"]
 
-    # RugWatch flagged wallets (local DB) for this mint / top holders
-    try:
-        from .rugwatch_bridge import fetch_rugwatch_flagged
+    # RugWatch flagged wallets (optional — user checkbox on website)
+    if include_rugwatch:
+        try:
+            from .rugwatch_bridge import fetch_rugwatch_flagged
 
-        holder_addrs = [
-            (h.get("wallet") or "").strip()
-            for h in (result.get("holders") or [])
-            if h.get("wallet")
-        ]
-        # include creator if known
-        if base_extra.get("creator"):
-            holder_addrs.append(str(base_extra["creator"]))
-        rw = fetch_rugwatch_flagged(mint, holder_wallets=holder_addrs, min_score=0, limit=200)
-        result["rugwatch_flagged"] = rw
-        base_extra["rugwatch_flagged"] = {
-            "ok": rw.get("ok"),
-            "match_count": rw.get("match_count"),
-            "db_wallet_count": rw.get("db_wallet_count"),
-            "db_found": rw.get("db_found"),
-            # never surface local filesystem paths in holder meta
-            "error": rw.get("error"),
-        }
-        if rw.get("ok") and rw.get("match_count"):
-            n = int(rw["match_count"])
-            flags = list(result.get("flags") or [])
-            flags.insert(
-                0,
-                f"RugWatch: {n} flagged wallet(s) linked to this mint or in top holders",
+            holder_addrs = [
+                (h.get("wallet") or "").strip()
+                for h in (result.get("holders") or [])
+                if h.get("wallet")
+            ]
+            # include creator if known
+            if base_extra.get("creator"):
+                holder_addrs.append(str(base_extra["creator"]))
+            rw = fetch_rugwatch_flagged(
+                mint, holder_wallets=holder_addrs, min_score=0, limit=200
             )
-            result["flags"] = flags
-            if summary.get("concentration_risk") in {"lower", "moderate"}:
-                summary["concentration_risk"] = "elevated"
-                result["summary"] = summary
-    except Exception as exc:  # noqa: BLE001
+            result["rugwatch_flagged"] = rw
+            base_extra["rugwatch_flagged"] = {
+                "ok": rw.get("ok"),
+                "match_count": rw.get("match_count"),
+                "db_wallet_count": rw.get("db_wallet_count"),
+                "db_found": rw.get("db_found"),
+                # never surface local filesystem paths in holder meta
+                "error": rw.get("error"),
+            }
+            if rw.get("ok") and rw.get("match_count"):
+                n = int(rw["match_count"])
+                flags = list(result.get("flags") or [])
+                flags.insert(
+                    0,
+                    f"RugWatch: {n} flagged wallet(s) linked to this mint or in top holders",
+                )
+                result["flags"] = flags
+                if summary.get("concentration_risk") in {"lower", "moderate"}:
+                    summary["concentration_risk"] = "elevated"
+                    result["summary"] = summary
+        except Exception as exc:  # noqa: BLE001
+            result["rugwatch_flagged"] = {
+                "ok": False,
+                "error": str(exc),
+                "linked_to_mint": [],
+                "in_top_holders": [],
+                "high_risk_db": [],
+            }
+    else:
         result["rugwatch_flagged"] = {
-            "ok": False,
-            "error": str(exc),
+            "ok": True,
+            "skipped": True,
+            "enabled": False,
+            "match_count": 0,
             "linked_to_mint": [],
             "in_top_holders": [],
             "high_risk_db": [],
+            "all_flagged": [],
+            "note": "RugWatch flags off for this lookup (user unchecked).",
+        }
+        base_extra["rugwatch_flagged"] = {
+            "ok": True,
+            "skipped": True,
+            "enabled": False,
+            "match_count": 0,
         }
 
     primary_note = (
         "Balances prefer Solscan (Helius/RPC unavailable or empty). "
         if solscan_primary
         else "Balances prefer Helius/RPC; Solscan & Birdeye fill gaps. "
+    )
+    rw_note = (
+        "Flagged wallets section uses RugWatch (local + cloud) when enabled. "
+        if include_rugwatch
+        else "RugWatch flagged wallets skipped for this lookup. "
     )
     result["notes"] = (
         "Multi-source holders: "
@@ -671,7 +707,7 @@ def _fuse_holder_sources(
         + primary_note
         + "Rugcheck adds insiders/risks. "
         + "Total wallet counts from Pump.fun + Birdeye + DexScreener + Solscan when available. "
-        + "Flagged wallets section reads local RugWatch DB. "
+        + rw_note
         + (result.get("notes") or "")
     ).strip()
     if errors:
@@ -1438,6 +1474,12 @@ def _format_rugwatch_flagged_section(
     ]
     if not rw:
         lines.append("  RugWatch: no data (scan holders to load).")
+        return lines
+    if rw.get("skipped") or rw.get("enabled") is False:
+        lines.append(
+            "  RugWatch: off for this lookup (checkbox unchecked on Analyze)."
+        )
+        lines.append("  Flagged wallets were not loaded.")
         return lines
     if not rw.get("ok"):
         lines.append(f"  RugWatch: unavailable — {rw.get('error') or 'unknown error'}")

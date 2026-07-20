@@ -134,6 +134,29 @@ body::before {
   border-color: var(--accent-border);
 }
 
+/* RugWatch nav tab — yellow letters (same family as site font) */
+.nav-link-rugwatch {
+  color: #f5c542;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border-color: rgba(245, 197, 66, 0.35);
+  background: rgba(245, 197, 66, 0.08);
+  margin-right: 4px;
+}
+.nav-link-rugwatch:hover {
+  color: #ffe08a;
+  background: rgba(245, 197, 66, 0.16);
+  border-color: rgba(245, 197, 66, 0.55);
+}
+
+.check-rugwatch {
+  color: #f5c542;
+  font-weight: 600;
+}
+.check-rugwatch input {
+  accent-color: #f5c542;
+}
+
 /* Documentation page */
 .app-docs { max-width: 920px; }
 .docs-hero h1 {

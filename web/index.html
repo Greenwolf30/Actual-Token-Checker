@@ -21,6 +21,15 @@
         <a class="nav-brand nav-brand-icon" href="/" title="Home">
           <img class="logo logo-sm" src="/logo.svg" width="28" height="28" alt="Home" />
         </a>
+        <a
+          class="nav-link nav-link-rugwatch"
+          id="navRugwatch"
+          href="http://127.0.0.1:8790/"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Open RugWatch (local website — change later in config.js)"
+          >RugWatch</a
+        >
         <div class="nav-links">
           <a class="nav-link" href="/docs.html" title="Full user guide on this site">Docs</a>
           <a
@@ -77,6 +86,13 @@
         <label class="check">
           <input type="checkbox" id="quick" />
           quick
+        </label>
+        <label
+          class="check check-rugwatch"
+          title="When checked, Analyze merges RugWatch flagged wallets (local + cloud). Uncheck to ignore."
+        >
+          <input type="checkbox" id="useRugwatch" checked />
+          RugWatch
         </label>
         <button type="submit" id="analyzeBtn">Analyze</button>
       </form>

@@ -206,12 +206,14 @@ def analyze_token(
     pair_address: str | None = None,
     include_holders: bool = True,
     quick: bool = False,
+    include_rugwatch: bool = True,
 ) -> dict[str, Any]:
     """
     Build a full token report.
 
     quick=True: market + basic fields only (fast first paint for the GUI).
     Skips slow OHLCV history, social scrape, holders, and bundles.
+    include_rugwatch=False: skip RugWatch flagged-wallet merge on holders.
     """
     try:
         pairs = resolve_pairs(query, chain=chain)
@@ -498,6 +500,7 @@ def analyze_token(
                 pair_summary.get("chain_id"),
                 token_addr,
                 pair_address=pair_summary.get("pair_address"),
+                include_rugwatch=include_rugwatch,
             )
         except Exception as exc:  # noqa: BLE001
             return {
