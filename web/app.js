@@ -735,6 +735,19 @@ function extractRuggersSnapshot(data) {
         in_similar: false,
       };
     }
+    // Previously flagged (RugWatch) — separate Ruggers section, not mixed into similar
+    const flagged_known = {};
+    for (const f of track.flagged_addresses || []) {
+      const fw = ((f && (f.wallet || f.address)) || "").trim();
+      if (!fw) continue;
+      flagged_known[fw] = {
+        risk_score: f.risk_score != null ? Number(f.risk_score) : null,
+        label: f.label || null,
+        origin: f.origin || null,
+        on_this_mint: !!f.on_this_mint,
+        in_top_holders: !!f.in_top_holders,
+      };
+    }
     return {
       address,
       chain,
@@ -744,6 +757,7 @@ function extractRuggersSnapshot(data) {
       creator,
       wallets,
       similar_groups,
+      flagged_known,
       ok: true,
     };
   }
@@ -1046,23 +1060,87 @@ function processRuggersFromAnalyze(data) {
     };
   }
 
+  // Merge RugWatch-flagged addresses for this mint (persistent on the rec)
+  const prevFlagged =
+    rec.flagged_known && typeof rec.flagged_known === "object"
+      ? rec.flagged_known
+      : {};
+  const nextFlagged = { ...prevFlagged };
+  for (const [fw, meta] of Object.entries(snap.flagged_known || {})) {
+    if (!fw) continue;
+    nextFlagged[fw] = {
+      ...(prevFlagged[fw] || {}),
+      ...(meta || {}),
+      last_seen: now,
+    };
+  }
+  rec.flagged_known = nextFlagged;
+
+  // Mark status rows that are already on the RugWatch list
+  for (const [w, st] of Object.entries(status)) {
+    if (!st) continue;
+    st.is_flagged = isRuggersFlaggedWallet(rec, w);
+  }
   rec.status = status;
+
   store[key] = rec;
   saveRuggersStore(store);
   return { key, rec };
+}
+
+/** True if wallet is already known flagged (RugWatch list for this mint track). */
+function isRuggersFlaggedWallet(rec, wallet) {
+  if (!rec || !wallet) return false;
+  const fk = rec.flagged_known;
+  if (!fk || typeof fk !== "object") return false;
+  const w = String(wallet).trim();
+  if (fk[w]) return true;
+  const wl = w.toLowerCase();
+  for (const k of Object.keys(fk)) {
+    if (String(k).toLowerCase() === wl) return true;
+  }
+  return false;
 }
 
 function ruggersBuckets(rec) {
   const creatorSold = [];
   const similarSellers = [];
   const singleSellers = [];
+  const flaggedWallets = [];
   const swings = [];
+  const flaggedSeen = new Set();
   if (!rec || !rec.status) {
-    return { creatorSold, similarSellers, singleSellers, swings };
+    return {
+      creatorSold,
+      similarSellers,
+      singleSellers,
+      flaggedWallets,
+      swings,
+    };
   }
+
+  function pushFlagged(row) {
+    const w = row.wallet || "";
+    if (!w || flaggedSeen.has(w)) return;
+    flaggedSeen.add(w);
+    flaggedWallets.push({
+      ...row,
+      is_flagged: true,
+      tag: row.tag === "swing" ? "swing" : row.tag === "seller" ? "seller" : "flagged",
+    });
+  }
+
   for (const [w, st] of Object.entries(rec.status)) {
     if (!st) continue;
-    const row = { wallet: w, ...st };
+    const flagged = !!(st.is_flagged || isRuggersFlaggedWallet(rec, w));
+    const row = { wallet: w, ...st, is_flagged: flagged };
+
+    // Already on RugWatch → Flagged wallets section (not Similar / Single / Creator sell lists)
+    if (flagged && (st.tag === "seller" || st.tag === "swing")) {
+      pushFlagged(row);
+      continue;
+    }
+
     if (st.tag === "swing") {
       swings.push(row);
       continue;
@@ -1075,12 +1153,38 @@ function ruggersBuckets(rec) {
     if (st.in_similar) similarSellers.push(row);
     else singleSellers.push(row);
   }
+
+  // Any other previously flagged addresses known for this mint (not already listed)
+  for (const [fw, meta] of Object.entries(rec.flagged_known || {})) {
+    if (!fw || flaggedSeen.has(fw)) continue;
+    const st = (rec.status && rec.status[fw]) || {};
+    pushFlagged({
+      wallet: fw,
+      tag: st.tag === "seller" ? "seller" : st.tag === "swing" ? "swing" : "flagged",
+      sold_pct: st.sold_pct != null ? st.sold_pct : null,
+      first_pct: st.first_pct != null ? st.first_pct : null,
+      current_pct: st.current_pct != null ? st.current_pct : null,
+      listed: st.listed,
+      reason: st.reason || "rugwatch_flagged",
+      is_flagged: true,
+      risk_score: meta && meta.risk_score,
+      label: meta && meta.label,
+    });
+  }
+
   const bySold = (a, b) => (Number(b.sold_pct) || 0) - (Number(a.sold_pct) || 0);
   creatorSold.sort(bySold);
   similarSellers.sort(bySold);
   singleSellers.sort(bySold);
+  flaggedWallets.sort(bySold);
   swings.sort(bySold);
-  return { creatorSold, similarSellers, singleSellers, swings };
+  return {
+    creatorSold,
+    similarSellers,
+    singleSellers,
+    flaggedWallets,
+    swings,
+  };
 }
 
 function fmtRugPct(n) {
@@ -1100,15 +1204,22 @@ let _lastRuggersKey = "";
 
 function renderRuggersWalletRow(row) {
   const w = row.wallet || "";
+  const isFlagged = !!row.is_flagged || row.tag === "flagged";
   const sold =
-    row.sold_pct != null ? Number(row.sold_pct).toFixed(1) + "% sold" : "sold";
+    row.sold_pct != null
+      ? Number(row.sold_pct).toFixed(1) + "% sold"
+      : isFlagged && row.tag === "flagged"
+        ? "on RugWatch list"
+        : "sold";
   const first = "first " + fmtRugPct(row.first_pct);
   const now =
     row.tag === "swing"
       ? "now " + fmtRugPct(row.current_pct)
       : row.listed
         ? "now " + fmtRugPct(row.current_pct)
-        : "now not listed";
+        : row.tag === "flagged" && row.listed == null
+          ? "watchlist"
+          : "now not listed";
   const reason =
     row.reason === "not_listed"
       ? "dropped off holder list"
@@ -1116,14 +1227,24 @@ function renderRuggersWalletRow(row) {
         ? "sold 100% of first bag"
         : row.reason === "sold_99"
           ? "sold ≥99% of first bag"
-          : row.tag === "swing"
-            ? "buy-back after dump"
-            : row.reason || "";
-  const tagCls =
-    row.tag === "swing" ? "rug-tag-swing" : "rug-tag-seller";
-  const tagLabel = row.tag === "swing" ? "swing" : "seller";
+          : row.reason === "rugwatch_flagged"
+            ? "already on RugWatch (flagged)"
+            : row.tag === "swing"
+              ? "buy-back after dump"
+              : row.reason || "";
+  let tagCls = "rug-tag-seller";
+  let tagLabel = "seller";
+  if (row.tag === "swing") {
+    tagCls = "rug-tag-swing";
+    tagLabel = "swing";
+  } else if (isFlagged) {
+    tagCls = "rug-tag-flagged";
+    tagLabel = "flagged";
+  }
   return (
-    '<div class="rug-wallet-row">' +
+    '<div class="rug-wallet-row' +
+    (isFlagged ? " rug-wallet-flagged" : "") +
+    '">' +
     '<div class="rug-wallet-main">' +
     '<span class="rug-tag ' +
     tagCls +
@@ -1624,15 +1745,22 @@ function refreshRuggersPanel(focusKey) {
   );
   html += renderRuggersSection(
     "Similar wallets (sellers)",
-    "Wallets that were in a similar-size group on first lookup and later sold ≥99% / dropped off. Yellow Upload → RugWatch cloud.",
+    "New similar-size group sellers only (not already on RugWatch). Sold ≥99% / dropped off. Yellow Upload → RugWatch cloud.",
     buckets.similarSellers,
     "similar"
   );
   html += renderRuggersSection(
     "Single wallets (sellers)",
-    "Individual top holders (not similar-group) that sold ≥99% of first bag or are no longer listed. Yellow Upload → RugWatch cloud.",
+    "New individual sellers not already on RugWatch. Sold ≥99% / dropped off. Yellow Upload → RugWatch cloud.",
     buckets.singleSellers,
     "single"
+  );
+  // Previously flagged — no Upload (already on RugWatch / cloud)
+  html += renderRuggersSection(
+    "Flagged wallets",
+    "Already on RugWatch (local/cloud). Not mixed into Similar/Single. No Upload — already saved.",
+    buckets.flaggedWallets
+    // no exportKey → no Export / Upload buttons
   );
   html += renderRuggersSection(
     "Swing traders",
@@ -1645,14 +1773,17 @@ function refreshRuggersPanel(focusKey) {
     buckets.creatorSold.length +
     buckets.similarSellers.length +
     buckets.singleSellers.length;
+  const nFlag = (buckets.flaggedWallets || []).length;
   html +=
-    '<p class="rug-footer-meta">Sellers listed: ' +
+    '<p class="rug-footer-meta">New sellers: ' +
     nSell +
+    " · Flagged (no upload): " +
+    nFlag +
     " · Swings: " +
     buckets.swings.length +
     " · Tracked mints: " +
     keys.length +
-    " · Yellow Upload pushes that section to RugWatch cloud." +
+    " · Yellow Upload is only for new Creator/Similar/Single (not Flagged)." +
     "</p>";
 
   if (body) body.innerHTML = html;
@@ -1937,8 +2068,9 @@ function formatRuggersPlain(rec, buckets, key) {
     lines.push("");
   }
   dump("Creator sold", buckets.creatorSold);
-  dump("Similar sellers", buckets.similarSellers);
-  dump("Single sellers", buckets.singleSellers);
+  dump("Similar sellers (new only)", buckets.similarSellers);
+  dump("Single sellers (new only)", buckets.singleSellers);
+  dump("Flagged wallets (no upload)", buckets.flaggedWallets || []);
   dump("Swing traders", buckets.swings);
   return lines.join("\n");
 }

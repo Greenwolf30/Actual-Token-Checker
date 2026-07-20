@@ -887,6 +887,15 @@ a.copy-mint:hover {
   color: #c4a84a;
   border: 1px solid rgba(180, 140, 50, 0.28);
 }
+/* Already on RugWatch — separate from new similar sellers */
+.rug-tag-flagged {
+  background: rgba(140, 100, 180, 0.14);
+  color: #b89ad4;
+  border: 1px solid rgba(140, 100, 180, 0.32);
+}
+.rug-wallet-flagged .rug-wallet-meta {
+  color: #9a8aab;
+}
 .rug-footer-meta {
   margin: 12px 0 0;
   font-size: 0.72rem;
