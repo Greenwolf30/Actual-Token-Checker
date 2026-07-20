@@ -1169,14 +1169,14 @@ function downloadRuggersSection(exportKey) {
 
 function rugwatchApiBase() {
   const cfg = window.ADTC_CONFIG || {};
-  let u = (cfg.rugwatchUrl || "http://127.0.0.1:8790/").trim();
-  if (!u) u = "http://127.0.0.1:8790/";
+  let u = (cfg.rugwatchUrl || "https://rugwatch.onrender.com/").trim();
+  if (!u) u = "https://rugwatch.onrender.com/";
   return u.replace(/\/+$/, "");
 }
 
 /**
- * Upload Ruggers section wallets → RugWatch local DB + Push cloud (increases cloud count).
- * Requires RugWatch website running (default http://127.0.0.1:8790) with GITHUB_TOKEN set.
+ * Upload Ruggers section wallets → live RugWatch DB + Push cloud (GitHub wallet list).
+ * Default: https://rugwatch.onrender.com (override with config.js rugwatchUrl).
  */
 async function uploadRuggersSectionToCloud(exportKey) {
   const rows = ruggersRowsForExportKey(exportKey);
@@ -1284,9 +1284,10 @@ async function uploadRuggersSectionToCloud(exportKey) {
     alert(
       "RugWatch Upload failed:\n\n" +
         String(e.message || e) +
-        "\n\nTips:\n• Run RugWatch: python run_web.py --port 8790\n" +
-        "• Set GITHUB_TOKEN in RugWatch .env\n" +
-        "• Check config.js rugwatchUrl"
+        "\n\nTips:\n• Live RugWatch: https://rugwatch.onrender.com\n" +
+        "• GITHUB_TOKEN must be set on that server\n" +
+        "• Check config.js rugwatchUrl\n" +
+        "• Free tier: first request after sleep can take ~60s"
     );
   } finally {
     if (btn) {
@@ -2362,7 +2363,7 @@ function initRugwatchNav() {
   const a = $("navRugwatch");
   if (!a) return;
   const cfg = window.ADTC_CONFIG || {};
-  const url = (cfg.rugwatchUrl || "http://127.0.0.1:8790/").trim();
+  const url = (cfg.rugwatchUrl || "https://rugwatch.onrender.com/").trim();
   if (url) a.href = url;
 }
 
