@@ -1135,6 +1135,28 @@ a.copy-mint:hover,
   color: #9fd0ff;
 }
 
+/* Alerts: wallet address yellow when holds > 5% */
+.report a.wallet-link.wallet-hold-yellow,
+.logs-col-body a.wallet-link.wallet-hold-yellow {
+  color: #e8c84a;
+  font-weight: 600;
+}
+.report a.wallet-link.wallet-hold-yellow:hover,
+.logs-col-body a.wallet-link.wallet-hold-yellow:hover {
+  color: #f0d86a;
+}
+
+/* Holders: wallet address red when holds > 10% */
+.report a.wallet-link.wallet-hold-red,
+.logs-col-body a.wallet-link.wallet-hold-red {
+  color: #e85d5d;
+  font-weight: 600;
+}
+.report a.wallet-link.wallet-hold-red:hover,
+.logs-col-body a.wallet-link.wallet-hold-red:hover {
+  color: #ff7a7a;
+}
+
 /* Custom scrollbar for report */
 .report::-webkit-scrollbar { width: 8px; height: 8px; }
 .report::-webkit-scrollbar-track { background: transparent; }

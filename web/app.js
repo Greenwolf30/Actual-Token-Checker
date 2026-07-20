@@ -2363,6 +2363,84 @@ function colorWalletHolderPcts(html) {
     .join("\n");
 }
 
+/** Extract a bag % from a report line (holds X% / (X% / owns X%). */
+function extractHoldPctFromLine(line) {
+  const plain = String(line || "").replace(/<[^>]*>/g, "");
+  let m = plain.match(/\bholds\s+(\d+(?:\.\d+)?)\s*%/i);
+  if (m) return Number(m[1]);
+  m = plain.match(/\((\d+(?:\.\d+)?)\s*%/);
+  if (m) return Number(m[1]);
+  m = plain.match(/\bowns\s+(\d+(?:\.\d+)?)\s*%/i);
+  if (m) return Number(m[1]);
+  return null;
+}
+
+function markWalletLinksOnLine(line, extraClass) {
+  if (!line || !extraClass) return line;
+  return line.replace(
+    /class="wallet-link"/g,
+    'class="wallet-link ' + extraClass + '"'
+  );
+}
+
+/**
+ * Alerts: color wallet address yellow when that row holds > 5%.
+ * % and address are on the same line ("holds 12.34% … ADDR").
+ */
+function colorAlertWalletAddresses(html) {
+  if (!html) return html;
+  return html
+    .split("\n")
+    .map((line) => {
+      const pct = extractHoldPctFromLine(line);
+      if (pct != null && pct > 5 && /class="wallet-link"/.test(line)) {
+        return markWalletLinksOnLine(line, "wallet-hold-yellow");
+      }
+      return line;
+    })
+    .join("\n");
+}
+
+/**
+ * Holders: color wallet address red when bag > 10%.
+ * Top-holder rows put % on one line and the address on the next.
+ */
+function colorHoldersWalletAddresses(html) {
+  if (!html) return html;
+  const lines = html.split("\n");
+  let pendingPct = null;
+  return lines
+    .map((line) => {
+      const plain = String(line || "").replace(/<[^>]*>/g, "").trim();
+      const pct = extractHoldPctFromLine(line);
+      const hasWallet = /class="wallet-link"/.test(line);
+      let out = line;
+
+      if (hasWallet) {
+        const use =
+          pct != null && pct > 10
+            ? pct
+            : pct == null && pendingPct != null && pendingPct > 10
+              ? pendingPct
+              : null;
+        if (use != null && use > 10) {
+          out = markWalletLinksOnLine(line, "wallet-hold-red");
+        }
+        pendingPct = null;
+      } else if (pct != null) {
+        // Rank / "holds X%" line — carry % to the address line below
+        pendingPct = pct;
+      } else if (!plain) {
+        pendingPct = null;
+      } else if (/^#\d+\b/.test(plain) || /^•/.test(plain)) {
+        // New row without a parseable % — clear carry
+        pendingPct = null;
+      }
+      return out;
+    })
+    .join("\n");
+}
+
 /**
  * Holders + Logs rich formatting:
  *  - drop Solscan URL lines (keep addresses)
@@ -2376,6 +2454,7 @@ function formatHoldersRichHtml(text) {
   let html = linkify(text);
   html = colorWalletHolderPcts(html);
   html = colorHoldingAmounts(html);
+  html = colorHoldersWalletAddresses(html);
   return html;
 }
 
@@ -2414,11 +2493,14 @@ function setPanelText(tab, text) {
   let html;
   if (tab === "holders") {
     // No Solscan URL rows; clickable addresses; yellow amounts; % colors (not Top1/5/10)
+    // Wallet address red when bag > 10%
     html = formatHoldersRichHtml(raw);
   } else if (tab === "alerts") {
     html = linkify(raw);
     html = colorWalletHolderPcts(html);
     html = colorHoldingAmounts(html);
+    // Wallet address yellow when bag > 5%
+    html = colorAlertWalletAddresses(html);
   } else if (tab === "bundles") {
     // Summary + each wallet group % colored; Top10 ex-LP uncolored; bal yellow
     html = formatBundlesRichHtml(raw);

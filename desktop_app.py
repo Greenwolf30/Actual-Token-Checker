@@ -1264,6 +1264,18 @@ def run_gui() -> None:
             foreground="#6cb6ff",
             underline=True,
         )
+        # Alerts: wallet address yellow when holds > 5%
+        box.tag_configure(
+            "wallet_hold_yellow",
+            foreground="#e8c84a",
+            underline=True,
+        )
+        # Holders: wallet address red when holds > 10%
+        box.tag_configure(
+            "wallet_hold_red",
+            foreground="#e85d5d",
+            underline=True,
+        )
         box.tag_configure(
             "url_link",
             foreground="#6cb6ff",
@@ -1406,6 +1418,61 @@ def run_gui() -> None:
             end = len(content)
         return content[start:end]
 
+    def _prev_line(content: str, idx: int) -> str:
+        """Line immediately above the line that contains idx (or empty)."""
+        line_start = content.rfind("\n", 0, idx) + 1
+        if line_start <= 0:
+            return ""
+        prev_end = line_start - 1
+        prev_start = content.rfind("\n", 0, prev_end) + 1
+        return content[prev_start:prev_end]
+
+    def _line_hold_pct(line: str) -> float | None:
+        """Bag % from 'holds X%' / '(X%' / 'owns X%' on a report line."""
+        if not line:
+            return None
+        m = re.search(r"\bholds\s+(\d+(?:\.\d+)?)\s*%", line, re.I)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                return None
+        m = re.search(r"\((\d+(?:\.\d+)?)\s*%", line)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                return None
+        m = re.search(r"\bowns\s+(\d+(?:\.\d+)?)\s*%", line, re.I)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                return None
+        return None
+
+    def _wallet_hold_color_tag(
+        content: str, addr_start: int, mode: str | None
+    ) -> str | None:
+        """
+        Extra Text tag for wallet address by bag %:
+          alerts  → yellow if > 5%
+          holders → red if > 10%
+        """
+        if not mode:
+            return None
+        line = _line_containing(content, addr_start)
+        pct = _line_hold_pct(line)
+        if pct is None and mode == "holders":
+            pct = _line_hold_pct(_prev_line(content, addr_start))
+        if pct is None:
+            return None
+        if mode == "alerts" and pct > 5:
+            return "wallet_hold_yellow"
+        if mode == "holders" and pct > 10:
+            return "wallet_hold_red"
+        return None
+
     def _is_top_summary_line(line: str) -> bool:
         """
         True for concentration summary lines like:
@@ -1428,12 +1495,14 @@ def run_gui() -> None:
         color_holder_pct: bool = True,
         color_mode: str = "all",
         link_urls: bool = False,
+        wallet_hold_mode: str | None = None,
     ) -> None:
         """
         Insert report text; Solana wallets + optional holder % priority colors.
         color_mode: "all" | "none" | "bundles" (total + suspect only)
         Top1/Top5/Top10 summary % values are never colored.
         link_urls: also make http(s) Solscan/etc. lines clickable (Holders).
+        wallet_hold_mode: "alerts" (>5% yellow addr) | "holders" (>10% red addr).
         """
         _configure_link_tags(box)
         if link_urls:
@@ -1453,6 +1522,21 @@ def run_gui() -> None:
                 "<Leave>",
                 lambda _e, b=box: b.configure(cursor="arrow"),
             )
+        # Colored wallet tags still open Solscan (same as wallet_link)
+        for wtag in ("wallet_hold_yellow", "wallet_hold_red"):
+            box.tag_bind(
+                wtag, "<Button-1>", lambda e, b=box: _open_url_for_index(b, e)
+            )
+            box.tag_bind(
+                wtag,
+                "<Enter>",
+                lambda _e, b=box: b.configure(cursor="hand2"),
+            )
+            box.tag_bind(
+                wtag,
+                "<Leave>",
+                lambda _e, b=box: b.configure(cursor="arrow"),
+            )
         box.configure(state="normal")
         box.delete("1.0", "end")
         if error:
@@ -1466,8 +1550,8 @@ def run_gui() -> None:
             _bundle_colorable_ranges(content) if color_mode == "bundles" else []
         )
 
-        # Spans: (start, end, tag_or_None) — URLs + wallets + supply %
-        spans: list[tuple[int, int, str | None]] = []
+        # Spans: (start, end, tag_or_tuple) — URLs + wallets + supply %
+        spans: list[tuple[int, int, Any]] = []
         if link_urls:
             for m in URL_RE.finditer(content):
                 raw = m.group(0)
@@ -1476,9 +1560,16 @@ def run_gui() -> None:
         for m in SOL_ADDR_RE.finditer(content):
             s, e = m.start(), m.end()
             # Skip address if it sits inside an already-tagged URL
-            if any(s < pe and e > ps and tag == "url_link" for ps, pe, tag in spans):
+            if any(
+                s < pe and e > ps and tag == "url_link" for ps, pe, tag in spans
+            ):
                 continue
-            spans.append((s, e, "wallet_link"))
+            hold_tag = _wallet_hold_color_tag(content, s, wallet_hold_mode)
+            if hold_tag:
+                # Color tag first so its foreground wins; keep wallet_link for clicks
+                spans.append((s, e, (hold_tag, "wallet_link")))
+            else:
+                spans.append((s, e, "wallet_link"))
         if allow_pct:
             for m in HOLDER_PCT_RE.finditer(content):
                 if color_mode == "bundles" and not _in_any_range(
@@ -1499,7 +1590,7 @@ def run_gui() -> None:
             # Do not color "[low priority]" / "· medium priority" labels — % only
 
         spans.sort(key=lambda t: (t[0], -(t[1] - t[0])))
-        cleaned: list[tuple[int, int, str | None]] = []
+        cleaned: list[tuple[int, int, Any]] = []
         last_end = -1
         for s, e, tag in spans:
             if s < last_end:
@@ -1593,9 +1684,13 @@ def run_gui() -> None:
         box = tab_widgets.get("holders")
         if box is None:
             return
-        # Wallets + Solscan URLs clickable (Creator wallet, top holders, authorities)
+        # Wallets + Solscan URLs clickable; address red when bag > 10%
         _insert_text_with_wallet_links(
-            box, content, error=error, link_urls=True
+            box,
+            content,
+            error=error,
+            link_urls=True,
+            wallet_hold_mode="holders",
         )
 
     def _render_about_text(content: str, *, error: bool = False) -> None:
@@ -2008,10 +2103,15 @@ def run_gui() -> None:
             if key == "holders":
                 _render_holders_text(content, error=error)
                 return
-            # Alerts: full wallet % colors; Bundles: total + suspect only
+            # Alerts: full wallet % colors; address yellow when bag > 5%
             if key == "alerts":
                 _insert_text_with_wallet_links(
-                    box, content, error=error, color_holder_pct=True, color_mode="all"
+                    box,
+                    content,
+                    error=error,
+                    color_holder_pct=True,
+                    color_mode="all",
+                    wallet_hold_mode="alerts",
                 )
                 return
             if key == "bundles":
