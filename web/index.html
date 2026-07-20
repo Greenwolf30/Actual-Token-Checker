@@ -158,6 +158,19 @@
               <button type="button" id="ruggersClearAll" class="ghost history-btn">Clear all</button>
             </div>
           </div>
+          <div class="rug-ca-search" title="Jump to a mint you previously analyzed (stored in this browser)">
+            <label class="rug-ca-label" for="ruggersCaSearch">Search previous lookup by CA</label>
+            <input
+              id="ruggersCaSearch"
+              class="mono rug-ca-input"
+              type="text"
+              placeholder="Paste mint / CA from a previous full Analyze…"
+              spellcheck="false"
+              autocomplete="off"
+            />
+            <button type="button" id="ruggersCaGo" class="ghost history-btn">Find</button>
+            <span id="ruggersCaStatus" class="rug-ca-status" hidden></span>
+          </div>
           <div id="ruggersBody" class="ruggers-body" aria-live="polite">
             <p class="logs-empty">
               Run a full Analyze (not Quick) to start tracking.<br />

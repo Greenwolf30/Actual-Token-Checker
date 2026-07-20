@@ -564,6 +564,17 @@ Buttons
   Clear mint  — delete tracking for the current / selected mint only
   Clear all   — wipe all Ruggers tracking on this browser
 
+Search previous lookup by CA
+  At the top of Ruggers: paste a mint / contract address (CA) you analyzed
+  before on this browser → Find (or press Enter).
+  Opens that mint’s Ruggers tracking if it exists in localStorage.
+  Does not call the network; only searches previous full Analyzes saved
+  on this device/browser.
+
+Mint / CA copy
+  Left-click the mint address in the Ruggers header (yellow) or in the
+  summary bar under the token name to copy it to the clipboard.
+
 Per-section actions (Creator / Similar / Single only — not Swing)
   Export (gray)  — download JSON or one-address-per-line file for manual
                    import in RugWatch “Upload manual wallets”

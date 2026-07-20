@@ -590,6 +590,68 @@ button, .ghost, .primary {
 .panel-ruggers.active {
   display: flex;
 }
+/* Ruggers: find previous mint by CA */
+.rug-ca-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 10px 12px;
+  margin: 0 0 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.rug-ca-label {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  font-weight: 600;
+  width: 100%;
+}
+@media (min-width: 720px) {
+  .rug-ca-label {
+    width: auto;
+  }
+}
+.rug-ca-input {
+  flex: 1;
+  min-width: 200px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 0.82rem;
+}
+.rug-ca-input:focus {
+  outline: none;
+  border-color: rgba(245, 197, 66, 0.55);
+}
+.rug-ca-status {
+  font-size: 0.78rem;
+  color: var(--warn);
+}
+.rug-ca-status.ok {
+  color: var(--good);
+}
+a.copy-mint,
+.copy-mint {
+  color: #f5c542;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-weight: 600;
+}
+a.copy-mint:hover {
+  color: #ffe08a;
+}
+#sumAddr.copy-mint {
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  color: #f5c542;
+}
+
 .ruggers-body {
   flex: 1;
   overflow: auto;

@@ -1342,14 +1342,26 @@ function refreshRuggersPanel(focusKey) {
   _lastRuggersBuckets = buckets;
   _lastRuggersRec = rec;
   _lastRuggersKey = activeKey;
-  const title =
+  const mintAddr = (rec.address || "").trim() || "";
+  const titleLeft =
     (rec.symbol ? "$" + rec.symbol + " · " : "") +
-    (rec.name ? rec.name + " · " : "") +
-    (rec.address || activeKey);
+    (rec.name ? rec.name + " · " : "");
 
   let html = "";
   html += '<div class="rug-header">';
-  html += '<div class="rug-title mono">' + escHtml(title) + "</div>";
+  html += '<div class="rug-title mono">';
+  html += escHtml(titleLeft);
+  if (mintAddr) {
+    html +=
+      '<a href="#" class="copy-mint mono" data-copy="' +
+      escHtml(mintAddr) +
+      '" title="Left-click to copy mint / CA">' +
+      escHtml(mintAddr) +
+      "</a>";
+  } else {
+    html += escHtml(activeKey);
+  }
+  html += "</div>";
   html +=
     '<div class="rug-sub">First lookup: ' +
     escHtml(shortWhen(rec.first_ts)) +
@@ -1359,6 +1371,13 @@ function refreshRuggersPanel(focusKey) {
     (rec.lookup_count || 1) +
     " · Tracked wallets: " +
     Object.keys(rec.first_wallets || {}).length +
+    (mintAddr
+      ? ' · Mint: <a href="#" class="copy-mint mono" data-copy="' +
+        escHtml(mintAddr) +
+        '" title="Left-click to copy mint / CA">' +
+        escHtml(mintAddr) +
+        "</a>"
+      : "") +
     "</div>";
   html +=
     '<p class="rug-rules">Rules: only wallets that sold <strong>≥99%</strong> of their ' +
@@ -1439,6 +1458,139 @@ function refreshRuggersPanel(focusKey) {
     sel.addEventListener("change", () => refreshRuggersPanel(sel.value));
   }
   wireRuggersExportButtons();
+  wireCopyMintClicks(body);
+}
+
+/** Find a previously tracked Ruggers mint key by full or partial CA / mint. */
+function findRuggersKeyByCa(query, store) {
+  const q = String(query || "").trim();
+  if (!q || !store) return null;
+  const ql = q.toLowerCase();
+  const keys = Object.keys(store);
+  // Exact address or key match
+  for (const k of keys) {
+    const rec = store[k] || {};
+    const addr = String(rec.address || "").trim();
+    if (addr && addr.toLowerCase() === ql) return k;
+    if (k.toLowerCase() === ql) return k;
+    if (k.toLowerCase().endsWith(":" + ql)) return k;
+  }
+  // Partial (paste short or mid string) — prefer longest address match
+  let best = null;
+  let bestLen = 0;
+  if (ql.length >= 6) {
+    for (const k of keys) {
+      const rec = store[k] || {};
+      const addr = String(rec.address || "").trim().toLowerCase();
+      if (addr && (addr.includes(ql) || ql.includes(addr))) {
+        if (addr.length > bestLen) {
+          best = k;
+          bestLen = addr.length;
+        }
+      } else if (k.toLowerCase().includes(ql)) {
+        if (k.length > bestLen) {
+          best = k;
+          bestLen = k.length;
+        }
+      }
+    }
+  }
+  return best;
+}
+
+function setRuggersCaStatus(msg, ok) {
+  const el = $("ruggersCaStatus");
+  if (!el) return;
+  if (!msg) {
+    el.hidden = true;
+    el.textContent = "";
+    el.classList.remove("ok");
+    return;
+  }
+  el.hidden = false;
+  el.textContent = msg;
+  el.classList.toggle("ok", !!ok);
+}
+
+function ruggersFindByCa() {
+  const input = $("ruggersCaSearch");
+  const q = input ? String(input.value || "").trim() : "";
+  if (!q) {
+    setRuggersCaStatus("Paste a mint / CA first.", false);
+    return;
+  }
+  const store = loadRuggersStore();
+  const key = findRuggersKeyByCa(q, store);
+  if (!key) {
+    setRuggersCaStatus(
+      "No previous Ruggers lookup for that CA in this browser.",
+      false
+    );
+    return;
+  }
+  const rec = store[key] || {};
+  setRuggersCaStatus(
+    "Found" +
+      (rec.symbol ? " $" + rec.symbol : "") +
+      (rec.address ? " · " + String(rec.address).slice(0, 8) + "…" : ""),
+    true
+  );
+  refreshRuggersPanel(key);
+  switchTab("ruggers");
+}
+
+function copyTextToClipboard(text, onOk) {
+  const t = String(text || "").trim();
+  if (!t) return;
+  const done = () => {
+    if (typeof onOk === "function") onOk();
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(t).then(done).catch(() => {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = t;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        done();
+      } catch (_) {
+        alert("Copy failed — select and copy manually:\n" + t);
+      }
+    });
+  } else {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = t;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      done();
+    } catch (_) {
+      alert("Copy failed — select and copy manually:\n" + t);
+    }
+  }
+}
+
+function wireCopyMintClicks(root) {
+  const scope = root || document;
+  scope.querySelectorAll("a.copy-mint, .copy-mint").forEach((a) => {
+    if (a.dataset.copyWired === "1") return;
+    a.dataset.copyWired = "1";
+    a.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      const text = a.getAttribute("data-copy") || a.textContent || "";
+      copyTextToClipboard(text, () => {
+        const prev = a.textContent;
+        a.textContent = "copied!";
+        setTimeout(() => {
+          a.textContent = prev;
+        }, 900);
+      });
+    });
+  });
 }
 
 function formatRuggersPlain(rec, buckets, key) {
@@ -1519,6 +1671,17 @@ function initRuggers() {
   if (r) r.addEventListener("click", () => refreshRuggersPanel());
   if (cm) cm.addEventListener("click", () => clearRuggersMint());
   if (ca) ca.addEventListener("click", () => clearRuggersAll());
+  const go = $("ruggersCaGo");
+  const inp = $("ruggersCaSearch");
+  if (go) go.addEventListener("click", () => ruggersFindByCa());
+  if (inp) {
+    inp.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        ruggersFindByCa();
+      }
+    });
+  }
 }
 
 function apiBase() {
@@ -1802,7 +1965,16 @@ function renderSummary(data) {
   const name = t.name || m.name || "Token";
   const sym = t.symbol || m.symbol || "?";
   $("sumName").textContent = `${name} ($${sym}) · ${t.chain_id || m.chain_id || ""}`;
-  $("sumAddr").textContent = t.address || m.address || "";
+  const mint = (t.address || m.address || "").trim();
+  const sumAddr = $("sumAddr");
+  if (sumAddr) {
+    sumAddr.textContent = mint;
+    sumAddr.classList.add("copy-mint");
+    sumAddr.setAttribute("data-copy", mint);
+    sumAddr.title = mint ? "Left-click to copy mint / CA" : "";
+    sumAddr.dataset.copyWired = "";
+    if (mint) wireCopyMintClicks(sumAddr.parentElement || document);
+  }
   $("sumPrice").textContent = fmtUsd(m.price_usd);
   $("sumMc").textContent = fmtUsd(m.market_cap_usd);
   $("sumLiq").textContent = fmtUsd(m.liquidity_usd);
