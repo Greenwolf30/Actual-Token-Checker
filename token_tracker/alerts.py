@@ -679,17 +679,17 @@ def format_alerts_text(data: dict[str, Any]) -> str:
         ),
         (
             "dexscreener_socials_missing",
-            "DexScreener socials missing will show here when value is true",
+            "DexScreener socials missing will show here",
             ["dexscreener_socials_missing"],
         ),
         (
             "serial_rugger_link",
-            "Serial-rugger / rug signals will show here when value is true",
+            "Serial-rugger / rug signals will show here",
             ["serial_rugger_link"],
         ),
         (
             "rugwatch_flagged",
-            "Flagged wallets hold % will show here when value is true",
+            "Flagged wallets hold % will show here",
             ["rugwatch_flagged"],
         ),
     ]
@@ -698,8 +698,8 @@ def format_alerts_text(data: dict[str, Any]) -> str:
     notes = str(data.get("notes") or "")
     pump_skip_lp = "Pump.fun" in notes or "PumpSwap" in notes
 
-    # These three always print as a slot line; when true, append " · true" + value
-    _true_marker_ids = {
+    # Always keep base “will show here” text; append " · true" when the alert is active
+    _append_true_keys = {
         "dexscreener_socials_missing",
         "serial_rugger_link",
         "rugwatch_flagged",
@@ -708,13 +708,6 @@ def format_alerts_text(data: dict[str, Any]) -> str:
     def _render_alert(a: dict[str, Any], index: int) -> None:
         sev = (a.get("severity") or "info").upper()
         title = str(a.get("title") or "")
-        aid = str(a.get("id") or "")
-        if aid == "rugwatch_flagged" or aid.startswith("bundle_pct"):
-            pass
-        if aid in _true_marker_ids or (
-            aid.startswith("bundle_pct") and "bundle_pct_threshold" in _true_marker_ids
-        ):
-            title = f"{title} · true"
         lines.append(f"  {index}. [{sev}] {title}")
         detail = a.get("detail") or ""
         while len(detail) > 90:
@@ -730,9 +723,7 @@ def format_alerts_text(data: dict[str, Any]) -> str:
                 try:
                     fval = float(ftp)
                     if fval > 0:
-                        lines.append(
-                            f"     Flagged wallets hold {fval:.2f}% total · true"
-                        )
+                        lines.append(f"     Flagged wallets hold {fval:.2f}% total")
                     else:
                         lines.append("     Flagged wallets hold % will show here")
                 except (TypeError, ValueError):
@@ -817,32 +808,21 @@ def format_alerts_text(data: dict[str, Any]) -> str:
                     f"{' (skipped on Pump.fun / PumpSwap)' if pump_skip_lp else ''}"
                 )
                 continue
-        if hit:
-            # Compact true-marker line for the three requested fields
-            if _key in {
-                "dexscreener_socials_missing",
-                "serial_rugger_link",
-                "rugwatch_flagged",
-            }:
-                title = str(hit.get("title") or placeholder.replace(" will show here", ""))
-                if _key == "rugwatch_flagged":
-                    ftp = hit.get("flagged_total_pct")
-                    try:
-                        if ftp is not None and float(ftp) > 0:
-                            title = f"Flagged wallets hold {float(ftp):.2f}%"
-                    except (TypeError, ValueError):
-                        pass
-                lines.append(f"  · {title} · true")
-                detail = str(hit.get("detail") or "").strip()
-                if detail:
-                    # one short detail line
-                    if len(detail) > 100:
-                        detail = detail[:97] + "..."
-                    lines.append(f"     {detail}")
-                idx += 1
-            else:
-                _render_alert(hit, idx)
-                idx += 1
+        if hit and _key in _append_true_keys:
+            # Keep the same base message; append · true (and % for flagged if known)
+            line = f"  · {placeholder} · true"
+            if _key == "rugwatch_flagged":
+                ftp = hit.get("flagged_total_pct")
+                try:
+                    if ftp is not None and float(ftp) > 0:
+                        line = f"  · {placeholder} · true · {float(ftp):.2f}%"
+                except (TypeError, ValueError):
+                    pass
+            lines.append(line)
+            idx += 1
+        elif hit:
+            _render_alert(hit, idx)
+            idx += 1
         else:
             lines.append(f"  · {placeholder}")
 
