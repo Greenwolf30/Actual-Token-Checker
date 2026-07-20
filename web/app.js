@@ -1071,6 +1071,8 @@ function processRuggersFromAnalyze(data) {
       rugwatch_known: {},
       // Sold ≥99% while flagged — sticky Flagged section until buy-back swing
       flagged_sellers: {},
+      // Similar section Upload on this mint — stay under Similar (not Flagged here)
+      uploaded_similar: {},
     };
     for (const [w, info] of Object.entries(snap.wallets || {})) {
       rec.first_wallets[w] = {
@@ -1101,6 +1103,39 @@ function processRuggersFromAnalyze(data) {
     }
     if (!rec.flagged_sellers || typeof rec.flagged_sellers !== "object") {
       rec.flagged_sellers = {};
+    }
+    if (!rec.uploaded_similar || typeof rec.uploaded_similar !== "object") {
+      rec.uploaded_similar = {};
+    }
+    // Repair: older builds moved Similar-Uploads into Flagged — put them back
+    if (rec.flagged_sellers && typeof rec.flagged_sellers === "object") {
+      for (const [w, meta] of Object.entries(rec.flagged_sellers)) {
+        if (!w || !meta || String(meta.origin) !== "uploaded") continue;
+        const firstSim = !!(
+          rec.first_wallets &&
+          rec.first_wallets[w] &&
+          rec.first_wallets[w].in_similar
+        );
+        const stSim = !!(rec.status && rec.status[w] && rec.status[w].in_similar);
+        if (!firstSim && !stSim) continue;
+        rec.uploaded_similar[w] = {
+          ...(rec.uploaded_similar[w] || {}),
+          uploaded_at:
+            (rec.uploaded_similar[w] && rec.uploaded_similar[w].uploaded_at) ||
+            meta.entered_at ||
+            now,
+          repaired_from_flagged: true,
+        };
+        delete rec.flagged_sellers[w];
+        if (rec.status && rec.status[w]) {
+          rec.status[w].in_similar = true;
+          rec.status[w].is_flagged = false;
+          rec.status[w].uploaded_similar = true;
+        }
+        if (rec.first_wallets && rec.first_wallets[w]) {
+          rec.first_wallets[w].in_similar = true;
+        }
+      }
     }
   }
 
@@ -1216,7 +1251,24 @@ function processRuggersFromAnalyze(data) {
       prevTag !== "swing" &&
       !prev.ever_sold;
 
-    if (!isFirstLookup && newlySold && onRugWatch) {
+    // Sticky similar membership (never clear just because they left the list)
+    // + wallets Uploaded from Similar on this mint stay similar here forever
+    const uploadedSimilar = isUploadedSimilarOnThisMint(rec, w);
+    const inSimilar = !!(
+      first.in_similar ||
+      prev.in_similar ||
+      (cur && cur.in_similar) ||
+      uploadedSimilar
+    );
+    if (inSimilar && first && !first.in_similar) {
+      first.in_similar = true;
+      if (rec.first_wallets[w]) rec.first_wallets[w].in_similar = true;
+    }
+
+    // Enter Flagged when newly sold ≥99% while already on RugWatch —
+    // EXCEPT wallets Uploaded from Similar on THIS mint (they stay Similar here).
+    // On any other mint they still go straight to Flagged.
+    if (!isFirstLookup && newlySold && onRugWatch && !uploadedSimilar) {
       flaggedSellers[w] = {
         ...(rwKnown[w] || {}),
         entered_at: now,
@@ -1228,7 +1280,7 @@ function processRuggersFromAnalyze(data) {
         entered_via: "sold_while_flagged",
         rules_v: RUGGERS_RULES_VERSION,
       };
-    } else if (tag === "seller" && wasFlaggedSeller) {
+    } else if (tag === "seller" && wasFlaggedSeller && !uploadedSimilar) {
       // Sticky update only — already in Flagged for this mint
       flaggedSellers[w] = {
         ...(flaggedSellers[w] || {}),
@@ -1242,22 +1294,16 @@ function processRuggersFromAnalyze(data) {
       };
     }
 
+    // Uploaded-from-Similar on this mint: never sit under Flagged here
+    if (uploadedSimilar && flaggedSellers[w]) {
+      delete flaggedSellers[w];
+    }
+
     // Only remove from Flagged on buy-back swing
     if (tag === "swing" && wasFlaggedSeller) {
       delete flaggedSellers[w];
       if (rwKnown[w]) delete rwKnown[w];
       unflagNow.push(w);
-    }
-
-    // Sticky similar membership (never clear just because they left the list)
-    const inSimilar = !!(
-      first.in_similar ||
-      prev.in_similar ||
-      (cur && cur.in_similar)
-    );
-    if (inSimilar && first && !first.in_similar) {
-      first.in_similar = true;
-      if (rec.first_wallets[w]) rec.first_wallets[w].in_similar = true;
     }
 
     status[w] = {
@@ -1271,11 +1317,13 @@ function processRuggersFromAnalyze(data) {
       sold_pct: soldState.sold_pct,
       reason: soldState.reason,
       in_similar: inSimilar,
+      uploaded_similar: uploadedSimilar,
       is_creator: !!(
         rec.creator &&
         w.toLowerCase() === String(rec.creator).toLowerCase()
       ),
-      is_flagged: !!(flaggedSellers[w] || (onRugWatch && tag === "seller")),
+      // Flagged section only — not "on cloud but uploaded as similar on this mint"
+      is_flagged: !!(flaggedSellers[w] && !uploadedSimilar),
       last_update: now,
     };
   }
@@ -1386,8 +1434,30 @@ async function unflagRuggersWalletsOnCloud(addresses) {
 }
 
 /**
- * After successful Upload → mark wallets as RugWatch-known; if already sellers,
- * put them in Flagged section for this mint.
+ * True if this wallet was Uploaded from Similar on THIS mint.
+ * Those stay under Similar here; Flagged only on other mints.
+ */
+function isUploadedSimilarOnThisMint(rec, wallet) {
+  if (!rec || !wallet) return false;
+  const w = String(wallet).trim();
+  if (!w) return false;
+  const us = rec.uploaded_similar;
+  if (us && typeof us === "object") {
+    if (us[w]) return true;
+    const wl = w.toLowerCase();
+    for (const k of Object.keys(us)) {
+      if (String(k).toLowerCase() === wl) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * After successful Upload → mark wallets as RugWatch-known on cloud.
+ *
+ * Similar section: stay in Similar for THIS mint (do not move to Flagged).
+ * On other mints, the same wallets go straight to Flagged when they sell ≥99%.
+ * Creator section: still enter Flagged on this mint (already on cloud).
  */
 function markRuggersUploadedAsFlagged(exportKey, rows) {
   if (!_lastRuggersKey || !rows || !rows.length) return;
@@ -1400,7 +1470,12 @@ function markRuggersUploadedAsFlagged(exportKey, rows) {
   if (!rec.flagged_sellers || typeof rec.flagged_sellers !== "object") {
     rec.flagged_sellers = {};
   }
+  if (!rec.uploaded_similar || typeof rec.uploaded_similar !== "object") {
+    rec.uploaded_similar = {};
+  }
   const now = new Date().toISOString();
+  const fromSimilar = exportKey === "similar";
+
   for (const row of rows) {
     const w = (row && row.wallet) || "";
     if (!w) continue;
@@ -1408,11 +1483,33 @@ function markRuggersUploadedAsFlagged(exportKey, rows) {
       ...(rec.rugwatch_known[w] || {}),
       origin: "uploaded",
       last_seen: now,
+      uploaded_section: exportKey || "unknown",
     };
     const st = (rec.status && rec.status[w]) || row;
     const tag = st.tag || row.tag;
+
+    if (fromSimilar) {
+      // Keep on Similar for this mint — never park under Flagged here
+      rec.uploaded_similar[w] = {
+        uploaded_at: (rec.uploaded_similar[w] && rec.uploaded_similar[w].uploaded_at) || now,
+        last_update: now,
+        sold_pct: st.sold_pct != null ? st.sold_pct : row.sold_pct,
+        first_pct: st.first_pct != null ? st.first_pct : row.first_pct,
+      };
+      if (rec.flagged_sellers[w]) delete rec.flagged_sellers[w];
+      if (rec.first_wallets && rec.first_wallets[w]) {
+        rec.first_wallets[w].in_similar = true;
+      }
+      if (rec.status && rec.status[w]) {
+        rec.status[w].in_similar = true;
+        rec.status[w].is_flagged = false;
+        rec.status[w].uploaded_similar = true;
+      }
+      continue;
+    }
+
+    // Creator (and any non-similar) upload → Flagged on this mint
     if (tag === "seller" || tag === "swing" || row.sold_pct != null) {
-      // Uploaded sellers become Flagged for this mint (already on cloud)
       if (tag !== "swing") {
         rec.flagged_sellers[w] = {
           ...(rec.flagged_sellers[w] || {}),
@@ -1458,9 +1555,11 @@ function ruggersBuckets(rec) {
       ? rec.flagged_sellers
       : {};
 
-  // Flagged section = only sticky flagged_sellers (sold ≥99% while on RugWatch)
+  // Flagged section = sticky flagged_sellers, but NOT wallets Uploaded from
+  // Similar on this mint (those stay under Similar here).
   for (const [fw, meta] of Object.entries(flaggedSellers)) {
     if (!fw || flaggedSeen.has(fw)) continue;
+    if (isUploadedSimilarOnThisMint(rec, fw)) continue;
     const st = (rec.status && rec.status[fw]) || {};
     // If they swung, they should already be removed from flagged_sellers
     if (st.tag === "swing") continue;
@@ -1487,7 +1586,14 @@ function ruggersBuckets(rec) {
 
   for (const [w, st] of Object.entries(rec.status)) {
     if (!st) continue;
-    const row = { wallet: w, ...st, is_flagged: !!flaggedSellers[w] };
+    const keepSimilar = isUploadedSimilarOnThisMint(rec, w);
+    const inFlagged = !!(flaggedSellers[w] || flaggedSeen.has(w)) && !keepSimilar;
+    const row = {
+      wallet: w,
+      ...st,
+      is_flagged: inFlagged,
+      in_similar: !!(st.in_similar || keepSimilar),
+    };
 
     if (st.tag === "swing") {
       swings.push(row);
@@ -1495,13 +1601,13 @@ function ruggersBuckets(rec) {
     }
     if (st.tag !== "seller") continue;
     // Already in Flagged section — not Creator / Similar / Single
-    if (flaggedSellers[w] || flaggedSeen.has(w)) continue;
+    if (inFlagged) continue;
 
-    if (st.is_creator) {
+    if (st.is_creator && !keepSimilar) {
       creatorSold.push(row);
       continue;
     }
-    if (st.in_similar) similarSellers.push(row);
+    if (st.in_similar || keepSimilar) similarSellers.push(row);
     else singleSellers.push(row);
   }
 
@@ -1919,8 +2025,11 @@ async function uploadRuggersSectionToCloud(exportKey) {
         "\nCloud push: " +
         pushed +
         (cloud && cloud.note ? "\n\n" + cloud.note : "") +
-        "\n\nUploaded sellers now sit under Flagged wallets for this mint. " +
-        "If they buy back later, they move to Swing and are unflagged/removed from cloud."
+        (exportKey === "similar"
+          ? "\n\nSimilar sellers stay under Similar wallets on this mint (also on cloud). " +
+            "On other mints they go to Flagged when they sell ≥99%."
+          : "\n\nUploaded sellers sit under Flagged wallets for this mint. " +
+            "If they buy back later, they move to Swing and are unflagged/removed from cloud.")
     );
   } catch (e) {
     alert(
@@ -2109,9 +2218,10 @@ function refreshRuggersPanel(focusKey) {
   );
   html += renderRuggersSection(
     "Similar wallets (sellers)",
-    "Similar-size group sellers (≥99% sold / left list), not already on RugWatch. " +
-      "Count drops when you Upload (→ Flagged), they buy back (→ Swing), or creator is identified. " +
-      "Membership stays sticky after sell (no longer reclassified as Single).",
+    "Similar-size group sellers (≥99% sold / left list). " +
+      "Upload → cloud/RugWatch, but they stay under Similar on THIS mint. " +
+      "On a different mint they go straight to Flagged when they sell ≥99%. " +
+      "Buy-back → Swing. Membership stays sticky after sell.",
     buckets.similarSellers,
     "similar"
   );
@@ -2127,7 +2237,9 @@ function refreshRuggersPanel(focusKey) {
   if (flaggedRows.length) {
     html += renderRuggersSection(
       "Flagged wallets",
-      "On RugWatch and sold ≥99% on this mint. Stay here until they buy back → Swing (then unflagged + removed from cloud). No Upload.",
+      "Already on RugWatch and sold ≥99% on this mint (not uploaded from this mint’s Similar). " +
+        "Similar Upload stays under Similar here; other mints send them here. " +
+        "Buy-back → Swing + unflag/cloud remove. No Upload.",
       flaggedRows
     );
   } else {
@@ -2137,9 +2249,10 @@ function refreshRuggersPanel(focusKey) {
       '<h3 class="rug-section-title">Flagged wallets <span class="rug-count">0</span></h3>' +
       "</div>" +
       '<p class="rug-section-hint">' +
-      "Empty until a RugWatch-flagged wallet on this mint sells ≥99% " +
-      "(or you Upload a seller). New mints start empty. " +
-      "Buy-back is the only removal → Swing + unflag/cloud remove." +
+      "Empty until a wallet already on RugWatch sells ≥99% on this mint " +
+      "(e.g. uploaded from another mint’s Similar). " +
+      "Similar Upload on this mint stays under Similar, not here. " +
+      "Buy-back → Swing + unflag/cloud remove." +
       "</p>" +
       '<div class="rug-section-body"><p class="rug-empty">None yet.</p></div>' +
       "</section>";
