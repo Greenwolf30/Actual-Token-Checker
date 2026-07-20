@@ -62,13 +62,17 @@ def _normalize_chain(chain: str | None) -> str | None:
 
 def resolve_pairs(query: str, chain: str | None = None) -> list[dict[str, Any]]:
     """
-    Resolve market pairs with fewer free-API pings:
+    Resolve market pairs — multi-provider cascade (Solana-focused extras):
 
-    1) Pump.fun for *pump mints (when applicable)
-    2) DexScreener token-pairs (targeted) before broad search
-    3) DexScreener search (cached) for tickers / fallback
-    4) GeckoTerminal ticker resolve when search is noisy
-    5) Pump fallback on 429 / empty
+    1) Pre-bond *pump → native Pump.fun
+    2) DexScreener (cached; budget/429 → skip)
+    3) Raydium API v3 (Solana pools)
+    4) Birdeye token overview (needs BIRDEYE_API_KEY)
+    5) Rugcheck report price/mcap (thin pair)
+    6) Pump.fun native (graduated / fallback)
+    7) GeckoTerminal ticker resolve when search is noisy
+
+    Holders (separate path) fuse Helius + Rugcheck + Solscan + Birdeye.
 
     Supports Solana, EVM, and Robinhood Chain (DexScreener chainId=robinhood).
     """
@@ -91,6 +95,30 @@ def resolve_pairs(query: str, chain: str | None = None) -> list[dict[str, Any]]:
             return pf.pairs_for_prebond_mint(mint_q)
         except Exception:  # noqa: BLE001
             return []
+
+    def _alt_sol_market(mint_q: str) -> list[dict[str, Any]]:
+        """Raydium + Birdeye + Rugcheck market pairs (no DexScreener)."""
+        from . import market_sources as msrc
+        from . import raydium as rd
+
+        parts: list[list[dict[str, Any]]] = []
+        try:
+            parts.append(rd.pairs_for_token(mint_q) or [])
+        except Exception:  # noqa: BLE001
+            parts.append([])
+        try:
+            parts.append(msrc.birdeye_pairs_for_mint(mint_q) or [])
+        except Exception:  # noqa: BLE001
+            parts.append([])
+        try:
+            parts.append(msrc.rugcheck_pairs_for_mint(mint_q) or [])
+        except Exception:  # noqa: BLE001
+            parts.append([])
+        try:
+            parts.append(_pump_fallback(mint_q) or [])
+        except Exception:  # noqa: BLE001
+            parts.append([])
+        return msrc.merge_pair_lists(*parts)
 
     def _prefer_pumpfun_pairs(
         pairs_in: list[dict[str, Any]], mint_q: str
@@ -145,46 +173,44 @@ def resolve_pairs(query: str, chain: str | None = None) -> list[dict[str, Any]]:
             pre = _pump_prebond_first(maybe_addr)
             if pre:
                 return pre
-            if pf.is_pump_mint(maybe_addr):
-                fb = _pump_fallback(maybe_addr)
-                if fb:
-                    return fb
             try:
                 pairs = dx.pairs_for_token(maybe_chain, maybe_addr)
                 if pairs:
-                    return _prefer_pumpfun_pairs(pairs, maybe_addr)
+                    got = _prefer_pumpfun_pairs(pairs, maybe_addr)
+                    if maybe_chain in {"solana", "sol"} or pf.is_pump_mint(maybe_addr):
+                        alts = _alt_sol_market(maybe_addr)
+                        if alts:
+                            from . import market_sources as msrc
+
+                            return _prefer_pumpfun_pairs(
+                                msrc.merge_pair_lists(got, alts), maybe_addr
+                            )
+                    return got
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
+            if maybe_chain in {"solana", "sol"} or pf.is_pump_mint(maybe_addr):
+                alts = _alt_sol_market(maybe_addr)
+                if alts:
+                    return _prefer_pumpfun_pairs(alts, maybe_addr)
             fb = _pump_fallback(maybe_addr)
             if fb:
                 return fb
 
-    # Pure address: prebond Pump → graduated pump native → Dex/Raydium
+    # Pure address: multi-source cascade
     looks_like_addr = bool(ADDRESS_RE.match(q)) or (
         len(q) >= 32 and " " not in q and not q.startswith("http")
     )
     if looks_like_addr:
         mint = q.split(":")[-1] if ":" in q else q
-        # 1) Still on bonding curve → Pump.fun native only
+        solish = (not chain) or chain in {"solana", "sol"} or pf.is_pump_mint(mint)
+
+        # 1) Pre-bond *pump → Pump.fun native only
         pre = _pump_prebond_first(mint)
         if pre:
             return pre
-        # 2) Graduated / unknown: native pump synthetic, then indexes
-        if pf.is_pump_mint(mint):
-            fb = _pump_fallback(mint)
-            if fb:
-                # Graduated synthetic OK; still allow Dex enrich below only if empty
-                if fb[0].get("_prebond") or not fb[0].get("_graduated"):
-                    return fb
-                # Graduated: try Dex for better pool depth, but keep pump first
-                try:
-                    direct_g = _direct_token_pairs(mint, chain or "solana")
-                except Exception:  # noqa: BLE001
-                    direct_g = []
-                if direct_g:
-                    return _prefer_pumpfun_pairs(fb + direct_g, mint)
-                return fb
-        direct = _direct_token_pairs(mint, chain)
+
+        # 2) DexScreener targeted pairs (uses Raydium on DX cooldown inside client)
+        direct = _direct_token_pairs(mint, chain or ("solana" if solish else chain))
         if direct:
             exact = [
                 p
@@ -192,8 +218,17 @@ def resolve_pairs(query: str, chain: str | None = None) -> list[dict[str, Any]]:
                 if ((p.get("baseToken") or {}).get("address") or "").lower()
                 == mint.lower()
             ]
-            return _prefer_pumpfun_pairs(exact or direct, mint)
-        # Broad search only if direct pairs missed
+            got = _prefer_pumpfun_pairs(exact or direct, mint)
+            # Enrich with alts if thin (e.g. only price-only raydium stub)
+            if solish and len(got) < 2:
+                alts = _alt_sol_market(mint)
+                if alts:
+                    from . import market_sources as msrc
+
+                    return _prefer_pumpfun_pairs(msrc.merge_pair_lists(got, alts), mint)
+            return got
+
+        # 3) Broad DexScreener search
         pairs_addr: list[dict[str, Any]] = []
         try:
             pairs_addr = dx.search_pairs(q)
@@ -213,7 +248,21 @@ def resolve_pairs(query: str, chain: str | None = None) -> list[dict[str, Any]]:
             == mint.lower()
         ]
         if exact:
-            return _prefer_pumpfun_pairs(exact, mint)
+            got = _prefer_pumpfun_pairs(exact, mint)
+            if solish:
+                alts = _alt_sol_market(mint)
+                if alts:
+                    from . import market_sources as msrc
+
+                    return _prefer_pumpfun_pairs(msrc.merge_pair_lists(got, alts), mint)
+            return got
+
+        # 4) Full alt stack: Raydium + Birdeye + Rugcheck + Pump
+        if solish:
+            alts = _alt_sol_market(mint)
+            if alts:
+                return _prefer_pumpfun_pairs(alts, mint)
+
         fb = _pump_fallback(mint)
         if fb:
             return fb

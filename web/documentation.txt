@@ -110,6 +110,10 @@ DexScreener / Analyze cache (server, in-memory)
     DEXSCREENER_HOUR_BUDGET, DEXSCREENER_COOLDOWN_SEC.
   - Pre-bond *pump tokens: native Pump.fun API is primary (price/mcap/curve);
     DexScreener/Raydium are not required while still on the bonding curve.
+  - Multi-source stack (use what responds; no single point of failure):
+      Market: Pump (prebond) → DexScreener → Raydium → Birdeye → Rugcheck → Pump
+      Holders: Helius/RPC + Rugcheck + Solscan + Birdeye (fused in parallel)
+      LP labels: known programs + Pump curve/pool PDAs
 
 
 --------------------------------------------------------------------------------

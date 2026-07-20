@@ -311,9 +311,10 @@ def _solana_holders(
     def _totals() -> dict[str, Any]:
         return hsrc.fetch_holder_totals(mint)
 
-    # Fetch all sources in parallel (was sequential — biggest holders latency win)
+    # Fetch all sources in parallel — Helius/RPC + Rugcheck + Solscan + Birdeye
+    # (holder_totals may also hit Pump.fun / DexScreener for counts only)
     jobs = {
-        "rpc": _rpc,
+        "rpc": _rpc,  # Helius when HELIUS_API_KEY set
         "rugcheck": _rug,
         "solscan": _solscan,
         "birdeye": _birdeye,
