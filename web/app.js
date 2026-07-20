@@ -1705,8 +1705,8 @@ function refreshRuggersPanel(focusKey) {
     "Holders who never dumped 99% are ignored. " +
     "Yellow <strong>Upload</strong> on Creator / Similar sends wallets to RugWatch cloud; " +
     "<strong>Export</strong> downloads a file (Single has Export only). " +
-    "<strong>Note:</strong> wallets already on the cloud after a successful upload are " +
-    "ignored by the server (no duplicate copies).</p>";
+    "<strong>Note:</strong> wallets already on the cloud after each successful upload " +
+    "are ignored by the server (no duplicate copies).</p>";
 
   // Tracked mint (left) + CA search bar (right)
   const prevSearch =
@@ -1762,13 +1762,13 @@ function refreshRuggersPanel(focusKey) {
 
   html += renderRuggersSection(
     "Creator (sold ≥99%)",
-    "Creator wallet only — listed if they sold ≥99% of their first-lookup bag or left the list. Yellow Upload → RugWatch cloud. Note: wallets already on the cloud after a successful upload are ignored by the server.",
+    "Creator wallet only — listed if they sold ≥99% of their first-lookup bag or left the list. Yellow Upload → RugWatch cloud. Note: wallets already on the cloud after each successful upload are ignored by the server.",
     buckets.creatorSold,
     "creator"
   );
   html += renderRuggersSection(
     "Similar wallets (sellers)",
-    "New similar-size group sellers only (not already on RugWatch). Sold ≥99% / dropped off. Yellow Upload → RugWatch cloud. Note: wallets already on the cloud after a successful upload are ignored by the server.",
+    "New similar-size group sellers only (not already on RugWatch). Sold ≥99% / dropped off. Yellow Upload → RugWatch cloud. Note: wallets already on the cloud after each successful upload are ignored by the server.",
     buckets.similarSellers,
     "similar"
   );
@@ -1823,7 +1823,7 @@ function refreshRuggersPanel(focusKey) {
     " · Tracked mints: " +
     keys.length +
     " · Yellow Upload: Creator / Similar only · Export: Creator / Similar / Single" +
-    " · Wallets already on the cloud after a successful upload are ignored by the server." +
+    " · Wallets already on the cloud after each successful upload are ignored by the server." +
     "</p>";
 
   if (body) body.innerHTML = html;
