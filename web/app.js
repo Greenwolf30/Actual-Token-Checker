@@ -1332,9 +1332,10 @@ async function uploadRuggersSectionToCloud(exportKey) {
       " wallet(s) from “" +
       section +
       "” to RugWatch?\n\n" +
-      "1) Import into RugWatch local DB\n" +
-      "2) Push cloud → GitHub (cloud wallet count increases)\n\n" +
-      "RugWatch must be running at:\n" +
+      "1) Import NEW wallets only (already in cloud/local are skipped)\n" +
+      "2) Push cloud → GitHub if anything new was added\n\n" +
+      "Duplicates are never saved twice.\n\n" +
+      "RugWatch:\n" +
       base +
       "\n\nContinue?"
   );
@@ -1402,19 +1403,43 @@ async function uploadRuggersSectionToCloud(exportKey) {
       }
     }
 
-    const imported = upData.imported != null ? upData.imported : rows.length;
+    const imported = upData.imported != null ? upData.imported : 0;
+    const skipEx =
+      upData.skipped_existing != null
+        ? upData.skipped_existing
+        : upData.skipped != null
+          ? upData.skipped
+          : 0;
     const cloudN =
-      cloud.wallet_count != null ? cloud.wallet_count : cloud.count != null ? cloud.count : "?";
+      cloud && cloud.wallet_count != null
+        ? cloud.wallet_count
+        : cloud && cloud.count != null
+          ? cloud.count
+          : "?";
+    const pushed =
+      cloud && cloud.skipped_push
+        ? "no (all duplicates — push skipped)"
+        : cloud && cloud.ok
+          ? "yes"
+          : "n/a";
     alert(
-      "Uploaded to RugWatch cloud.\n\n" +
+      (imported > 0
+        ? "Uploaded to RugWatch.\n\n"
+        : "No new wallets to upload.\n\n") +
         "Section: " +
         section +
-        "\nImported (this batch): " +
+        "\nNew imported: " +
         imported +
+        "\nAlready in cloud/local (skipped): " +
+        skipEx +
         "\nCloud wallets now: " +
         cloudN +
-        (cloud.cloud_shards != null ? "\nCloud shards: " + cloud.cloud_shards : "") +
-        "\n\nOpen RugWatch to confirm the blue cloud pill."
+        "\nCloud push: " +
+        pushed +
+        (cloud && cloud.cloud_shards != null
+          ? "\nCloud shards: " + cloud.cloud_shards
+          : "") +
+        "\n\nDuplicates are never saved twice."
     );
   } catch (e) {
     alert(
