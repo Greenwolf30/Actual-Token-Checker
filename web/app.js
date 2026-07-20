@@ -1752,9 +1752,9 @@ function refreshRuggersPanel(focusKey) {
   );
   html += renderRuggersSection(
     "Single wallets (sellers)",
-    "New individual sellers not already on RugWatch. Sold ≥99% / dropped off. Yellow Upload → RugWatch cloud.",
-    buckets.singleSellers,
-    "single"
+    "New individual sellers not already on RugWatch. Sold ≥99% / dropped off. (No Upload button.)",
+    buckets.singleSellers
+    // no exportKey → no Export / Upload buttons
   );
   // Previously flagged — no Upload (already on RugWatch / cloud)
   const flaggedRows = buckets.flaggedWallets || [];
@@ -1799,7 +1799,7 @@ function refreshRuggersPanel(focusKey) {
     buckets.swings.length +
     " · Tracked mints: " +
     keys.length +
-    " · Yellow Upload is only for new Creator/Similar/Single (not Flagged)." +
+    " · Yellow Upload is only for Creator / Similar (not Single, Flagged, or Swings)." +
     "</p>";
 
   if (body) body.innerHTML = html;

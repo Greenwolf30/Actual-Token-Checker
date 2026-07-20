@@ -698,9 +698,24 @@ def format_alerts_text(data: dict[str, Any]) -> str:
     notes = str(data.get("notes") or "")
     pump_skip_lp = "Pump.fun" in notes or "PumpSwap" in notes
 
+    # These three always print as a slot line; when true, append " · true" + value
+    _true_marker_ids = {
+        "dexscreener_socials_missing",
+        "serial_rugger_link",
+        "rugwatch_flagged",
+    }
+
     def _render_alert(a: dict[str, Any], index: int) -> None:
         sev = (a.get("severity") or "info").upper()
-        lines.append(f"  {index}. [{sev}] {a.get('title')}")
+        title = str(a.get("title") or "")
+        aid = str(a.get("id") or "")
+        if aid == "rugwatch_flagged" or aid.startswith("bundle_pct"):
+            pass
+        if aid in _true_marker_ids or (
+            aid.startswith("bundle_pct") and "bundle_pct_threshold" in _true_marker_ids
+        ):
+            title = f"{title} · true"
+        lines.append(f"  {index}. [{sev}] {title}")
         detail = a.get("detail") or ""
         while len(detail) > 90:
             lines.append(f"     {detail[:90]}")
@@ -715,7 +730,9 @@ def format_alerts_text(data: dict[str, Any]) -> str:
                 try:
                     fval = float(ftp)
                     if fval > 0:
-                        lines.append(f"     Flagged wallets hold {fval:.2f}% total")
+                        lines.append(
+                            f"     Flagged wallets hold {fval:.2f}% total · true"
+                        )
                     else:
                         lines.append("     Flagged wallets hold % will show here")
                 except (TypeError, ValueError):
@@ -801,8 +818,31 @@ def format_alerts_text(data: dict[str, Any]) -> str:
                 )
                 continue
         if hit:
-            _render_alert(hit, idx)
-            idx += 1
+            # Compact true-marker line for the three requested fields
+            if _key in {
+                "dexscreener_socials_missing",
+                "serial_rugger_link",
+                "rugwatch_flagged",
+            }:
+                title = str(hit.get("title") or placeholder.replace(" will show here", ""))
+                if _key == "rugwatch_flagged":
+                    ftp = hit.get("flagged_total_pct")
+                    try:
+                        if ftp is not None and float(ftp) > 0:
+                            title = f"Flagged wallets hold {float(ftp):.2f}%"
+                    except (TypeError, ValueError):
+                        pass
+                lines.append(f"  · {title} · true")
+                detail = str(hit.get("detail") or "").strip()
+                if detail:
+                    # one short detail line
+                    if len(detail) > 100:
+                        detail = detail[:97] + "..."
+                    lines.append(f"     {detail}")
+                idx += 1
+            else:
+                _render_alert(hit, idx)
+                idx += 1
         else:
             lines.append(f"  · {placeholder}")
 
