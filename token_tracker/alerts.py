@@ -608,6 +608,10 @@ def _bundle_pct_alert(bundles_data: dict[str, Any] | None) -> dict[str, Any] | N
 
 
 def format_alerts_text(data: dict[str, Any]) -> str:
+    """
+    Format Alerts tab. Active alerts print as usual; any check with no
+    real-time hit (0 / missing) gets a “will show here” placeholder.
+    """
     lines = [
         "=" * 72,
         "  ALERTS",
@@ -618,144 +622,201 @@ def format_alerts_text(data: dict[str, Any]) -> str:
     if not data.get("ok") and not data.get("alerts"):
         lines.append(f"  {data.get('summary') or data.get('notes') or 'unavailable'}")
         lines.append("")
-        lines.append(
-            "  Top priority will show if there are any of: unlocked liquidity, "
-            "single holder >5%, bundle >20% / >27% / ≥50%, DexScreener socials missing, "
-            "similar large wallets, or rugger-linked wallets."
-        )
+        lines.append("  Alerts will show here after a full Analyze.")
         return "\n".join(lines) + "\n"
 
     n = int(data.get("priority_count") or 0)
-    lines.append(f"  Top-priority warnings: {n}")
-    lines.append(f"  {data.get('summary') or ''}")
+    if n > 0:
+        lines.append(f"  Top-priority warnings: {n}")
+    else:
+        lines.append("  Top-priority warnings will show here")
+    if data.get("summary"):
+        lines.append(f"  {data.get('summary')}")
     lines.append("")
 
-    alerts = data.get("alerts") or []
-    has_flagged_alert = any(
-        (a or {}).get("id") == "rugwatch_flagged" for a in alerts if isinstance(a, dict)
-    )
+    alerts = [a for a in (data.get("alerts") or []) if isinstance(a, dict)]
+    by_id: dict[str, dict[str, Any]] = {}
+    for a in alerts:
+        aid = str(a.get("id") or "")
+        if aid and aid not in by_id:
+            by_id[aid] = a
+        # bundle thresholds share one placeholder bucket
+        if aid.startswith("bundle_pct"):
+            by_id.setdefault("bundle_pct_threshold", a)
 
-    if not alerts:
-        lines.append("  ✓ No immediate top-priority alerts from current data.")
-        lines.append("")
-        lines.append("  Checked:")
-        checks_done = set(data.get("checks") or [])
-        # Prefer explicit checks list (e.g. skip LP unlock for Pump.fun)
-        if not checks_done or "liquidity_unlocked" in checks_done:
-            lines.append("    • Liquidity unlocked")
-        elif data.get("notes") and (
-            "Pump.fun" in str(data.get("notes")) or "PumpSwap" in str(data.get("notes"))
-        ):
-            lines.append(
-                "    • Liquidity unlocked (skipped — Pump.fun / PumpSwap pool)"
-            )
-        lines.append("    • All non-LP wallets holding over 2% (with % + priority)")
-        lines.append("    • Single holder over 5% (excluding known program/LP)")
-        lines.append("    • Bundle share 5–20% (low–moderate) / >20% / >27% / ≥50%")
-        lines.append("    • Socials missing / not updated on DexScreener")
-        lines.append("    • Similar wallets with large combined %")
-        lines.append("    • Known serial-rugger / rug signals (Rugcheck)")
-        lines.append(
-            "    • RugWatch flagged wallets (combined bag % on this token)"
-        )
-        lines.append("")
-        lines.append(
-            "  Warning: top priority will show if any of those conditions appear."
-        )
-    else:
-        lines.append("  TOP PRIORITY")
-        lines.append("  " + "-" * 40)
-        for i, a in enumerate(alerts, 1):
-            sev = (a.get("severity") or "info").upper()
-            lines.append(f"  {i}. [{sev}] {a.get('title')}")
-            detail = a.get("detail") or ""
-            # wrap-ish
-            while len(detail) > 90:
-                lines.append(f"     {detail[:90]}")
-                detail = detail[90:]
-            if detail:
-                lines.append(f"     {detail}")
-            items = a.get("items") or []
-            for it in items[:6]:
-                lines.append(f"     • {it}")
-            # RugWatch flagged: only the combined % (in title/detail) — no wallet dump
-            if a.get("hide_wallets") or a.get("id") == "rugwatch_flagged":
-                ftp = a.get("flagged_total_pct")
-                if ftp is not None:
-                    try:
-                        lines.append(
-                            f"     Flagged wallets hold {float(ftp):.2f}% total"
-                        )
-                    except (TypeError, ValueError):
-                        pass
-                lines.append("")
-                continue
-            wallets = a.get("wallets") or []
-            # Comprehensive lists (e.g. all >2%) print fully; others cap for brevity
-            max_w = 40 if a.get("list_all") or a.get("id") == "holders_over_2_pct" else 8
-            # Group by holding priority so e.g. [low priority] is a subtitle
-            # above the wallets — not glued next to each address line.
-            _pri_order = {
-                "critical": 0,
-                "high": 1,
-                "medium": 2,
-                "low": 3,
-                "unknown": 4,
-                "none": 5,
-                "": 6,
-            }
+    # Labels for zero/empty → “will show here”
+    placeholder_slots: list[tuple[str, str, list[str]]] = [
+        (
+            "liquidity_unlocked",
+            "Liquidity unlocked will show here",
+            ["liquidity_unlocked"],
+        ),
+        (
+            "holders_over_2_pct",
+            "Wallets holding over 2% will show here",
+            ["holders_over_2_pct"],
+        ),
+        (
+            "single_holder_over_5",
+            "Single holder over 5% will show here",
+            ["single_holder_over_5"],
+        ),
+        (
+            "similar_wallets_large",
+            "Similar wallets large hold % will show here",
+            ["similar_wallets_large"],
+        ),
+        (
+            "bundle_pct_threshold",
+            "Bundle share % will show here",
+            [
+                "bundle_pct_threshold",
+                "bundle_pct_5_20",
+                "bundle_pct_20",
+                "bundle_pct_27",
+                "bundle_pct_50",
+            ],
+        ),
+        (
+            "dexscreener_socials_missing",
+            "DexScreener socials missing will show here",
+            ["dexscreener_socials_missing"],
+        ),
+        (
+            "serial_rugger_link",
+            "Serial-rugger / rug signals will show here",
+            ["serial_rugger_link"],
+        ),
+        (
+            "rugwatch_flagged",
+            "Flagged wallets hold % will show here",
+            ["rugwatch_flagged"],
+        ),
+    ]
 
-            def _wallet_pri(w: dict[str, Any]) -> str:
-                pri = (w.get("hold_priority") or "").strip().lower()
-                if pri:
-                    return pri
+    checks = set(data.get("checks") or [])
+    notes = str(data.get("notes") or "")
+    pump_skip_lp = "Pump.fun" in notes or "PumpSwap" in notes
+
+    def _render_alert(a: dict[str, Any], index: int) -> None:
+        sev = (a.get("severity") or "info").upper()
+        lines.append(f"  {index}. [{sev}] {a.get('title')}")
+        detail = a.get("detail") or ""
+        while len(detail) > 90:
+            lines.append(f"     {detail[:90]}")
+            detail = detail[90:]
+        if detail:
+            lines.append(f"     {detail}")
+        for it in (a.get("items") or [])[:6]:
+            lines.append(f"     • {it}")
+        if a.get("hide_wallets") or a.get("id") == "rugwatch_flagged":
+            ftp = a.get("flagged_total_pct")
+            if ftp is not None:
                 try:
-                    pct_f = float(w.get("pct"))
+                    fval = float(ftp)
+                    if fval > 0:
+                        lines.append(f"     Flagged wallets hold {fval:.2f}% total")
+                    else:
+                        lines.append("     Flagged wallets hold % will show here")
                 except (TypeError, ValueError):
-                    return "unknown"
-                if 2.0 <= pct_f <= 5.0:
-                    return "low"
-                if pct_f < 10:
-                    return "medium"
-                if pct_f < 15:
-                    return "high"
-                if pct_f >= 15:
-                    return "critical"
-                return "unknown"
-
-            shown = wallets[:max_w]
-            groups: dict[str, list[dict[str, Any]]] = {}
-            for w in shown:
-                groups.setdefault(_wallet_pri(w), []).append(w)
-            ordered_keys = sorted(
-                groups.keys(), key=lambda k: _pri_order.get(k, 99)
-            )
-            for pri in ordered_keys:
-                # Subtitle above the wallet list for that band
-                if pri and pri not in {"none", "unknown"}:
-                    lines.append(f"     [{pri} priority]")
-                for w in groups[pri]:
-                    try:
-                        pct_s = f"{float(w.get('pct')):.2f}%"
-                    except (TypeError, ValueError):
-                        pct_s = "n/a"
-                    rank = w.get("rank")
-                    rank_s = f"#{rank} " if rank is not None else ""
-                    lab = f"  ({w.get('label')})" if w.get("label") else ""
-                    lines.append(
-                        f"     • {rank_s}holds {pct_s}{lab}  {w.get('wallet') or ''}"
-                    )
-            if len(wallets) > max_w:
-                lines.append(f"     … and {len(wallets) - max_w} more")
+                    lines.append("     Flagged wallets hold % will show here")
             lines.append("")
+            return
+        wallets = a.get("wallets") or []
+        if not wallets and a.get("id") in {
+            "holders_over_2_pct",
+            "single_holder_over_5",
+        }:
+            lines.append("     Wallet list will show here")
+            lines.append("")
+            return
+        max_w = 40 if a.get("list_all") or a.get("id") == "holders_over_2_pct" else 8
+        _pri_order = {
+            "critical": 0,
+            "high": 1,
+            "medium": 2,
+            "low": 3,
+            "unknown": 4,
+            "none": 5,
+            "": 6,
+        }
 
-    # When no flagged wallet still holds — simple placeholder only
-    if not has_flagged_alert:
-        lines.append("  FLAGGED WALLETS")
-        lines.append("  " + "-" * 40)
-        lines.append("  Flagged wallets will show here")
+        def _wallet_pri(w: dict[str, Any]) -> str:
+            pri = (w.get("hold_priority") or "").strip().lower()
+            if pri:
+                return pri
+            try:
+                pct_f = float(w.get("pct"))
+            except (TypeError, ValueError):
+                return "unknown"
+            if 2.0 <= pct_f <= 5.0:
+                return "low"
+            if pct_f < 10:
+                return "medium"
+            if pct_f < 15:
+                return "high"
+            if pct_f >= 15:
+                return "critical"
+            return "unknown"
+
+        shown = wallets[:max_w]
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for w in shown:
+            groups.setdefault(_wallet_pri(w), []).append(w)
+        for pri in sorted(groups.keys(), key=lambda k: _pri_order.get(k, 99)):
+            if pri and pri not in {"none", "unknown"}:
+                lines.append(f"     [{pri} priority]")
+            for w in groups[pri]:
+                try:
+                    pct_s = f"{float(w.get('pct')):.2f}%"
+                except (TypeError, ValueError):
+                    pct_s = "n/a"
+                rank = w.get("rank")
+                rank_s = f"#{rank} " if rank is not None else ""
+                lab = f"  ({w.get('label')})" if w.get("label") else ""
+                lines.append(
+                    f"     • {rank_s}holds {pct_s}{lab}  {w.get('wallet') or ''}"
+                )
+        if len(wallets) > max_w:
+            lines.append(f"     … and {len(wallets) - max_w} more")
         lines.append("")
 
+    lines.append("  ALERT SLOTS")
+    lines.append("  " + "-" * 40)
+    idx = 1
+    for _key, placeholder, id_aliases in placeholder_slots:
+        hit = None
+        for aid in id_aliases:
+            if aid in by_id:
+                hit = by_id[aid]
+                break
+        # LP unlock not in checks on pump pools
+        if _key == "liquidity_unlocked" and (
+            "liquidity_unlocked" not in checks or pump_skip_lp
+        ):
+            if not hit:
+                lines.append(
+                    f"  · Liquidity unlocked will show here"
+                    f"{' (skipped on Pump.fun / PumpSwap)' if pump_skip_lp else ''}"
+                )
+                continue
+        if hit:
+            _render_alert(hit, idx)
+            idx += 1
+        else:
+            lines.append(f"  · {placeholder}")
+
+    # Any extra alerts not covered by slots
+    covered = set()
+    for _, _, aliases in placeholder_slots:
+        covered.update(aliases)
+    for a in alerts:
+        aid = str(a.get("id") or "")
+        if aid and aid not in covered and not aid.startswith("bundle_pct"):
+            _render_alert(a, idx)
+            idx += 1
+
+    lines.append("")
     if data.get("notes"):
         lines.append(f"  Note: {data['notes']}")
     return "\n".join(lines) + "\n"

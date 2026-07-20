@@ -202,16 +202,17 @@ def format_bundles_text(data: dict[str, Any]) -> str:
 
     s = data.get("summary") or {}
     total_bp = s.get("total_bundle_pct")
-    total_line = (
-        f"  Total % bundles: {_pct(total_bp)}"
-        + (
-            f"  ({s.get('flagged_wallets')} flagged wallet(s))"
-            if s.get("flagged_wallets")
-            else ""
+    if total_bp is not None and float(total_bp or 0) > 0:
+        total_line = (
+            f"  Total % bundles: {_pct(total_bp)}"
+            + (
+                f"  ({s.get('flagged_wallets')} flagged wallet(s))"
+                if s.get("flagged_wallets")
+                else ""
+            )
         )
-        if total_bp is not None
-        else "  Total % bundles: n/a (no bundle wallets flagged)"
-    )
+    else:
+        total_line = "  Total % bundles will show here"
     src_list = s.get("sources_used") or []
     lines = [
         "BUNDLES / COORDINATED WALLETS",
@@ -219,9 +220,17 @@ def format_bundles_text(data: dict[str, Any]) -> str:
         f"  Sources:         {', '.join(src_list) if src_list else (data.get('source') or 'n/a')}",
         f"  Bundle risk:     {s.get('bundle_risk')}  (score {s.get('bundle_risk_score')}/100)",
         total_line,
-        f"  Clusters:        {s.get('multi_account_clusters')} multi-ATA wallet(s)",
-        f"  Similar groups:  {s.get('similar_size_groups')}",
     ]
+    cl_n = int(s.get("multi_account_clusters") or 0)
+    sg_n = int(s.get("similar_size_groups") or 0)
+    if cl_n > 0:
+        lines.append(f"  Clusters:        {cl_n} multi-ATA wallet(s)")
+    else:
+        lines.append("  Clusters will show here")
+    if sg_n > 0:
+        lines.append(f"  Similar groups:  {sg_n}")
+    else:
+        lines.append("  Similar groups will show here")
     # Total % of unique wallets that sit in similar-size groups (combined supply)
     sim_pct = s.get("similar_size_total_pct")
     sim_n = s.get("similar_size_wallet_count")
@@ -229,25 +238,33 @@ def format_bundles_text(data: dict[str, Any]) -> str:
         sim_pct, sim_n = _similar_size_total_percent(
             list(data.get("similar_size_groups") or [])
         )
-    if sim_pct is not None:
+    if sim_pct is not None and float(sim_pct or 0) > 0:
         lines.append(
             f"  Similar-size total: {_pct(sim_pct)}"
             + (f"  ({sim_n} wallet(s))" if sim_n else "")
         )
     else:
-        lines.append("  Similar-size total: n/a")
-    lines.extend(
-        [
-            f"  Insider accts:   {s.get('insider_accounts')}",
-            f"  Top10 ex-LP:     {_pct(s.get('top10_pct_excluding_known_programs'))}",
-            "",
-            "  Signals:",
-        ]
-    )
-    for sig in data.get("signals") or []:
-        sev = (sig.get("severity") or "info").upper()
-        lines.append(f"    [{sev}] {sig.get('title')}")
-        lines.append(f"           {sig.get('detail')}")
+        lines.append("  Similar-size total will show here")
+    ins_n = int(s.get("insider_accounts") or 0)
+    if ins_n > 0:
+        lines.append(f"  Insider accts:   {ins_n}")
+    else:
+        lines.append("  Insider accounts will show here")
+    top10 = s.get("top10_pct_excluding_known_programs")
+    if top10 is not None and float(top10 or 0) > 0:
+        lines.append(f"  Top10 ex-LP:     {_pct(top10)}")
+    else:
+        lines.append("  Top10 ex-LP will show here")
+    lines.append("")
+    lines.append("  Signals:")
+    sigs = list(data.get("signals") or [])
+    if sigs:
+        for sig in sigs:
+            sev = (sig.get("severity") or "info").upper()
+            lines.append(f"    [{sev}] {sig.get('title')}")
+            lines.append(f"           {sig.get('detail')}")
+    else:
+        lines.append("    Signals will show here")
 
     reports = data.get("source_reports") or {}
     if reports:
@@ -266,8 +283,8 @@ def format_bundles_text(data: dict[str, Any]) -> str:
                 lines.append(f"    {k} error: {v}")
 
     clusters = data.get("clusters") or []
+    lines.append("")
     if clusters:
-        lines.append("")
         lines.append("  Multi-account clusters (same wallet → several large ATAs):")
         for c in clusters[:10]:
             w = c.get("wallet") or ""
@@ -283,6 +300,8 @@ def format_bundles_text(data: dict[str, Any]) -> str:
                 lines.append(f"         ATA {a}")
             if len(accts) > 4:
                 lines.append(f"         … +{len(accts) - 4} more")
+    else:
+        lines.append("  Multi-account clusters will show here")
 
     groups = data.get("similar_size_groups") or []
     if groups:
@@ -318,15 +337,20 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             n_show = len(member_rows)
             if n_show > 6:
                 lines.append(f"         … +{n_show - 6} more")
+    else:
+        lines.append("")
+        lines.append("  Similar-size wallet groups will show here")
 
     insiders = data.get("insider_wallets") or []
+    lines.append("")
     if insiders:
-        lines.append("")
         lines.append("  Insider-flagged (Rugcheck):")
         for h in insiders[:10]:
             lines.append(
                 f"    #{h.get('rank')} {h.get('wallet')}  holds {_pct(h.get('pct_supply'))}"
             )
+    else:
+        lines.append("  Insider-flagged wallets will show here")
 
     suspects = data.get("suspect_wallets") or []
     if suspects:
@@ -350,6 +374,9 @@ def format_bundles_text(data: dict[str, Any]) -> str:
                 lines.append(f"      {reasons}")
         if len(suspects) > 12:
             lines.append(f"    … +{len(suspects) - 12} more")
+    else:
+        lines.append("")
+        lines.append("  Suspect wallets will show here")
 
     if data.get("notes"):
         lines.append("")

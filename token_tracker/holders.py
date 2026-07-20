@@ -1476,8 +1476,12 @@ def format_holders_text(data: dict[str, Any]) -> str:
 
     lines.append("")
     lines.append("  Flags (known LP / program wallets excluded):")
-    for f in data.get("flags") or []:
-        lines.append(f"    • {f}")
+    flags_list = list(data.get("flags") or [])
+    if flags_list:
+        for f in flags_list:
+            lines.append(f"    • {f}")
+    else:
+        lines.append("    Flags will show here")
     if data.get("filter_query"):
         lines.append("")
         lines.append(
@@ -1512,13 +1516,15 @@ def format_holders_text(data: dict[str, Any]) -> str:
             lines.append(f"         https://solscan.io/account/{w}")
 
     clusters = data.get("owner_clusters") or []
+    lines.append("")
     if clusters:
-        lines.append("")
         lines.append("  Multi-account clusters (same wallet, several large ATAs):")
         for c in clusters[:8]:
             lines.append(
                 f"    {c.get('wallet')} · {c.get('accounts')} accounts · bal {c.get('combined_balance')}"
             )
+    else:
+        lines.append("  Multi-account clusters will show here")
 
     # ── RugWatch flagged wallets ──────────────────────────────────────
     lines.extend(
@@ -1752,13 +1758,27 @@ def _format_rugwatch_flagged_section(
     )
     if prev_n < skipped_sold:
         prev_n = skipped_sold
+    still_line = (
+        f"  Still holding: {still_n}"
+        if still_n > 0
+        else "  Still holding will show here"
+    )
+    prev_line = (
+        f"  Previously holding: {prev_n}"
+        if prev_n > 0
+        else "  Previously holding will show here"
+    )
+    combined_line = (
+        f"  Combined bag: {total_s}{total_pri_s}"
+        if with_pct_n > 0 and total_pct > 0
+        else "  Combined flagged bag % will show here"
+    )
     lines: list[str] = [
         "",
-        f"  ── FLAGGED WALLETS (RugWatch) · combined {total_s}{total_pri_s} ──",
-        f"  Still holding: {still_n}",
-        f"  Previously holding: {prev_n}",
-        "  Previously holding increases when more flagged wallets sold ≥99% / left (saved to GitHub).",
-        "  Only still-holding wallets are listed below.",
+        "  ── FLAGGED WALLETS (RugWatch) ──",
+        still_line,
+        prev_line,
+        combined_line,
     ]
     if not rw:
         lines.append("  RugWatch: no data (scan holders to load).")
@@ -1794,9 +1814,7 @@ def _format_rugwatch_flagged_section(
     wallets = list(stats.get("wallets") or [])
     skipped_lp = int(stats.get("skipped_lp") or 0)
     if not wallets:
-        # Sold ≥99% (or none still holding) → simple placeholder + counts
         lines.append("  Flagged wallets will show here")
-        lines.append(f"  Still holding: {still_n} · Previously holding: {prev_n}")
         return lines
 
     lines.append(
