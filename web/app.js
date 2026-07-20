@@ -1383,6 +1383,7 @@ function refreshRuggersPanel(focusKey) {
     html += escHtml(activeKey);
   }
   html += "</div>";
+  // CA/mint shown once in the title above — do not repeat "Mint:" here
   html +=
     '<div class="rug-sub">First lookup: ' +
     escHtml(shortWhen(rec.first_ts)) +
@@ -1392,13 +1393,6 @@ function refreshRuggersPanel(focusKey) {
     (rec.lookup_count || 1) +
     " · Tracked wallets: " +
     Object.keys(rec.first_wallets || {}).length +
-    (mintAddr
-      ? ' · Mint: <a href="#" class="copy-mint mono" data-copy="' +
-        escHtml(mintAddr) +
-        '" title="Left-click to copy mint / CA">' +
-        escHtml(mintAddr) +
-        "</a>"
-      : "") +
     "</div>";
   html +=
     '<p class="rug-rules">Rules: only wallets that sold <strong>≥99%</strong> of their ' +
