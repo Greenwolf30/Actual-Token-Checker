@@ -835,7 +835,119 @@ What Logs is not
 
 
 --------------------------------------------------------------------------------
-15. COMMON QUESTIONS
+15. PREVENTING 429s, BREAKDOWNS, AND SLOW FETCHING
+--------------------------------------------------------------------------------
+
+  You cannot eliminate every slowdown, but you can stop most breakdowns and
+  429 storms with habits + plan choices. This applies to Actual Token Checker
+  (and RugWatch when Upload / flags use cloud).
+
+Why you get 429s and slowness
+  | Cause                              | What happens                                      |
+  |------------------------------------|---------------------------------------------------|
+  | Provider free tiers                 | Too many Helius / Birdeye / DexScreener calls →    |
+  |   (Helius, Birdeye, DexScreener)   | HTTP 429 “rate limited”                           |
+  | Many full Analyzes at once         | Free host does ~1 heavy job well; parallel clicks |
+  |                                    | stack and time out                                |
+  | Cold starts (free web sleep)       | First request after idle ~30–90s feels “broken”   |
+  | Large RugWatch cloud               | Pull / ATC flags load big JSON → slow or OOM      |
+  | Immediate retries after 429        | Makes the limit worse                             |
+
+  429 is usually the API provider refusing more traffic — not your laptop
+  and not “the app permanently broken.”
+
+Practical prevention (do these first)
+  1. One full Analyze at a time.
+     Wait until Holders / Bundles / Alerts finish before the next mint.
+     Parallel full runs burn Helius and DexScreener fastest.
+
+  2. Prefer Quick when you only need price / overview.
+     Full Analyze = holders + bundles + flags + more provider calls.
+     Use full only when you need that depth.
+
+  3. Do not spam Refresh / re-Analyze the same CA.
+     Re-running the same mint in a loop is a common 429 trigger.
+
+  4. Keep RugWatch cloud curated, not millions of wallets.
+     Ideal: hundreds – low tens of thousands.
+     Heavy: 100k–200k+ (slower Push/Pull, slower ATC flags).
+     Upload from Ruggers only when you care about those sellers.
+
+  5. Wake services before heavy work.
+     Open ATC (and RugWatch if you will Upload) once after idle, wait for
+     cold start, then Analyze / Upload. Avoid Upload while RugWatch is
+     still sleeping.
+
+  6. Site passcode on (WEB_API_TOKEN).
+     Cuts random traffic that burns your keys.
+
+  7. Do not share free-tier API URLs publicly.
+     Bots + many people clicking Analyze share the same rate limit.
+
+Keys / tiers (biggest real fix for 429s)
+  | Provider      | Free reality                         | Better for stability              |
+  |---------------|--------------------------------------|-----------------------------------|
+  | Helius        | Monthly caps + RPC rate limits       | Paid / higher tier if you Analyze |
+  |               |                                      | a lot (best ROI for 429s)         |
+  | Birdeye       | Tight rate limits                    | Optional; skip if not needed      |
+  | DexScreener   | Public, easy to 429                  | Full mint + wait; do not hammer   |
+  | GitHub cloud  | Fine for light Push/Pull             | PAT set; do not Push every few    |
+  |               |                                      | seconds                           |
+  | Render free   | Sleep + small RAM                    | Paid always-on if you hate cold   |
+  |               |                                      | starts                            |
+
+  Rule of thumb: if you hit 429s often, upgrade Helius before anything else.
+  Holders / deep work live there.
+
+Hosting habits (e.g. free Render)
+  - Treat free as personal, light use — not multi-user production.
+  - Expect sleep after ~15 minutes idle.
+  - Avoid two free services both cold at once (ATC + RugWatch): open
+    RugWatch first, then ATC Upload.
+  - Large cloud Pull on free can OOM / restart — pull when idle, not mid-
+    Analyze.
+
+Stable day-to-day workflow
+  1. Open ATC + RugWatch (wake cold starts).
+  2. One mint → Quick or full Analyze.
+  3. Wait for finish.
+  4. If Ruggers has new sellers → Upload once (do not spam).
+  5. Pause between mints (even 5–15 seconds helps public APIs).
+  6. Do not Pull cloud every few minutes.
+
+What “slow” usually is (not always a crash)
+  | Symptom                         | Likely cause                          |
+  |---------------------------------|---------------------------------------|
+  | 30–90s first load               | Free cold start                       |
+  | Holders empty / provider notes  | 429 or missing / exhausted API key    |
+  | Upload hangs                    | RugWatch asleep                       |
+  | Flags slow                      | Large cloud index / many shards       |
+  | Random timeouts                 | Concurrent Analyzes or free CPU limit |
+
+Optional upgrades if you want fewer headaches
+  1. Helius paid (best ROI for 429s).
+  2. Always-on host for ATC (and RugWatch if you Upload daily).
+  3. Use Logs instead of re-fetching the same mint.
+  4. (Optional code later) retry with backoff on 429, single-flight Analyze
+     queue, short TTL cache per mint.
+
+Short checklist
+  [ ] One Analyze at a time
+  [ ] Do not re-check the same CA every few seconds
+  [ ] Wake RugWatch before Upload
+  [ ] Passcode on
+  [ ] Cloud not huge unless you need it
+  [ ] Helius key valid and not over monthly cap
+  [ ] Accept free-tier cold starts or pay for always-on
+
+Bottom line
+  Breakdowns and 429s are mostly rate limits + free hosting + concurrent
+  full scans — not Logs size or UI colors. Steady one-at-a-time use +
+  Helius headroom + a smaller cloud prevents most of it.
+
+
+--------------------------------------------------------------------------------
+16. COMMON QUESTIONS
 --------------------------------------------------------------------------------
 
 Q: Can visitors add their own Helius keys?
@@ -844,6 +956,12 @@ A: No. Keys stay on the server. Gear = site passcode only (if enabled).
 Q: Why DexScreener 429 / bad response?
 A: Public rate limits. Wait, use Quick, use full mint, enable site passcode
    so fewer people spam Analyze. Cache reduces repeat hits.
+   See §15 for a full guide (429s, cold starts, cloud size, workflow).
+
+Q: Why is Analyze slow or timing out?
+A: Free host cold start, concurrent full Analyzes, provider 429s, or a large
+   RugWatch cloud. Follow §15 (one Analyze at a time, wake services, Helius
+   headroom).
 
 Q: Do view counts reset daily?
 A: Total views do not reset daily. “Unique today” does. Free hosting may
@@ -876,7 +994,7 @@ A: Yes. Lookup count does not matter. Sales are always measured against
 
 
 --------------------------------------------------------------------------------
-16. DISCLAIMER
+17. DISCLAIMER
 --------------------------------------------------------------------------------
 
   Heuristics only. Data can be wrong, late, or incomplete.
