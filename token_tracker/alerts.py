@@ -700,7 +700,8 @@ def format_alerts_text(data: dict[str, Any]) -> str:
     notes = str(data.get("notes") or "")
     pump_skip_lp = "Pump.fun" in notes or "PumpSwap" in notes
 
-    # Always keep base “will show here” text; append " · true" when the alert is active
+    # Slot keys that stay on one placeholder line when active (no full alert block).
+    # Placeholder already ends with "if value returns True" — do not append " · true".
     _append_true_keys = {
         "dexscreener_socials_missing",
         "serial_rugger_link",
@@ -819,13 +820,13 @@ def format_alerts_text(data: dict[str, Any]) -> str:
                 )
                 continue
         if hit and _key in _append_true_keys:
-            # Keep the same base message; append · true (and % for flagged if known)
-            line = f"  · {placeholder} · true"
+            # One "True" only (in "if value returns True"); optional % for flagged
+            line = f"  · {placeholder}"
             if _key == "rugwatch_flagged":
                 ftp = hit.get("flagged_total_pct")
                 try:
                     if ftp is not None and float(ftp) > 0:
-                        line = f"  · {placeholder} · true · {float(ftp):.2f}%"
+                        line = f"  · {placeholder} · {float(ftp):.2f}%"
                 except (TypeError, ValueError):
                     pass
             lines.append(line)
