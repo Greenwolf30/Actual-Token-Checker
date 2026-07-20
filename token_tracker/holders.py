@@ -1788,9 +1788,7 @@ def _format_rugwatch_flagged_section(
         + (f" ({cloud_shards} shards)" if cloud_shards > 1 else "")
         + f"  ·  matches on this mint/top: {rw.get('match_count', 0)}"
     )
-    lines.append(
-        "  Tags: [local] · [cloud] · [both]  ·  Click blue address → Solscan"
-    )
+    lines.append("  Tags: [local] · [cloud] · [both]")
     lines.append("")
 
     wallets = list(stats.get("wallets") or [])
