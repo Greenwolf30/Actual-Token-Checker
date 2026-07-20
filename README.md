@@ -45,6 +45,24 @@ python run_web.py
 
 Provider keys stay on the server only (never in `web/`).
 
+### RugWatch integration (flags + Ruggers Upload)
+
+| Feature | What it does |
+|--------|----------------|
+| **RugWatch** checkbox (yellow) | Analyze includes or skips flagged-wallet merge |
+| Top nav **RugWatch** (yellow, next to logo) | Opens RugWatch site (`web/config.js` → `rugwatchUrl`) |
+| Ruggers **Upload** (yellow) | Sends Creator / Similar / Single sellers to RugWatch + Push cloud |
+| Ruggers **Export** | Download JSON/txt for manual RugWatch import |
+| Holders flags | Merges **local** `rugwatch*.db` + **cloud** `RUGWATCH_WALLETS_URL`; tags `[local]` / `[cloud]` / `[both]` |
+
+Render ATC env (cloud flags):
+
+```text
+RUGWATCH_WALLETS_URL=https://raw.githubusercontent.com/Greenwolf30/RugWatch/main/data/wallets_index.json
+```
+
+Full user guide: `web/documentation.txt` (also `/docs.html` on the site).
+
 Public deploy notes: see `DEPLOY.md`.
 
 ## Layout
