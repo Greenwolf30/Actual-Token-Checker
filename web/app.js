@@ -2345,7 +2345,8 @@ function holdColorForPct(pct) {
   return null;
 }
 
-const LP_HOLD_COLOR = { cls: "wallet-hold-lp", color: "#d0d4dc" };
+// Dim off-white / light gray (not bright white)
+const LP_HOLD_COLOR = { cls: "wallet-hold-lp", color: "#9aa3b2" };
 
 /**
  * For each plain line, resolve the bag % that should color a wallet on that line.

@@ -1275,10 +1275,10 @@ def run_gui() -> None:
             foreground=PCT_CRITICAL,  # dim red >10%
             underline=True,
         )
-        # Known LP / liquidity pair — dim white
+        # Known LP / liquidity pair — muted off-white / gray (not bright white)
         box.tag_configure(
             "wallet_hold_lp",
-            foreground="#d0d4dc",
+            foreground="#9aa3b2",
             underline=True,
         )
         # Color tags must outrank default wallet_link blue
