@@ -1135,30 +1135,29 @@ a.copy-mint:hover,
   color: #9fd0ff;
 }
 
-/* Alerts: wallet address yellow when holds > 5% (inline style also set) */
+/* Wallet address hold colors — dim (match pct-medium / pct-critical) */
 .report a.wallet-link.wallet-hold-yellow,
 .logs-col-body a.wallet-link.wallet-hold-yellow,
 pre.report a.wallet-hold-yellow {
-  color: #e8c84a !important;
-  font-weight: 600;
+  color: #b8a85c !important; /* dim yellow >5% */
+  font-weight: 500;
 }
 .report a.wallet-link.wallet-hold-yellow:hover,
 .logs-col-body a.wallet-link.wallet-hold-yellow:hover,
 pre.report a.wallet-hold-yellow:hover {
-  color: #f0d86a !important;
+  color: #c9b96e !important;
 }
 
-/* Holders: wallet address red when holds > 10% (inline style also set) */
 .report a.wallet-link.wallet-hold-red,
 .logs-col-body a.wallet-link.wallet-hold-red,
 pre.report a.wallet-hold-red {
-  color: #e85d5d !important;
-  font-weight: 600;
+  color: #b86b66 !important; /* dim red >10% */
+  font-weight: 500;
 }
 .report a.wallet-link.wallet-hold-red:hover,
 .logs-col-body a.wallet-link.wallet-hold-red:hover,
 pre.report a.wallet-hold-red:hover {
-  color: #ff7a7a !important;
+  color: #c87f7a !important;
 }
 
 /* Custom scrollbar for report */

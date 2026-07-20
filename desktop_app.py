@@ -1264,16 +1264,15 @@ def run_gui() -> None:
             foreground="#6cb6ff",
             underline=True,
         )
-        # Alerts: wallet address yellow when holds > 5%
+        # Wallet address hold colors — dim (match pct_medium / pct_critical)
         box.tag_configure(
             "wallet_hold_yellow",
-            foreground="#e8c84a",
+            foreground=PCT_MEDIUM,  # dim yellow >5%
             underline=True,
         )
-        # Holders: wallet address red when holds > 10%
         box.tag_configure(
             "wallet_hold_red",
-            foreground="#e85d5d",
+            foreground=PCT_CRITICAL,  # dim red >10%
             underline=True,
         )
         # Color tags must outrank default wallet_link blue

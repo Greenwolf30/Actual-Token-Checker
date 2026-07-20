@@ -2335,8 +2335,9 @@ function isKnownLpContext(addr, plainLines, idx) {
  */
 function holdColorForPct(pct) {
   if (pct == null || !Number.isFinite(pct)) return null;
-  if (pct > 10) return { cls: "wallet-hold-red", color: "#e85d5d" };
-  if (pct > 5) return { cls: "wallet-hold-yellow", color: "#e8c84a" };
+  // Dim shades (match % priority palette — not bright)
+  if (pct > 10) return { cls: "wallet-hold-red", color: "#b86b66" };
+  if (pct > 5) return { cls: "wallet-hold-yellow", color: "#b8a85c" };
   return null;
 }
 
