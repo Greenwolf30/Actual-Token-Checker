@@ -77,13 +77,21 @@ body::before {
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  justify-content: flex-end; /* links flush to far right */
+  justify-content: flex-end; /* Docs/GitHub pack to the right */
   gap: 6px 10px;
   padding: 6px 10px;
   width: 100%;
 }
+/* Logo + RugWatch tab glued left */
+.nav-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: auto;
+  flex-shrink: 0;
+}
 .site-nav-inner .nav-brand {
-  margin-right: auto; /* logo stays left; links pack to the right */
+  margin-right: 0;
 }
 .nav-brand {
   display: inline-flex;
@@ -141,7 +149,7 @@ body::before {
   letter-spacing: 0.02em;
   border-color: rgba(245, 197, 66, 0.35);
   background: rgba(245, 197, 66, 0.08);
-  margin-right: 4px;
+  margin: 0;
 }
 .nav-link-rugwatch:hover {
   color: #ffe08a;
@@ -155,6 +163,30 @@ body::before {
 }
 .check-rugwatch input {
   accent-color: #f5c542;
+}
+
+/* Ruggers → yellow Upload to RugWatch cloud */
+.rug-upload-btn {
+  color: #1a1400 !important;
+  font-weight: 700 !important;
+  background: #f5c542 !important;
+  border: 1px solid #d4a017 !important;
+  border-radius: 7px;
+  padding: 5px 12px !important;
+}
+.rug-upload-btn:hover:not(:disabled) {
+  background: #ffe08a !important;
+  border-color: #f5c542 !important;
+}
+.rug-upload-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+.rug-section-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
 }
 
 /* Documentation page */

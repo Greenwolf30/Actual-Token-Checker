@@ -995,7 +995,7 @@ function renderRuggersWalletRow(row) {
  * @param {string} title
  * @param {string} hint
  * @param {object[]} rows
- * @param {string} [exportKey]  "creator" | "similar" | "single" — shows Export for RugWatch
+ * @param {string} [exportKey]  "creator" | "similar" | "single" — Export + yellow Upload
  */
 function renderRuggersSection(title, hint, rows, exportKey) {
   let body;
@@ -1005,15 +1005,24 @@ function renderRuggersSection(title, hint, rows, exportKey) {
     body = rows.map(renderRuggersWalletRow).join("");
   }
   const n = rows ? rows.length : 0;
-  const exportBtn =
-    exportKey
-      ? '<button type="button" class="ghost history-btn rug-export-btn" data-rug-export="' +
-        escHtml(exportKey) +
-        '" title="Download wallets for RugWatch Upload tab (JSON or one address per line)">' +
-        "Export" +
-        (n ? " (" + n + ")" : "") +
-        "</button>"
-      : "";
+  let actions = "";
+  if (exportKey) {
+    actions =
+      '<div class="rug-section-actions">' +
+      '<button type="button" class="ghost history-btn rug-export-btn" data-rug-export="' +
+      escHtml(exportKey) +
+      '" title="Download wallets as JSON/txt for RugWatch">' +
+      "Export" +
+      (n ? " (" + n + ")" : "") +
+      "</button>" +
+      '<button type="button" class="rug-upload-btn" data-rug-upload="' +
+      escHtml(exportKey) +
+      '" title="Import into local RugWatch DB and Push cloud (GitHub wallet list)">' +
+      "Upload" +
+      (n ? " (" + n + ")" : "") +
+      "</button>" +
+      "</div>";
+  }
   return (
     '<section class="rug-section">' +
     '<div class="rug-section-head">' +
@@ -1022,7 +1031,7 @@ function renderRuggersSection(title, hint, rows, exportKey) {
     ' <span class="rug-count">' +
     n +
     "</span></h3>" +
-    exportBtn +
+    actions +
     "</div>" +
     (hint ? '<p class="rug-section-hint">' + escHtml(hint) + "</p>" : "") +
     '<div class="rug-section-body">' +
@@ -1137,6 +1146,135 @@ function downloadRuggersSection(exportKey) {
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 
+function rugwatchApiBase() {
+  const cfg = window.ADTC_CONFIG || {};
+  let u = (cfg.rugwatchUrl || "http://127.0.0.1:8790/").trim();
+  if (!u) u = "http://127.0.0.1:8790/";
+  return u.replace(/\/+$/, "");
+}
+
+/**
+ * Upload Ruggers section wallets → RugWatch local DB + Push cloud (increases cloud count).
+ * Requires RugWatch website running (default http://127.0.0.1:8790) with GITHUB_TOKEN set.
+ */
+async function uploadRuggersSectionToCloud(exportKey) {
+  const rows = ruggersRowsForExportKey(exportKey);
+  if (!rows.length) {
+    alert(
+      "No wallets in this section to upload.\n\n" +
+        "Re-analyze the mint after sellers appear, then try Upload again."
+    );
+    return;
+  }
+  const section = ruggersExportLabel(exportKey);
+  const payload = buildRuggersExportPayload(exportKey, rows);
+  const base = rugwatchApiBase();
+  const ok = window.confirm(
+    "Upload " +
+      rows.length +
+      " wallet(s) from “" +
+      section +
+      "” to RugWatch?\n\n" +
+      "1) Import into RugWatch local DB\n" +
+      "2) Push cloud → GitHub (cloud wallet count increases)\n\n" +
+      "RugWatch must be running at:\n" +
+      base +
+      "\n\nContinue?"
+  );
+  if (!ok) return;
+
+  const btn = document.querySelector(
+    '[data-rug-upload="' + exportKey + '"]'
+  );
+  const prev = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Uploading…";
+  }
+
+  try {
+    const headers = { "Content-Type": "application/json", Accept: "application/json" };
+    // Optional: same passcode as RugWatch site token if configured
+    try {
+      const tok = localStorage.getItem("rugwatch_site_token") || "";
+      if (tok) headers["X-API-Token"] = tok;
+    } catch (_) {
+      /* ignore */
+    }
+
+    const up = await fetch(base + "/api/upload", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        format: payload.format,
+        wallets: payload.wallets,
+        source: "adtc_ruggers_" + section,
+        push_cloud: true,
+      }),
+    });
+    let upData = {};
+    try {
+      upData = await up.json();
+    } catch (_) {
+      throw new Error("RugWatch upload returned non-JSON (is " + base + " running?)");
+    }
+    if (!up.ok || !upData.ok) {
+      throw new Error(
+        upData.error || "Upload failed (HTTP " + up.status + "). Start RugWatch website."
+      );
+    }
+
+    // Explicit push if server did not auto-push
+    let cloud = upData.cloud || null;
+    if (!cloud || !cloud.ok) {
+      const push = await fetch(base + "/api/push-cloud", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({}),
+      });
+      try {
+        cloud = await push.json();
+      } catch (_) {
+        cloud = { ok: false, error: "Push cloud bad response" };
+      }
+      if (!push.ok || !cloud.ok) {
+        throw new Error(
+          (cloud && cloud.error) ||
+            "Imported locally but Push cloud failed. Open RugWatch and click Push cloud."
+        );
+      }
+    }
+
+    const imported = upData.imported != null ? upData.imported : rows.length;
+    const cloudN =
+      cloud.wallet_count != null ? cloud.wallet_count : cloud.count != null ? cloud.count : "?";
+    alert(
+      "Uploaded to RugWatch cloud.\n\n" +
+        "Section: " +
+        section +
+        "\nImported (this batch): " +
+        imported +
+        "\nCloud wallets now: " +
+        cloudN +
+        (cloud.cloud_shards != null ? "\nCloud shards: " + cloud.cloud_shards : "") +
+        "\n\nOpen RugWatch to confirm the blue cloud pill."
+    );
+  } catch (e) {
+    alert(
+      "RugWatch Upload failed:\n\n" +
+        String(e.message || e) +
+        "\n\nTips:\n• Run RugWatch: python run_web.py --port 8790\n" +
+        "• Set GITHUB_TOKEN in RugWatch .env\n" +
+        "• Check config.js rugwatchUrl"
+    );
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = prev || "Upload";
+    }
+  }
+}
+
 function wireRuggersExportButtons() {
   const body = $("ruggersBody");
   if (!body) return;
@@ -1144,6 +1282,12 @@ function wireRuggersExportButtons() {
     btn.addEventListener("click", () => {
       const key = btn.getAttribute("data-rug-export") || "";
       downloadRuggersSection(key);
+    });
+  });
+  body.querySelectorAll("[data-rug-upload]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const key = btn.getAttribute("data-rug-upload") || "";
+      uploadRuggersSectionToCloud(key);
     });
   });
 }
@@ -1221,8 +1365,8 @@ function refreshRuggersPanel(focusKey) {
     "<em>first-lookup</em> bag (or left the holder list) are listed. " +
     "Buy-back after a dump → <span class=\"rug-tag rug-tag-swing\">swing</span>. " +
     "Holders who never dumped 99% are ignored. " +
-    "Use <strong>Export</strong> on Creator / Similar / Single sections to download " +
-    "wallets for the RugWatch <strong>Upload</strong> tab.</p>";
+    "Use yellow <strong>Upload</strong> on Creator / Similar / Single to send wallets " +
+    "to RugWatch cloud (or <strong>Export</strong> to download a file).</p>";
 
   if (keys.length > 1) {
     html += '<label class="rug-mint-pick">Tracked mint ';
@@ -1248,19 +1392,19 @@ function refreshRuggersPanel(focusKey) {
 
   html += renderRuggersSection(
     "Creator (sold ≥99%)",
-    "Creator wallet only — listed if they sold ≥99% of their first-lookup bag or left the list. Export → RugWatch Upload.",
+    "Creator wallet only — listed if they sold ≥99% of their first-lookup bag or left the list. Yellow Upload → RugWatch cloud.",
     buckets.creatorSold,
     "creator"
   );
   html += renderRuggersSection(
     "Similar wallets (sellers)",
-    "Wallets that were in a similar-size group on first lookup and later sold ≥99% / dropped off. Export → RugWatch Upload.",
+    "Wallets that were in a similar-size group on first lookup and later sold ≥99% / dropped off. Yellow Upload → RugWatch cloud.",
     buckets.similarSellers,
     "similar"
   );
   html += renderRuggersSection(
     "Single wallets (sellers)",
-    "Individual top holders (not similar-group) that sold ≥99% of first bag or are no longer listed. Export → RugWatch Upload.",
+    "Individual top holders (not similar-group) that sold ≥99% of first bag or are no longer listed. Yellow Upload → RugWatch cloud.",
     buckets.singleSellers,
     "single"
   );
@@ -1282,7 +1426,7 @@ function refreshRuggersPanel(focusKey) {
     buckets.swings.length +
     " · Tracked mints: " +
     keys.length +
-    " · Export JSON from a section, then open RugWatch → Upload tab." +
+    " · Yellow Upload pushes that section to RugWatch cloud." +
     "</p>";
 
   if (body) body.innerHTML = html;
