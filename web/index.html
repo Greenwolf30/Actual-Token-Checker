@@ -171,7 +171,7 @@
         </section>
         <section class="panel panel-logs" id="panel-history" data-panel="history" role="tabpanel">
           <div class="history-bar">
-            <span class="history-bar-label">LOGS · last 20 searches on this browser</span>
+            <span class="history-bar-label">LOGS · last 200 searches on this browser</span>
             <div class="history-bar-actions">
               <button type="button" id="historyRefresh" class="ghost history-btn">Refresh</button>
               <button type="button" id="historyClear" class="ghost history-btn">Clear</button>
@@ -198,7 +198,7 @@
           </form>
           <!-- 3-column row layout: Overview | Holders | Bundles (filled by app.js) -->
           <div id="historyList" class="logs-list" aria-live="polite">
-            <p class="logs-empty">Run Analyze — successful searches are logged here (max 20).</p>
+            <p class="logs-empty">Run Analyze — successful searches are logged here (max 200). After 200, oldest are deleted on consecutive lookups.</p>
           </div>
           <!-- Keep for setPanelText fallback / accessibility hidden dump -->
           <pre class="report" id="text-history" hidden></pre>

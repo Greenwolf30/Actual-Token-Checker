@@ -6,7 +6,7 @@
 const TABS = ["overview", "holders", "bundles", "alerts", "maps", "about", "ruggers", "history"];
 const TOKEN_KEY = "adtc_site_token";
 const HISTORY_KEY = "adtc_history_log";
-const HISTORY_MAX = 20;
+const HISTORY_MAX = 200;
 const RUGGERS_KEY = "adtc_ruggers_track";
 /** Sold ≥ this fraction of first-lookup bag → list as seller (99%). */
 const RUGGERS_SOLD_FRAC = 0.99;
@@ -15,7 +15,7 @@ const RUGGERS_REMAIN_FRAC = 1 - RUGGERS_SOLD_FRAC;
 
 const $ = (id) => document.getElementById(id);
 
-// ── History log (browser localStorage, max 20) ───────────────────────
+// ── History log (browser localStorage, max 200; oldest dropped on later lookups) ─
 
 function loadHistoryLog() {
   try {
@@ -283,7 +283,9 @@ function formatHistoryLogText(items) {
   const lines = [
     entrySep,
     "  LOGS",
-    "  Last " + HISTORY_MAX + " token searches on this browser (oldest dropped when full)",
+    "  Last " +
+      HISTORY_MAX +
+      " token searches on this browser (oldest deleted on consecutive lookups when full)",
     entrySep,
     "",
   ];
@@ -371,8 +373,13 @@ function refreshHistoryPanel(highlightCa) {
 
   if (!rows.length) {
     list.innerHTML =
-      '<p class="logs-empty">Run Analyze — successful searches are logged here (max 20).<br/>' +
+      '<p class="logs-empty">Run Analyze — successful searches are logged here (max ' +
+      HISTORY_MAX +
+      ").<br/>" +
       "Each entry shows Overview · Holders · Bundles side by side.<br/>" +
+      "After " +
+      HISTORY_MAX +
+      " entries, oldest are deleted on consecutive lookups.<br/>" +
       "Use the search bar above to find a previous lookup by CA.</p>";
     return;
   }
@@ -2522,7 +2529,7 @@ function renderSections(data, query) {
     if (tab === "history" || tab === "ruggers") continue;
     if (sections[tab]) setPanelText(tab, sections[tab]);
   }
-  // Log successful Analyze into browser History (max 20)
+  // Log successful Analyze into browser History (max HISTORY_MAX; drop oldest)
   try {
     // Prefer full analyze (not quick-only empty holders) when possible
     const isQuick = !!(data.quick || data._phase === "quick");

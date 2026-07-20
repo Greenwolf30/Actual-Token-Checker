@@ -749,9 +749,9 @@ What each entry shows
   holders/bundles list, run Analyze again and open Holders / Bundles.
 
 How many entries
-  - Logs keeps up to 20 searches.
+  - Logs keeps up to 200 searches.
   - Newest is at the top.
-  - When you go past 20, the oldest entry is removed automatically.
+  - When you go past 200, the oldest entry is deleted automatically on each consecutive lookup.
 
 Where it lives
   Desktop

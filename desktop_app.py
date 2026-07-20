@@ -112,8 +112,8 @@ QUICK = ["BONK", "WIF", "POPCAT", "PEPE", "TRUMP", "FARTCOIN"]
 
 # Desktop search bar history (local file; not shipped in share package)
 SEARCH_HISTORY_MAX = 5
-# History Log tab: last N full analyzes (drops oldest when over limit)
-HISTORY_LOG_MAX = 20
+# History Log tab: last N full analyzes (drops oldest on consecutive lookups over limit)
+HISTORY_LOG_MAX = 200
 
 
 def _app_data_dir() -> Path:
@@ -256,7 +256,7 @@ def _fmt_pct_short(v: Any) -> str | None:
         return None
 
 
-# Cap text snapshots so 20 Logs entries stay reasonable on disk / browser storage
+# Cap text snapshots so 200 Logs entries stay reasonable on disk / browser storage
 _LOGS_HOLDERS_SNAP_MAX = 12_000
 _LOGS_BUNDLES_SNAP_MAX = 8_000
 
@@ -361,7 +361,7 @@ def build_history_log_entry(
 
 def push_history_log(entry: dict[str, Any]) -> list[dict[str, Any]]:
     """
-    Prepend entry; keep only HISTORY_LOG_MAX (drop oldest when over 20).
+    Prepend entry; keep only HISTORY_LOG_MAX (drop oldest when over 200).
     Returns the updated list (newest first).
     """
     if not entry:
@@ -1841,7 +1841,7 @@ def run_gui() -> None:
         "Run Analyze to load official coin facts and community tone.",
     )
 
-    # ── History Log tab (last 20 searches + download) ─────────────────
+    # ── History Log tab (last 200 searches + download) ────────────────
     history_frame = tk.Frame(notebook, bg=PANEL)
     notebook.add(history_frame, text="Logs")
     history_bar = tk.Frame(
@@ -1859,7 +1859,7 @@ def run_gui() -> None:
     ).pack(side="left", padx=(0, 10))
     tk.Label(
         hist_inner,
-        text=f"Keeps last {HISTORY_LOG_MAX} searches · oldest removed when full",
+        text=f"Keeps last {HISTORY_LOG_MAX} searches · oldest deleted on later lookups when full",
         bg=SURFACE,
         fg=MUTED,
         font=(FONT, 8),
