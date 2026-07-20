@@ -644,26 +644,60 @@ def _fuse_holder_sources(
             if base_extra.get("creator"):
                 holder_addrs.append(str(base_extra["creator"]))
             rw = fetch_rugwatch_flagged(
-                mint, holder_wallets=holder_addrs, min_score=0, limit=200
+                mint, holder_wallets=holder_addrs, min_score=0, limit=500
             )
+            # Combined bag % of flagged wallets still in the top-holder snapshot
+            try:
+                stats = collect_flagged_holder_pcts(
+                    rw, list(result.get("holders") or [])
+                )
+                rw = dict(rw)
+                rw["flagged_total_pct"] = float(stats.get("total_pct") or 0)
+                rw["flagged_with_pct_count"] = int(stats.get("with_pct_count") or 0)
+                rw["flagged_shown_count"] = int(stats.get("shown_count") or 0)
+            except Exception:  # noqa: BLE001
+                rw = dict(rw)
+                rw.setdefault("flagged_total_pct", 0.0)
+                rw.setdefault("flagged_with_pct_count", 0)
+
             result["rugwatch_flagged"] = rw
+            result["flagged_hold_pct"] = float(rw.get("flagged_total_pct") or 0)
+            result["flagged_with_pct_count"] = int(
+                rw.get("flagged_with_pct_count") or 0
+            )
             base_extra["rugwatch_flagged"] = {
                 "ok": rw.get("ok"),
                 "match_count": rw.get("match_count"),
                 "db_wallet_count": rw.get("db_wallet_count"),
+                "cloud_wallet_count": rw.get("cloud_wallet_count"),
                 "db_found": rw.get("db_found"),
+                "flagged_total_pct": rw.get("flagged_total_pct"),
+                "flagged_with_pct_count": rw.get("flagged_with_pct_count"),
                 # never surface local filesystem paths in holder meta
                 "error": rw.get("error"),
             }
-            if rw.get("ok") and rw.get("match_count"):
-                n = int(rw["match_count"])
+            if rw.get("ok") and (
+                rw.get("match_count") or (rw.get("flagged_with_pct_count") or 0) > 0
+            ):
+                n = int(rw.get("match_count") or rw.get("flagged_with_pct_count") or 0)
+                tot = float(rw.get("flagged_total_pct") or 0)
                 flags = list(result.get("flags") or [])
-                flags.insert(
-                    0,
-                    f"RugWatch: {n} flagged wallet(s) linked to this mint or in top holders",
-                )
+                if tot > 0:
+                    flags.insert(
+                        0,
+                        f"RugWatch: flagged wallets hold {tot:.2f}% of supply "
+                        f"({int(rw.get('flagged_with_pct_count') or 0)} wallet(s))",
+                    )
+                else:
+                    flags.insert(
+                        0,
+                        f"RugWatch: {n} flagged wallet(s) linked to this mint or top holders",
+                    )
                 result["flags"] = flags
-                if summary.get("concentration_risk") in {"lower", "moderate"}:
+                if tot > 0 and summary.get("concentration_risk") in {
+                    "lower",
+                    "moderate",
+                }:
                     summary["concentration_risk"] = "elevated"
                     result["summary"] = summary
         except Exception as exc:  # noqa: BLE001
@@ -674,6 +708,8 @@ def _fuse_holder_sources(
                 "in_top_holders": [],
                 "high_risk_db": [],
             }
+            result["flagged_hold_pct"] = 0.0
+            result["flagged_with_pct_count"] = 0
     else:
         result["rugwatch_flagged"] = {
             "ok": True,

@@ -103,10 +103,19 @@ def rugwatch_db_paths() -> list[Path]:
     return found
 
 
+# Public multi-shard cloud list (safe default for this project’s website).
+# Override with RUGWATCH_WALLETS_URL on the server if needed.
+_DEFAULT_WALLETS_URL = (
+    "https://raw.githubusercontent.com/Greenwolf30/RugWatch/main/data/wallets_index.json"
+)
+
+
 def _wallets_url() -> str | None:
     load_dotenv()
-    u = (os.environ.get("RUGWATCH_WALLETS_URL") or "").strip()
-    return u or None
+    # Explicit env wins (empty string = disable cloud list)
+    if "RUGWATCH_WALLETS_URL" in os.environ:
+        return (os.environ.get("RUGWATCH_WALLETS_URL") or "").strip() or None
+    return _DEFAULT_WALLETS_URL
 
 
 def _http_get_json(url: str, *, timeout: float = 20.0) -> Any:

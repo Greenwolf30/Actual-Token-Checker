@@ -10,6 +10,9 @@ services:
         value: "3.12.8"
       - key: WEB_TRUST_PROXY
         value: "1"
+      # RugWatch cloud list (flagged wallets in Holders + Alerts)
+      - key: RUGWATCH_WALLETS_URL
+        value: "https://raw.githubusercontent.com/Greenwolf30/RugWatch/main/data/wallets_index.json"
       - key: HELIUS_API_KEY
         sync: false
       - key: BIRDEYE_API_KEY

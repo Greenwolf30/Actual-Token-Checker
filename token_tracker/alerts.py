@@ -758,21 +758,63 @@ def _rugwatch_flagged_alert(holders_data: dict[str, Any]) -> dict[str, Any] | No
     Individual wallets stay on the Holders → Flagged wallets section — not here.
     """
     rw = holders_data.get("rugwatch_flagged") or {}
-    if not rw or not rw.get("ok") or rw.get("skipped") or rw.get("enabled") is False:
+    if not rw or rw.get("skipped") or rw.get("enabled") is False:
         return None
+    # Prefer precomputed totals from holders scan (same numbers as Holders tab)
+    total = holders_data.get("flagged_hold_pct")
+    with_pct = holders_data.get("flagged_with_pct_count")
     try:
         from .holders import collect_flagged_holder_pcts, holding_priority_label
     except Exception:  # noqa: BLE001
-        return None
+        holding_priority_label = None  # type: ignore[assignment]
+        collect_flagged_holder_pcts = None  # type: ignore[assignment]
 
-    stats = collect_flagged_holder_pcts(rw, list(holders_data.get("holders") or []))
-    total = float(stats.get("total_pct") or 0)
-    with_pct = int(stats.get("with_pct_count") or 0)
-    # Only alert when we can attribute real bag % on this mint
+    if total is None or with_pct is None:
+        if not rw.get("ok"):
+            return None
+        if collect_flagged_holder_pcts is None:
+            return None
+        stats = collect_flagged_holder_pcts(
+            rw, list(holders_data.get("holders") or [])
+        )
+        total = float(stats.get("total_pct") or 0)
+        with_pct = int(stats.get("with_pct_count") or 0)
+    else:
+        try:
+            total = float(total or 0)
+        except (TypeError, ValueError):
+            total = 0.0
+        try:
+            with_pct = int(with_pct or 0)
+        except (TypeError, ValueError):
+            with_pct = 0
+
+    # Also accept values stashed on rugwatch_flagged
+    if with_pct <= 0:
+        try:
+            with_pct = int(rw.get("flagged_with_pct_count") or 0)
+        except (TypeError, ValueError):
+            pass
+    if total <= 0:
+        try:
+            total = float(rw.get("flagged_total_pct") or 0)
+        except (TypeError, ValueError):
+            total = 0.0
+
+    match_n = 0
+    try:
+        match_n = int(rw.get("match_count") or 0)
+    except (TypeError, ValueError):
+        match_n = 0
+
+    # Need at least one flagged wallet with a known bag % on this token
     if with_pct <= 0 or total <= 0:
         return None
 
-    total_pri = holding_priority_label(total)
+    if holding_priority_label is not None:
+        total_pri = holding_priority_label(total)
+    else:
+        total_pri = "unknown"
     if total >= 15:
         severity = "critical"
     elif total >= 10:
