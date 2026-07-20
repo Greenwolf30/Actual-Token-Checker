@@ -178,6 +178,24 @@
               <button type="button" id="historyDownload" class="ghost history-btn">Download</button>
             </div>
           </div>
+          <!-- CA search for previous lookups (same idea as Ruggers) -->
+          <form class="rug-ca-search logs-ca-search" id="logsCaForm" autocomplete="off">
+            <div class="rug-ca-search-row">
+              <span class="rug-ca-icon" aria-hidden="true">⌕</span>
+              <input
+                id="logsCaSearch"
+                class="mono rug-ca-input"
+                type="search"
+                name="ca"
+                placeholder="Search previous lookup by CA…"
+                spellcheck="false"
+                autocomplete="off"
+                enterkeyhint="search"
+              />
+              <button type="submit" id="logsCaGo" class="rug-ca-go">Search</button>
+            </div>
+            <p id="logsCaStatus" class="rug-ca-status" hidden></p>
+          </form>
           <!-- 3-column row layout: Overview | Holders | Bundles (filled by app.js) -->
           <div id="historyList" class="logs-list" aria-live="polite">
             <p class="logs-empty">Run Analyze — successful searches are logged here (max 20).</p>

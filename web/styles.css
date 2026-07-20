@@ -702,10 +702,22 @@ button, .ghost, .primary {
     text-align: left;
   }
 }
+/* Logs CA search (under history bar) */
+.logs-ca-search {
+  flex: none;
+  width: 100%;
+  max-width: none;
+  margin: 0 0 10px;
+  margin-left: 0;
+}
+.logs-ca-search .rug-ca-status {
+  text-align: left;
+}
 .logs-entry.logs-hit {
   outline: 1px solid rgba(180, 150, 60, 0.55);
   background: rgba(180, 150, 60, 0.08);
   border-radius: 8px;
+  scroll-margin-top: 12px;
 }
 a.copy-mint,
 .copy-mint {

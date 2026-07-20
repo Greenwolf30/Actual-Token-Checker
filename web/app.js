@@ -329,6 +329,34 @@ function escHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
+function historyEntryMatchesCa(e, hl) {
+  if (!hl || !e) return false;
+  const eAddr = String(e.address || "")
+    .trim()
+    .toLowerCase();
+  const eQ = String(e.query || "")
+    .trim()
+    .toLowerCase();
+  const eSym = String(e.symbol || "")
+    .trim()
+    .toLowerCase();
+  const eName = String(e.name || "")
+    .trim()
+    .toLowerCase();
+  if (eAddr && (eAddr === hl || eAddr.includes(hl) || (hl.length >= 6 && hl.includes(eAddr)))) {
+    return true;
+  }
+  if (eQ && (eQ === hl || eQ.includes(hl) || (hl.length >= 6 && hl.includes(eQ)))) {
+    return true;
+  }
+  // Allow $SYMBOL or name search for convenience
+  if (eSym && (eSym === hl || eSym === hl.replace(/^\$/, "") || ("$" + eSym) === hl)) {
+    return true;
+  }
+  if (eName && eName === hl) return true;
+  return false;
+}
+
 function refreshHistoryPanel(highlightCa) {
   const list = $("historyList");
   const dump = $("text-history");
@@ -344,27 +372,36 @@ function refreshHistoryPanel(highlightCa) {
   if (!rows.length) {
     list.innerHTML =
       '<p class="logs-empty">Run Analyze — successful searches are logged here (max 20).<br/>' +
-      "Each entry shows Overview · Holders · Bundles side by side.</p>";
+      "Each entry shows Overview · Holders · Bundles side by side.<br/>" +
+      "Use the search bar above to find a previous lookup by CA.</p>";
     return;
   }
 
   const hl = normalizeCaQuery(highlightCa || "").toLowerCase();
   const sep =
     "[[============================================================]]";
+  let matchCount = 0;
+  if (hl) {
+    rows.forEach((e) => {
+      if (historyEntryMatchesCa(e, hl)) matchCount += 1;
+    });
+  }
   let html =
     '<p class="logs-meta">Entries: ' +
     rows.length +
     " / " +
     HISTORY_MAX +
-    " · Overview | Holders | Bundles in a row</p>";
+    " · Overview | Holders | Bundles in a row" +
+    (hl
+      ? " · Search hits: " +
+        matchCount +
+        (matchCount ? " (highlighted)" : " — none")
+      : " · Search by CA above") +
+    "</p>";
 
+  let firstHitId = true;
   rows.forEach((e, idx) => {
-    const eAddr = String(e.address || "").trim().toLowerCase();
-    const eQ = String(e.query || "").trim().toLowerCase();
-    const isHit =
-      hl &&
-      ((eAddr && (eAddr === hl || eAddr.includes(hl) || hl.includes(eAddr))) ||
-        (eQ && (eQ === hl || eQ.includes(hl) || hl.includes(eQ))));
+    const isHit = historyEntryMatchesCa(e, hl);
     // Single separator between entries (not double)
     html +=
       '<div class="logs-sep" aria-hidden="true">' + escHtml(sep) + "</div>";
@@ -405,11 +442,14 @@ function refreshHistoryPanel(highlightCa) {
       subHtml += "—";
     }
 
+    const hitId = isHit && firstHitId;
+    if (hitId) firstHitId = false;
+
     html +=
       '<article class="logs-entry' +
       (isHit ? " logs-hit" : "") +
       '"' +
-      (isHit ? ' id="logs-hit-entry"' : "") +
+      (hitId ? ' id="logs-hit-entry"' : "") +
       ">" +
       '<h3 class="logs-entry-head">' +
       escHtml(String(idx + 1).padStart(2, "0") + ". " + title) +
@@ -487,16 +527,112 @@ function clearHistoryLog() {
   }
   if (!window.confirm("Clear all Logs entries on this browser?")) return;
   saveHistoryLog([]);
+  setLogsCaStatus("", false);
+  const inp = $("logsCaSearch");
+  if (inp) inp.value = "";
   refreshHistoryPanel();
   showError("");
 }
 
+function setLogsCaStatus(msg, ok) {
+  const el = $("logsCaStatus");
+  if (!el) return;
+  if (!msg) {
+    el.hidden = true;
+    el.textContent = "";
+    el.classList.remove("ok");
+    return;
+  }
+  el.hidden = false;
+  el.textContent = msg;
+  el.classList.toggle("ok", !!ok);
+}
+
+/**
+ * Logs search bar: find a previous Analyze by mint/CA (or symbol).
+ * Highlights matching entries and scrolls to the first hit.
+ */
+function logsFindByCa() {
+  const input = $("logsCaSearch");
+  const q = input ? String(input.value || "").trim() : "";
+  if (!q) {
+    setLogsCaStatus("Paste a mint / CA into the search bar first.", false);
+    refreshHistoryPanel();
+    return;
+  }
+  const hit = findHistoryEntryByCa(q);
+  if (hit && hit.entry) {
+    const e = hit.entry;
+    const n = loadHistoryLog().filter((row) =>
+      historyEntryMatchesCa(row, normalizeCaQuery(q).toLowerCase())
+    ).length;
+    setLogsCaStatus(
+      "Found" +
+        (n > 1 ? " " + n + " matches" : "") +
+        (e.symbol ? " · $" + e.symbol : "") +
+        (e.address ? " · " + String(e.address).slice(0, 12) + "…" : "") +
+        (e.ts
+          ? " · " + String(e.ts).slice(0, 19).replace("T", " ") + " UTC"
+          : "") +
+        " (entry #" +
+        (hit.index + 1) +
+        ")",
+      true
+    );
+    refreshHistoryPanel(e.address || normalizeCaQuery(q));
+    return;
+  }
+  setLogsCaStatus(
+    "No previous lookup for that CA in Logs (this browser, last " +
+      HISTORY_MAX +
+      "). Run Analyze first.",
+    false
+  );
+  refreshHistoryPanel(normalizeCaQuery(q));
+}
+
+function wireLogsCaSearch() {
+  const form = $("logsCaForm");
+  if (form) {
+    form.onsubmit = (ev) => {
+      ev.preventDefault();
+      logsFindByCa();
+    };
+  }
+  const go = $("logsCaGo");
+  const inp = $("logsCaSearch");
+  if (go) {
+    go.onclick = (ev) => {
+      ev.preventDefault();
+      logsFindByCa();
+    };
+  }
+  if (inp) {
+    inp.onkeydown = (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        logsFindByCa();
+      }
+    };
+  }
+}
+
 function initHistory() {
   refreshHistoryPanel();
+  wireLogsCaSearch();
   const r = $("historyRefresh");
   const c = $("historyClear");
   const d = $("historyDownload");
-  if (r) r.addEventListener("click", () => refreshHistoryPanel());
+  if (r)
+    r.addEventListener("click", () => {
+      const inp = $("logsCaSearch");
+      const q = inp ? String(inp.value || "").trim() : "";
+      if (q) logsFindByCa();
+      else {
+        setLogsCaStatus("", false);
+        refreshHistoryPanel();
+      }
+    });
   if (c) c.addEventListener("click", () => clearHistoryLog());
   if (d) d.addEventListener("click", () => downloadHistoryLog());
 }
@@ -1604,21 +1740,28 @@ function findRuggersKeyByCa(query, store) {
   return best;
 }
 
-/** Find a previous Logs (history) entry by CA — most recent match. */
+/** Find a previous Logs (history) entry by CA — most recent match first. */
 function findHistoryEntryByCa(query) {
   const raw = normalizeCaQuery(query);
   if (!raw) return null;
   const ql = raw.toLowerCase();
   const rows = loadHistoryLog();
+  // Exact address / query first
   for (let i = 0; i < rows.length; i++) {
     const e = rows[i] || {};
-    const addr = String(e.address || "").trim().toLowerCase();
-    const qy = String(e.query || "").trim().toLowerCase();
-    if (addr && (addr === ql || addr.includes(ql) || ql.includes(addr))) {
-      return { index: i, entry: e };
-    }
-    if (qy && (qy === ql || qy.includes(ql) || ql.includes(qy))) {
-      return { index: i, entry: e };
+    const addr = String(e.address || "")
+      .trim()
+      .toLowerCase();
+    const qy = String(e.query || "")
+      .trim()
+      .toLowerCase();
+    if (addr && addr === ql) return { index: i, entry: e };
+    if (qy && qy === ql) return { index: i, entry: e };
+  }
+  // Partial CA / symbol (same rules as highlight)
+  for (let i = 0; i < rows.length; i++) {
+    if (historyEntryMatchesCa(rows[i], ql)) {
+      return { index: i, entry: rows[i] };
     }
   }
   return null;
