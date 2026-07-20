@@ -1537,36 +1537,49 @@ async function uploadRuggersSectionToCloud(exportKey) {
         : upData.skipped != null
           ? upData.skipped
           : 0;
+    const skipCloud = upData.skipped_cloud != null ? upData.skipped_cloud : "?";
+    const skipLocal = upData.skipped_local != null ? upData.skipped_local : "?";
+    const cloudChecked = upData.cloud_checked === true ? "yes" : "no / failed";
     const cloudN =
       cloud && cloud.wallet_count != null
         ? cloud.wallet_count
         : cloud && cloud.count != null
           ? cloud.count
           : "?";
+    const cloudBefore =
+      cloud && cloud.cloud_before != null ? cloud.cloud_before : "?";
+    const addedCloud =
+      cloud && cloud.added_from_local != null ? cloud.added_from_local : "?";
     const pushed =
       cloud && cloud.skipped_push
-        ? "no (all duplicates — push skipped)"
+        ? "skipped"
         : cloud && cloud.ok
-          ? "yes"
-          : "n/a";
+          ? "merge-push OK"
+          : cloud && cloud.error
+            ? "failed: " + cloud.error
+            : "n/a";
     alert(
-      (imported > 0
-        ? "Uploaded to RugWatch.\n\n"
-        : "No new wallets to upload.\n\n") +
+      "RugWatch upload result\n\n" +
         "Section: " +
         section +
-        "\nNew imported: " +
+        "\nNew into local DB: " +
         imported +
-        "\nAlready in cloud/local (skipped): " +
-        skipEx +
-        "\nCloud wallets now: " +
+        "\nSkipped (already on cloud list): " +
+        skipCloud +
+        "\nSkipped (already on this RugWatch server DB): " +
+        skipLocal +
+        "\nCloud address list checked: " +
+        cloudChecked +
+        "\nCloud before merge: " +
+        cloudBefore +
+        "\nCloud now: " +
         cloudN +
+        "\nAdded to cloud from local: " +
+        addedCloud +
         "\nCloud push: " +
         pushed +
-        (cloud && cloud.cloud_shards != null
-          ? "\nCloud shards: " + cloud.cloud_shards
-          : "") +
-        "\n\nDuplicates are never saved twice."
+        (cloud && cloud.note ? "\n\n" + cloud.note : "") +
+        "\n\nNote: already-local wallets still re-sync to GitHub via merge-push."
     );
   } catch (e) {
     alert(
