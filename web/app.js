@@ -2271,6 +2271,76 @@ function extractHoldPctFromPlain(line) {
 }
 
 /**
+ * Known LP / AMM / program vault addresses (match holders.py _KNOWN_OWNERS).
+ * Never color-code these as risk bags.
+ */
+const KNOWN_LP_PROGRAM_ADDRS = new Set([
+  "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1",
+  "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK",
+  "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",
+  "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+  "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+  "11111111111111111111111111111111",
+  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+  "ComputeBudget111111111111111111111111111111",
+  "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+  "5quBtoiQqxF9Jv6KYKctB59NT3gtJD2Y65kdnB1Uev3h",
+  "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C",
+  "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",
+  "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB",
+  "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG",
+  "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+  "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+  "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s",
+]);
+
+/** Label / text hints for LP · liquidity pair · AMM vaults (holders.py _LP_LABEL_RE). */
+const LP_LABEL_RE =
+  /\b(lp|liquidity|pool|vault|amm|clmm|dlmm|cpmm|raydium|orca|meteora|whirlpool|pumpswap|pump\.fun|pumpfun|openbook|serum|phoenix|lifinity|invariant|saber|mercurial|market\s*maker|authority|program)\b/i;
+
+/**
+ * True if this row context is a known LP / liquidity pair / program vault.
+ * Checks the address and bracket labels on the same / neighboring lines.
+ */
+function isKnownLpContext(addr, plainLines, idx) {
+  if (addr && KNOWN_LP_PROGRAM_ADDRS.has(addr)) return true;
+  const parts = [];
+  for (let j = Math.max(0, idx - 1); j <= Math.min(plainLines.length - 1, idx + 1); j++) {
+    parts.push(String(plainLines[j] || ""));
+  }
+  const blob = parts.join(" ");
+  // Explicit labels like [Liquidity pair] or (Raydium Authority)
+  if (/\[[^\]]*(?:lp|liquidity|pool|vault|amm|raydium|orca|meteora|whirlpool|pump)[^\]]*\]/i.test(blob)) {
+    return true;
+  }
+  if (/\(\s*(?:lp|liquidity\s*pair|raydium|orca|meteora|whirlpool|pumpswap)[^)]*\)/i.test(blob)) {
+    return true;
+  }
+  if (/\bliquidity\s*pair\b/i.test(blob)) return true;
+  if (/\bknown\s*program\b/i.test(blob)) return true;
+  // Bracket label body matches LP heuristics
+  const labels = blob.match(/\[([^\]]+)\]/g) || [];
+  for (const lab of labels) {
+    if (LP_LABEL_RE.test(lab)) return true;
+  }
+  return false;
+}
+
+/**
+ * Shared wallet-address hold colors (Holders / Alerts / Bundles):
+ *   > 10% → red
+ *   > 5%  → yellow
+ * Known LP / liquidity pairs are never colored.
+ */
+function holdColorForPct(pct) {
+  if (pct == null || !Number.isFinite(pct)) return null;
+  if (pct > 10) return { cls: "wallet-hold-red", color: "#e85d5d" };
+  if (pct > 5) return { cls: "wallet-hold-yellow", color: "#e8c84a" };
+  return null;
+}
+
+/**
  * For each plain line, resolve the bag % that should color a wallet on that line.
  * - Same line % wins
  * - Else previous line % (Holders: rank line then address line)
@@ -2334,17 +2404,15 @@ function walletLinkHtml(addr, holdClass, holdColor) {
 
 /**
  * linkify with optional wallet-address hold coloring.
- * mode: null | "alerts" (>5% yellow) | "holders" (>10% red)
+ * colorHold true → Holders / Alerts / Bundles shared scheme:
+ *   >5% yellow · >10% red · skip known LP / liquidity pairs
  */
-function linkify(text, mode) {
+function linkify(text, colorHold) {
   if (!text) return "";
   // Never show Solscan URL rows; addresses stay and become clickable below
   const plain = stripSolscanUrlLines(text);
   const plainLines = plain.split("\n");
-  const linePcts =
-    mode === "alerts" || mode === "holders"
-      ? resolveLineHoldPcts(plainLines)
-      : null;
+  const linePcts = colorHold ? resolveLineHoldPcts(plainLines) : null;
 
   const escLines = plainLines.map((line) =>
     line
@@ -2368,20 +2436,7 @@ function linkify(text, mode) {
       );
     });
 
-    let holdClass = null;
-    let holdColor = null;
-    if (linePcts) {
-      const pct = linePcts[idx];
-      if (pct != null && Number.isFinite(pct)) {
-        if (mode === "alerts" && pct > 5) {
-          holdClass = "wallet-hold-yellow";
-          holdColor = "#e8c84a";
-        } else if (mode === "holders" && pct > 10) {
-          holdClass = "wallet-hold-red";
-          holdColor = "#e85d5d";
-        }
-      }
-    }
+    const linePct = linePcts ? linePcts[idx] : null;
 
     // Solana base58 wallets → clickable Solscan (address text stays)
     html = html.replace(
@@ -2389,7 +2444,21 @@ function linkify(text, mode) {
       (full, prefix, chunk) => {
         const linked = chunk.replace(
           /\b([1-9A-HJ-NP-Za-km-z]{32,44})\b/g,
-          (addr) => walletLinkHtml(addr, holdClass, holdColor)
+          (addr) => {
+            let holdClass = null;
+            let holdColor = null;
+            if (colorHold && linePct != null) {
+              // Skip known LP / liquidity pair / program vaults
+              if (!isKnownLpContext(addr, plainLines, idx)) {
+                const hc = holdColorForPct(linePct);
+                if (hc) {
+                  holdClass = hc.cls;
+                  holdColor = hc.color;
+                }
+              }
+            }
+            return walletLinkHtml(addr, holdClass, holdColor);
+          }
         );
         return prefix + linked;
       }
@@ -2480,8 +2549,8 @@ function colorWalletHolderPcts(html) {
  */
 function formatHoldersRichHtml(text) {
   if (!text) return "";
-  // Color wallet addresses during linkify (inline style — always visible)
-  let html = linkify(text, "holders");
+  // Wallet addresses: >5% yellow · >10% red · skip known LP (inline style)
+  let html = linkify(text, true);
   html = colorWalletHolderPcts(html);
   html = colorHoldingAmounts(html);
   return html;
@@ -2509,7 +2578,8 @@ function colorBundlesSelectivePcts(html) {
 
 function formatBundlesRichHtml(text) {
   if (!text) return "";
-  let html = linkify(text);
+  // Same address hold colors as Holders/Alerts (>5% yellow · >10% red · skip LP)
+  let html = linkify(text, true);
   html = colorBundlesSelectivePcts(html);
   html = colorHoldingAmounts(html);
   return html;
@@ -2521,16 +2591,16 @@ function setPanelText(tab, text) {
   const raw = text || "(empty)";
   let html;
   if (tab === "holders") {
-    // No Solscan URL rows; clickable addresses; yellow amounts; % colors (not Top1/5/10)
-    // Wallet address red when bag > 10% (inline style in linkify)
+    // Wallet address: >5% yellow · >10% red · skip known LP
     html = formatHoldersRichHtml(raw);
   } else if (tab === "alerts") {
-    // Wallet address yellow when bag > 5% (inline style in linkify)
-    html = linkify(raw, "alerts");
+    // Same hold-color scheme as Holders / Bundles
+    html = linkify(raw, true);
     html = colorWalletHolderPcts(html);
     html = colorHoldingAmounts(html);
   } else if (tab === "bundles") {
     // Summary + each wallet group % colored; Top10 ex-LP uncolored; bal yellow
+    // + wallet address hold colors
     html = formatBundlesRichHtml(raw);
   } else {
     html = linkify(raw);
