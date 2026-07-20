@@ -719,11 +719,13 @@ button, .ghost, .primary {
   border-radius: 8px;
   scroll-margin-top: 12px;
 }
-/* Yellow copyable CA — Ruggers + Logs only (not #sumAddr top bar) */
+/* Yellow copyable CA — summary bar + Ruggers + Logs */
 a.copy-mint,
+.copy-mint,
 .rug-title a.copy-mint,
 .logs-entry-sub a.copy-mint,
-.logs-ca-copy {
+.logs-ca-copy,
+#sumAddr.copy-mint {
   color: #c4a84a !important;
   cursor: pointer;
   text-decoration: underline;
@@ -731,17 +733,12 @@ a.copy-mint,
   font-weight: 500;
 }
 a.copy-mint:hover,
+.copy-mint:hover,
 .rug-title a.copy-mint:hover,
 .logs-entry-sub a.copy-mint:hover,
-.logs-ca-copy:hover {
+.logs-ca-copy:hover,
+#sumAddr.copy-mint:hover {
   color: #d4bc6a !important;
-}
-/* Top-of-page mint: plain, not copyable */
-#sumAddr {
-  color: var(--text-muted, #9aa3b2);
-  cursor: default;
-  text-decoration: none;
-  font-weight: 400;
 }
 
 .ruggers-body {
