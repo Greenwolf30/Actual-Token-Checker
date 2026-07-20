@@ -485,7 +485,17 @@ def _fuse_holder_sources(
     if not by_wallet:
         return _empty("No holders from Helius/RPC, Rugcheck, Solscan, or Birdeye.")
 
-    # Known program labels
+    # Per-mint Pump.fun bonding curve / PumpSwap pool (not global program IDs)
+    pump_lp: dict[str, str] = {}
+    try:
+        from .pumpfun import fetch_pump_lp_accounts, is_pump_mint
+
+        if is_pump_mint(mint):
+            pump_lp = fetch_pump_lp_accounts(mint) or {}
+    except Exception:  # noqa: BLE001
+        pump_lp = {}
+
+    # Known program / LP labels
     for w, row in by_wallet.items():
         if w in _KNOWN_OWNERS:
             row["is_known_program"] = True
@@ -493,6 +503,14 @@ def _fuse_holder_sources(
         if pair_address and w == pair_address:
             row["is_known_program"] = True
             row["label"] = row.get("label") or "Liquidity pair"
+        if w in pump_lp:
+            row["is_known_program"] = True
+            # Prefer specific pump LP label when unlabeled or generic
+            cur = (row.get("label") or "").strip()
+            if not cur or cur.lower() in {"liquidity pair", "unknown"}:
+                row["label"] = pump_lp[w]
+            elif pump_lp[w].lower() not in cur.lower():
+                row["label"] = cur + " · " + pump_lp[w]
         if row.get("insider"):
             lab = row.get("label") or ""
             if "insider" not in lab.lower():

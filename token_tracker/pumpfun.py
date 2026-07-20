@@ -26,6 +26,49 @@ def is_pump_mint(address: str | None) -> bool:
     return address.lower().endswith(PUMP_MINT_SUFFIX)
 
 
+def fetch_pump_lp_accounts(mint: str) -> dict[str, str]:
+    """
+    Map of wallet address → LP label for this pump mint.
+
+    Bonding curve / PumpSwap pool accounts are *per-mint PDAs*, not the global
+    program IDs in holders._KNOWN_OWNERS — so large LP bags look like whales
+    unless we resolve them from Pump.fun coin metadata.
+    """
+    m = (mint or "").strip()
+    if not m or not is_pump_mint(m):
+        return {}
+    out: dict[str, str] = {}
+    data: Any = None
+    for url in (
+        f"https://frontend-api-v3.pump.fun/coins/{m}",
+        f"https://frontend-api.pump.fun/coins/{m}",
+    ):
+        try:
+            data = get_json(url, timeout=10.0, retries=0)
+            if isinstance(data, dict) and (
+                data.get("bonding_curve")
+                or data.get("associated_bonding_curve")
+                or data.get("pump_swap_pool")
+            ):
+                break
+        except Exception:  # noqa: BLE001
+            data = None
+    if not isinstance(data, dict):
+        return {}
+
+    def _add(addr: Any, label: str) -> None:
+        a = (str(addr) if addr is not None else "").strip()
+        if a and len(a) >= 32:
+            out[a] = label
+
+    _add(data.get("bonding_curve"), "Pump.fun bonding curve")
+    _add(data.get("associated_bonding_curve"), "Pump.fun bonding curve (ATA)")
+    _add(data.get("pump_swap_pool"), "PumpSwap pool (liquidity)")
+    # Some payloads use raydium_pool after migrate
+    _add(data.get("raydium_pool"), "Raydium pool (liquidity)")
+    return out
+
+
 def classify_graduation(
     token_address: str | None,
     *,
