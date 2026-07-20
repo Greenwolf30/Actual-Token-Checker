@@ -590,49 +590,74 @@ button, .ghost, .primary {
 .panel-ruggers.active {
   display: flex;
 }
-/* Ruggers: find previous mint by CA */
+/* Ruggers: search bar for previous token lookup by CA */
 .rug-ca-search {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 10px;
-  padding: 10px 12px;
   margin: 0 0 10px;
+  padding: 10px 12px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
-.rug-ca-label {
-  font-size: 0.78rem;
-  color: var(--text-secondary);
-  font-weight: 600;
-  width: 100%;
+.rug-ca-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 6px 4px 10px;
 }
-@media (min-width: 720px) {
-  .rug-ca-label {
-    width: auto;
-  }
+.rug-ca-search-row:focus-within {
+  border-color: rgba(180, 150, 60, 0.55);
+  box-shadow: 0 0 0 2px rgba(180, 150, 60, 0.12);
+}
+.rug-ca-icon {
+  color: var(--text-muted);
+  font-size: 1rem;
+  flex-shrink: 0;
+  line-height: 1;
 }
 .rug-ca-input {
   flex: 1;
-  min-width: 200px;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
+  min-width: 0;
+  background: transparent;
+  border: none;
   color: var(--text);
-  border-radius: 7px;
-  padding: 8px 10px;
-  font-size: 0.82rem;
-}
-.rug-ca-input:focus {
+  padding: 8px 4px;
+  font-size: 0.84rem;
   outline: none;
-  border-color: rgba(245, 197, 66, 0.55);
+}
+.rug-ca-input::placeholder {
+  color: var(--text-muted);
+}
+.rug-ca-go {
+  flex-shrink: 0;
+  background: rgba(180, 150, 60, 0.2);
+  color: #c4a84a;
+  border: 1px solid rgba(180, 150, 60, 0.4);
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.rug-ca-go:hover {
+  background: rgba(180, 150, 60, 0.32);
+  color: #d4bc6a;
 }
 .rug-ca-status {
+  display: block;
+  margin: 8px 2px 0;
   font-size: 0.78rem;
   color: var(--warn);
 }
 .rug-ca-status.ok {
   color: var(--good);
+}
+.logs-entry.logs-hit {
+  outline: 1px solid rgba(180, 150, 60, 0.55);
+  background: rgba(180, 150, 60, 0.08);
+  border-radius: 8px;
 }
 a.copy-mint,
 .copy-mint {

@@ -329,7 +329,7 @@ function escHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
-function refreshHistoryPanel() {
+function refreshHistoryPanel(highlightCa) {
   const list = $("historyList");
   const dump = $("text-history");
   const rows = loadHistoryLog();
@@ -348,6 +348,7 @@ function refreshHistoryPanel() {
     return;
   }
 
+  const hl = normalizeCaQuery(highlightCa || "").toLowerCase();
   const sep =
     "[[============================================================]]";
   let html =
@@ -358,6 +359,12 @@ function refreshHistoryPanel() {
     " · Overview | Holders | Bundles in a row</p>";
 
   rows.forEach((e, idx) => {
+    const eAddr = String(e.address || "").trim().toLowerCase();
+    const eQ = String(e.query || "").trim().toLowerCase();
+    const isHit =
+      hl &&
+      ((eAddr && (eAddr === hl || eAddr.includes(hl) || hl.includes(eAddr))) ||
+        (eQ && (eQ === hl || eQ.includes(hl) || hl.includes(eQ))));
     // Single separator between entries (not double)
     html +=
       '<div class="logs-sep" aria-hidden="true">' + escHtml(sep) + "</div>";
@@ -399,7 +406,11 @@ function refreshHistoryPanel() {
     }
 
     html +=
-      '<article class="logs-entry">' +
+      '<article class="logs-entry' +
+      (isHit ? " logs-hit" : "") +
+      '"' +
+      (isHit ? ' id="logs-hit-entry"' : "") +
+      ">" +
       '<h3 class="logs-entry-head">' +
       escHtml(String(idx + 1).padStart(2, "0") + ". " + title) +
       "</h3>" +
@@ -426,6 +437,16 @@ function refreshHistoryPanel() {
   });
 
   list.innerHTML = html;
+  if (hl) {
+    const hitEl = document.getElementById("logs-hit-entry");
+    if (hitEl) {
+      try {
+        hitEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      } catch (_) {
+        /* ignore */
+      }
+    }
+  }
 }
 
 function downloadHistoryLog() {
@@ -1461,41 +1482,84 @@ function refreshRuggersPanel(focusKey) {
   wireCopyMintClicks(body);
 }
 
-/** Find a previously tracked Ruggers mint key by full or partial CA / mint. */
+/** Normalize pasted CA (strip chain: prefix, whitespace, zero-width chars). */
+function normalizeCaQuery(query) {
+  let q = String(query || "")
+    .trim()
+    .replace(/[\u200B-\u200D\uFEFF]/g, "");
+  // chain:address or solana/ADDRESS styles
+  if (q.includes(":")) {
+    const parts = q.split(":");
+    q = parts[parts.length - 1].trim();
+  }
+  if (q.includes("/")) {
+    const parts = q.split("/");
+    q = parts[parts.length - 1].trim();
+  }
+  return q;
+}
+
+/** Find previously tracked Ruggers mint key by full or partial CA. */
 function findRuggersKeyByCa(query, store) {
-  const q = String(query || "").trim();
-  if (!q || !store) return null;
-  const ql = q.toLowerCase();
+  const raw = normalizeCaQuery(query);
+  if (!raw || !store) return null;
+  const ql = raw.toLowerCase();
   const keys = Object.keys(store);
-  // Exact address or key match
   for (const k of keys) {
     const rec = store[k] || {};
     const addr = String(rec.address || "").trim();
-    if (addr && addr.toLowerCase() === ql) return k;
-    if (k.toLowerCase() === ql) return k;
-    if (k.toLowerCase().endsWith(":" + ql)) return k;
+    const al = addr.toLowerCase();
+    const kl = k.toLowerCase();
+    if (al && al === ql) return k;
+    if (kl === ql) return k;
+    if (kl.endsWith(":" + ql)) return k;
+    // key may be "solana:MINT"
+    const keyAddr = kl.includes(":") ? kl.split(":").pop() : kl;
+    if (keyAddr === ql) return k;
   }
-  // Partial (paste short or mid string) — prefer longest address match
   let best = null;
   let bestLen = 0;
   if (ql.length >= 6) {
     for (const k of keys) {
       const rec = store[k] || {};
       const addr = String(rec.address || "").trim().toLowerCase();
+      const keyAddr = k.toLowerCase().includes(":")
+        ? k.toLowerCase().split(":").pop()
+        : k.toLowerCase();
       if (addr && (addr.includes(ql) || ql.includes(addr))) {
-        if (addr.length > bestLen) {
+        if (addr.length >= bestLen) {
           best = k;
           bestLen = addr.length;
         }
-      } else if (k.toLowerCase().includes(ql)) {
-        if (k.length > bestLen) {
+      } else if (keyAddr && (keyAddr.includes(ql) || ql.includes(keyAddr))) {
+        if (keyAddr.length >= bestLen) {
           best = k;
-          bestLen = k.length;
+          bestLen = keyAddr.length;
         }
       }
     }
   }
   return best;
+}
+
+/** Find a previous Logs (history) entry by CA — most recent match. */
+function findHistoryEntryByCa(query) {
+  const raw = normalizeCaQuery(query);
+  if (!raw) return null;
+  const ql = raw.toLowerCase();
+  const rows = loadHistoryLog();
+  for (let i = 0; i < rows.length; i++) {
+    const e = rows[i] || {};
+    const addr = String(e.address || "").trim().toLowerCase();
+    const qy = String(e.query || "").trim().toLowerCase();
+    if (addr && (addr === ql || addr.includes(ql) || ql.includes(addr))) {
+      return { index: i, entry: e };
+    }
+    if (qy && (qy === ql || qy.includes(ql) || ql.includes(qy))) {
+      return { index: i, entry: e };
+    }
+  }
+  return null;
 }
 
 function setRuggersCaStatus(msg, ok) {
@@ -1512,31 +1576,52 @@ function setRuggersCaStatus(msg, ok) {
   el.classList.toggle("ok", !!ok);
 }
 
+/**
+ * Search bar: find a token you previously looked up by CA.
+ * Prefers Ruggers tracking data; falls back to Logs history snapshots.
+ */
 function ruggersFindByCa() {
   const input = $("ruggersCaSearch");
   const q = input ? String(input.value || "").trim() : "";
   if (!q) {
-    setRuggersCaStatus("Paste a mint / CA first.", false);
+    setRuggersCaStatus("Paste a mint / CA into the search bar first.", false);
     return;
   }
   const store = loadRuggersStore();
   const key = findRuggersKeyByCa(q, store);
-  if (!key) {
+  if (key) {
+    const rec = store[key] || {};
     setRuggersCaStatus(
-      "No previous Ruggers lookup for that CA in this browser.",
-      false
+      "Found Ruggers data" +
+        (rec.symbol ? " · $" + rec.symbol : "") +
+        (rec.address ? " · " + String(rec.address).slice(0, 10) + "…" : "") +
+        " · lookups " +
+        (rec.lookup_count || 1),
+      true
     );
+    refreshRuggersPanel(key);
+    switchTab("ruggers");
     return;
   }
-  const rec = store[key] || {};
+  // Fallback: previous Analyze in Logs
+  const hit = findHistoryEntryByCa(q);
+  if (hit && hit.entry) {
+    const e = hit.entry;
+    setRuggersCaStatus(
+      "Found in Logs (previous Analyze)" +
+        (e.symbol ? " · $" + e.symbol : "") +
+        (e.address ? " · " + String(e.address).slice(0, 10) + "…" : "") +
+        " — opening Logs. No Ruggers sell-track for this CA yet (needs full Analyze baseline).",
+      true
+    );
+    switchTab("history");
+    refreshHistoryPanel(e.address || normalizeCaQuery(q));
+    return;
+  }
   setRuggersCaStatus(
-    "Found" +
-      (rec.symbol ? " $" + rec.symbol : "") +
-      (rec.address ? " · " + String(rec.address).slice(0, 8) + "…" : ""),
-    true
+    "No previous lookup for that CA in this browser (Ruggers or Logs).",
+    false
   );
-  refreshRuggersPanel(key);
-  switchTab("ruggers");
 }
 
 function copyTextToClipboard(text, onOk) {
@@ -1671,9 +1756,19 @@ function initRuggers() {
   if (r) r.addEventListener("click", () => refreshRuggersPanel());
   if (cm) cm.addEventListener("click", () => clearRuggersMint());
   if (ca) ca.addEventListener("click", () => clearRuggersAll());
+  const form = $("ruggersCaForm");
+  if (form) {
+    form.addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      ruggersFindByCa();
+    });
+  }
   const go = $("ruggersCaGo");
   const inp = $("ruggersCaSearch");
-  if (go) go.addEventListener("click", () => ruggersFindByCa());
+  if (go) go.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    ruggersFindByCa();
+  });
   if (inp) {
     inp.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter") {
