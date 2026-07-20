@@ -491,23 +491,58 @@ def _ruggers_track_snapshot(
                     pass
                 break
 
-    # RugWatch-flagged addresses that touch this mint / top holders
-    # (client Ruggers tab puts these in their own section — not with new similar sellers)
+    # RugWatch-flagged addresses that actually touch THIS mint only.
+    # Never dump global high_risk_db / all_flagged — those are unrelated wallets.
+    # Client Ruggers: only after ≥99% sell do they enter Flagged section.
     flagged_addresses: list[dict[str, Any]] = []
     rw = holders.get("rugwatch_flagged") if isinstance(holders.get("rugwatch_flagged"), dict) else {}
     if rw and rw.get("ok") and not rw.get("skipped"):
         seen_f: set[str] = set()
-        for group_key in ("in_top_holders", "linked_to_mint", "all_flagged", "high_risk_db"):
+        # in_top_holders = currently on this mint's holder list + on RugWatch
+        # linked_to_mint = historically linked to this mint in RugWatch DB
+        # also include any flagged wallet already in our tracked rows (creator/similar)
+        for group_key in ("in_top_holders", "linked_to_mint"):
             for w in list(rw.get(group_key) or []):
                 if not isinstance(w, dict):
                     continue
                 addr = (w.get("address") or w.get("wallet") or "").strip()
                 if not addr or addr in seen_f:
                     continue
-                # Prefer wallets tied to this mint / top list; also keep if in our tracked rows
-                on_mint = bool(w.get("on_this_mint") or w.get("in_top_holders"))
-                in_rows = addr in seen
-                if not on_mint and not in_rows and group_key == "all_flagged":
+                seen_f.add(addr)
+                flagged_addresses.append(
+                    {
+                        "wallet": addr,
+                        "risk_score": w.get("risk_score"),
+                        "label": w.get("label") or w.get("role"),
+                        "origin": w.get("origin") or w.get("tag") or w.get("location"),
+                        "on_this_mint": bool(
+                            w.get("on_this_mint") or group_key == "linked_to_mint"
+                        ),
+                        "in_top_holders": bool(
+                            w.get("in_top_holders") or group_key == "in_top_holders"
+                        ),
+                    }
+                )
+                if len(flagged_addresses) >= 80:
+                    break
+            if len(flagged_addresses) >= 80:
+                break
+        # Tracked rows that match RugWatch but were not in the two lists above
+        # (e.g. similar-only wallets). Match against in_top style maps if present.
+        if len(flagged_addresses) < 80:
+            by_addr: dict[str, dict[str, Any]] = {}
+            for group_key in ("in_top_holders", "linked_to_mint", "all_flagged"):
+                for w in list(rw.get(group_key) or []):
+                    if not isinstance(w, dict):
+                        continue
+                    a = (w.get("address") or w.get("wallet") or "").strip()
+                    if a and a not in by_addr:
+                        by_addr[a] = w
+            for addr in list(seen):
+                if addr in seen_f:
+                    continue
+                w = by_addr.get(addr)
+                if not w:
                     continue
                 seen_f.add(addr)
                 flagged_addresses.append(
@@ -517,13 +552,11 @@ def _ruggers_track_snapshot(
                         "label": w.get("label") or w.get("role"),
                         "origin": w.get("origin") or w.get("tag") or w.get("location"),
                         "on_this_mint": bool(w.get("on_this_mint")),
-                        "in_top_holders": bool(w.get("in_top_holders")),
+                        "in_top_holders": True,
                     }
                 )
                 if len(flagged_addresses) >= 80:
                     break
-            if len(flagged_addresses) >= 80:
-                break
 
     return {
         "ok": bool(holders.get("ok")) and bool(wallet_rows),

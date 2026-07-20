@@ -8,6 +8,8 @@ const TOKEN_KEY = "adtc_site_token";
 const HISTORY_KEY = "adtc_history_log";
 const HISTORY_MAX = 200;
 const RUGGERS_KEY = "adtc_ruggers_track";
+/** Bump when Flagged-wallet rules change so sticky junk is wiped once. */
+const RUGGERS_RULES_VERSION = 3;
 /** Sold ≥ this fraction of first-lookup bag → list as seller (99%). */
 const RUGGERS_SOLD_FRAC = 0.99;
 /** Remaining bag must be ≤ (1 - RUGGERS_SOLD_FRAC) of first_pct to count as sold. */
@@ -652,15 +654,95 @@ function loadRuggersStore() {
     const raw = localStorage.getItem(RUGGERS_KEY);
     if (!raw) return {};
     const data = JSON.parse(raw);
-    return data && typeof data === "object" && !Array.isArray(data) ? data : {};
+    if (!data || typeof data !== "object" || Array.isArray(data)) return {};
+    return migrateRuggersStore(data);
   } catch {
     return {};
   }
 }
 
+/**
+ * One-time cleanup: old builds dumped global RugWatch wallets into
+ * flagged_known and left them sticky forever. Wipe Flagged section data
+ * when rules version is behind; keep first_wallets / sellers / swings.
+ *
+ * Also strip any flagged_sellers entry that was not created under the
+ * current rules (entered_via + rules_v), so junk cannot survive.
+ */
+function migrateRuggersStore(store) {
+  const meta = store.__meta && typeof store.__meta === "object" ? store.__meta : {};
+  const ver = Number(meta.rules_version) || 0;
+  let changed = ver < RUGGERS_RULES_VERSION;
+
+  const next = {};
+  for (const [key, rec] of Object.entries(store)) {
+    if (key === "__meta") continue;
+    if (!rec || typeof rec !== "object") continue;
+    const copy = { ...rec };
+
+    if (ver < RUGGERS_RULES_VERSION) {
+      // Full Flagged wipe on rules bump
+      copy.flagged_known = {};
+      copy.flagged_sellers = {};
+      copy.rugwatch_known = {};
+      if (copy.status && typeof copy.status === "object") {
+        const st = {};
+        for (const [w, row] of Object.entries(copy.status)) {
+          if (!row || typeof row !== "object") continue;
+          st[w] = { ...row, is_flagged: false };
+        }
+        copy.status = st;
+      }
+      copy.rules_version = RUGGERS_RULES_VERSION;
+      changed = true;
+    } else {
+      // Even on current version: drop invalid sticky Flagged rows
+      const fs = copy.flagged_sellers;
+      if (fs && typeof fs === "object") {
+        const cleaned = {};
+        for (const [w, metaW] of Object.entries(fs)) {
+          if (
+            metaW &&
+            typeof metaW === "object" &&
+            metaW.entered_via === "sold_while_flagged" &&
+            Number(metaW.rules_v) >= RUGGERS_RULES_VERSION
+          ) {
+            cleaned[w] = metaW;
+          } else {
+            changed = true;
+          }
+        }
+        if (Object.keys(cleaned).length !== Object.keys(fs).length) {
+          copy.flagged_sellers = cleaned;
+          copy.flagged_known = { ...cleaned };
+          changed = true;
+        }
+      }
+    }
+    next[key] = copy;
+  }
+  next.__meta = {
+    ...meta,
+    rules_version: RUGGERS_RULES_VERSION,
+    migrated_at: meta.migrated_at || new Date().toISOString(),
+    last_flagged_scrub: changed ? new Date().toISOString() : meta.last_flagged_scrub,
+  };
+  if (changed) {
+    try {
+      localStorage.setItem(RUGGERS_KEY, JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+  }
+  return next;
+}
+
 function saveRuggersStore(store) {
   try {
-    localStorage.setItem(RUGGERS_KEY, JSON.stringify(store || {}));
+    const s = store && typeof store === "object" ? store : {};
+    if (!s.__meta || typeof s.__meta !== "object") s.__meta = {};
+    s.__meta.rules_version = RUGGERS_RULES_VERSION;
+    localStorage.setItem(RUGGERS_KEY, JSON.stringify(s));
   } catch {
     /* quota / private mode */
   }
@@ -950,19 +1032,29 @@ function computeSoldState(first, current) {
 /**
  * Update (or seed) tracking for one mint from a successful full Analyze.
  * First lookup freezes baseline; later lookups recompute sellers / swings.
+ *
+ * Flagged wallets (Ruggers):
+ *  - Only wallets that are on RugWatch AND were on this mint AND sold ≥99%
+ *  - Sticky on this mint until they buy back → Swing + unflag/remove cloud
+ *  - Brand-new mints start empty (no pre-seeded flagged list)
  */
 function processRuggersFromAnalyze(data) {
   const snap = extractRuggersSnapshot(data);
   if (!snap || !snap.address) return null;
   const key = mintKeyFromToken(snap.address, snap.chain);
-  if (!key) return null;
+  if (!key || key === "__meta") return null;
 
   const store = loadRuggersStore();
   let rec = store[key];
+  if (rec && (rec === store.__meta || !rec.first_wallets && rec.rules_version && !rec.address)) {
+    rec = null;
+  }
   const now = snap.ts || new Date().toISOString();
+  const isFirstLookup =
+    !rec || !rec.first_wallets || !Object.keys(rec.first_wallets).length;
 
-  if (!rec || !rec.first_wallets || !Object.keys(rec.first_wallets).length) {
-    // First lookup baseline
+  if (isFirstLookup) {
+    // First lookup baseline — all Ruggers sections stay empty until later sells
     rec = {
       address: snap.address,
       chain: snap.chain,
@@ -974,8 +1066,11 @@ function processRuggersFromAnalyze(data) {
       lookup_count: 1,
       first_wallets: {},
       first_similar_groups: snap.similar_groups || [],
-      // status filled after compare
       status: {},
+      // RugWatch hits seen while on this mint (not the Flagged section by itself)
+      rugwatch_known: {},
+      // Sold ≥99% while flagged — sticky Flagged section until buy-back swing
+      flagged_sellers: {},
     };
     for (const [w, info] of Object.entries(snap.wallets || {})) {
       rec.first_wallets[w] = {
@@ -1001,9 +1096,12 @@ function processRuggersFromAnalyze(data) {
     if (snap.symbol) rec.symbol = snap.symbol;
     if (snap.name) rec.name = snap.name;
     if (snap.creator) rec.creator = snap.creator;
-    // Merge any newly seen wallets into baseline only if never tracked
-    // (user asked first-lookup track; still capture new similar members that appear later
-    //  only for "not listed" of original set — do NOT expand first set with late whales)
+    if (!rec.rugwatch_known || typeof rec.rugwatch_known !== "object") {
+      rec.rugwatch_known = {};
+    }
+    if (!rec.flagged_sellers || typeof rec.flagged_sellers !== "object") {
+      rec.flagged_sellers = {};
+    }
   }
 
   // Current listed map
@@ -1017,11 +1115,60 @@ function processRuggersFromAnalyze(data) {
     };
   }
 
+  // Learn similar-group membership from this snap + freeze it on first_wallets.
+  // Bug fix: after a sell, wallet drops off the holder list → current snapshot
+  // no longer marks in_similar, so Similar count shrank every re-Analyze.
+  // Once similar (first, previous status, or any later snap), stay similar.
+  if (!rec.first_wallets || typeof rec.first_wallets !== "object") {
+    rec.first_wallets = {};
+  }
+  for (const [w, info] of Object.entries(snap.wallets || {})) {
+    if (!info || !info.in_similar) continue;
+    if (rec.first_wallets[w]) {
+      rec.first_wallets[w].in_similar = true;
+    }
+  }
+  // Also from similar_groups members on this snap
+  for (const g of snap.similar_groups || []) {
+    for (const w of g.wallets || []) {
+      if (!w) continue;
+      if (rec.first_wallets[w]) rec.first_wallets[w].in_similar = true;
+    }
+  }
+
+  // Merge RugWatch knowledge for wallets that touch this mint only
+  // (server already filters; never treat as Flagged section until ≥99% sell)
+  const rwKnown =
+    rec.rugwatch_known && typeof rec.rugwatch_known === "object"
+      ? rec.rugwatch_known
+      : {};
+  for (const [fw, meta] of Object.entries(snap.flagged_known || {})) {
+    if (!fw) continue;
+    // Only remember if on this mint track (in baseline or currently listed)
+    // OR already a sticky flagged seller for this mint
+    const onTrack =
+      !!(rec.first_wallets && rec.first_wallets[fw]) ||
+      !!current[fw] ||
+      !!(rec.flagged_sellers && rec.flagged_sellers[fw]);
+    if (!onTrack) continue;
+    rwKnown[fw] = {
+      ...(rwKnown[fw] || {}),
+      ...(meta || {}),
+      last_seen: now,
+    };
+  }
+  rec.rugwatch_known = rwKnown;
+
   // Recompute status for every first-lookup wallet
   const status = rec.status && typeof rec.status === "object" ? rec.status : {};
+  const flaggedSellers =
+    rec.flagged_sellers && typeof rec.flagged_sellers === "object"
+      ? { ...rec.flagged_sellers }
+      : {};
+  const unflagNow = [];
+
   for (const [w, first] of Object.entries(rec.first_wallets || {})) {
     const cur = current[w] || { listed: false, pct_supply: 0, balance: 0 };
-    // If not in current snapshot at all → not listed
     if (!current[w]) {
       cur.listed = false;
       cur.pct_supply = 0;
@@ -1029,7 +1176,7 @@ function processRuggersFromAnalyze(data) {
     }
     const soldState = computeSoldState(first, cur);
     const prev = status[w] || {};
-    let tag = "holding"; // default ignore in UI unless sold/swing
+    let tag = "holding";
     let everSold = !!prev.ever_sold;
 
     if (soldState.sold) {
@@ -1040,13 +1187,77 @@ function processRuggersFromAnalyze(data) {
       const hasBag =
         (cur.pct_supply != null && Number(cur.pct_supply) > 0) ||
         (cur.balance != null && Number(cur.balance) > 0);
-      if (hasBag || (soldState.remaining_of_first != null && soldState.remaining_of_first > RUGGERS_REMAIN_FRAC)) {
+      if (
+        hasBag ||
+        (soldState.remaining_of_first != null &&
+          soldState.remaining_of_first > RUGGERS_REMAIN_FRAC)
+      ) {
         tag = "swing";
       } else {
         tag = "seller";
       }
     } else {
       tag = "holding";
+    }
+
+    const wasFlaggedSeller = !!flaggedSellers[w];
+    const onRugWatch =
+      wasFlaggedSeller ||
+      !!rwKnown[w] ||
+      isRuggersRugwatchKnown(rec, w);
+
+    // Enter Flagged ONLY when this lookup newly crosses ≥99% sold while already
+    // on RugWatch. Do NOT re-dump every historical seller on every Analyze
+    // (that was why Flagged kept coming back after wipes).
+    const prevTag = String(prev.tag || "holding");
+    const newlySold =
+      tag === "seller" &&
+      prevTag !== "seller" &&
+      prevTag !== "swing" &&
+      !prev.ever_sold;
+
+    if (!isFirstLookup && newlySold && onRugWatch) {
+      flaggedSellers[w] = {
+        ...(rwKnown[w] || {}),
+        entered_at: now,
+        last_update: now,
+        sold_pct:
+          soldState.sold_pct != null ? soldState.sold_pct : 100,
+        first_pct: first.pct_supply,
+        reason: soldState.reason || "sold_99",
+        entered_via: "sold_while_flagged",
+        rules_v: RUGGERS_RULES_VERSION,
+      };
+    } else if (tag === "seller" && wasFlaggedSeller) {
+      // Sticky update only — already in Flagged for this mint
+      flaggedSellers[w] = {
+        ...(flaggedSellers[w] || {}),
+        last_update: now,
+        sold_pct:
+          soldState.sold_pct != null
+            ? soldState.sold_pct
+            : (flaggedSellers[w] && flaggedSellers[w].sold_pct) || 100,
+        first_pct: first.pct_supply,
+        reason: soldState.reason || flaggedSellers[w].reason || "sold_99",
+      };
+    }
+
+    // Only remove from Flagged on buy-back swing
+    if (tag === "swing" && wasFlaggedSeller) {
+      delete flaggedSellers[w];
+      if (rwKnown[w]) delete rwKnown[w];
+      unflagNow.push(w);
+    }
+
+    // Sticky similar membership (never clear just because they left the list)
+    const inSimilar = !!(
+      first.in_similar ||
+      prev.in_similar ||
+      (cur && cur.in_similar)
+    );
+    if (inSimilar && first && !first.in_similar) {
+      first.in_similar = true;
+      if (rec.first_wallets[w]) rec.first_wallets[w].in_similar = true;
     }
 
     status[w] = {
@@ -1059,55 +1270,170 @@ function processRuggersFromAnalyze(data) {
       listed: !!cur.listed,
       sold_pct: soldState.sold_pct,
       reason: soldState.reason,
-      in_similar: !!(first.in_similar || (cur && cur.in_similar)),
+      in_similar: inSimilar,
       is_creator: !!(
         rec.creator &&
         w.toLowerCase() === String(rec.creator).toLowerCase()
       ),
+      is_flagged: !!(flaggedSellers[w] || (onRugWatch && tag === "seller")),
       last_update: now,
     };
   }
 
-  // Merge RugWatch-flagged addresses for this mint (persistent on the rec)
-  const prevFlagged =
-    rec.flagged_known && typeof rec.flagged_known === "object"
-      ? rec.flagged_known
-      : {};
-  const nextFlagged = { ...prevFlagged };
-  for (const [fw, meta] of Object.entries(snap.flagged_known || {})) {
-    if (!fw) continue;
-    nextFlagged[fw] = {
-      ...(prevFlagged[fw] || {}),
-      ...(meta || {}),
-      last_seen: now,
+  // Sticky flagged sellers not currently in first_wallets status (shouldn't
+  // normally happen) — keep them until swing; refresh sold meta if present
+  for (const fw of Object.keys(flaggedSellers)) {
+    if (status[fw]) continue;
+    // still show as seller/flagged
+    status[fw] = {
+      tag: "seller",
+      ever_sold: true,
+      first_pct: flaggedSellers[fw].first_pct != null ? flaggedSellers[fw].first_pct : null,
+      first_balance: null,
+      current_pct: 0,
+      current_balance: 0,
+      listed: false,
+      sold_pct:
+        flaggedSellers[fw].sold_pct != null ? flaggedSellers[fw].sold_pct : 100,
+      reason: flaggedSellers[fw].reason || "sold_99",
+      in_similar: false,
+      is_creator: !!(
+        rec.creator &&
+        fw.toLowerCase() === String(rec.creator).toLowerCase()
+      ),
+      is_flagged: true,
+      last_update: now,
     };
   }
-  rec.flagged_known = nextFlagged;
 
-  // Mark status rows that are already on the RugWatch list
-  for (const [w, st] of Object.entries(status)) {
-    if (!st) continue;
-    st.is_flagged = isRuggersFlaggedWallet(rec, w);
-  }
+  rec.rugwatch_known = rwKnown;
+  rec.flagged_sellers = flaggedSellers;
+  // Keep legacy key in sync for any old UI paths (sellers-only, not full watchlist)
+  rec.flagged_known = { ...flaggedSellers };
   rec.status = status;
 
   store[key] = rec;
   saveRuggersStore(store);
-  return { key, rec };
+
+  // Async: remove buy-back wallets from RugWatch local + cloud
+  if (unflagNow.length) {
+    unflagRuggersWalletsOnCloud(unflagNow).catch(() => {
+      /* non-fatal */
+    });
+  }
+
+  return { key, rec, unflagged: unflagNow };
 }
 
-/** True if wallet is already known flagged (RugWatch list for this mint track). */
+/** True if wallet is known on RugWatch for this mint track (not necessarily in Flagged section). */
+function isRuggersRugwatchKnown(rec, wallet) {
+  if (!rec || !wallet) return false;
+  const w = String(wallet).trim();
+  if (!w) return false;
+  // Do not consult legacy flagged_known dump (had unrelated high-risk wallets)
+  const pools = [rec.rugwatch_known, rec.flagged_sellers];
+  for (const fk of pools) {
+    if (!fk || typeof fk !== "object") continue;
+    if (fk[w]) return true;
+    const wl = w.toLowerCase();
+    for (const k of Object.keys(fk)) {
+      if (String(k).toLowerCase() === wl) return true;
+    }
+  }
+  return false;
+}
+
+/** @deprecated name kept — means "in Flagged sellers section for this mint" */
 function isRuggersFlaggedWallet(rec, wallet) {
   if (!rec || !wallet) return false;
-  const fk = rec.flagged_known;
-  if (!fk || typeof fk !== "object") return false;
+  const fs = rec.flagged_sellers;
+  if (!fs || typeof fs !== "object") return false;
   const w = String(wallet).trim();
-  if (fk[w]) return true;
+  if (fs[w]) return true;
   const wl = w.toLowerCase();
-  for (const k of Object.keys(fk)) {
+  for (const k of Object.keys(fs)) {
     if (String(k).toLowerCase() === wl) return true;
   }
   return false;
+}
+
+/**
+ * Remove wallets from RugWatch local DB + GitHub cloud (buy-back swing).
+ */
+async function unflagRuggersWalletsOnCloud(addresses) {
+  const addrs = (addresses || []).map((a) => String(a || "").trim()).filter(Boolean);
+  if (!addrs.length) return null;
+  const base = rugwatchApiBase();
+  const headers = { "Content-Type": "application/json", Accept: "application/json" };
+  try {
+    const tok = localStorage.getItem("rugwatch_site_token") || "";
+    if (tok) headers["X-API-Token"] = tok;
+  } catch (_) {
+    /* ignore */
+  }
+  const res = await fetch(base + "/api/unflag", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ addresses: addrs, push_cloud: true }),
+  });
+  let data = {};
+  try {
+    data = await res.json();
+  } catch (_) {
+    data = { ok: false, error: "non-JSON unflag response" };
+  }
+  return data;
+}
+
+/**
+ * After successful Upload → mark wallets as RugWatch-known; if already sellers,
+ * put them in Flagged section for this mint.
+ */
+function markRuggersUploadedAsFlagged(exportKey, rows) {
+  if (!_lastRuggersKey || !rows || !rows.length) return;
+  const store = loadRuggersStore();
+  const rec = store[_lastRuggersKey];
+  if (!rec) return;
+  if (!rec.rugwatch_known || typeof rec.rugwatch_known !== "object") {
+    rec.rugwatch_known = {};
+  }
+  if (!rec.flagged_sellers || typeof rec.flagged_sellers !== "object") {
+    rec.flagged_sellers = {};
+  }
+  const now = new Date().toISOString();
+  for (const row of rows) {
+    const w = (row && row.wallet) || "";
+    if (!w) continue;
+    rec.rugwatch_known[w] = {
+      ...(rec.rugwatch_known[w] || {}),
+      origin: "uploaded",
+      last_seen: now,
+    };
+    const st = (rec.status && rec.status[w]) || row;
+    const tag = st.tag || row.tag;
+    if (tag === "seller" || tag === "swing" || row.sold_pct != null) {
+      // Uploaded sellers become Flagged for this mint (already on cloud)
+      if (tag !== "swing") {
+        rec.flagged_sellers[w] = {
+          ...(rec.flagged_sellers[w] || {}),
+          entered_at: (rec.flagged_sellers[w] && rec.flagged_sellers[w].entered_at) || now,
+          last_update: now,
+          sold_pct: st.sold_pct != null ? st.sold_pct : row.sold_pct,
+          first_pct: st.first_pct != null ? st.first_pct : row.first_pct,
+          reason: st.reason || row.reason || "sold_99",
+          origin: "uploaded",
+          entered_via: "sold_while_flagged",
+          rules_v: RUGGERS_RULES_VERSION,
+        };
+        if (rec.status && rec.status[w]) {
+          rec.status[w].is_flagged = true;
+        }
+      }
+    }
+  }
+  rec.flagged_known = { ...rec.flagged_sellers };
+  store[_lastRuggersKey] = rec;
+  saveRuggersStore(store);
 }
 
 function ruggersBuckets(rec) {
@@ -1127,57 +1453,56 @@ function ruggersBuckets(rec) {
     };
   }
 
-  function pushFlagged(row) {
-    const w = row.wallet || "";
-    if (!w || flaggedSeen.has(w)) return;
-    flaggedSeen.add(w);
+  const flaggedSellers =
+    rec.flagged_sellers && typeof rec.flagged_sellers === "object"
+      ? rec.flagged_sellers
+      : {};
+
+  // Flagged section = only sticky flagged_sellers (sold ≥99% while on RugWatch)
+  for (const [fw, meta] of Object.entries(flaggedSellers)) {
+    if (!fw || flaggedSeen.has(fw)) continue;
+    const st = (rec.status && rec.status[fw]) || {};
+    // If they swung, they should already be removed from flagged_sellers
+    if (st.tag === "swing") continue;
+    flaggedSeen.add(fw);
     flaggedWallets.push({
-      ...row,
+      wallet: fw,
+      tag: "seller",
       is_flagged: true,
-      tag: row.tag === "swing" ? "swing" : row.tag === "seller" ? "seller" : "flagged",
+      ever_sold: true,
+      sold_pct:
+        st.sold_pct != null
+          ? st.sold_pct
+          : meta.sold_pct != null
+            ? meta.sold_pct
+            : 100,
+      first_pct: st.first_pct != null ? st.first_pct : meta.first_pct,
+      current_pct: st.current_pct != null ? st.current_pct : 0,
+      listed: st.listed === true,
+      reason: st.reason || meta.reason || "sold_99",
+      risk_score: meta.risk_score,
+      label: meta.label,
     });
   }
 
   for (const [w, st] of Object.entries(rec.status)) {
     if (!st) continue;
-    const flagged = !!(st.is_flagged || isRuggersFlaggedWallet(rec, w));
-    const row = { wallet: w, ...st, is_flagged: flagged };
-
-    // Already on RugWatch → Flagged wallets section (not Similar / Single / Creator sell lists)
-    if (flagged && (st.tag === "seller" || st.tag === "swing")) {
-      pushFlagged(row);
-      continue;
-    }
+    const row = { wallet: w, ...st, is_flagged: !!flaggedSellers[w] };
 
     if (st.tag === "swing") {
       swings.push(row);
       continue;
     }
-    if (st.tag !== "seller") continue; // ignore non-99% sells
+    if (st.tag !== "seller") continue;
+    // Already in Flagged section — not Creator / Similar / Single
+    if (flaggedSellers[w] || flaggedSeen.has(w)) continue;
+
     if (st.is_creator) {
       creatorSold.push(row);
       continue;
     }
     if (st.in_similar) similarSellers.push(row);
     else singleSellers.push(row);
-  }
-
-  // Any other previously flagged addresses known for this mint (not already listed)
-  for (const [fw, meta] of Object.entries(rec.flagged_known || {})) {
-    if (!fw || flaggedSeen.has(fw)) continue;
-    const st = (rec.status && rec.status[fw]) || {};
-    pushFlagged({
-      wallet: fw,
-      tag: st.tag === "seller" ? "seller" : st.tag === "swing" ? "swing" : "flagged",
-      sold_pct: st.sold_pct != null ? st.sold_pct : null,
-      first_pct: st.first_pct != null ? st.first_pct : null,
-      current_pct: st.current_pct != null ? st.current_pct : null,
-      listed: st.listed,
-      reason: st.reason || "rugwatch_flagged",
-      is_flagged: true,
-      risk_score: meta && meta.risk_score,
-      label: meta && meta.label,
-    });
   }
 
   const bySold = (a, b) => (Number(b.sold_pct) || 0) - (Number(a.sold_pct) || 0);
@@ -1565,6 +1890,14 @@ async function uploadRuggersSectionToCloud(exportKey) {
           : cloud && cloud.error
             ? "failed: " + cloud.error
             : "n/a";
+    // Move uploaded sellers into Flagged for this mint (already on cloud)
+    try {
+      markRuggersUploadedAsFlagged(exportKey, rows);
+      if (_lastRuggersKey) refreshRuggersPanel(_lastRuggersKey);
+    } catch (_) {
+      /* ignore */
+    }
+
     alert(
       "RugWatch upload result\n\n" +
         "Section: " +
@@ -1586,7 +1919,8 @@ async function uploadRuggersSectionToCloud(exportKey) {
         "\nCloud push: " +
         pushed +
         (cloud && cloud.note ? "\n\n" + cloud.note : "") +
-        "\n\nNote: already-local wallets still re-sync to GitHub via merge-push."
+        "\n\nUploaded sellers now sit under Flagged wallets for this mint. " +
+        "If they buy back later, they move to Swing and are unflagged/removed from cloud."
     );
   } catch (e) {
     alert(
@@ -1626,11 +1960,13 @@ function refreshRuggersPanel(focusKey) {
   const body = $("ruggersBody");
   const dump = $("text-ruggers");
   const store = loadRuggersStore();
-  const keys = Object.keys(store).sort((a, b) => {
-    const ta = store[a].last_ts || store[a].first_ts || "";
-    const tb = store[b].last_ts || store[b].first_ts || "";
-    return tb.localeCompare(ta);
-  });
+  const keys = Object.keys(store)
+    .filter((k) => k !== "__meta" && store[k] && typeof store[k] === "object" && store[k].first_wallets)
+    .sort((a, b) => {
+      const ta = store[a].last_ts || store[a].first_ts || "";
+      const tb = store[b].last_ts || store[b].first_ts || "";
+      return tb.localeCompare(ta);
+    });
 
   // Prefer currently displayed token address if known
   let activeKey = focusKey || "";
@@ -1704,16 +2040,14 @@ function refreshRuggersPanel(focusKey) {
     Object.keys(rec.first_wallets || {}).length +
     "</div>";
   html +=
-    '<p class="rug-rules">Rules: wallets that sold <strong>≥99%</strong> upon ' +
-    "<em>first-lookup</em> (or left the holder list) are listed. " +
-    "Continued search queries do not affect monitoring. " +
-    "After they have sold, place another search query and they will appear in Ruggers. " +
-    "Buy-back after a dump → <span class=\"rug-tag rug-tag-swing\">swing</span>. " +
-    "Holders who never dumped 99% are ignored. " +
-    "Yellow <strong>Upload</strong> on Creator / Similar sends wallets to RugWatch cloud; " +
-    "<strong>Export</strong> downloads a file (Single has Export only). " +
-    "<strong>Note:</strong> wallets already on the cloud after each successful upload " +
-    "are ignored by the server (no duplicate copies).</p>";
+    '<p class="rug-rules">Rules: first Analyze on a mint freezes the holder baseline; ' +
+    "all sections start <strong>empty</strong>. Later Analyzes list wallets that sold " +
+    "<strong>≥99%</strong> (or left the list). " +
+    "New sellers → Creator / Similar / Single (Upload to flag). " +
+    "Already on RugWatch + sold ≥99% → <strong>Flagged wallets</strong> (sticky for this mint). " +
+    "Buy-back after a dump → <span class=\"rug-tag rug-tag-swing\">swing</span> " +
+    "(only way off Flagged; also unflags and removes from cloud). " +
+    "Holders who never dumped 99% are ignored.</p>";
 
   // Tracked mint (left) + CA search bar (right)
   const prevSearch =
@@ -1769,31 +2103,32 @@ function refreshRuggersPanel(focusKey) {
 
   html += renderRuggersSection(
     "Creator (sold ≥99%)",
-    "Creator wallet only — listed if they sold ≥99% of their first-lookup bag or left the list. Yellow Upload → RugWatch cloud. Note: wallets already on the cloud after each successful upload are ignored by the server.",
+    "Creator only — sold ≥99% / left list, and not already on RugWatch. Yellow Upload → flag + cloud.",
     buckets.creatorSold,
     "creator"
   );
   html += renderRuggersSection(
     "Similar wallets (sellers)",
-    "New similar-size group sellers only (not already on RugWatch). Sold ≥99% / dropped off. Yellow Upload → RugWatch cloud. Note: wallets already on the cloud after each successful upload are ignored by the server.",
+    "Similar-size group sellers (≥99% sold / left list), not already on RugWatch. " +
+      "Count drops when you Upload (→ Flagged), they buy back (→ Swing), or creator is identified. " +
+      "Membership stays sticky after sell (no longer reclassified as Single).",
     buckets.similarSellers,
     "similar"
   );
   html += renderRuggersSection(
     "Single wallets (sellers)",
-    "New individual sellers not already on RugWatch. Sold ≥99% / dropped off. Export only (no Upload).",
+    "New individual sellers not already on RugWatch. Export only (no Upload).",
     buckets.singleSellers,
     "single",
     { exportOnly: true }
   );
-  // Previously flagged — no Upload (already on RugWatch / cloud)
+  // Flagged = sold ≥99% while on RugWatch; sticky until buy-back swing
   const flaggedRows = buckets.flaggedWallets || [];
   if (flaggedRows.length) {
     html += renderRuggersSection(
       "Flagged wallets",
-      "Already on RugWatch. Not mixed into Similar/Single. No Upload — already on GitHub/cloud.",
+      "On RugWatch and sold ≥99% on this mint. Stay here until they buy back → Swing (then unflagged + removed from cloud). No Upload.",
       flaggedRows
-      // no exportKey → no Export / Upload buttons
     );
   } else {
     html +=
@@ -1802,15 +2137,16 @@ function refreshRuggersPanel(focusKey) {
       '<h3 class="rug-section-title">Flagged wallets <span class="rug-count">0</span></h3>' +
       "</div>" +
       '<p class="rug-section-hint">' +
-      "Flagged wallets will show here. Wallets that sold ≥99% of their bags are not listed. " +
-      "Upload new sellers to GitHub with yellow Upload on Creator / Similar / Single." +
+      "Empty until a RugWatch-flagged wallet on this mint sells ≥99% " +
+      "(or you Upload a seller). New mints start empty. " +
+      "Buy-back is the only removal → Swing + unflag/cloud remove." +
       "</p>" +
-      '<div class="rug-section-body"><p class="rug-empty">Flagged wallets will show here</p></div>' +
+      '<div class="rug-section-body"><p class="rug-empty">None yet.</p></div>' +
       "</section>";
   }
   html += renderRuggersSection(
     "Swing traders",
-    "Previously sold ≥99% (or left the list), then bought back on a later lookup.",
+    "Sold ≥99%, then bought back. Former flagged sellers are unflagged and removed from cloud.",
     buckets.swings
   );
 
@@ -1823,14 +2159,14 @@ function refreshRuggersPanel(focusKey) {
   html +=
     '<p class="rug-footer-meta">New sellers: ' +
     nSell +
-    " · Flagged (no upload): " +
+    " · Flagged (sticky until swing): " +
     nFlag +
     " · Swings: " +
     buckets.swings.length +
     " · Tracked mints: " +
     keys.length +
-    " · Yellow Upload: Creator / Similar only · Export: Creator / Similar / Single" +
-    " · Wallets already on the cloud after each successful upload are ignored by the server." +
+    " · Upload: Creator / Similar · Export: Creator / Similar / Single" +
+    " · Swing of a flagged seller → unflag + remove from cloud." +
     "</p>";
 
   if (body) body.innerHTML = html;
@@ -1905,7 +2241,9 @@ function findRuggersKeyByCa(query, store) {
   const raw = normalizeCaQuery(query);
   if (!raw || !store) return null;
   const ql = raw.toLowerCase();
-  const keys = Object.keys(store);
+  const keys = Object.keys(store).filter(
+    (k) => k !== "__meta" && store[k] && typeof store[k] === "object"
+  );
   for (const k of keys) {
     const rec = store[k] || {};
     const addr = String(rec.address || "").trim();
@@ -2131,7 +2469,9 @@ function clearRuggersMint() {
   let key = "";
   if (addr) {
     key = Object.keys(store).find(
-      (k) => k === addr || k.endsWith(":" + addr)
+      (k) =>
+        k !== "__meta" &&
+        (k === addr || k.endsWith(":" + addr))
     );
   }
   if (!key) {
@@ -2150,16 +2490,55 @@ function clearRuggersMint() {
 
 function clearRuggersAll() {
   const store = loadRuggersStore();
-  if (!Object.keys(store).length) {
+  const mintKeys = Object.keys(store).filter((k) => k !== "__meta");
+  if (!mintKeys.length) {
     alert("Ruggers store is already empty.");
     return;
   }
   if (!confirm("Clear ALL Ruggers tracking for every mint on this browser?")) return;
-  saveRuggersStore({});
+  saveRuggersStore({
+    __meta: { rules_version: RUGGERS_RULES_VERSION, cleared_at: new Date().toISOString() },
+  });
   refreshRuggersPanel();
 }
 
+/** Wipe only Flagged sticky lists (keep sellers/swings/baseline). */
+function clearRuggersFlaggedOnly() {
+  const store = loadRuggersStore();
+  let n = 0;
+  for (const [key, rec] of Object.entries(store)) {
+    if (key === "__meta" || !rec || typeof rec !== "object") continue;
+    const had =
+      Object.keys(rec.flagged_sellers || {}).length +
+      Object.keys(rec.flagged_known || {}).length;
+    if (!had) continue;
+    rec.flagged_sellers = {};
+    rec.flagged_known = {};
+    rec.rugwatch_known = {};
+    if (rec.status && typeof rec.status === "object") {
+      for (const w of Object.keys(rec.status)) {
+        if (rec.status[w]) rec.status[w].is_flagged = false;
+      }
+    }
+    store[key] = rec;
+    n += 1;
+  }
+  saveRuggersStore(store);
+  refreshRuggersPanel();
+  alert(
+    n
+      ? "Cleared Flagged wallets on " + n + " mint(s). Re-Analyze after a real ≥99% sell to refill correctly."
+      : "Flagged wallets lists were already empty."
+  );
+}
+
 function initRuggers() {
+  // Always load through migration (wipes illegal Flagged sticky rows)
+  try {
+    loadRuggersStore();
+  } catch (_) {
+    /* ignore */
+  }
   refreshRuggersPanel();
   const r = $("ruggersRefresh");
   const cm = $("ruggersClearMint");
