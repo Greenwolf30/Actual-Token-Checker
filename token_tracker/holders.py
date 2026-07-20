@@ -1690,14 +1690,8 @@ def _format_rugwatch_flagged_section(
     lines: list[str] = [
         "",
         f"  ── FLAGGED WALLETS (RugWatch) · combined {total_s}{total_pri_s} ──",
-        "  This list is NOT bundlers and is NOT the Bundles tab.",
-        "  Only CURRENT holders: flagged wallets that still hold on this mint.",
-        "  Sold ≥99% / dropped off the list / not in top snapshot → hidden.",
-        "  These are RugWatch watchlist wallets only (heuristic — not proven ruggers).",
-        "  A [creator] tag means creator of SOME OTHER scanned token,",
-        "  NOT automatically the creator of THIS token (see Creator line above).",
-        "  [this mint] = linked to the token you are viewing now.",
-        "  Combined % = sum of current bags still held by flagged wallets.",
+        "  Only wallets that still hold on this mint are listed here.",
+        "  Wallets that sold ≥99% of their bag are not shown.",
     ]
     if not rw:
         lines.append("  RugWatch: no data (scan holders to load).")
@@ -1728,35 +1722,30 @@ def _format_rugwatch_flagged_section(
         + f"  ·  matches on this mint/top: {rw.get('match_count', 0)}"
     )
     lines.append(
-        "  Tags: [local] local DB only · [cloud] cloud list only · [both] in both"
-    )
-    # Never show local filesystem paths (e.g. C:\\Users\\…\\rugwatch.db)
-    lines.append("  Known LP / program wallets are excluded from this list")
-    lines.append("  Click any blue wallet address → open Solscan")
-    lines.append(
-        "  % colors match Alerts: 2–5% low · 5–10% medium · 10–15% high · ≥15% critical"
+        "  Tags: [local] · [cloud] · [both]  ·  Click blue address → Solscan"
     )
     lines.append("")
 
     wallets = list(stats.get("wallets") or [])
     skipped_lp = int(stats.get("skipped_lp") or 0)
     if not wallets:
-        if skipped_sold:
-            lines.append(
-                f"  (No flagged wallets still holding — {skipped_sold} sold out / "
-                "not in top holders hidden.)"
-            )
-        else:
-            lines.append(
-                "  (No flagged wallets currently holding on this mint.)"
-            )
+        # Sold ≥99% (or none still holding) → simple placeholder
+        lines.append("  Flagged wallets will show here")
+        lines.append(
+            "  (when a flagged wallet still holds on this mint)."
+        )
+        lines.append(
+            "  Wallets that sold ≥99% of their bags are not listed."
+        )
+        lines.append(
+            "  Upload new sellers to GitHub from Ruggers → yellow Upload."
+        )
         return lines
 
     lines.append(
         f"  Flagged wallets (still holding) · combined {total_s}{total_pri_s} "
         f"({len(wallets)} shown"
-        + (f", {skipped_sold} sold/left hidden" if skipped_sold else "")
-        + (f", {skipped_lp} LP/program excluded" if skipped_lp else "")
+        + (f", {skipped_lp} LP excluded" if skipped_lp else "")
         + "):"
     )
     lines.append("")
@@ -1807,21 +1796,16 @@ def _format_rugwatch_flagged_section(
     lines.append("")
     if with_pct_n:
         lines.append(
-            f"  Combined flagged bag (still holding): {total_s}"
+            f"  Combined bag still held: {total_s}"
             + (f" ({total_pri} priority)" if total_pri_s else "")
-            + f" across {with_pct_n} wallet(s)"
+            + f" · {with_pct_n} wallet(s)"
         )
     if skipped_sold:
         lines.append(
-            f"  Hidden: {skipped_sold} flagged wallet(s) sold ≥99% / left list / no current bag"
+            "  Flagged wallets that sold ≥99% of their bags are not shown here."
         )
-    if with_pct_n:
         lines.append(
-            f"  ⚠ {with_pct_n} flagged wallet(s) still hold on this mint"
-        )
-    else:
-        lines.append(
-            "  (No flagged wallets currently holding a bag on this mint.)"
+            "  Upload new sellers to GitHub from Ruggers → yellow Upload."
         )
 
     return lines

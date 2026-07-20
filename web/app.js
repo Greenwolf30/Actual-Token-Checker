@@ -1757,12 +1757,27 @@ function refreshRuggersPanel(focusKey) {
     "single"
   );
   // Previously flagged — no Upload (already on RugWatch / cloud)
-  html += renderRuggersSection(
-    "Flagged wallets",
-    "Already on RugWatch (local/cloud). Not mixed into Similar/Single. No Upload — already saved.",
-    buckets.flaggedWallets
-    // no exportKey → no Export / Upload buttons
-  );
+  const flaggedRows = buckets.flaggedWallets || [];
+  if (flaggedRows.length) {
+    html += renderRuggersSection(
+      "Flagged wallets",
+      "Already on RugWatch. Not mixed into Similar/Single. No Upload — already on GitHub/cloud.",
+      flaggedRows
+      // no exportKey → no Export / Upload buttons
+    );
+  } else {
+    html +=
+      '<section class="rug-section">' +
+      '<div class="rug-section-head">' +
+      '<h3 class="rug-section-title">Flagged wallets <span class="rug-count">0</span></h3>' +
+      "</div>" +
+      '<p class="rug-section-hint">' +
+      "Flagged wallets will show here. Wallets that sold ≥99% of their bags are not listed. " +
+      "Upload new sellers to GitHub with yellow Upload on Creator / Similar / Single." +
+      "</p>" +
+      '<div class="rug-section-body"><p class="rug-empty">Flagged wallets will show here</p></div>' +
+      "</section>";
+  }
   html += renderRuggersSection(
     "Swing traders",
     "Previously sold ≥99% (or left the list), then bought back on a later lookup.",

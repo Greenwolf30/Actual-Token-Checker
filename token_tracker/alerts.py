@@ -749,23 +749,16 @@ def format_alerts_text(data: dict[str, Any]) -> str:
                 lines.append(f"     … and {len(wallets) - max_w} more")
             lines.append("")
 
-    # Always show Flagged wallets status when no active hold-% alert
-    # (so the field is never a silent blank when holdings are 0%)
+    # When no flagged wallet still holds (sold ≥99% / none on mint) — simple placeholder
     if not has_flagged_alert:
         lines.append("  FLAGGED WALLETS")
         lines.append("  " + "-" * 40)
+        lines.append("  Flagged wallets will show here")
         lines.append(
-            "  Will show: Flagged wallets hold X.XX% of supply"
+            "  (when any still hold on this mint — sold ≥99% bags are not listed)."
         )
         lines.append(
-            "  …when any RugWatch-flagged wallet still holds on this mint"
-            " (current bag ≥ 0.01%)."
-        )
-        lines.append(
-            "  Right now: none still holding — or RugWatch off / no matches."
-        )
-        lines.append(
-            "  See Holders → Flagged wallets for the live list."
+            "  Upload new sellers to GitHub from Ruggers → yellow Upload."
         )
         lines.append("")
 
