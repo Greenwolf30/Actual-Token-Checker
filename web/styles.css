@@ -1114,11 +1114,11 @@ a.copy-mint:hover,
   font-weight: 500;
 }
 
-/* Token holding amounts (balances) — yellow */
+/* Token holding amounts (balances) — dim yellow (not bright) */
 .report .hold-amt,
 .logs-col-body .hold-amt {
-  color: #e8c84a;
-  font-weight: 600;
+  color: #b8a85c;
+  font-weight: 500;
 }
 
 /* Clickable wallet addresses */
