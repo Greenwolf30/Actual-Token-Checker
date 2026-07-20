@@ -7,7 +7,7 @@
 
   This guide explains what each part of the app does, in plain language —
   including Quick mode, social scores, news, wallets, Rugcheck / creators,
-  the About tab, and the Ruggers sell-out tracker.
+  and the About tab.
 
   Everything here is a HEURISTIC from public data. Not financial advice.
 ================================================================================
@@ -21,7 +21,7 @@ A research tool for crypto tokens (especially Solana, plus other chains like
 Ethereum, Base, and Robinhood Chain). You paste a contract or ticker; the app
 pulls public market and risk data and shows it in tabs:
 
-  Overview · Holders · Bundles · Alerts · Maps · About · Ruggers · Logs
+  Overview · Holders · Bundles · Alerts · Maps · About · Logs
 
 It does NOT trade for you, custody funds, or guarantee a token is safe.
 
@@ -40,13 +40,12 @@ It does NOT trade for you, custody funds, or guarantee a token is safe.
 
 
 Navigation bar (compact)
-  [logo] | Docs | GitHub | Stats API | Badge
+  [logo] | GitHub | Stats API | Badge
 
-  Docs → /docs.html on this website (loads web/documentation.txt)
-  Also: /documentation.txt (raw text) · /docs (same as docs.html)
   GitHub → https://github.com/Greenwolf30/Actual-Token-Checker
-  Footer “Documentation” link opens the on-site guide (not only GitHub).
-  Analyze is the search button under the title.
+  (repo home; open DOCUMENTATION.txt there for this guide)
+  No separate Documentation page on the Analyze site.
+  Analyze is only the search button under the title — not in the top nav.
 
 
 --------------------------------------------------------------------------------
@@ -461,104 +460,14 @@ About is split into story + community + news + links.
 
 
 --------------------------------------------------------------------------------
-11. RUGGERS (website)
---------------------------------------------------------------------------------
-
-Subtitle: Ruggers
-
-The Ruggers tab sits next to About (before Logs) on the website. It tracks
-wallets from your first successful full Analyze of a mint, then lists only
-those that later sold out almost completely.
-
-Not financial advice. “Seller” / “swing” labels are heuristics from holder
-snapshots, not proof of a rug or intent.
-
-What Ruggers is for
-  - Freeze who held what on your FIRST full lookup of a token (from the
-    same holder/bundle data that feeds Logs).
-  - On later Analyzes of that mint, find wallets that sold ≥99% of that
-    first bag — or disappeared from the holder list.
-  - Separate similar-size group members from single whales and the creator.
-  - Flag buy-backs after a dump as swing (section: Swing traders).
-
-How tracking starts (first lookup)
-  After a successful full Analyze (Quick OFF) with holders:
-
-  1. Top non-LP holders from the Holders snapshot are stored as a baseline.
-  2. Similar-size wallets from Bundles (similar-size groups) are included.
-  3. Creator wallet (when known) is included.
-  4. Each wallet’s first supply % (and balance when known) is frozen.
-  5. That freeze is what later “sold % of holdings” is measured against.
-
-  Quick mode does not start or update Ruggers (no full holder scan).
-
-What “sold ≥99%” means
-  A wallet is listed only if it dumped at least 99% of its FIRST-lookup bag:
-
-    remaining_first_bag ≤ 1% of first bag
-    OR the wallet is no longer on the holder list (treated as sold 100%)
-
-  Examples
-    First hold 5.00% of supply → still listed with 0.04% → seller (~99.2% sold)
-    First hold 5.00% → still listed with 0.10% → NOT listed (only 98% sold)
-    First hold 5.00% → gone from top holders → seller (not listed anymore)
-    First hold 5.00% → sold out, then later holds 1% again → swing
-
-  Wallets that never sold ≥99% are ignored (not shown).
-
-Sections on the Ruggers tab
-  1. Creator (sold ≥99%)
-       Creator only, and only if they sold ≥99% of first bag or left the list.
-  2. Similar wallets (sellers)
-       Wallets that were in a similar-size group on first lookup and later
-       sold ≥99% / dropped off the list. Listed as SELLER.
-  3. Single wallets (sellers)
-       Individual top holders (not in a similar group) that sold ≥99% or
-       are no longer listed. Listed as SELLER.
-  4. Swing traders
-       Wallets that previously met the seller rule, then bought back on a
-       later lookup. Labeled swing (not seller).
-
-Labels
-  seller  — sold ≥99% of first bag or dropped off the holder list
-  swing   — was a seller, then reappeared with holdings (buy-back)
-
-Buttons
-  Refresh     — redraw the panel from browser storage
-  Clear mint  — delete tracking for the current / selected mint only
-  Clear all   — wipe all Ruggers tracking on this browser
-
-Where it lives
-  Website only: browser localStorage key adtc_ruggers_track
-  (separate from Logs). Not uploaded to the server. Not shared across
-  browsers / devices. Clearing site data resets it.
-
-  Multiple mints: use the dropdown on the Ruggers tab to switch.
-
-Typical workflow
-  1. Full Analyze a new mint (Quick off) → baseline freezes (may show
-     empty seller sections — nothing has dumped yet).
-  2. Later, Analyze the same mint again.
-  3. Open Ruggers → see who sold ≥99% since first lookup, by section.
-  4. If a dumper buys back, they move to Swing traders.
-
-What Ruggers is not
-  - Not a live mempool dump alert
-  - Not proof wallets are the same person or a “rug team”
-  - Not RugWatch / serial-wallet cloud DB (that is a separate desktop tool)
-  - Not updated by Quick-only searches
-  - Not a substitute for Solscan trade history (top-holder snapshots only)
-
-
---------------------------------------------------------------------------------
-12. LOGS
+11. LOGS
 --------------------------------------------------------------------------------
 
 Subtitle: Logs
 
 The Logs tab is a private log of tokens you have already searched.
-It sits next to Overview, Holders, Bundles, Alerts, Maps, About, and Ruggers
-on the desktop app and the website. Use it to look back at recent analyzes
+It sits next to Overview, Holders, Bundles, Alerts, Maps, and About on
+the desktop app and the website. Use it to look back at recent analyzes
 without typing every mint again.
 
   Desktop: saved in history_log.json next to the app.
