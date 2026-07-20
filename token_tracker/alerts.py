@@ -396,6 +396,11 @@ def build_alerts(
             }
         )
 
+    # ── 6) RugWatch flagged wallets — total bag % on this token ───────
+    rw_alert = _rugwatch_flagged_alert(holders_data)
+    if rw_alert:
+        alerts.append(rw_alert)
+
     priority_count = sum(1 for a in alerts if a.get("priority") == "top")
     if priority_count:
         summary = f"{priority_count} top-priority warning(s) — review immediately."
@@ -409,7 +414,8 @@ def build_alerts(
             "No top-priority warnings from current checks. "
             f"Top priority will show here if {lp_clause}a single holder "
             "is over 5%, bundle share exceeds 20%, DexScreener socials are missing, "
-            "similar wallets hold a large %, or a wallet is linked to known rug signals."
+            "similar wallets hold a large %, a wallet is linked to known rug signals, "
+            "or RugWatch-flagged wallets hold a measurable bag."
         )
 
     checks = [
@@ -419,6 +425,7 @@ def build_alerts(
         "bundle_pct_threshold",
         "dexscreener_socials_missing",
         "serial_rugger_link",
+        "rugwatch_flagged",
     ]
     if not is_pump:
         checks.insert(0, "liquidity_unlocked")
@@ -644,6 +651,9 @@ def format_alerts_text(data: dict[str, Any]) -> str:
         lines.append("    • Socials missing / not updated on DexScreener")
         lines.append("    • Similar wallets with large combined %")
         lines.append("    • Known serial-rugger / rug signals (Rugcheck)")
+        lines.append(
+            "    • RugWatch flagged wallets (combined bag % on this token)"
+        )
         lines.append("")
         lines.append(
             "  Warning: top priority will show if any of those conditions appear."
@@ -726,6 +736,84 @@ def format_alerts_text(data: dict[str, Any]) -> str:
     if data.get("notes"):
         lines.append(f"  Note: {data['notes']}")
     return "\n".join(lines) + "\n"
+
+
+def _rugwatch_flagged_alert(holders_data: dict[str, Any]) -> dict[str, Any] | None:
+    """
+    Alert when RugWatch-flagged wallets hold a known bag on this token.
+
+    Title + wallet lines include supply % so the Alerts UI color scheme
+    (2–5% low · 5–10% medium · 10–15% high · ≥15% critical) applies.
+    """
+    rw = holders_data.get("rugwatch_flagged") or {}
+    if not rw or not rw.get("ok") or rw.get("skipped") or rw.get("enabled") is False:
+        return None
+    try:
+        from .holders import collect_flagged_holder_pcts, holding_priority_label
+    except Exception:  # noqa: BLE001
+        return None
+
+    stats = collect_flagged_holder_pcts(rw, list(holders_data.get("holders") or []))
+    total = float(stats.get("total_pct") or 0)
+    with_pct = int(stats.get("with_pct_count") or 0)
+    # Only alert when we can attribute real bag % on this mint
+    if with_pct <= 0 or total <= 0:
+        return None
+
+    wallets_raw = list(stats.get("wallets") or [])
+    wallets: list[dict[str, Any]] = []
+    for row in wallets_raw:
+        pct = row.get("pct")
+        if pct is None:
+            continue
+        try:
+            pct_f = float(pct)
+        except (TypeError, ValueError):
+            continue
+        wallets.append(
+            {
+                "wallet": row.get("wallet"),
+                "pct": pct_f,
+                "hold_priority": row.get("hold_priority")
+                or holding_priority_label(pct_f),
+                "rank": row.get("rank"),
+                "label": row.get("label"),
+            }
+        )
+    if not wallets:
+        return None
+
+    wallets.sort(key=lambda w: -float(w.get("pct") or 0))
+    total_pri = holding_priority_label(total)
+    if total >= 15:
+        severity = "critical"
+    elif total >= 10:
+        severity = "high"
+    elif total > 5:
+        severity = "medium"
+    else:
+        severity = "info"
+
+    return {
+        "id": "rugwatch_flagged",
+        "priority": "top",
+        "severity": severity,
+        "title": f"Flagged wallets hold ~{total:.2f}% of supply",
+        "detail": (
+            f"{with_pct} RugWatch-flagged wallet(s) hold a combined "
+            f"~{total:.2f}% of supply on this token"
+            + (
+                f" ({total_pri} priority by size)."
+                if total_pri in {"low", "medium", "high", "critical"}
+                else "."
+            )
+            + " LP/program wallets excluded. Heuristic watchlist — not proof of a rug."
+        ),
+        "wallets": wallets,
+        "list_all": True,
+        "flagged_total_pct": total,
+        "flagged_wallet_count": with_pct,
+    }
 
 
 def _serial_rugger_hits(

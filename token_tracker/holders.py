@@ -1460,84 +1460,46 @@ def format_holders_text(data: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _format_rugwatch_flagged_section(
-    rw: dict[str, Any],
-    *,
+def collect_flagged_holder_pcts(
+    rw: dict[str, Any] | None,
     holders: list[dict[str, Any]] | None = None,
-) -> list[str]:
-    """List RugWatch-flagged wallets with ownership %; skip known LP/program wallets."""
-    lines: list[str] = [
-        "",
-        "  ── FLAGGED WALLETS (RugWatch) ─────────────────",
-        "  This list is NOT bundlers and is NOT the Bundles tab.",
-        "  These are RugWatch watchlist wallets only (heuristic — not proven ruggers).",
-        "  A [creator] tag means creator of SOME OTHER scanned token,",
-        "  NOT automatically the creator of THIS token (see Creator line above).",
-        "  [this mint] = linked to the token you are viewing now.",
-    ]
-    if not rw:
-        lines.append("  RugWatch: no data (scan holders to load).")
-        return lines
-    if rw.get("skipped") or rw.get("enabled") is False:
-        lines.append(
-            "  RugWatch: off for this lookup (checkbox unchecked on Analyze)."
-        )
-        lines.append("  Flagged wallets were not loaded.")
-        return lines
-    if not rw.get("ok"):
-        lines.append(f"  RugWatch: unavailable — {rw.get('error') or 'unknown error'}")
-        lines.append(
-            "  Tip: run RugWatch + Push cloud, set RUGWATCH_DB and/or "
-            "RUGWATCH_WALLETS_URL (prefer .../data/wallets_index.json)."
-        )
-        return lines
+) -> dict[str, Any]:
+    """
+    Flagged (non-LP) wallets with known bag % on this token.
+
+    Returns:
+      wallets: [{wallet, pct, hold_priority, rank?, label?, ...}]
+      total_pct: sum of known bags
+      shown_count / with_pct_count / skipped_lp
+    """
+    rw = rw or {}
+    holders = list(holders or [])
+    pct_by = _holder_pct_map(holders)
+    label_by = {
+        (h.get("wallet") or "").strip(): h.get("label")
+        for h in holders
+        if (h.get("wallet") or "").strip()
+    }
+    rank_by = {
+        (h.get("wallet") or "").strip(): h.get("rank")
+        for h in holders
+        if (h.get("wallet") or "").strip()
+    }
 
     all_flagged = list(rw.get("all_flagged") or [])
-    linked = list(rw.get("linked_to_mint") or [])
-    in_top = list(rw.get("in_top_holders") or [])
-    # Prefer full DB list; fall back to merged subsets
     if not all_flagged:
         seen: set[str] = set()
-        for group in (linked, in_top, list(rw.get("high_risk_db") or [])):
+        for group in (
+            list(rw.get("linked_to_mint") or []),
+            list(rw.get("in_top_holders") or []),
+            list(rw.get("high_risk_db") or []),
+        ):
             for w in group:
                 a = (w.get("address") or "").strip()
                 if a and a not in seen:
                     seen.add(a)
                     all_flagged.append(w)
 
-    pct_by = _holder_pct_map(list(holders or []))
-    label_by = {
-        (h.get("wallet") or "").strip(): h.get("label")
-        for h in (holders or [])
-        if (h.get("wallet") or "").strip()
-    }
-
-    local_n = int(rw.get("db_wallet_count") or 0)
-    cloud_n = int(rw.get("cloud_wallet_count") or 0)
-    local_shards = int(rw.get("local_shards") or 0)
-    cloud_shards = int(rw.get("cloud_shards") or 0)
-    lines.append(
-        f"  RugWatch local: {local_n} wallets"
-        + (f" ({local_shards} DB files)" if local_shards > 1 else "")
-        + f"  ·  cloud: {cloud_n}"
-        + (f" ({cloud_shards} shards)" if cloud_shards > 1 else "")
-        + f"  ·  matches on this mint/top: {rw.get('match_count', 0)}"
-    )
-    lines.append(
-        "  Tags: [local] local DB only · [cloud] cloud list only · [both] in both"
-    )
-    # Never show local filesystem paths (e.g. C:\\Users\\…\\rugwatch.db)
-    lines.append("  Known LP / program wallets are excluded from this list")
-    lines.append("  Click any blue wallet address → open Solscan")
-    lines.append("")
-
-    if not all_flagged:
-        lines.append(
-            "  (No wallets flagged in RugWatch yet — scan rugs in RugWatch to fill the list.)"
-        )
-        return lines
-
-    # Sort: on-mint / in-top first, then by risk score
     def _sort_key(w: dict[str, Any]) -> tuple:
         on_mint = 1 if w.get("on_this_mint") else 0
         in_holders = 1 if w.get("in_top_holders") else 0
@@ -1557,66 +1519,201 @@ def _format_rugwatch_flagged_section(
             continue
         shown.append(w)
 
+    wallets_out: list[dict[str, Any]] = []
+    total_pct = 0.0
+    with_pct = 0
+    for w in shown:
+        addr = (w.get("address") or "").strip()
+        if not addr:
+            continue
+        owns = pct_by.get(addr)
+        if owns is None:
+            for key, p in pct_by.items():
+                if key.lower() == addr.lower():
+                    owns = p
+                    break
+        try:
+            owns_f = float(owns) if owns is not None else None
+        except (TypeError, ValueError):
+            owns_f = None
+        row = {
+            "wallet": addr,
+            "pct": owns_f,
+            "hold_priority": holding_priority_label(owns_f),
+            "rank": rank_by.get(addr),
+            "label": w.get("label") or w.get("role") or label_by.get(addr),
+            "risk_score": w.get("risk_score"),
+            "times_seen": w.get("times_seen"),
+            "on_this_mint": bool(w.get("on_this_mint")),
+            "in_top_holders": bool(w.get("in_top_holders")),
+            "origin": (w.get("tag") or w.get("origin") or w.get("location") or ""),
+            "notes": w.get("notes") or w.get("evidence") or "",
+            "raw": w,
+        }
+        wallets_out.append(row)
+        if owns_f is not None:
+            total_pct += owns_f
+            with_pct += 1
+
+    # Prefer largest bags first for alerts / display
+    wallets_out.sort(
+        key=lambda r: (
+            -(float(r["pct"]) if r.get("pct") is not None else -1.0),
+            -int(r.get("risk_score") or 0),
+        )
+    )
+    return {
+        "wallets": wallets_out,
+        "total_pct": round(total_pct, 4) if with_pct else 0.0,
+        "with_pct_count": with_pct,
+        "shown_count": len(wallets_out),
+        "skipped_lp": skipped_lp,
+    }
+
+
+def _format_rugwatch_flagged_section(
+    rw: dict[str, Any],
+    *,
+    holders: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    """List RugWatch-flagged wallets with ownership %; skip known LP/program wallets."""
+    # Compute totals first so the section header can show combined %
+    stats = collect_flagged_holder_pcts(rw, holders)
+    total_pct = float(stats.get("total_pct") or 0)
+    with_pct_n = int(stats.get("with_pct_count") or 0)
+    total_s = f"{total_pct:.2f}%" if with_pct_n else "n/a"
+    total_pri = holding_priority_label(total_pct if with_pct_n else None)
+    total_pri_s = (
+        f" · {total_pri} priority"
+        if total_pri in {"low", "medium", "high", "critical"}
+        else ""
+    )
+
+    lines: list[str] = [
+        "",
+        f"  ── FLAGGED WALLETS (RugWatch) · combined {total_s}{total_pri_s} ──",
+        "  This list is NOT bundlers and is NOT the Bundles tab.",
+        "  These are RugWatch watchlist wallets only (heuristic — not proven ruggers).",
+        "  A [creator] tag means creator of SOME OTHER scanned token,",
+        "  NOT automatically the creator of THIS token (see Creator line above).",
+        "  [this mint] = linked to the token you are viewing now.",
+        "  Combined % = sum of known bags for flagged wallets on this token.",
+    ]
+    if not rw:
+        lines.append("  RugWatch: no data (scan holders to load).")
+        return lines
+    if rw.get("skipped") or rw.get("enabled") is False:
+        lines.append(
+            "  RugWatch: off for this lookup (checkbox unchecked on Analyze)."
+        )
+        lines.append("  Flagged wallets were not loaded.")
+        return lines
+    if not rw.get("ok"):
+        lines.append(f"  RugWatch: unavailable — {rw.get('error') or 'unknown error'}")
+        lines.append(
+            "  Tip: run RugWatch + Push cloud, set RUGWATCH_DB and/or "
+            "RUGWATCH_WALLETS_URL (prefer .../data/wallets_index.json)."
+        )
+        return lines
+
+    local_n = int(rw.get("db_wallet_count") or 0)
+    cloud_n = int(rw.get("cloud_wallet_count") or 0)
+    local_shards = int(rw.get("local_shards") or 0)
+    cloud_shards = int(rw.get("cloud_shards") or 0)
     lines.append(
-        f"  Flagged wallets ({len(shown)} shown"
+        f"  RugWatch local: {local_n} wallets"
+        + (f" ({local_shards} DB files)" if local_shards > 1 else "")
+        + f"  ·  cloud: {cloud_n}"
+        + (f" ({cloud_shards} shards)" if cloud_shards > 1 else "")
+        + f"  ·  matches on this mint/top: {rw.get('match_count', 0)}"
+    )
+    lines.append(
+        "  Tags: [local] local DB only · [cloud] cloud list only · [both] in both"
+    )
+    # Never show local filesystem paths (e.g. C:\\Users\\…\\rugwatch.db)
+    lines.append("  Known LP / program wallets are excluded from this list")
+    lines.append("  Click any blue wallet address → open Solscan")
+    lines.append(
+        "  % colors match Alerts: 2–5% low · 5–10% medium · 10–15% high · ≥15% critical"
+    )
+    lines.append("")
+
+    wallets = list(stats.get("wallets") or [])
+    skipped_lp = int(stats.get("skipped_lp") or 0)
+    if not wallets:
+        lines.append(
+            "  (No wallets flagged in RugWatch yet — scan rugs in RugWatch to fill the list.)"
+        )
+        return lines
+
+    lines.append(
+        f"  Flagged wallets · combined {total_s}{total_pri_s} "
+        f"({len(wallets)} shown"
+        + (f", {with_pct_n} with known bag" if with_pct_n else ", none in top snapshot")
         + (f", {skipped_lp} LP/program excluded" if skipped_lp else "")
         + "):"
     )
     lines.append("")
 
-    for i, w in enumerate(shown[:100], start=1):
-        addr = (w.get("address") or "").strip()
+    for i, row in enumerate(wallets[:100], start=1):
+        addr = (row.get("wallet") or "").strip()
         if not addr:
             continue
         tags: list[str] = []
-        # local / cloud / both (from multi-source RugWatch bridge)
-        origin = (w.get("tag") or w.get("origin") or w.get("location") or "").strip()
+        origin = str(row.get("origin") or "").strip()
         if origin in {"local", "cloud", "both", "[local]", "[cloud]", "[both]"}:
             tags.append(origin.strip("[]"))
-        if w.get("on_this_mint"):
+        if row.get("on_this_mint"):
             tags.append("this mint")
-        if w.get("in_top_holders"):
+        if row.get("in_top_holders"):
             tags.append("in top holders")
-        if w.get("role"):
-            tags.append(str(w.get("role")))
-        elif w.get("label"):
-            tags.append(str(w.get("label")))
-        owns = pct_by.get(addr)
+        if row.get("label"):
+            tags.append(str(row.get("label")))
+        owns_f = row.get("pct")
         try:
-            owns_f = float(owns) if owns is not None else None
+            owns_num = float(owns_f) if owns_f is not None else None
         except (TypeError, ValueError):
-            owns_f = None
-        # Holding-size priority: ~2%–3% = low priority
-        hold_pri = holding_priority_label(owns_f)
-        if hold_pri in {"low", "low-moderate", "medium", "high", "critical"}:
+            owns_num = None
+        hold_pri = (row.get("hold_priority") or holding_priority_label(owns_num) or "").strip()
+        # Keep priority on its own token so Alerts-style grouping is clear;
+        # the % itself is colored by the same Holders/Alerts scheme in the UI.
+        if hold_pri in {"low", "medium", "high", "critical"}:
             tags.append(f"{hold_pri} priority")
         tag_s = f"  [{', '.join(tags)}]" if tags else ""
-        score = w.get("risk_score")
-        seen_n = w.get("times_seen")
-        owns_s = _pct(owns)
-        if owns is None:
+        score = row.get("risk_score")
+        seen_n = row.get("times_seen")
+        if owns_num is not None:
+            owns_s = f"{owns_num:.2f}%"
+        else:
             owns_s = "n/a (not in top snapshot)"
         lines.append(
             f"    #{i}  holds {owns_s}  ·  score={score}  seen×{seen_n}{tag_s}"
         )
         # Address alone on its line so desktop link-tagger makes it clickable
         lines.append(f"         {addr}")
-        note = (w.get("notes") or w.get("evidence") or "").strip()
+        note = str(row.get("notes") or "").strip()
         if note:
             lines.append(f"         {(note[:100])}")
 
-    if len(shown) > 100:
-        lines.append(f"  … and {len(shown) - 100} more in RugWatch DB")
+    if len(wallets) > 100:
+        lines.append(f"  … and {len(wallets) - 100} more in RugWatch DB")
 
     # Quick callout if any match current token
-    mint_hits = [w for w in shown if w.get("on_this_mint") or w.get("in_top_holders")]
+    mint_hits = [
+        w for w in wallets if w.get("on_this_mint") or w.get("in_top_holders")
+    ]
+    lines.append("")
+    if with_pct_n:
+        lines.append(
+            f"  Combined flagged bag on this token: {total_s}"
+            + (f" ({total_pri} priority)" if total_pri_s else "")
+            + f" across {with_pct_n} wallet(s) with known %"
+        )
     if mint_hits:
-        lines.append("")
         lines.append(
             f"  ⚠ {len(mint_hits)} flagged wallet(s) tied to this mint or top holders"
         )
     else:
-        lines.append("")
         lines.append(
             "  (None of these flagged wallets matched this mint’s top holders yet.)"
         )
