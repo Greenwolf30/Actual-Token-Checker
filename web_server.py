@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import threading
@@ -29,6 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
+
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -76,11 +78,15 @@ _SECRET_KEY_NAMES = re.compile(
     r"rpc_url|solana_rpc_url)$"
 )
 
-# Simple in-memory rate limit (per IP)
+# Per-IP rate limit + concurrent Analyze cap (protect shared server egress IP)
 _RATE_LOCK = threading.Lock()
 _RATE_HITS: dict[str, deque[float]] = defaultdict(deque)
-_RATE_MAX = 12  # analyzes per window
-_RATE_WINDOW = 60.0  # seconds
+# Default 6 analyzes / minute / IP (was 12). Override: ANALYZE_RATE_MAX
+_RATE_MAX = int(os.environ.get("ANALYZE_RATE_MAX") or 6)
+_RATE_WINDOW = float(os.environ.get("ANALYZE_RATE_WINDOW") or 60.0)
+# One in-flight Analyze per IP
+_MAX_INFLIGHT_PER_IP = int(os.environ.get("ANALYZE_MAX_INFLIGHT") or 1)
+_IP_INFLIGHT: dict[str, int] = defaultdict(int)
 
 # Optional shared secret so random internet clients can't burn your keys
 # Set WEB_API_TOKEN in .env to require header: X-API-Token: <token>
@@ -110,6 +116,7 @@ def _cors_allowed_origins() -> list[str] | None:
 
 
 def _rate_ok(ip: str) -> bool:
+    """Sliding-window max Analyzes per IP (counts every attempt that starts)."""
     now = time.time()
     with _RATE_LOCK:
         q = _RATE_HITS[ip]
@@ -119,6 +126,24 @@ def _rate_ok(ip: str) -> bool:
             return False
         q.append(now)
         return True
+
+
+def _acquire_inflight(ip: str) -> bool:
+    """At most N concurrent Analyzes per IP (default 1)."""
+    with _RATE_LOCK:
+        if _IP_INFLIGHT[ip] >= _MAX_INFLIGHT_PER_IP:
+            return False
+        _IP_INFLIGHT[ip] += 1
+        return True
+
+
+def _release_inflight(ip: str) -> None:
+    with _RATE_LOCK:
+        n = _IP_INFLIGHT.get(ip, 0) - 1
+        if n <= 0:
+            _IP_INFLIGHT.pop(ip, None)
+        else:
+            _IP_INFLIGHT[ip] = n
 
 
 def redact_text(text: str) -> str:
@@ -624,6 +649,7 @@ def run_analyze(
 ) -> dict[str, Any]:
     load_dotenv()
     from token_tracker.analyze import analyze_token
+    from token_tracker.analyze_gate import analyze_cached
 
     q = (query or "").strip()
     if not q:
@@ -631,11 +657,28 @@ def run_analyze(
     if len(q) > 200:
         return {"ok": False, "error": "query too long"}
 
+    def _live() -> dict[str, Any]:
+        try:
+            report = analyze_token(
+                q,
+                chain=chain or None,
+                include_holders=not quick,
+                quick=quick,
+                include_rugwatch=bool(include_rugwatch),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "ok": False,
+                "error": redact_text(f"Analyze failed: {exc}"),
+                "detail": redact_text(traceback.format_exc()[-800:]),
+            }
+        return build_public_payload(report)
+
     try:
-        report = analyze_token(
-            q,
-            chain=chain or None,
-            include_holders=not quick,
+        payload, source = analyze_cached(
+            _live,
+            query=q,
+            chain=chain,
             quick=quick,
             include_rugwatch=bool(include_rugwatch),
         )
@@ -645,7 +688,11 @@ def run_analyze(
             "error": redact_text(f"Analyze failed: {exc}"),
             "detail": redact_text(traceback.format_exc()[-800:]),
         }
-    return build_public_payload(report)
+    if isinstance(payload, dict):
+        # Non-secret debug: helps confirm cache is working (safe for clients)
+        payload.setdefault("cache", source)
+        return payload
+    return {"ok": False, "error": "Analyze returned empty result"}
 
 
 class _ThreadedServer(ThreadingHTTPServer):
@@ -924,25 +971,43 @@ class WebHandler(BaseHTTPRequestHandler):
                 429,
                 {
                     "ok": False,
-                    "error": f"Rate limit: max {_RATE_MAX} analyzes per {_RATE_WINDOW:.0f}s.",
+                    "error": (
+                        f"Rate limit: max {_RATE_MAX} analyzes per "
+                        f"{_RATE_WINDOW:.0f}s from your IP. Wait and try again."
+                    ),
                 },
             )
         if not (query or "").strip():
             return self._json(400, {"ok": False, "error": "query is required"})
+        if not _acquire_inflight(ip):
+            return self._json(
+                429,
+                {
+                    "ok": False,
+                    "error": (
+                        "Another Analyze is already running from your IP. "
+                        "Wait for it to finish (one at a time protects shared API limits)."
+                    ),
+                },
+            )
 
-        # Analyze can take a while (holders / narrative)
-        result = run_analyze(
-            query.strip(),
-            chain=chain,
-            quick=quick,
-            include_rugwatch=include_rugwatch,
-        )
+        # Analyze can take a while (holders / narrative); cache+single-flight inside
+        try:
+            result = run_analyze(
+                query.strip(),
+                chain=chain,
+                quick=quick,
+                include_rugwatch=include_rugwatch,
+            )
+        finally:
+            _release_inflight(ip)
         try:
             record_analyze(ok=bool(result.get("ok")))
         except Exception:  # noqa: BLE001
             pass
         code = 200 if result.get("ok") else 422
-        if result.get("error") and "Rate limit" in str(result.get("error")):
+        err = str(result.get("error") or "")
+        if "Rate limit" in err or "already running" in err:
             code = 429
         return self._json(code, result)
 

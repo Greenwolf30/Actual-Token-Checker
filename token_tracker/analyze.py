@@ -62,8 +62,14 @@ def _normalize_chain(chain: str | None) -> str | None:
 
 def resolve_pairs(query: str, chain: str | None = None) -> list[dict[str, Any]]:
     """
-    Resolve market pairs. Uses DexScreener (cached) first; on 429 / empty for
-    pump-style mints, falls back to Pump.fun native coin API.
+    Resolve market pairs with fewer free-API pings:
+
+    1) Pump.fun for *pump mints (when applicable)
+    2) DexScreener token-pairs (targeted) before broad search
+    3) DexScreener search (cached) for tickers / fallback
+    4) GeckoTerminal ticker resolve when search is noisy
+    5) Pump fallback on 429 / empty
+
     Supports Solana, EVM, and Robinhood Chain (DexScreener chainId=robinhood).
     """
     q = query.strip()
@@ -80,7 +86,7 @@ def resolve_pairs(query: str, chain: str | None = None) -> list[dict[str, Any]]:
             return []
 
     def _direct_token_pairs(addr: str, preferred: str | None) -> list[dict[str, Any]]:
-        """Hit DexScreener token-pairs for one or several chains."""
+        """Hit DexScreener token-pairs for one or several chains (cached)."""
         chains: list[str] = []
         if preferred:
             chains.append(preferred)
@@ -110,6 +116,10 @@ def resolve_pairs(query: str, chain: str | None = None) -> list[dict[str, Any]]:
         maybe_chain, maybe_addr = q.split(":", 1)
         maybe_chain = _normalize_chain(maybe_chain) or maybe_chain.lower()
         if maybe_chain and maybe_addr:
+            if pf.is_pump_mint(maybe_addr):
+                fb = _pump_fallback(maybe_addr)
+                if fb:
+                    return fb
             try:
                 pairs = dx.pairs_for_token(maybe_chain, maybe_addr)
                 if pairs:
@@ -120,7 +130,55 @@ def resolve_pairs(query: str, chain: str | None = None) -> list[dict[str, Any]]:
             if fb:
                 return fb
 
-    # Looks like an address — search, optionally filter chain
+    # Pure address: targeted token-pairs / pump BEFORE broad DexScreener search
+    # (search is noisier and costs an extra free-API hit).
+    looks_like_addr = bool(ADDRESS_RE.match(q)) or (
+        len(q) >= 32 and " " not in q and not q.startswith("http")
+    )
+    if looks_like_addr:
+        mint = q.split(":")[-1] if ":" in q else q
+        if pf.is_pump_mint(mint):
+            fb = _pump_fallback(mint)
+            if fb:
+                return fb
+        direct = _direct_token_pairs(mint, chain)
+        if direct:
+            exact = [
+                p
+                for p in direct
+                if ((p.get("baseToken") or {}).get("address") or "").lower()
+                == mint.lower()
+            ]
+            return exact or direct
+        # Broad search only if direct pairs missed
+        pairs_addr: list[dict[str, Any]] = []
+        try:
+            pairs_addr = dx.search_pairs(q)
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            pairs_addr = []
+        if chain:
+            pairs_addr = [
+                p
+                for p in pairs_addr
+                if (p.get("chainId") or "").lower() == chain.lower()
+            ]
+        exact = [
+            p
+            for p in pairs_addr
+            if ((p.get("baseToken") or {}).get("address") or "").lower()
+            == mint.lower()
+        ]
+        if exact:
+            return exact
+        fb = _pump_fallback(mint)
+        if fb:
+            return fb
+        if last_err and not pairs_addr:
+            raise last_err
+        return pairs_addr
+
+    # Symbol / name — DexScreener search (cached ~3 min)
     pairs: list[dict[str, Any]] = []
     try:
         pairs = dx.search_pairs(q)
@@ -134,25 +192,6 @@ def resolve_pairs(query: str, chain: str | None = None) -> list[dict[str, Any]]:
 
     if chain:
         pairs = [p for p in pairs if (p.get("chainId") or "").lower() == chain.lower()]
-
-    # If query is a pure address, prefer pairs where baseToken matches
-    if ADDRESS_RE.match(q) or (len(q) >= 32 and " " not in q):
-        exact = [
-            p
-            for p in pairs
-            if ((p.get("baseToken") or {}).get("address") or "").lower() == q.lower()
-        ]
-        if exact:
-            return exact
-        direct = _direct_token_pairs(q, chain)
-        if direct:
-            return direct
-        fb = _pump_fallback(q)
-        if fb:
-            return fb
-        if last_err and not pairs:
-            raise last_err
-        return pairs
 
     # Symbol / name: DexScreener search is noisy (copycats). GeckoTerminal pool
     # search ranks by real reserves/volume and usually hits the canonical mint.

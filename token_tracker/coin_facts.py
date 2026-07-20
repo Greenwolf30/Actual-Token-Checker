@@ -581,12 +581,19 @@ def _from_dexscreener(
                 links.setdefault("website", str(w["url"]))
                 ok = True
 
+    # Cached DexScreener extras (pairs already often have socials — avoid spam)
     try:
-        data = get_json(
-            f"https://api.dexscreener.com/latest/dex/tokens/{address}",
-            timeout=_TIMEOUT,
-            retries=0,
-        )
+        from .api_cache import TTL_PAIRS, TTL_SEARCH, cache_get, cache_set
+
+        tok_key = f"dx:tokens_meta:{(chain_id or '').lower()}:{address.lower()}"
+        data = cache_get(tok_key)
+        if data is None:
+            data = get_json(
+                f"https://api.dexscreener.com/latest/dex/tokens/{address}",
+                timeout=_TIMEOUT,
+                retries=0,
+            )
+            cache_set(tok_key, data if data is not None else {}, TTL_PAIRS)
         pairs = (data or {}).get("pairs") if isinstance(data, dict) else None
         if isinstance(pairs, list):
             for p in pairs[:8]:
@@ -614,12 +621,23 @@ def _from_dexscreener(
     except Exception:  # noqa: BLE001
         pass
 
+    # Latest profiles feed is shared — cache whole list briefly (not per-mint)
     try:
-        profiles = get_json(
-            "https://api.dexscreener.com/token-profiles/latest/v1",
-            timeout=_TIMEOUT,
-            retries=0,
-        )
+        from .api_cache import TTL_SEARCH, cache_get, cache_set
+
+        prof_key = "dx:token_profiles_latest_v1"
+        profiles = cache_get(prof_key)
+        if profiles is None:
+            profiles = get_json(
+                "https://api.dexscreener.com/token-profiles/latest/v1",
+                timeout=_TIMEOUT,
+                retries=0,
+            )
+            cache_set(
+                prof_key,
+                profiles if profiles is not None else [],
+                TTL_SEARCH,
+            )
         if isinstance(profiles, list):
             al = address.lower()
             for row in profiles:

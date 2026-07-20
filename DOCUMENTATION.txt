@@ -97,9 +97,14 @@ Pump.fun fallback
     snapshot from Pump.fun’s public coin API.
   - That snapshot is thinner than full DexScreener data.
 
-DexScreener cache
-  - Same search/pair is remembered ~2–3 minutes so re-analyzing the same
-    mint does not spam DexScreener as hard.
+DexScreener / Analyze cache (server, in-memory)
+  - Same DexScreener search/pair is remembered ~2–3 minutes.
+  - Full Analyze result for the same mint is cached ~90s (Quick ~45s).
+  - Concurrent Analyzes of the same mint share one live fetch (single-flight).
+  - Per-IP: max ~6 Analyzes / 60s and one Analyze at a time (protects shared
+    host IP from rate limits). Env: ANALYZE_CACHE_TTL_FULL, ANALYZE_RATE_MAX.
+  - Mint addresses use targeted token-pairs / Pump before broad DexScreener
+    search to cut free-API pings.
 
 
 --------------------------------------------------------------------------------
