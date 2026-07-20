@@ -2255,20 +2255,109 @@ function stripSolscanUrlLines(text) {
     .join("\n");
 }
 
-function linkify(text) {
+/**
+ * Hold % from a plain report line (no HTML).
+ * Matches: holds 12.3% · (12.3% · owns 12.3%
+ */
+function extractHoldPctFromPlain(line) {
+  const plain = String(line || "");
+  let m = plain.match(/\bholds\s+(\d+(?:\.\d+)?)\s*%/i);
+  if (m) return Number(m[1]);
+  m = plain.match(/\((\d+(?:\.\d+)?)\s*%/);
+  if (m) return Number(m[1]);
+  m = plain.match(/\bowns\s+(\d+(?:\.\d+)?)\s*%/i);
+  if (m) return Number(m[1]);
+  return null;
+}
+
+/**
+ * For each plain line, resolve the bag % that should color a wallet on that line.
+ * - Same line % wins
+ * - Else previous line % (Holders: rank line then address line)
+ * - Else next line % (Creator: address then "owns X%")
+ */
+function resolveLineHoldPcts(plainLines) {
+  const n = plainLines.length;
+  const own = plainLines.map(extractHoldPctFromPlain);
+  const resolved = new Array(n).fill(null);
+  for (let i = 0; i < n; i++) {
+    if (own[i] != null) {
+      resolved[i] = own[i];
+      continue;
+    }
+    // Prefer previous non-empty line with a % (top-holder layout)
+    for (let j = i - 1; j >= 0 && j >= i - 2; j--) {
+      if (own[j] != null) {
+        resolved[i] = own[j];
+        break;
+      }
+      if (String(plainLines[j] || "").trim()) break;
+    }
+    if (resolved[i] != null) continue;
+    // Next line with owns/holds (creator layout)
+    for (let j = i + 1; j < n && j <= i + 2; j++) {
+      if (own[j] != null) {
+        resolved[i] = own[j];
+        break;
+      }
+      if (String(plainLines[j] || "").trim() && !/solscan\.io/i.test(plainLines[j])) {
+        // non-empty non-pct line — stop looking
+        if (!/\b(owns|holds)\b/i.test(plainLines[j])) break;
+      }
+    }
+  }
+  return resolved;
+}
+
+/** Build wallet <a> with optional hold color (inline style so it always wins). */
+function walletLinkHtml(addr, holdClass, holdColor) {
+  const cls = holdClass
+    ? "wallet-link " + holdClass
+    : "wallet-link";
+  const style = holdColor
+    ? ' style="color:' +
+      holdColor +
+      ' !important;font-weight:600"'
+    : "";
+  return (
+    '<a class="' +
+    cls +
+    '" href="https://solscan.io/account/' +
+    addr +
+    '" target="_blank" rel="noopener noreferrer"' +
+    style +
+    ">" +
+    addr +
+    "</a>"
+  );
+}
+
+/**
+ * linkify with optional wallet-address hold coloring.
+ * mode: null | "alerts" (>5% yellow) | "holders" (>10% red)
+ */
+function linkify(text, mode) {
   if (!text) return "";
   // Never show Solscan URL rows; addresses stay and become clickable below
   const plain = stripSolscanUrlLines(text);
-  const esc = plain
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-  // Other http(s) URLs (not solscan account lines — already stripped)
-  let html = esc.replace(
-    /(https?:\/\/[^\s<>"']+)/g,
-    (url) => {
+  const plainLines = plain.split("\n");
+  const linePcts =
+    mode === "alerts" || mode === "holders"
+      ? resolveLineHoldPcts(plainLines)
+      : null;
+
+  const escLines = plainLines.map((line) =>
+    line
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+  );
+
+  const htmlLines = escLines.map((escLine, idx) => {
+    // Other http(s) URLs (not solscan account lines — already stripped)
+    let html = escLine.replace(/(https?:\/\/[^\s<>"']+)/g, (url) => {
       if (/solscan\.io\/(account|token)\//i.test(url)) {
-        return url; // should be rare after strip; leave plain if any leftover
+        return url;
       }
       return (
         '<a href="' +
@@ -2277,21 +2366,38 @@ function linkify(text) {
         url +
         "</a>"
       );
+    });
+
+    let holdClass = null;
+    let holdColor = null;
+    if (linePcts) {
+      const pct = linePcts[idx];
+      if (pct != null && Number.isFinite(pct)) {
+        if (mode === "alerts" && pct > 5) {
+          holdClass = "wallet-hold-yellow";
+          holdColor = "#e8c84a";
+        } else if (mode === "holders" && pct > 10) {
+          holdClass = "wallet-hold-red";
+          holdColor = "#e85d5d";
+        }
+      }
     }
-  );
-  // Solana base58 wallets → clickable Solscan (address text stays)
-  html = html.replace(
-    /(^|>)([^<]*?)(?=<|$)/g,
-    (full, prefix, chunk) => {
-      const linked = chunk.replace(
-        /\b([1-9A-HJ-NP-Za-km-z]{32,44})\b/g,
-        (addr) =>
-          `<a class="wallet-link" href="https://solscan.io/account/${addr}" target="_blank" rel="noopener noreferrer">${addr}</a>`
-      );
-      return prefix + linked;
-    }
-  );
-  return html;
+
+    // Solana base58 wallets → clickable Solscan (address text stays)
+    html = html.replace(
+      /(^|>)([^<]*?)(?=<|$)/g,
+      (full, prefix, chunk) => {
+        const linked = chunk.replace(
+          /\b([1-9A-HJ-NP-Za-km-z]{32,44})\b/g,
+          (addr) => walletLinkHtml(addr, holdClass, holdColor)
+        );
+        return prefix + linked;
+      }
+    );
+    return html;
+  });
+
+  return htmlLines.join("\n");
 }
 
 /** Wallet-holder % bands: low green · medium yellow · high orange · critical red */
@@ -2363,98 +2469,21 @@ function colorWalletHolderPcts(html) {
     .join("\n");
 }
 
-/** Extract a bag % from a report line (holds X% / (X% / owns X%). */
-function extractHoldPctFromLine(line) {
-  const plain = String(line || "").replace(/<[^>]*>/g, "");
-  let m = plain.match(/\bholds\s+(\d+(?:\.\d+)?)\s*%/i);
-  if (m) return Number(m[1]);
-  m = plain.match(/\((\d+(?:\.\d+)?)\s*%/);
-  if (m) return Number(m[1]);
-  m = plain.match(/\bowns\s+(\d+(?:\.\d+)?)\s*%/i);
-  if (m) return Number(m[1]);
-  return null;
-}
-
-function markWalletLinksOnLine(line, extraClass) {
-  if (!line || !extraClass) return line;
-  return line.replace(
-    /class="wallet-link"/g,
-    'class="wallet-link ' + extraClass + '"'
-  );
-}
-
-/**
- * Alerts: color wallet address yellow when that row holds > 5%.
- * % and address are on the same line ("holds 12.34% … ADDR").
- */
-function colorAlertWalletAddresses(html) {
-  if (!html) return html;
-  return html
-    .split("\n")
-    .map((line) => {
-      const pct = extractHoldPctFromLine(line);
-      if (pct != null && pct > 5 && /class="wallet-link"/.test(line)) {
-        return markWalletLinksOnLine(line, "wallet-hold-yellow");
-      }
-      return line;
-    })
-    .join("\n");
-}
-
-/**
- * Holders: color wallet address red when bag > 10%.
- * Top-holder rows put % on one line and the address on the next.
- */
-function colorHoldersWalletAddresses(html) {
-  if (!html) return html;
-  const lines = html.split("\n");
-  let pendingPct = null;
-  return lines
-    .map((line) => {
-      const plain = String(line || "").replace(/<[^>]*>/g, "").trim();
-      const pct = extractHoldPctFromLine(line);
-      const hasWallet = /class="wallet-link"/.test(line);
-      let out = line;
-
-      if (hasWallet) {
-        const use =
-          pct != null && pct > 10
-            ? pct
-            : pct == null && pendingPct != null && pendingPct > 10
-              ? pendingPct
-              : null;
-        if (use != null && use > 10) {
-          out = markWalletLinksOnLine(line, "wallet-hold-red");
-        }
-        pendingPct = null;
-      } else if (pct != null) {
-        // Rank / "holds X%" line — carry % to the address line below
-        pendingPct = pct;
-      } else if (!plain) {
-        pendingPct = null;
-      } else if (/^#\d+\b/.test(plain) || /^•/.test(plain)) {
-        // New row without a parseable % — clear carry
-        pendingPct = null;
-      }
-      return out;
-    })
-    .join("\n");
-}
-
 /**
  * Holders + Logs rich formatting:
  *  - drop Solscan URL lines (keep addresses)
  *  - clickable wallet addresses
+ *  - Holders mode: address red when bag > 10%
  *  - yellow token amounts
  *  - % color bands except Top1/Top5/Top10 and Top10 ex-LP
  *  - Creator "owns X%" uses % color scheme
  */
 function formatHoldersRichHtml(text) {
   if (!text) return "";
-  let html = linkify(text);
+  // Color wallet addresses during linkify (inline style — always visible)
+  let html = linkify(text, "holders");
   html = colorWalletHolderPcts(html);
   html = colorHoldingAmounts(html);
-  html = colorHoldersWalletAddresses(html);
   return html;
 }
 
@@ -2493,14 +2522,13 @@ function setPanelText(tab, text) {
   let html;
   if (tab === "holders") {
     // No Solscan URL rows; clickable addresses; yellow amounts; % colors (not Top1/5/10)
-    // Wallet address red when bag > 10%
+    // Wallet address red when bag > 10% (inline style in linkify)
     html = formatHoldersRichHtml(raw);
   } else if (tab === "alerts") {
-    html = linkify(raw);
+    // Wallet address yellow when bag > 5% (inline style in linkify)
+    html = linkify(raw, "alerts");
     html = colorWalletHolderPcts(html);
     html = colorHoldingAmounts(html);
-    // Wallet address yellow when bag > 5%
-    html = colorAlertWalletAddresses(html);
   } else if (tab === "bundles") {
     // Summary + each wallet group % colored; Top10 ex-LP uncolored; bal yellow
     html = formatBundlesRichHtml(raw);

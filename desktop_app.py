@@ -1276,6 +1276,12 @@ def run_gui() -> None:
             foreground="#e85d5d",
             underline=True,
         )
+        # Color tags must outrank default wallet_link blue
+        try:
+            box.tag_raise("wallet_hold_yellow")
+            box.tag_raise("wallet_hold_red")
+        except Exception:  # noqa: BLE001
+            pass
         box.tag_configure(
             "url_link",
             foreground="#6cb6ff",
