@@ -644,31 +644,31 @@ def format_alerts_text(data: dict[str, Any]) -> str:
         if aid.startswith("bundle_pct"):
             by_id.setdefault("bundle_pct_threshold", a)
 
-    # Labels for zero/empty → “will show here”
+    # Labels for zero/empty → “will show here when value is true”
     placeholder_slots: list[tuple[str, str, list[str]]] = [
         (
             "liquidity_unlocked",
-            "Liquidity unlocked will show here",
+            "Liquidity unlocked will show here when value is true",
             ["liquidity_unlocked"],
         ),
         (
             "holders_over_2_pct",
-            "Wallets holding over 2% will show here",
+            "Wallets holding over 2% will show here when value is true",
             ["holders_over_2_pct"],
         ),
         (
             "single_holder_over_5",
-            "Single holder over 5% will show here",
+            "Single holder over 5% will show here when value is true",
             ["single_holder_over_5"],
         ),
         (
             "similar_wallets_large",
-            "Similar wallets large hold % will show here",
+            "Similar wallets large hold % will show here when value is true",
             ["similar_wallets_large"],
         ),
         (
             "bundle_pct_threshold",
-            "Bundle share % will show here",
+            "Bundle share % will show here when value is true",
             [
                 "bundle_pct_threshold",
                 "bundle_pct_5_20",
@@ -679,17 +679,17 @@ def format_alerts_text(data: dict[str, Any]) -> str:
         ),
         (
             "dexscreener_socials_missing",
-            "DexScreener socials missing will show here",
+            "DexScreener socials missing will show here when value is true",
             ["dexscreener_socials_missing"],
         ),
         (
             "serial_rugger_link",
-            "Serial-rugger / rug signals will show here",
+            "Serial-rugger / rug signals will show here when value is true",
             ["serial_rugger_link"],
         ),
         (
             "rugwatch_flagged",
-            "Flagged wallets hold % will show here",
+            "Flagged wallets hold % will show here when value is true",
             ["rugwatch_flagged"],
         ),
     ]
@@ -813,7 +813,7 @@ def format_alerts_text(data: dict[str, Any]) -> str:
         ):
             if not hit:
                 lines.append(
-                    f"  · Liquidity unlocked will show here"
+                    f"  · Liquidity unlocked will show here when value is true"
                     f"{' (skipped on Pump.fun / PumpSwap)' if pump_skip_lp else ''}"
                 )
                 continue
