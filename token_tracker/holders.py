@@ -646,7 +646,7 @@ def _fuse_holder_sources(
             rw = fetch_rugwatch_flagged(
                 mint, holder_wallets=holder_addrs, min_score=0, limit=500
             )
-            # Combined bag % of flagged wallets still in the top-holder snapshot
+            # Combined bag % + still/previously holding counts (cumulative on GitHub)
             try:
                 stats = collect_flagged_holder_pcts(
                     rw, list(result.get("holders") or [])
@@ -655,15 +655,50 @@ def _fuse_holder_sources(
                 rw["flagged_total_pct"] = float(stats.get("total_pct") or 0)
                 rw["flagged_with_pct_count"] = int(stats.get("with_pct_count") or 0)
                 rw["flagged_shown_count"] = int(stats.get("shown_count") or 0)
+                rw["still_holding_count"] = int(stats.get("still_holding_count") or 0)
+                rw["previously_holding_scan"] = int(
+                    stats.get("previously_holding_count") or 0
+                )
+                try:
+                    from .flagged_hold_store import merge_mint_flagged_hold
+
+                    prev_info = merge_mint_flagged_hold(
+                        mint,
+                        still_addrs=list(stats.get("still_addrs") or []),
+                        prev_addrs=list(stats.get("prev_addrs") or []),
+                        push_github=True,
+                    )
+                    rw["previously_holding_count"] = int(
+                        prev_info.get("previously_holding") or 0
+                    )
+                    rw["ever_held_count"] = int(prev_info.get("ever_held") or 0)
+                    rw["previously_holding_added"] = int(
+                        prev_info.get("added_previously") or 0
+                    )
+                    rw["previously_holding_github"] = prev_info.get("github") or {}
+                except Exception as store_exc:  # noqa: BLE001
+                    rw["previously_holding_count"] = int(
+                        stats.get("previously_holding_count") or 0
+                    )
+                    rw["ever_held_count"] = rw["still_holding_count"] + rw[
+                        "previously_holding_count"
+                    ]
+                    rw["previously_holding_store_error"] = str(store_exc)
             except Exception:  # noqa: BLE001
                 rw = dict(rw)
                 rw.setdefault("flagged_total_pct", 0.0)
                 rw.setdefault("flagged_with_pct_count", 0)
+                rw.setdefault("previously_holding_count", 0)
+                rw.setdefault("still_holding_count", 0)
 
             result["rugwatch_flagged"] = rw
             result["flagged_hold_pct"] = float(rw.get("flagged_total_pct") or 0)
             result["flagged_with_pct_count"] = int(
                 rw.get("flagged_with_pct_count") or 0
+            )
+            result["flagged_still_holding"] = int(rw.get("still_holding_count") or 0)
+            result["flagged_previously_holding"] = int(
+                rw.get("previously_holding_count") or 0
             )
             base_extra["rugwatch_flagged"] = {
                 "ok": rw.get("ok"),
@@ -673,6 +708,9 @@ def _fuse_holder_sources(
                 "db_found": rw.get("db_found"),
                 "flagged_total_pct": rw.get("flagged_total_pct"),
                 "flagged_with_pct_count": rw.get("flagged_with_pct_count"),
+                "still_holding_count": rw.get("still_holding_count"),
+                "previously_holding_count": rw.get("previously_holding_count"),
+                "ever_held_count": rw.get("ever_held_count"),
                 # never surface local filesystem paths in holder meta
                 "error": rw.get("error"),
             }
@@ -1593,6 +1631,9 @@ def collect_flagged_holder_pcts(
         shown.append(w)
 
     wallets_out: list[dict[str, Any]] = []
+    previously_out: list[dict[str, Any]] = []
+    still_addrs: list[str] = []
+    prev_addrs: list[str] = []
     total_pct = 0.0
     with_pct = 0
     skipped_sold = 0
@@ -1626,10 +1667,6 @@ def collect_flagged_holder_pcts(
         if still_holds and bal is not None and bal <= 0 and (owns_f or 0) <= 0:
             still_holds = False
 
-        if only_current_holders and not still_holds:
-            skipped_sold += 1
-            continue
-
         row = {
             "wallet": addr,
             "pct": owns_f,
@@ -1645,10 +1682,20 @@ def collect_flagged_holder_pcts(
             "raw": w,
             "still_holds": still_holds,
         }
-        wallets_out.append(row)
-        if owns_f is not None and owns_f >= _FLAGGED_STILL_HOLD_MIN_PCT:
-            total_pct += owns_f
-            with_pct += 1
+
+        if still_holds:
+            still_addrs.append(addr)
+            wallets_out.append(row)
+            if owns_f is not None and owns_f >= _FLAGGED_STILL_HOLD_MIN_PCT:
+                total_pct += owns_f
+                with_pct += 1
+        else:
+            # Sold ≥99% / left list / not in top — count as previously holding
+            skipped_sold += 1
+            prev_addrs.append(addr)
+            previously_out.append(row)
+            if not only_current_holders:
+                wallets_out.append(row)
 
     # Prefer largest bags first for alerts / display
     wallets_out.sort(
@@ -1659,11 +1706,16 @@ def collect_flagged_holder_pcts(
     )
     return {
         "wallets": wallets_out,
+        "previously_wallets": previously_out,
+        "still_addrs": still_addrs,
+        "prev_addrs": prev_addrs,
         "total_pct": round(total_pct, 4) if with_pct else 0.0,
         "with_pct_count": with_pct,
         "shown_count": len(wallets_out),
         "skipped_lp": skipped_lp,
         "skipped_sold": skipped_sold,
+        "previously_holding_count": skipped_sold,
+        "still_holding_count": len(still_addrs),
         "only_current_holders": only_current_holders,
     }
 
@@ -1687,11 +1739,26 @@ def _format_rugwatch_flagged_section(
     )
 
     skipped_sold = int(stats.get("skipped_sold") or 0)
+    still_n = int(
+        (rw or {}).get("still_holding_count")
+        or stats.get("still_holding_count")
+        or with_pct_n
+        or 0
+    )
+    prev_n = int(
+        (rw or {}).get("previously_holding_count")
+        or stats.get("previously_holding_count")
+        or 0
+    )
+    if prev_n < skipped_sold:
+        prev_n = skipped_sold
     lines: list[str] = [
         "",
         f"  ── FLAGGED WALLETS (RugWatch) · combined {total_s}{total_pri_s} ──",
-        "  Only wallets that still hold on this mint are listed here.",
-        "  Wallets that sold ≥99% of their bag are not shown.",
+        f"  Still holding: {still_n}",
+        f"  Previously holding: {prev_n}",
+        "  Previously holding increases when more flagged wallets sold ≥99% / left (saved to GitHub).",
+        "  Only still-holding wallets are listed below.",
     ]
     if not rw:
         lines.append("  RugWatch: no data (scan holders to load).")
@@ -1729,13 +1796,14 @@ def _format_rugwatch_flagged_section(
     wallets = list(stats.get("wallets") or [])
     skipped_lp = int(stats.get("skipped_lp") or 0)
     if not wallets:
-        # Sold ≥99% (or none still holding) → simple placeholder
+        # Sold ≥99% (or none still holding) → simple placeholder + counts
         lines.append("  Flagged wallets will show here")
+        lines.append(f"  Still holding: {still_n} · Previously holding: {prev_n}")
         return lines
 
     lines.append(
         f"  Flagged wallets (still holding) · combined {total_s}{total_pri_s} "
-        f"({len(wallets)} shown"
+        f"({len(wallets)} shown · previously holding {prev_n}"
         + (f", {skipped_lp} LP excluded" if skipped_lp else "")
         + "):"
     )

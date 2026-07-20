@@ -556,6 +556,16 @@ def build_public_payload(report: dict[str, Any]) -> dict[str, Any]:
         # Text snapshots are clipped so ~20 entries fit in localStorage.
         "history_meta": {
             "holders_ok": bool(holders.get("ok")),
+            "flagged_still_holding": int(
+                holders.get("flagged_still_holding")
+                or (holders.get("rugwatch_flagged") or {}).get("still_holding_count")
+                or 0
+            ),
+            "flagged_previously_holding": int(
+                holders.get("flagged_previously_holding")
+                or (holders.get("rugwatch_flagged") or {}).get("previously_holding_count")
+                or 0
+            ),
             "concentration_risk": hsum.get("concentration_risk"),
             "top1_pct": hsum.get("top1_pct"),
             "top5_pct": hsum.get("top5_pct"),
