@@ -522,16 +522,170 @@ button, .ghost, .primary {
   animation: fadeIn 0.18s ease;
 }
 .panel.active { display: block; }
+/* Logs / Ruggers panels need flex so the body can scroll correctly */
+.panel.panel-logs.active { display: flex; }
+.panel.panel-ruggers.active { display: flex; }
 
-/* History tab toolbar */
+/* ── Ruggers tab ─────────────────────────────────────────── */
+.panel-ruggers {
+  display: none;
+  flex-direction: column;
+  min-height: 0;
+}
+.panel-ruggers.active {
+  display: flex;
+}
+.ruggers-body {
+  flex: 1;
+  overflow: auto;
+  max-height: min(68vh, 880px);
+  padding: 12px 14px 24px;
+}
+.rug-header {
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.rug-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+  word-break: break-all;
+}
+.rug-sub {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+.rug-rules {
+  margin: 10px 0 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+.rug-mint-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.rug-mint-pick select {
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font-size: 0.78rem;
+  max-width: min(360px, 70vw);
+}
+.rug-section {
+  margin: 14px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+.rug-section-title {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+.rug-count {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--accent-border);
+}
+.rug-section-hint {
+  margin: 0;
+  padding: 6px 12px 4px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.rug-section-body {
+  padding: 6px 10px 10px;
+}
+.rug-empty {
+  margin: 6px 4px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.rug-wallet-row {
+  padding: 8px 6px;
+  border-bottom: 1px solid rgba(37, 43, 54, 0.7);
+}
+.rug-wallet-row:last-child {
+  border-bottom: none;
+}
+.rug-wallet-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  word-break: break-all;
+}
+.rug-wallet-meta {
+  margin-top: 3px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.rug-tag {
+  display: inline-block;
+  font-family: var(--font);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.rug-tag-seller {
+  background: rgba(255, 69, 58, 0.15);
+  color: #ff6b63;
+  border: 1px solid rgba(255, 69, 58, 0.35);
+}
+.rug-tag-swing {
+  background: rgba(255, 159, 10, 0.15);
+  color: #ffb340;
+  border: 1px solid rgba(255, 159, 10, 0.4);
+}
+.rug-footer-meta {
+  margin: 12px 0 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.ruggers-body a.wallet-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+.ruggers-body a.wallet-link:hover {
+  text-decoration: underline;
+}
+
+/* History / Logs tab toolbar */
 .history-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 10px 14px 0;
+  padding: 10px 14px 8px;
   border-bottom: 1px solid var(--border, #2a3544);
+  flex-shrink: 0;
 }
 .history-bar-label {
   font-size: 0.72rem;
@@ -547,6 +701,108 @@ button, .ghost, .primary {
 .history-btn {
   font-size: 0.75rem !important;
   padding: 4px 10px !important;
+}
+
+/* Logs: scrollable list of entries */
+.panel-logs {
+  display: none;
+  flex-direction: column;
+  min-height: 0;
+}
+.panel-logs.active {
+  display: flex;
+}
+.logs-list {
+  flex: 1;
+  overflow: auto;
+  max-height: min(68vh, 880px);
+  padding: 10px 12px 20px;
+}
+.logs-empty {
+  margin: 16px 8px;
+  color: var(--text-muted, #8b9bb0);
+  font-size: 0.85rem;
+}
+.logs-meta {
+  margin: 0 0 10px;
+  font-size: 0.75rem;
+  color: var(--text-muted, #8b9bb0);
+}
+
+/* Single-bracket separator between entries */
+.logs-sep {
+  margin: 14px 0 10px;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--text-muted, #8b9bb0);
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
+.logs-entry {
+  border: 1px solid var(--border, #2a3544);
+  border-radius: 10px;
+  background: var(--surface, rgba(18, 24, 31, 0.6));
+  padding: 10px 10px 12px;
+  margin-bottom: 4px;
+}
+.logs-entry-head {
+  font-size: 0.82rem;
+  font-weight: 600;
+  margin: 0 0 4px;
+  color: var(--text, #e8eef6);
+}
+.logs-entry-sub {
+  font-size: 0.72rem;
+  color: var(--text-muted, #8b9bb0);
+  margin: 0 0 10px;
+  font-family: var(--mono);
+  word-break: break-all;
+}
+
+/* Three columns: Overview | Holders | Bundles */
+.logs-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr) minmax(0, 1.15fr);
+  gap: 10px;
+  align-items: stretch;
+}
+@media (max-width: 960px) {
+  .logs-row {
+    grid-template-columns: 1fr;
+  }
+}
+.logs-col {
+  min-width: 0;
+  border: 1px solid var(--border, #2a3544);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  display: flex;
+  flex-direction: column;
+  max-height: 320px;
+}
+.logs-col-title {
+  flex-shrink: 0;
+  padding: 6px 10px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted, #8b9bb0);
+  border-bottom: 1px solid var(--border, #2a3544);
+}
+.logs-col-body {
+  flex: 1;
+  margin: 0;
+  padding: 8px 10px 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  line-height: 1.45;
+  color: var(--text-secondary, #c5d0dc);
 }
 
 @keyframes fadeIn {
@@ -577,24 +833,49 @@ button, .ghost, .primary {
 
 /* Wallet holder % priority colors — dim / muted shades on dark UI */
 .report .pct-low,
-.report .pri-low {
+.report .pri-low,
+.logs-col-body .pct-low {
   color: #6a9e78; /* dim green */
   font-weight: 500;
 }
 .report .pct-medium,
-.report .pri-medium {
+.report .pri-medium,
+.logs-col-body .pct-medium {
   color: #b8a85c; /* dim yellow */
   font-weight: 500;
 }
 .report .pct-high,
-.report .pri-high {
+.report .pri-high,
+.logs-col-body .pct-high {
   color: #b8864a; /* dim orange */
   font-weight: 500;
 }
 .report .pct-critical,
-.report .pri-critical {
+.report .pri-critical,
+.logs-col-body .pct-critical {
   color: #b86b66; /* dim red */
   font-weight: 500;
+}
+
+/* Token holding amounts (balances) — yellow */
+.report .hold-amt,
+.logs-col-body .hold-amt {
+  color: #e8c84a;
+  font-weight: 600;
+}
+
+/* Clickable wallet addresses */
+.report a.wallet-link,
+.logs-col-body a.wallet-link,
+.logs-entry-sub a.wallet-link {
+  color: #6cb6ff;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.report a.wallet-link:hover,
+.logs-col-body a.wallet-link:hover,
+.logs-entry-sub a.wallet-link:hover {
+  color: #9fd0ff;
 }
 
 /* Custom scrollbar for report */

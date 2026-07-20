@@ -3,17 +3,154 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta http-equiv="refresh" content="0;url=https://github.com/Greenwolf30/Actual-Token-Checker" />
-  <title>GitHub — Actual Data Token Checker</title>
+  <meta name="referrer" content="no-referrer" />
+  <title>Documentation — Actual Data Token Checker</title>
   <link rel="icon" href="/logo.svg" type="image/svg+xml" />
-  <script>
-    location.replace("https://github.com/Greenwolf30/Actual-Token-Checker");
-  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    .docs-page {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 20px 16px 48px;
+    }
+    .docs-top {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .docs-top h1 {
+      margin: 0;
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .docs-top p {
+      margin: 4px 0 0;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+    .docs-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .docs-actions a {
+      display: inline-block;
+      padding: 6px 12px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: var(--bg-elevated);
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 0.8rem;
+      font-weight: 500;
+    }
+    .docs-actions a:hover {
+      border-color: var(--accent-border);
+      color: var(--text);
+      background: var(--accent-soft);
+    }
+    .docs-actions a.primary {
+      border-color: var(--accent-border);
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+    .docs-body {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-elevated);
+      box-shadow: var(--shadow);
+      overflow: auto;
+      max-height: none;
+    }
+    .docs-body pre {
+      margin: 0;
+      padding: 18px 16px 28px;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      line-height: 1.55;
+      color: var(--text-secondary);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .docs-status {
+      margin: 12px 0;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+    .docs-status.err { color: var(--bad); }
+  </style>
 </head>
 <body>
-  <p>
-    Redirecting to
-    <a href="https://github.com/Greenwolf30/Actual-Token-Checker">GitHub</a>…
-  </p>
+  <div class="docs-page">
+    <nav class="site-nav site-nav-compact" aria-label="Main" style="margin-bottom: 16px;">
+      <div class="site-nav-inner">
+        <a class="nav-brand nav-brand-icon" href="/" title="Home">
+          <img class="logo logo-sm" src="/logo.svg" width="28" height="28" alt="Home" />
+        </a>
+        <div class="nav-links">
+          <a class="nav-link" href="/">Analyze</a>
+          <a class="nav-link" href="/docs.html" aria-current="page">Docs</a>
+          <a
+            class="nav-link"
+            href="https://github.com/Greenwolf30/Actual-Token-Checker"
+            target="_blank"
+            rel="noopener noreferrer"
+            >GitHub</a
+          >
+        </div>
+      </div>
+    </nav>
+
+    <div class="docs-top">
+      <div>
+        <h1>Actual Data Token Checker — User Guide</h1>
+        <p>Full website documentation (same content as documentation.txt on this site)</p>
+      </div>
+      <div class="docs-actions">
+        <a class="primary" href="/">← Back to Analyze</a>
+        <a href="/documentation.txt" target="_blank" rel="noopener">Raw .txt</a>
+        <a
+          href="https://github.com/Greenwolf30/Actual-Token-Checker/blob/main/DOCUMENTATION.txt"
+          target="_blank"
+          rel="noopener noreferrer"
+          >GitHub copy</a
+        >
+      </div>
+    </div>
+
+    <p id="docsStatus" class="docs-status">Loading documentation…</p>
+    <div class="docs-body">
+      <pre id="docsContent"></pre>
+    </div>
+  </div>
+
+  <script>
+    (async function () {
+      const status = document.getElementById("docsStatus");
+      const pre = document.getElementById("docsContent");
+      try {
+        const r = await fetch("/documentation.txt", { cache: "no-cache" });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const text = await r.text();
+        pre.textContent = text;
+        status.textContent =
+          "Loaded from this website · " + text.length.toLocaleString() + " characters";
+      } catch (e) {
+        status.className = "docs-status err";
+        status.textContent =
+          "Could not load /documentation.txt — " + (e && e.message ? e.message : e);
+        pre.textContent =
+          "Documentation file missing from the web/ folder on the server.\n" +
+          "Upload web/documentation.txt next to index.html, then refresh.";
+      }
+    })();
+  </script>
 </body>
 </html>

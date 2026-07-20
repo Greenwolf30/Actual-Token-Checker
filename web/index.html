@@ -22,6 +22,7 @@
           <img class="logo logo-sm" src="/logo.svg" width="28" height="28" alt="Home" />
         </a>
         <div class="nav-links">
+          <a class="nav-link" href="/docs.html" title="Full user guide on this site">Docs</a>
           <a
             class="nav-link"
             href="https://github.com/Greenwolf30/Actual-Token-Checker"
@@ -107,6 +108,7 @@
         <button type="button" class="tab" role="tab" aria-selected="false" data-tab="alerts">Alerts</button>
         <button type="button" class="tab" role="tab" aria-selected="false" data-tab="maps">Maps</button>
         <button type="button" class="tab" role="tab" aria-selected="false" data-tab="about">About</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="ruggers">Ruggers</button>
         <button type="button" class="tab" role="tab" aria-selected="false" data-tab="history">Logs</button>
       </nav>
 
@@ -129,7 +131,26 @@
         <section class="panel" id="panel-about" data-panel="about" role="tabpanel">
           <pre class="report" id="text-about">About narrative loads after Analyze (coin facts + X + news).</pre>
         </section>
-        <section class="panel" id="panel-history" data-panel="history" role="tabpanel">
+        <section class="panel panel-ruggers" id="panel-ruggers" data-panel="ruggers" role="tabpanel">
+          <div class="history-bar">
+            <span class="history-bar-label">Ruggers · sell-out track from first lookup (this browser)</span>
+            <div class="history-bar-actions">
+              <button type="button" id="ruggersRefresh" class="ghost history-btn">Refresh</button>
+              <button type="button" id="ruggersClearMint" class="ghost history-btn" title="Clear tracking for the current mint only">Clear mint</button>
+              <button type="button" id="ruggersClearAll" class="ghost history-btn">Clear all</button>
+            </div>
+          </div>
+          <div id="ruggersBody" class="ruggers-body" aria-live="polite">
+            <p class="logs-empty">
+              Run a full Analyze (not Quick) to start tracking.<br />
+              On the <strong>first lookup</strong> of a mint, top holders, similar-size wallets, and the creator are frozen as a baseline.
+              Later analyzes list wallets that sold <strong>≥99%</strong> of that bag — or dropped off the list.
+              Buy-backs are labeled <strong>swing</strong>.
+            </p>
+          </div>
+          <pre class="report" id="text-ruggers" hidden></pre>
+        </section>
+        <section class="panel panel-logs" id="panel-history" data-panel="history" role="tabpanel">
           <div class="history-bar">
             <span class="history-bar-label">LOGS · last 20 searches on this browser</span>
             <div class="history-bar-actions">
@@ -138,7 +159,12 @@
               <button type="button" id="historyDownload" class="ghost history-btn">Download</button>
             </div>
           </div>
-          <pre class="report" id="text-history">Run Analyze — successful searches are logged here (max 20).</pre>
+          <!-- 3-column row layout: Overview | Holders | Bundles (filled by app.js) -->
+          <div id="historyList" class="logs-list" aria-live="polite">
+            <p class="logs-empty">Run Analyze — successful searches are logged here (max 20).</p>
+          </div>
+          <!-- Keep for setPanelText fallback / accessibility hidden dump -->
+          <pre class="report" id="text-history" hidden></pre>
         </section>
       </main>
     </div>
@@ -146,12 +172,7 @@
     <footer class="foot">
       <span id="disclaimer">Heuristics only · not financial advice · provider keys never leave the server.</span>
       <span class="muted">
-        <a
-          href="https://github.com/Greenwolf30/Actual-Token-Checker/blob/main/DOCUMENTATION.txt"
-          target="_blank"
-          rel="noopener noreferrer"
-          >Documentation</a
-        >
+        <a href="/docs.html">Documentation</a>
         · <span id="footerStats">Profile views: — · Analyzes: —</span>
         · <a id="statsLink" href="/api/stats" target="_blank" rel="noopener">public stats</a>
         · <a id="badgeLink" href="/badge.svg" target="_blank" rel="noopener">badge</a>

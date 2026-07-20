@@ -55,6 +55,8 @@ STATIC_TYPES = {
     ".css": "text/css; charset=utf-8",
     ".js": "application/javascript; charset=utf-8",
     ".json": "application/json; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
+    ".md": "text/plain; charset=utf-8",
     ".svg": "image/svg+xml; charset=utf-8",
     ".png": "image/png",
     ".ico": "image/x-icon",
@@ -238,20 +240,238 @@ def _safe_links(report: dict[str, Any]) -> dict[str, str]:
     return {k: redact_text(v) for k, v in links.items() if v}
 
 
+def _clean_logs_snapshot(text: Any) -> str:
+    """Keep full holders/bundles content; drop only noise for Logs.
+
+    Removed: Providers: lines, Note: lines, RugWatch flagged-wallets section.
+    Kept: totals, concentration, creator, flags, top holder wallets, bundles body.
+    """
+    if text is None:
+        return ""
+    lines = str(text).splitlines()
+    out: list[str] = []
+    skip_rw = False
+    for line in lines:
+        t = line.strip()
+        low = t.lower()
+
+        # RugWatch appendix starts after top holders — skip that section only
+        if "flagged wallets (rugwatch)" in low or "── flagged wallets" in low:
+            skip_rw = True
+            continue
+        if skip_rw:
+            continue
+
+        if low.startswith("providers:"):
+            continue
+        if "birdeye: skipped" in low:
+            continue
+        if "solscan: set solscan" in low:
+            continue
+        if "provider issues" in low:
+            continue
+        if low.startswith("note:") or low.startswith("notes:"):
+            continue
+        # Flag bullet that is only a rugwatch count (not wallet list)
+        if "rugwatch:" in low and "flagged" in low and t.startswith(("•", "*", "-")):
+            continue
+        # Solscan URL rows (keep wallet addresses elsewhere)
+        if re.match(r"^https?://(www\.)?solscan\.io/(account|token)/", t, re.I):
+            continue
+
+        out.append(line)
+
+    collapsed: list[str] = []
+    blanks = 0
+    for line in out:
+        if not line.strip():
+            blanks += 1
+            if blanks <= 1:
+                collapsed.append(line)
+            continue
+        blanks = 0
+        collapsed.append(line)
+    return "\n".join(collapsed).strip()
+
+
 def _clip_log_snapshot(text: Any, *, max_chars: int = 10_000) -> str | None:
-    """Trim Holders/Bundles text for website Logs localStorage."""
+    """Clean + trim Holders/Bundles text for website Logs localStorage."""
     if text is None:
         return None
-    s = str(text).strip()
+    s = _clean_logs_snapshot(redact_text(str(text)))
     if not s:
         return None
-    s = redact_text(s)
     if len(s) <= max_chars:
         return s
     return (
         s[: max_chars - 80].rstrip()
         + "\n\n  … [snapshot truncated for Logs storage] …\n"
     )
+
+
+def _ruggers_track_snapshot(
+    holders: dict[str, Any] | None,
+    bundles: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Compact structured wallets for website Ruggers tab (first-lookup tracking).
+
+    Client stores first-seen holdings per mint, then flags wallets that later
+    sold ≥99% of that bag (or dropped off the list), including similar-size
+    group members and creator.
+    """
+    holders = holders or {}
+    bundles = bundles or {}
+    meta = holders.get("meta") if isinstance(holders.get("meta"), dict) else {}
+    creator = (meta.get("creator") or "").strip() or None
+
+    wallet_rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for h in list(holders.get("holders") or [])[:40]:
+        if not isinstance(h, dict):
+            continue
+        if h.get("is_known_program"):
+            continue
+        w = (h.get("wallet") or "").strip()
+        if not w or w in seen:
+            continue
+        seen.add(w)
+        pct = h.get("pct_supply")
+        try:
+            pct_f = float(pct) if pct is not None else None
+        except (TypeError, ValueError):
+            pct_f = None
+        bal = h.get("balance")
+        try:
+            bal_f = float(bal) if bal is not None else None
+        except (TypeError, ValueError):
+            bal_f = None
+        wallet_rows.append(
+            {
+                "wallet": w,
+                "pct_supply": pct_f,
+                "balance": bal_f,
+                "rank": h.get("rank"),
+                "label": h.get("label"),
+            }
+        )
+
+    similar_groups: list[dict[str, Any]] = []
+    similar_wallets: set[str] = set()
+    for i, g in enumerate(list(bundles.get("similar_size_groups") or [])[:12]):
+        if not isinstance(g, dict):
+            continue
+        members_out: list[dict[str, Any]] = []
+        for m in list(g.get("members") or []):
+            if isinstance(m, dict):
+                mw = (m.get("wallet") or "").strip()
+                mp = m.get("pct_supply")
+            else:
+                mw = str(m or "").strip()
+                mp = None
+            if not mw:
+                continue
+            try:
+                mp_f = float(mp) if mp is not None else None
+            except (TypeError, ValueError):
+                mp_f = None
+            members_out.append({"wallet": mw, "pct_supply": mp_f})
+            similar_wallets.add(mw)
+        # fallback when only wallets list present
+        if not members_out:
+            avg = g.get("avg_pct")
+            try:
+                avg_f = float(avg) if avg is not None else None
+            except (TypeError, ValueError):
+                avg_f = None
+            for mw in list(g.get("wallets") or [])[:20]:
+                addr = str(mw or "").strip()
+                if not addr:
+                    continue
+                members_out.append({"wallet": addr, "pct_supply": avg_f})
+                similar_wallets.add(addr)
+        if len(members_out) < 2:
+            continue
+        try:
+            avg_g = float(g.get("avg_pct")) if g.get("avg_pct") is not None else None
+        except (TypeError, ValueError):
+            avg_g = None
+        try:
+            tot_g = float(g.get("total_pct")) if g.get("total_pct") is not None else None
+        except (TypeError, ValueError):
+            tot_g = None
+        similar_groups.append(
+            {
+                "id": f"sim{i + 1}",
+                "count": len(members_out),
+                "avg_pct": avg_g,
+                "total_pct": tot_g,
+                "members": members_out[:20],
+            }
+        )
+
+    # Mark similar on wallet rows; add similar-only wallets not already in top list
+    for row in wallet_rows:
+        row["in_similar"] = row["wallet"] in similar_wallets
+    for addr in similar_wallets:
+        if addr in seen:
+            continue
+        seen.add(addr)
+        # find pct from groups
+        pct_f = None
+        for g in similar_groups:
+            for m in g.get("members") or []:
+                if m.get("wallet") == addr:
+                    pct_f = m.get("pct_supply")
+                    break
+            if pct_f is not None:
+                break
+        wallet_rows.append(
+            {
+                "wallet": addr,
+                "pct_supply": pct_f,
+                "balance": None,
+                "rank": None,
+                "label": None,
+                "in_similar": True,
+            }
+        )
+
+    if creator and creator not in seen:
+        wallet_rows.append(
+            {
+                "wallet": creator,
+                "pct_supply": None,
+                "balance": None,
+                "rank": None,
+                "label": "creator",
+                "in_similar": creator in similar_wallets,
+            }
+        )
+        # try fill creator pct from holders list if present earlier
+        for h in list(holders.get("holders") or []):
+            if not isinstance(h, dict):
+                continue
+            if (h.get("wallet") or "").strip() == creator:
+                try:
+                    wallet_rows[-1]["pct_supply"] = (
+                        float(h["pct_supply"]) if h.get("pct_supply") is not None else None
+                    )
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    wallet_rows[-1]["balance"] = (
+                        float(h["balance"]) if h.get("balance") is not None else None
+                    )
+                except (TypeError, ValueError):
+                    pass
+                break
+
+    return {
+        "ok": bool(holders.get("ok")) and bool(wallet_rows),
+        "creator": creator,
+        "wallets": wallet_rows[:50],
+        "similar_groups": similar_groups,
+    }
 
 
 def build_public_payload(report: dict[str, Any]) -> dict[str, Any]:
@@ -325,6 +545,8 @@ def build_public_payload(report: dict[str, Any]) -> dict[str, Any]:
             "bundles_snapshot": _clip_log_snapshot(
                 sections.get("bundles"), max_chars=7_000
             ),
+            # Structured wallets for Ruggers tab (first-lookup sell tracking)
+            "ruggers_track": _ruggers_track_snapshot(holders, bundles),
         },
         "about_meta": {
             "headline": narrative.get("headline"),
@@ -574,6 +796,11 @@ class WebHandler(BaseHTTPRequestHandler):
         # Static files from /web
         if path == "/" or path == "/index.html":
             return self._serve_static("index.html")
+        # On-site documentation (full user guide in web/documentation.txt)
+        if path in {"/docs", "/docs/", "/documentation", "/documentation/"}:
+            return self._serve_static("docs.html")
+        if path in {"/DOCUMENTATION.txt", "/Documentation.txt"}:
+            return self._serve_static("documentation.txt")
         if path.startswith("/"):
             rel = path.lstrip("/")
             # block path traversal
