@@ -1885,46 +1885,53 @@ function buildRuggersExportPayload(exportKey, rows) {
   const section = ruggersExportLabel(exportKey);
   const mint = rec.address || _lastRuggersKey || "";
   const symbol = rec.symbol || "";
-  const wallets = (rows || [])
-    .map((r) => {
-      const addr = (r.wallet || "").trim();
-      if (!addr) return null;
-      const sold =
-        r.sold_pct != null && Number.isFinite(Number(r.sold_pct))
-          ? Number(r.sold_pct).toFixed(1) + "% sold of first bag"
-          : "seller ≥99% first bag";
-      const notes = [
-        "ruggers " + section,
-        symbol ? "$" + symbol : "",
-        mint ? "mint " + mint : "",
-        sold,
-        r.reason || "",
-      ]
-        .filter(Boolean)
-        .join(" · ");
-      return {
-        address: addr,
-        wallet: addr,
-        chain_id: (rec.chain || "solana").toString(),
-        label: "ruggers_" + section,
-        risk_score: 80,
-        notes: notes,
-        source: "adtc_ruggers_export",
-      };
-    })
-    .filter(Boolean);
+  // One entry per address (dedupe if UI listed a wallet twice)
+  const seen = new Set();
+  const wallets = [];
+  for (const r of rows || []) {
+    const addr = (r && r.wallet || "").trim();
+    if (!addr || seen.has(addr)) continue;
+    seen.add(addr);
+    const sold =
+      r.sold_pct != null && Number.isFinite(Number(r.sold_pct))
+        ? Number(r.sold_pct).toFixed(1) + "% sold of first bag"
+        : "seller ≥99% first bag";
+    const notes = [
+      "ruggers " + section,
+      symbol ? "$" + symbol : "",
+      mint ? "mint " + mint : "",
+      sold,
+      r.reason || "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    wallets.push({
+      address: addr,
+      wallet: addr,
+      chain_id: (rec.chain || "solana").toString(),
+      label: "ruggers_" + section,
+      risk_score: 80,
+      notes: notes,
+      source: "adtc_ruggers_export",
+    });
+  }
   return {
     format: "rugwatch_wallets_v1",
     source: "adtc_ruggers",
     section: section,
     mint: mint,
     symbol: symbol,
+    count: wallets.length,
     exported_at: new Date().toISOString(),
     wallets: wallets,
   };
 }
 
+/** Guard: one export download at a time (prevents stacked listeners → multi files). */
+let _ruggersExportBusy = false;
+
 function downloadRuggersSection(exportKey) {
+  if (_ruggersExportBusy) return;
   const rows = ruggersRowsForExportKey(exportKey);
   if (!rows.length) {
     alert(
@@ -1934,36 +1941,55 @@ function downloadRuggersSection(exportKey) {
     return;
   }
   const payload = buildRuggersExportPayload(exportKey, rows);
+  const n = (payload.wallets || []).length;
+  if (!n) {
+    alert("No unique wallets to export after dedupe.");
+    return;
+  }
   const section = ruggersExportLabel(exportKey);
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
   const asJson = window.confirm(
     "Export " +
-      rows.length +
+      n +
       " wallet(s) from “" +
       section +
       "” for RugWatch.\n\n" +
-      "OK = JSON (RugWatch Upload tab — recommended)\n" +
+      "This downloads ONE file with all " +
+      n +
+      " addresses.\n\n" +
+      "OK = JSON (RugWatch Upload — recommended)\n" +
       "Cancel = plain text (one address per line)"
   );
+  // One file only — never split across multiple downloads
   let blob;
   let name;
   if (asJson) {
     blob = new Blob([JSON.stringify(payload, null, 2)], {
       type: "application/json",
     });
-    name = "ruggers_" + section + "_" + stamp + ".json";
+    name = "ruggers_" + section + "_" + n + "wallets_" + stamp + ".json";
   } else {
     const lines = payload.wallets.map((w) => w.address);
     blob = new Blob([lines.join("\n") + "\n"], {
       type: "text/plain;charset=utf-8",
     });
-    name = "ruggers_" + section + "_" + stamp + ".txt";
+    name = "ruggers_" + section + "_" + n + "wallets_" + stamp + ".txt";
   }
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  _ruggersExportBusy = true;
+  try {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  } finally {
+    setTimeout(() => {
+      _ruggersExportBusy = false;
+    }, 800);
+  }
 }
 
 function rugwatchApiBase() {
@@ -2149,18 +2175,25 @@ async function uploadRuggersSectionToCloud(exportKey) {
 function wireRuggersExportButtons() {
   const body = $("ruggersBody");
   if (!body) return;
-  body.querySelectorAll("[data-rug-export]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const key = btn.getAttribute("data-rug-export") || "";
-      downloadRuggersSection(key);
+  // Single delegated listener (survives re-renders without stacking 2–3x clicks)
+  if (!body.dataset.rugActionsWired) {
+    body.dataset.rugActionsWired = "1";
+    body.addEventListener("click", (ev) => {
+      const t = ev.target;
+      if (!t || !t.closest) return;
+      const up = t.closest("[data-rug-upload]");
+      if (up) {
+        ev.preventDefault();
+        uploadRuggersSectionToCloud(up.getAttribute("data-rug-upload") || "");
+        return;
+      }
+      const ex = t.closest("[data-rug-export]");
+      if (ex) {
+        ev.preventDefault();
+        downloadRuggersSection(ex.getAttribute("data-rug-export") || "");
+      }
     });
-  });
-  body.querySelectorAll("[data-rug-upload]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const key = btn.getAttribute("data-rug-upload") || "";
-      uploadRuggersSectionToCloud(key);
-    });
-  });
+  }
 }
 
 function refreshRuggersPanel(focusKey) {
