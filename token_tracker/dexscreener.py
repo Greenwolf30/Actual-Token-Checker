@@ -1,9 +1,14 @@
-"""DexScreener API client with TTL cache (cuts repeat 429s)."""
+"""DexScreener API client with TTL cache (cuts repeat 429s).
+
+When DexScreener is in cooldown / over hourly budget, Solana mint lookups
+fall through to Raydium (market_failover + raydium modules).
+"""
 
 from __future__ import annotations
 
 from typing import Any
 
+from . import market_failover as mfail
 from .api_cache import TTL_NEGATIVE, TTL_PAIRS, TTL_SEARCH, cache_get, cache_set
 from .http_util import encode_query, get_json
 
@@ -15,8 +20,17 @@ def _is_rate_limit_error(exc: BaseException) -> bool:
     return "429" in msg or "rate-limited" in msg or "too many requests" in msg
 
 
+def _raydium_pairs_sol(addr: str) -> list[dict[str, Any]]:
+    try:
+        from . import raydium as rd
+
+        return list(rd.pairs_for_token(addr) or [])
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def search_pairs(query: str) -> list[dict[str, Any]]:
-    """Search DexScreener. Cached ~3 min. Raises on 429 after short retries."""
+    """Search DexScreener. Cached ~3 min. On 429/budget → Raydium for Sol mints."""
     q = (query or "").strip()
     if not q:
         return []
@@ -25,7 +39,20 @@ def search_pairs(query: str) -> list[dict[str, Any]]:
     if hit is not None:
         return list(hit)
 
+    looks_sol_mint = len(q) >= 32 and " " not in q and not q.lower().startswith("0x")
+    if not mfail.dexscreener_allowed():
+        if looks_sol_mint:
+            rd = _raydium_pairs_sol(q)
+            if rd:
+                cache_set(key, rd, TTL_SEARCH)
+                return rd
+        raise RuntimeError(
+            "DexScreener temporarily skipped (rate budget/cooldown). "
+            "Try a full Solana mint, wait ~1–2 minutes, or use Quick later."
+        )
+
     try:
+        mfail.record_dexscreener_call()
         data = get_json(
             f"{BASE}/latest/dex/search?{encode_query({'q': q})}",
             timeout=14.0,
@@ -33,6 +60,13 @@ def search_pairs(query: str) -> list[dict[str, Any]]:
         )
     except Exception as exc:  # noqa: BLE001
         cache_set(key, [], TTL_NEGATIVE)
+        if _is_rate_limit_error(exc):
+            mfail.record_dexscreener_429()
+            if looks_sol_mint:
+                rd = _raydium_pairs_sol(q)
+                if rd:
+                    cache_set(key, rd, TTL_SEARCH)
+                    return rd
         raise
 
     pairs = list(data.get("pairs") or []) if isinstance(data, dict) else []
@@ -50,7 +84,16 @@ def pairs_for_token(chain_id: str, token_address: str) -> list[dict[str, Any]]:
     if hit is not None:
         return list(hit)
 
+    sol = chain in {"solana", "sol"}
+    if sol and not mfail.dexscreener_allowed():
+        rd = _raydium_pairs_sol(addr)
+        if rd:
+            cache_set(key, rd, TTL_PAIRS)
+            return rd
+        return []
+
     try:
+        mfail.record_dexscreener_call()
         data = get_json(
             f"{BASE}/token-pairs/v1/{chain}/{addr}",
             timeout=14.0,
@@ -59,7 +102,18 @@ def pairs_for_token(chain_id: str, token_address: str) -> list[dict[str, Any]]:
     except Exception as exc:  # noqa: BLE001
         cache_set(key, [], TTL_NEGATIVE)
         if _is_rate_limit_error(exc):
+            mfail.record_dexscreener_429()
+            if sol:
+                rd = _raydium_pairs_sol(addr)
+                if rd:
+                    cache_set(key, rd, TTL_PAIRS)
+                    return rd
             raise
+        if sol:
+            rd = _raydium_pairs_sol(addr)
+            if rd:
+                cache_set(key, rd, TTL_PAIRS)
+                return rd
         return []
 
     if isinstance(data, list):
@@ -68,6 +122,10 @@ def pairs_for_token(chain_id: str, token_address: str) -> list[dict[str, Any]]:
         pairs = list(data.get("pairs") or [])
     else:
         pairs = []
+    if not pairs and sol:
+        rd = _raydium_pairs_sol(addr)
+        if rd:
+            pairs = rd
     cache_set(key, pairs, TTL_PAIRS if pairs else TTL_NEGATIVE)
     return pairs
 
@@ -84,7 +142,17 @@ def tokens_by_addresses(chain_id: str, addresses: list[str]) -> list[dict[str, A
     if hit is not None:
         return list(hit)
 
+    sol = chain in {"solana", "sol"}
+    if not mfail.dexscreener_allowed():
+        if sol and len(addresses) == 1:
+            rd = _raydium_pairs_sol(addresses[0])
+            if rd:
+                cache_set(key, rd, TTL_PAIRS)
+                return rd
+        return []
+
     try:
+        mfail.record_dexscreener_call()
         data = get_json(
             f"{BASE}/tokens/v1/{chain}/{joined}",
             timeout=14.0,
@@ -93,6 +161,12 @@ def tokens_by_addresses(chain_id: str, addresses: list[str]) -> list[dict[str, A
     except Exception as exc:  # noqa: BLE001
         cache_set(key, [], TTL_NEGATIVE)
         if _is_rate_limit_error(exc):
+            mfail.record_dexscreener_429()
+            if sol and len(addresses) == 1:
+                rd = _raydium_pairs_sol(addresses[0])
+                if rd:
+                    cache_set(key, rd, TTL_PAIRS)
+                    return rd
             raise
         return []
 
