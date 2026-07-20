@@ -358,6 +358,7 @@ def _solana_holders(
         birdeye=birdeye_result,
         errors=errors,
         holder_totals=totals,
+        include_rugwatch=include_rugwatch,
     )
     if fused.get("ok"):
         return fused
@@ -395,6 +396,7 @@ def _fuse_holder_sources(
     birdeye: dict[str, Any] | None,
     errors: dict[str, str],
     holder_totals: dict[str, Any] | None = None,
+    include_rugwatch: bool = True,
 ) -> dict[str, Any]:
     """
     Merge wallets from all providers.
@@ -402,6 +404,7 @@ def _fuse_holder_sources(
     Prefer Helius/RPC balances when present.
     If Helius/RPC is down or empty, Solscan becomes the primary balance/% source.
     Rugcheck/Birdeye still fill gaps and flags.
+    include_rugwatch: when False, skip RugWatch flagged-wallet merge (user checkbox).
     """
     by_wallet: dict[str, dict[str, Any]] = {}
     sources_used: list[str] = []
