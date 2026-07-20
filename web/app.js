@@ -1408,27 +1408,57 @@ function refreshRuggersPanel(focusKey) {
     "Use yellow <strong>Upload</strong> on Creator / Similar / Single to send wallets " +
     "to RugWatch cloud (or <strong>Export</strong> to download a file).</p>";
 
-  if (keys.length > 1) {
-    html += '<label class="rug-mint-pick">Tracked mint ';
-    html += '<select id="ruggersMintSelect">';
-    for (const k of keys) {
-      const r = store[k];
-      const lab =
-        (r.symbol ? "$" + r.symbol + " " : "") +
-        (r.address || k).slice(0, 12) +
-        "…";
-      html +=
-        '<option value="' +
-        escHtml(k) +
-        '"' +
-        (k === activeKey ? " selected" : "") +
-        ">" +
-        escHtml(lab) +
-        "</option>";
-    }
-    html += "</select></label>";
+  // Tracked mint (left) + CA search bar (right)
+  const prevSearch =
+    ($("ruggersCaSearch") && $("ruggersCaSearch").value) || "";
+  const prevStatusEl = $("ruggersCaStatus");
+  const prevStatus =
+    prevStatusEl && !prevStatusEl.hidden ? prevStatusEl.textContent : "";
+  const prevStatusOk =
+    prevStatusEl && prevStatusEl.classList.contains("ok");
+
+  html += '<div class="rug-mint-search-row">';
+  html += '<div class="rug-mint-pick-wrap">';
+  html += '<label class="rug-mint-pick" for="ruggersMintSelect">Tracked mint';
+  html += '<select id="ruggersMintSelect">';
+  for (const k of keys) {
+    const r = store[k] || {};
+    const lab =
+      (r.symbol ? "$" + r.symbol + " " : "") +
+      (r.address || k).slice(0, 12) +
+      "…";
+    html +=
+      '<option value="' +
+      escHtml(k) +
+      '"' +
+      (k === activeKey ? " selected" : "") +
+      ">" +
+      escHtml(lab) +
+      "</option>";
   }
-  html += "</div>";
+  html += "</select></label></div>";
+
+  html +=
+    '<form class="rug-ca-search" id="ruggersCaForm" autocomplete="off">' +
+    '<div class="rug-ca-search-row">' +
+    '<span class="rug-ca-icon" aria-hidden="true">⌕</span>' +
+    '<input id="ruggersCaSearch" class="mono rug-ca-input" type="search" name="ca" ' +
+    'placeholder="Search previous lookup by CA…" spellcheck="false" ' +
+    'autocomplete="off" enterkeyhint="search" value="' +
+    escHtml(prevSearch) +
+    '" />' +
+    '<button type="submit" id="ruggersCaGo" class="rug-ca-go">Search</button>' +
+    "</div>" +
+    '<p id="ruggersCaStatus" class="rug-ca-status' +
+    (prevStatusOk ? " ok" : "") +
+    '"' +
+    (prevStatus ? "" : " hidden") +
+    ">" +
+    escHtml(prevStatus) +
+    "</p>" +
+    "</form>";
+  html += "</div>"; // rug-mint-search-row
+  html += "</div>"; // rug-header
 
   html += renderRuggersSection(
     "Creator (sold ≥99%)",
@@ -1480,6 +1510,43 @@ function refreshRuggersPanel(focusKey) {
   }
   wireRuggersExportButtons();
   wireCopyMintClicks(body);
+  wireRuggersCaSearch();
+}
+
+/** Wire CA search form (re-run after each Ruggers panel render). */
+function wireRuggersCaSearch() {
+  const form = $("ruggersCaForm");
+  if (form && form.dataset.wired !== "1") {
+    form.dataset.wired = "1";
+    form.addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      ruggersFindByCa();
+    });
+  }
+  const go = $("ruggersCaGo");
+  const inp = $("ruggersCaSearch");
+  // Always re-bind click if button was recreated (dataset on form may survive wrongly)
+  if (form) {
+    // form recreated each refresh — rewire every time without relying on dataset alone
+    form.onsubmit = (ev) => {
+      ev.preventDefault();
+      ruggersFindByCa();
+    };
+  }
+  if (go) {
+    go.onclick = (ev) => {
+      ev.preventDefault();
+      ruggersFindByCa();
+    };
+  }
+  if (inp) {
+    inp.onkeydown = (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        ruggersFindByCa();
+      }
+    };
+  }
 }
 
 /** Normalize pasted CA (strip chain: prefix, whitespace, zero-width chars). */
@@ -1756,27 +1823,7 @@ function initRuggers() {
   if (r) r.addEventListener("click", () => refreshRuggersPanel());
   if (cm) cm.addEventListener("click", () => clearRuggersMint());
   if (ca) ca.addEventListener("click", () => clearRuggersAll());
-  const form = $("ruggersCaForm");
-  if (form) {
-    form.addEventListener("submit", (ev) => {
-      ev.preventDefault();
-      ruggersFindByCa();
-    });
-  }
-  const go = $("ruggersCaGo");
-  const inp = $("ruggersCaSearch");
-  if (go) go.addEventListener("click", (ev) => {
-    ev.preventDefault();
-    ruggersFindByCa();
-  });
-  if (inp) {
-    inp.addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter") {
-        ev.preventDefault();
-        ruggersFindByCa();
-      }
-    });
-  }
+  wireRuggersCaSearch();
 }
 
 function apiBase() {

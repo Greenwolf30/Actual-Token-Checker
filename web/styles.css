@@ -590,13 +590,47 @@ button, .ghost, .primary {
 .panel-ruggers.active {
   display: flex;
 }
-/* Ruggers: search bar for previous token lookup by CA */
-.rug-ca-search {
-  margin: 0 0 10px;
-  padding: 10px 12px;
-  background: var(--bg-elevated);
+/* Ruggers: Tracked mint (left) + CA search (right) */
+.rug-mint-search-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px 14px;
+  margin-top: 12px;
+  width: 100%;
+}
+.rug-mint-pick-wrap {
+  flex: 0 1 auto;
+  min-width: 160px;
+}
+.rug-mint-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.rug-mint-pick select {
+  background: var(--bg-input);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-size: 0.82rem;
+  min-width: 180px;
+  max-width: 280px;
+}
+.rug-ca-search {
+  flex: 1 1 220px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  min-width: 200px;
+  max-width: 420px;
+  margin-left: auto;
 }
 .rug-ca-search-row {
   display: flex;
@@ -647,12 +681,26 @@ button, .ghost, .primary {
 }
 .rug-ca-status {
   display: block;
-  margin: 8px 2px 0;
-  font-size: 0.78rem;
+  margin: 6px 2px 0;
+  font-size: 0.75rem;
   color: var(--warn);
+  text-align: right;
 }
 .rug-ca-status.ok {
   color: var(--good);
+}
+@media (max-width: 700px) {
+  .rug-mint-search-row {
+    flex-direction: column;
+  }
+  .rug-ca-search {
+    max-width: none;
+    width: 100%;
+    margin-left: 0;
+  }
+  .rug-ca-status {
+    text-align: left;
+  }
 }
 .logs-entry.logs-hit {
   outline: 1px solid rgba(180, 150, 60, 0.55);
