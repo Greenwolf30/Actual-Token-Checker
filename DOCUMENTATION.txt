@@ -567,11 +567,15 @@ Buttons
 Per-section actions (Creator / Similar / Single only — not Swing)
   Export (gray)  — download JSON or one-address-per-line file for manual
                    import in RugWatch “Upload manual wallets”
-  Upload (yellow)— send that section’s wallets to YOUR RugWatch website:
-                   1) import into RugWatch local DB
-                   2) Push cloud → GitHub (cloud wallet count increases)
+  Upload (yellow)— CLOUD upload path for seller wallets:
+                   1) import into YOUR RugWatch local DB
+                   2) Push cloud → GitHub cloud list / wallets_index.json
+                      (RugWatch blue “cloud” count increases)
+                   This is the ATC action that grows the cloud server list
+                   used by Render ATC flags (RUGWATCH_WALLETS_URL).
                    Requires RugWatch running (default http://127.0.0.1:8790)
                    with GITHUB_TOKEN set. Configure rugwatchUrl in config.js.
+                   (Not on the Logs tab — Logs only has local Download.)
 
 Where it lives
   Website only: browser localStorage key adtc_ruggers_track
@@ -760,23 +764,47 @@ Buttons
     currently have open.
 
   Download
-    Saves the current Logs list to a file you choose.
+    Saves the current Logs list to a FILE ON YOUR COMPUTER only.
     · .txt — readable text (same layout as the tab, including
       holders/bundles snapshots)
     · .json — full structured data for backup or tools
     Does not delete Logs from the app. Does not re-fetch market data.
+    Does NOT upload to RugWatch cloud, GitHub, or any ATC server.
+    Private browser/app log only.
+
+Upload vs Logs (important)
+  The Logs tab does NOT push wallets to the cloud database.
+  Cloud upload (RugWatch GitHub wallet list / index) is on the
+  Ruggers tab:
+
+    Ruggers → Creator / Similar / Single → yellow Upload
+      → imports into YOUR RugWatch local DB
+      → Push cloud → GitHub (cloud wallet count increases)
+
+  Requirements for that Upload: RugWatch website running (default
+  http://127.0.0.1:8790), GITHUB_TOKEN set in RugWatch .env, and
+  rugwatchUrl in web/config.js pointing at that site.
+
+  Summary
+    Logs Download     = save search history to your PC (not cloud)
+    Ruggers Upload    = send seller wallets to RugWatch cloud server
+                        (GitHub via your RugWatch instance)
 
 How to use it
   1. Analyze a token and wait until the run finishes successfully.
   2. Open the Logs tab — that token should be first on the list, with
      holders and bundles snapshots under the summary.
   3. Keep analyzing other tokens (up to 20 kept).
-  4. Use Download if you want a copy of the log.
-  5. Use Clear only if you want an empty Logs list.
-  6. Use Refresh if the list did not update after Analyze.
+  4. Use Download if you want a local copy of the log (not cloud).
+  5. To grow the RugWatch cloud list, open Ruggers → yellow Upload
+     (see §11–§12), not Logs.
+  6. Use Clear only if you want an empty Logs list.
+  7. Use Refresh if the list did not update after Analyze.
 
 What Logs is not
   - Not a live price feed or live holders feed.
+  - Not the place that uploads wallets to RugWatch / cloud (that is
+    Ruggers yellow Upload, or RugWatch’s own Push cloud).
   - Not a camera image — “snapshot” means a frozen text copy of the
     Holders / Bundles report at Analyze time.
   - Not a full export of every report field beyond what was stored
