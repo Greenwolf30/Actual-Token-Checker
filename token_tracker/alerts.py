@@ -332,10 +332,10 @@ def build_alerts(
                 "severity": "high" if top["pct"] >= 15 else "medium",
                 "title": "Single holder over 5%",
                 "detail": (
-                    f"Wallet holds ~{top['pct']:.2f}% of supply "
-                    f"(rank #{top.get('rank')}){more}. "
-                    f"{top.get('wallet') or ''}"
+                    f"Wallet holds {top['pct']:.2f}% of supply "
+                    f"(rank #{top.get('rank')}){more}."
                 ),
+                # Full list so UI can color-code each address by bag %
                 "wallets": whales[:12],
             }
         )

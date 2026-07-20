@@ -2257,15 +2257,19 @@ function stripSolscanUrlLines(text) {
 
 /**
  * Hold % from a plain report line (no HTML).
- * Matches: holds 12.3% · (12.3% · owns 12.3%
+ * Matches: holds 12.3% · holds ~12.3% · (12.3% · owns 12.3%
  */
 function extractHoldPctFromPlain(line) {
   const plain = String(line || "");
-  let m = plain.match(/\bholds\s+(\d+(?:\.\d+)?)\s*%/i);
+  // Optional ~ before the number (Alerts detail: "holds ~15.00%")
+  let m = plain.match(/\bholds\s*~?\s*(\d+(?:\.\d+)?)\s*%/i);
   if (m) return Number(m[1]);
   m = plain.match(/\((\d+(?:\.\d+)?)\s*%/);
   if (m) return Number(m[1]);
-  m = plain.match(/\bowns\s+(\d+(?:\.\d+)?)\s*%/i);
+  m = plain.match(/\bowns\s*~?\s*(\d+(?:\.\d+)?)\s*%/i);
+  if (m) return Number(m[1]);
+  // "Wallet holds ~15%" already covered; bare "~15.00% of supply"
+  m = plain.match(/~(\d+(?:\.\d+)?)\s*%/);
   if (m) return Number(m[1]);
   return null;
 }
@@ -2328,10 +2332,10 @@ function isKnownLpContext(addr, plainLines, idx) {
 }
 
 /**
- * Shared wallet-address hold colors (Holders / Alerts / Bundles):
- *   > 10% → red
- *   > 5%  → yellow
- * Known LP / liquidity pairs are never colored.
+ * Shared wallet-address colors (Holders / Alerts / Bundles):
+ *   known LP / liquidity pair → white (dim)
+ *   > 10% → red (dim)
+ *   > 5%  → yellow (dim)
  */
 function holdColorForPct(pct) {
   if (pct == null || !Number.isFinite(pct)) return null;
@@ -2340,6 +2344,8 @@ function holdColorForPct(pct) {
   if (pct > 5) return { cls: "wallet-hold-yellow", color: "#b8a85c" };
   return null;
 }
+
+const LP_HOLD_COLOR = { cls: "wallet-hold-lp", color: "#d0d4dc" };
 
 /**
  * For each plain line, resolve the bag % that should color a wallet on that line.
@@ -2448,9 +2454,12 @@ function linkify(text, colorHold) {
           (addr) => {
             let holdClass = null;
             let holdColor = null;
-            if (colorHold && linePct != null) {
-              // Skip known LP / liquidity pair / program vaults
-              if (!isKnownLpContext(addr, plainLines, idx)) {
+            if (colorHold) {
+              // Known LP / liquidity pair → white (not bag-risk colors)
+              if (isKnownLpContext(addr, plainLines, idx)) {
+                holdClass = LP_HOLD_COLOR.cls;
+                holdColor = LP_HOLD_COLOR.color;
+              } else if (linePct != null) {
                 const hc = holdColorForPct(linePct);
                 if (hc) {
                   holdClass = hc.cls;

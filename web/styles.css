@@ -1160,6 +1160,19 @@ pre.report a.wallet-hold-red:hover {
   color: #c87f7a !important;
 }
 
+/* Known LP / liquidity pair addresses — dim white */
+.report a.wallet-link.wallet-hold-lp,
+.logs-col-body a.wallet-link.wallet-hold-lp,
+pre.report a.wallet-hold-lp {
+  color: #d0d4dc !important;
+  font-weight: 500;
+}
+.report a.wallet-link.wallet-hold-lp:hover,
+.logs-col-body a.wallet-link.wallet-hold-lp:hover,
+pre.report a.wallet-hold-lp:hover {
+  color: #e8eaef !important;
+}
+
 /* Custom scrollbar for report */
 .report::-webkit-scrollbar { width: 8px; height: 8px; }
 .report::-webkit-scrollbar-track { background: transparent; }

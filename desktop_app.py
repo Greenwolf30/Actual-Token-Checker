@@ -1275,10 +1275,17 @@ def run_gui() -> None:
             foreground=PCT_CRITICAL,  # dim red >10%
             underline=True,
         )
+        # Known LP / liquidity pair — dim white
+        box.tag_configure(
+            "wallet_hold_lp",
+            foreground="#d0d4dc",
+            underline=True,
+        )
         # Color tags must outrank default wallet_link blue
         try:
             box.tag_raise("wallet_hold_yellow")
             box.tag_raise("wallet_hold_red")
+            box.tag_raise("wallet_hold_lp")
         except Exception:  # noqa: BLE001
             pass
         box.tag_configure(
@@ -1436,7 +1443,8 @@ def run_gui() -> None:
         """Bag % from 'holds X%' / '(X%' / 'owns X%' on a report line."""
         if not line:
             return None
-        m = re.search(r"\bholds\s+(\d+(?:\.\d+)?)\s*%", line, re.I)
+        # Optional ~ (Alerts: "holds ~15.00%")
+        m = re.search(r"\bholds\s*~?\s*(\d+(?:\.\d+)?)\s*%", line, re.I)
         if m:
             try:
                 return float(m.group(1))
@@ -1448,7 +1456,13 @@ def run_gui() -> None:
                 return float(m.group(1))
             except ValueError:
                 return None
-        m = re.search(r"\bowns\s+(\d+(?:\.\d+)?)\s*%", line, re.I)
+        m = re.search(r"\bowns\s*~?\s*(\d+(?:\.\d+)?)\s*%", line, re.I)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                return None
+        m = re.search(r"~(\d+(?:\.\d+)?)\s*%", line)
         if m:
             try:
                 return float(m.group(1))
@@ -1526,15 +1540,15 @@ def run_gui() -> None:
         content: str, addr: str, addr_start: int, enabled: bool
     ) -> str | None:
         """
-        Shared address hold colors (Holders / Alerts / Bundles):
+        Shared address colors (Holders / Alerts / Bundles):
+          known LP / liquidity pair → white
           > 10% → red
           > 5%  → yellow
-        Known LP / liquidity pairs are never colored.
         """
         if not enabled:
             return None
         if _is_lp_context(content, addr, addr_start):
-            return None
+            return "wallet_hold_lp"
         line = _line_containing(content, addr_start)
         pct = _line_hold_pct(line)
         if pct is None:
@@ -1599,7 +1613,7 @@ def run_gui() -> None:
                 lambda _e, b=box: b.configure(cursor="arrow"),
             )
         # Colored wallet tags still open Solscan (same as wallet_link)
-        for wtag in ("wallet_hold_yellow", "wallet_hold_red"):
+        for wtag in ("wallet_hold_yellow", "wallet_hold_red", "wallet_hold_lp"):
             box.tag_bind(
                 wtag, "<Button-1>", lambda e, b=box: _open_url_for_index(b, e)
             )
