@@ -635,22 +635,16 @@ def _fuse_holder_sources(
             "ok": rw.get("ok"),
             "match_count": rw.get("match_count"),
             "db_wallet_count": rw.get("db_wallet_count"),
-            "local_count": rw.get("local_count"),
-            "cloud_count": rw.get("cloud_count"),
             "db_found": rw.get("db_found"),
-            "cloud_configured": rw.get("cloud_configured"),
-            "inventory": rw.get("inventory"),
             # never surface local filesystem paths in holder meta
             "error": rw.get("error"),
-            "sources": rw.get("sources"),
         }
         if rw.get("ok") and rw.get("match_count"):
             n = int(rw["match_count"])
             flags = list(result.get("flags") or [])
             flags.insert(
                 0,
-                f"RugWatch: {n} flagged wallet(s) (local+cloud) linked to this mint "
-                f"or in top holders",
+                f"RugWatch: {n} flagged wallet(s) linked to this mint or in top holders",
             )
             result["flags"] = flags
             if summary.get("concentration_risk") in {"lower", "moderate"}:
@@ -1435,11 +1429,9 @@ def _format_rugwatch_flagged_section(
     """List RugWatch-flagged wallets with ownership %; skip known LP/program wallets."""
     lines: list[str] = [
         "",
-        "  ── FLAGGED WALLETS (RugWatch local + cloud) ───",
+        "  ── FLAGGED WALLETS (RugWatch) ─────────────────",
         "  This list is NOT bundlers and is NOT the Bundles tab.",
-        "  These are RugWatch watchlist wallets (heuristic — not proven ruggers).",
-        "  Sources: local SQLite on this PC + cloud list (if configured).",
-        "  Tags: [local] [cloud] [both] = where the wallet is stored.",
+        "  These are RugWatch watchlist wallets only (heuristic — not proven ruggers).",
         "  A [creator] tag means creator of SOME OTHER scanned token,",
         "  NOT automatically the creator of THIS token (see Creator line above).",
         "  [this mint] = linked to the token you are viewing now.",
@@ -1450,8 +1442,8 @@ def _format_rugwatch_flagged_section(
     if not rw.get("ok"):
         lines.append(f"  RugWatch: unavailable — {rw.get('error') or 'unknown error'}")
         lines.append(
-            "  Tip: run RugWatch (local DB), Push cloud, and/or set in ATC .env:\n"
-            "       RUGWATCH_DB=…  and/or  RUGWATCH_WALLETS_URL=… or RUGWATCH_GITHUB_REPO=…"
+            "  Tip: run RugWatch + Push cloud, set RUGWATCH_DB and/or "
+            "RUGWATCH_WALLETS_URL (prefer .../data/wallets_index.json)."
         )
         return lines
 
@@ -1475,20 +1467,20 @@ def _format_rugwatch_flagged_section(
         if (h.get("wallet") or "").strip()
     }
 
-    inv = rw.get("inventory") or {}
-    local_n = rw.get("local_count", inv.get("local_now", rw.get("db_wallet_count", 0)))
-    cloud_n = rw.get("cloud_count", inv.get("cloud_now", 0))
-    merged_n = inv.get("merged_unique", len(all_flagged))
+    local_n = int(rw.get("db_wallet_count") or 0)
+    cloud_n = int(rw.get("cloud_wallet_count") or 0)
+    local_shards = int(rw.get("local_shards") or 0)
+    cloud_shards = int(rw.get("cloud_shards") or 0)
     lines.append(
-        f"  RugWatch inventory: local={local_n}  ·  cloud={cloud_n}  ·  "
-        f"merged unique={merged_n}"
-        + (f"  ·  matches on this mint/top: {rw.get('match_count', 0)}")
+        f"  RugWatch local: {local_n} wallets"
+        + (f" ({local_shards} DB files)" if local_shards > 1 else "")
+        + f"  ·  cloud: {cloud_n}"
+        + (f" ({cloud_shards} shards)" if cloud_shards > 1 else "")
+        + f"  ·  matches on this mint/top: {rw.get('match_count', 0)}"
     )
-    src = rw.get("sources") or {}
-    if src.get("cloud_error") and not cloud_n:
-        lines.append(f"  Cloud note: {src.get('cloud_error')}")
-    if src.get("local_error") and not local_n:
-        lines.append(f"  Local note: {src.get('local_error')}")
+    lines.append(
+        "  Tags: [local] local DB only · [cloud] cloud list only · [both] in both"
+    )
     # Never show local filesystem paths (e.g. C:\\Users\\…\\rugwatch.db)
     lines.append("  Known LP / program wallets are excluded from this list")
     lines.append("  Click any blue wallet address → open Solscan")
@@ -1532,15 +1524,10 @@ def _format_rugwatch_flagged_section(
         if not addr:
             continue
         tags: list[str] = []
-        origin = (w.get("origin") or "").strip().lower()
-        if origin in {"local", "cloud", "both"}:
-            tags.append(origin)
-        elif w.get("in_local") and w.get("in_cloud"):
-            tags.append("both")
-        elif w.get("in_cloud"):
-            tags.append("cloud")
-        elif w.get("in_local"):
-            tags.append("local")
+        # local / cloud / both (from multi-source RugWatch bridge)
+        origin = (w.get("tag") or w.get("origin") or w.get("location") or "").strip()
+        if origin in {"local", "cloud", "both", "[local]", "[cloud]", "[both]"}:
+            tags.append(origin.strip("[]"))
         if w.get("on_this_mint"):
             tags.append("this mint")
         if w.get("in_top_holders"):
