@@ -720,21 +720,27 @@ button, .ghost, .primary {
   scroll-margin-top: 12px;
 }
 a.copy-mint,
-.copy-mint {
-  color: #c4a84a;
+.copy-mint,
+.rug-title a.copy-mint,
+.logs-entry-sub a.copy-mint,
+.logs-ca-copy {
+  color: #c4a84a !important;
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 2px;
   font-weight: 500;
 }
-a.copy-mint:hover {
-  color: #d4bc6a;
+a.copy-mint:hover,
+.copy-mint:hover,
+.rug-title a.copy-mint:hover,
+.logs-entry-sub a.copy-mint:hover {
+  color: #d4bc6a !important;
 }
 #sumAddr.copy-mint {
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 2px;
-  color: #c4a84a;
+  color: #c4a84a !important;
 }
 
 .ruggers-body {

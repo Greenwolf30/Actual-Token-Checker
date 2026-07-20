@@ -631,6 +631,10 @@ def format_alerts_text(data: dict[str, Any]) -> str:
     lines.append("")
 
     alerts = data.get("alerts") or []
+    has_flagged_alert = any(
+        (a or {}).get("id") == "rugwatch_flagged" for a in alerts if isinstance(a, dict)
+    )
+
     if not alerts:
         lines.append("  ✓ No immediate top-priority alerts from current data.")
         lines.append("")
@@ -744,6 +748,26 @@ def format_alerts_text(data: dict[str, Any]) -> str:
             if len(wallets) > max_w:
                 lines.append(f"     … and {len(wallets) - max_w} more")
             lines.append("")
+
+    # Always show Flagged wallets status when no active hold-% alert
+    # (so the field is never a silent blank when holdings are 0%)
+    if not has_flagged_alert:
+        lines.append("  FLAGGED WALLETS")
+        lines.append("  " + "-" * 40)
+        lines.append(
+            "  Will show: Flagged wallets hold X.XX% of supply"
+        )
+        lines.append(
+            "  …when any RugWatch-flagged wallet still holds on this mint"
+            " (current bag ≥ 0.01%)."
+        )
+        lines.append(
+            "  Right now: none still holding — or RugWatch off / no matches."
+        )
+        lines.append(
+            "  See Holders → Flagged wallets for the live list."
+        )
+        lines.append("")
 
     if data.get("notes"):
         lines.append(f"  Note: {data['notes']}")

@@ -429,13 +429,13 @@ function refreshHistoryPanel(highlightCa) {
     const holdersHtml = formatHoldersRichHtml(holdersPlain);
     const bundlesHtml = formatBundlesRichHtml(bundlesPlain);
 
-    // Subline mint clickable when present
+    // Subline CA — yellow copyable (same scheme as Ruggers / summary bar)
     let subHtml = escHtml((ts || "—") + " · " + (e.chain || "—") + " · ");
     if (e.address) {
       subHtml +=
-        '<a class="wallet-link" href="https://solscan.io/account/' +
-        encodeURIComponent(e.address) +
-        '" target="_blank" rel="noopener noreferrer">' +
+        '<a href="#" class="copy-mint mono logs-ca-copy" data-copy="' +
+        escHtml(e.address) +
+        '" title="Left-click to copy mint / CA">' +
         escHtml(e.address) +
         "</a>";
     } else {
@@ -477,6 +477,7 @@ function refreshHistoryPanel(highlightCa) {
   });
 
   list.innerHTML = html;
+  wireCopyMintClicks(list);
   if (hl) {
     const hitEl = document.getElementById("logs-hit-entry");
     if (hitEl) {
