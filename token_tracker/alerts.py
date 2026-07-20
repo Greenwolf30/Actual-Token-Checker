@@ -629,7 +629,9 @@ def format_alerts_text(data: dict[str, Any]) -> str:
     if n > 0:
         lines.append(f"  Top-priority warnings: {n}")
     else:
-        lines.append("  Top-priority warnings will show here")
+        lines.append(
+            "  Top-priority warnings will show here if value returns True"
+        )
     if data.get("summary"):
         lines.append(f"  {data.get('summary')}")
     lines.append("")
@@ -644,31 +646,31 @@ def format_alerts_text(data: dict[str, Any]) -> str:
         if aid.startswith("bundle_pct"):
             by_id.setdefault("bundle_pct_threshold", a)
 
-    # Labels for zero/empty → “will show here when value is true”
+    # Labels for zero/empty → “will show here if value returns True”
     placeholder_slots: list[tuple[str, str, list[str]]] = [
         (
             "liquidity_unlocked",
-            "Liquidity unlocked will show here when value is true",
+            "Liquidity unlocked will show here if value returns True",
             ["liquidity_unlocked"],
         ),
         (
             "holders_over_2_pct",
-            "Wallets holding over 2% will show here when value is true",
+            "Wallets holding over 2% will show here if value returns True",
             ["holders_over_2_pct"],
         ),
         (
             "single_holder_over_5",
-            "Single holder over 5% will show here when value is true",
+            "Single holder over 5% will show here if value returns True",
             ["single_holder_over_5"],
         ),
         (
             "similar_wallets_large",
-            "Similar wallets large hold % will show here when value is true",
+            "Similar wallets large hold % will show here if value returns True",
             ["similar_wallets_large"],
         ),
         (
             "bundle_pct_threshold",
-            "Bundle share % will show here when value is true",
+            "Bundle share % will show here if value returns True",
             [
                 "bundle_pct_threshold",
                 "bundle_pct_5_20",
@@ -679,17 +681,17 @@ def format_alerts_text(data: dict[str, Any]) -> str:
         ),
         (
             "dexscreener_socials_missing",
-            "DexScreener socials missing will show here",
+            "DexScreener socials missing will show here if value returns True",
             ["dexscreener_socials_missing"],
         ),
         (
             "serial_rugger_link",
-            "Serial-rugger / rug signals will show here",
+            "Serial-rugger / rug signals will show here if value returns True",
             ["serial_rugger_link"],
         ),
         (
             "rugwatch_flagged",
-            "Flagged wallets hold % will show here",
+            "Flagged wallets hold % will show here if value returns True",
             ["rugwatch_flagged"],
         ),
     ]
@@ -725,9 +727,15 @@ def format_alerts_text(data: dict[str, Any]) -> str:
                     if fval > 0:
                         lines.append(f"     Flagged wallets hold {fval:.2f}% total")
                     else:
-                        lines.append("     Flagged wallets hold % will show here")
+                        lines.append(
+                            "     Flagged wallets hold % will show here "
+                            "if value returns True"
+                        )
                 except (TypeError, ValueError):
-                    lines.append("     Flagged wallets hold % will show here")
+                    lines.append(
+                        "     Flagged wallets hold % will show here "
+                        "if value returns True"
+                    )
             lines.append("")
             return
         wallets = a.get("wallets") or []
@@ -735,7 +743,9 @@ def format_alerts_text(data: dict[str, Any]) -> str:
             "holders_over_2_pct",
             "single_holder_over_5",
         }:
-            lines.append("     Wallet list will show here")
+            lines.append(
+                "     Wallet list will show here if value returns True"
+            )
             lines.append("")
             return
         max_w = 40 if a.get("list_all") or a.get("id") == "holders_over_2_pct" else 8
@@ -804,7 +814,7 @@ def format_alerts_text(data: dict[str, Any]) -> str:
         ):
             if not hit:
                 lines.append(
-                    f"  · Liquidity unlocked will show here when value is true"
+                    f"  · Liquidity unlocked will show here if value returns True"
                     f"{' (skipped on Pump.fun / PumpSwap)' if pump_skip_lp else ''}"
                 )
                 continue

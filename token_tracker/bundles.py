@@ -212,7 +212,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             )
         )
     else:
-        total_line = "  Total % bundles will show here"
+        total_line = "  Total % bundles will show here if value returns True"
     src_list = s.get("sources_used") or []
     lines = [
         "BUNDLES / COORDINATED WALLETS",
@@ -226,11 +226,11 @@ def format_bundles_text(data: dict[str, Any]) -> str:
     if cl_n > 0:
         lines.append(f"  Clusters:        {cl_n} multi-ATA wallet(s)")
     else:
-        lines.append("  Clusters will show here")
+        lines.append("  Clusters will show here if value returns True")
     if sg_n > 0:
         lines.append(f"  Similar groups:  {sg_n}")
     else:
-        lines.append("  Similar groups will show here")
+        lines.append("  Similar groups will show here if value returns True")
     # Total % of unique wallets that sit in similar-size groups (combined supply)
     sim_pct = s.get("similar_size_total_pct")
     sim_n = s.get("similar_size_wallet_count")
@@ -244,17 +244,21 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             + (f"  ({sim_n} wallet(s))" if sim_n else "")
         )
     else:
-        lines.append("  Similar-size total will show here")
+        lines.append(
+            "  Similar-size total will show here if value returns True"
+        )
     ins_n = int(s.get("insider_accounts") or 0)
     if ins_n > 0:
         lines.append(f"  Insider accts:   {ins_n}")
     else:
-        lines.append("  Insider accounts will show here")
+        lines.append(
+            "  Insider accounts will show here if value returns True"
+        )
     top10 = s.get("top10_pct_excluding_known_programs")
     if top10 is not None and float(top10 or 0) > 0:
         lines.append(f"  Top10 ex-LP:     {_pct(top10)}")
     else:
-        lines.append("  Top10 ex-LP will show here")
+        lines.append("  Top10 ex-LP will show here if value returns True")
     lines.append("")
     lines.append("  Signals:")
     sigs = list(data.get("signals") or [])
@@ -264,7 +268,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             lines.append(f"    [{sev}] {sig.get('title')}")
             lines.append(f"           {sig.get('detail')}")
     else:
-        lines.append("    Signals will show here")
+        lines.append("    Signals will show here if value returns True")
 
     reports = data.get("source_reports") or {}
     if reports:
@@ -301,7 +305,9 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             if len(accts) > 4:
                 lines.append(f"         … +{len(accts) - 4} more")
     else:
-        lines.append("  Multi-account clusters will show here")
+        lines.append(
+            "  Multi-account clusters will show here if value returns True"
+        )
 
     groups = data.get("similar_size_groups") or []
     if groups:
@@ -339,7 +345,9 @@ def format_bundles_text(data: dict[str, Any]) -> str:
                 lines.append(f"         … +{n_show - 6} more")
     else:
         lines.append("")
-        lines.append("  Similar-size wallet groups will show here")
+        lines.append(
+            "  Similar-size wallet groups will show here if value returns True"
+        )
 
     insiders = data.get("insider_wallets") or []
     lines.append("")
@@ -350,7 +358,9 @@ def format_bundles_text(data: dict[str, Any]) -> str:
                 f"    #{h.get('rank')} {h.get('wallet')}  holds {_pct(h.get('pct_supply'))}"
             )
     else:
-        lines.append("  Insider-flagged wallets will show here")
+        lines.append(
+            "  Insider-flagged wallets will show here if value returns True"
+        )
 
     suspects = data.get("suspect_wallets") or []
     if suspects:
@@ -376,7 +386,9 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             lines.append(f"    … +{len(suspects) - 12} more")
     else:
         lines.append("")
-        lines.append("  Suspect wallets will show here")
+        lines.append(
+            "  Suspect wallets will show here if value returns True"
+        )
 
     if data.get("notes"):
         lines.append("")

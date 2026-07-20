@@ -1481,7 +1481,7 @@ def format_holders_text(data: dict[str, Any]) -> str:
         for f in flags_list:
             lines.append(f"    • {f}")
     else:
-        lines.append("    Flags will show here")
+        lines.append("    Flags will show here if value returns True")
     if data.get("filter_query"):
         lines.append("")
         lines.append(
@@ -1524,7 +1524,9 @@ def format_holders_text(data: dict[str, Any]) -> str:
                 f"    {c.get('wallet')} · {c.get('accounts')} accounts · bal {c.get('combined_balance')}"
             )
     else:
-        lines.append("  Multi-account clusters will show here")
+        lines.append(
+            "  Multi-account clusters will show here if value returns True"
+        )
 
     # ── RugWatch flagged wallets ──────────────────────────────────────
     lines.extend(
@@ -1761,17 +1763,17 @@ def _format_rugwatch_flagged_section(
     still_line = (
         f"  Still holding: {still_n}"
         if still_n > 0
-        else "  Still holding will show here"
+        else "  Still holding will show here if value returns True"
     )
     prev_line = (
         f"  Previously holding: {prev_n}"
         if prev_n > 0
-        else "  Previously holding will show here"
+        else "  Previously holding will show here if value returns True"
     )
     combined_line = (
         f"  Combined bag: {total_s}{total_pri_s}"
         if with_pct_n > 0 and total_pct > 0
-        else "  Combined flagged bag % will show here"
+        else "  Combined flagged bag % will show here if value returns True"
     )
     lines: list[str] = [
         "",
@@ -1814,7 +1816,9 @@ def _format_rugwatch_flagged_section(
     wallets = list(stats.get("wallets") or [])
     skipped_lp = int(stats.get("skipped_lp") or 0)
     if not wallets:
-        lines.append("  Flagged wallets will show here")
+        lines.append(
+            "  Flagged wallets will show here if value returns True"
+        )
         return lines
 
     lines.append(
