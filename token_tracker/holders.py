@@ -1731,15 +1731,6 @@ def _format_rugwatch_flagged_section(
     if not wallets:
         # Sold ≥99% (or none still holding) → simple placeholder
         lines.append("  Flagged wallets will show here")
-        lines.append(
-            "  (when a flagged wallet still holds on this mint)."
-        )
-        lines.append(
-            "  Wallets that sold ≥99% of their bags are not listed."
-        )
-        lines.append(
-            "  Upload new sellers to GitHub from Ruggers → yellow Upload."
-        )
         return lines
 
     lines.append(
@@ -1800,14 +1791,6 @@ def _format_rugwatch_flagged_section(
             + (f" ({total_pri} priority)" if total_pri_s else "")
             + f" · {with_pct_n} wallet(s)"
         )
-    if skipped_sold:
-        lines.append(
-            "  Flagged wallets that sold ≥99% of their bags are not shown here."
-        )
-        lines.append(
-            "  Upload new sellers to GitHub from Ruggers → yellow Upload."
-        )
-
     return lines
 
 
