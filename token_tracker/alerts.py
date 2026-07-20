@@ -674,6 +674,18 @@ def format_alerts_text(data: dict[str, Any]) -> str:
             items = a.get("items") or []
             for it in items[:6]:
                 lines.append(f"     • {it}")
+            # RugWatch flagged: only the combined % (in title/detail) — no wallet dump
+            if a.get("hide_wallets") or a.get("id") == "rugwatch_flagged":
+                ftp = a.get("flagged_total_pct")
+                if ftp is not None:
+                    try:
+                        lines.append(
+                            f"     Flagged wallets hold {float(ftp):.2f}% total"
+                        )
+                    except (TypeError, ValueError):
+                        pass
+                lines.append("")
+                continue
             wallets = a.get("wallets") or []
             # Comprehensive lists (e.g. all >2%) print fully; others cap for brevity
             max_w = 40 if a.get("list_all") or a.get("id") == "holders_over_2_pct" else 8
@@ -742,8 +754,8 @@ def _rugwatch_flagged_alert(holders_data: dict[str, Any]) -> dict[str, Any] | No
     """
     Alert when RugWatch-flagged wallets hold a known bag on this token.
 
-    Title + wallet lines include supply % so the Alerts UI color scheme
-    (2–5% low · 5–10% medium · 10–15% high · ≥15% critical) applies.
+    Alerts shows ONLY the combined holding % (color-banded in the UI).
+    Individual wallets stay on the Holders → Flagged wallets section — not here.
     """
     rw = holders_data.get("rugwatch_flagged") or {}
     if not rw or not rw.get("ok") or rw.get("skipped") or rw.get("enabled") is False:
@@ -760,30 +772,6 @@ def _rugwatch_flagged_alert(holders_data: dict[str, Any]) -> dict[str, Any] | No
     if with_pct <= 0 or total <= 0:
         return None
 
-    wallets_raw = list(stats.get("wallets") or [])
-    wallets: list[dict[str, Any]] = []
-    for row in wallets_raw:
-        pct = row.get("pct")
-        if pct is None:
-            continue
-        try:
-            pct_f = float(pct)
-        except (TypeError, ValueError):
-            continue
-        wallets.append(
-            {
-                "wallet": row.get("wallet"),
-                "pct": pct_f,
-                "hold_priority": row.get("hold_priority")
-                or holding_priority_label(pct_f),
-                "rank": row.get("rank"),
-                "label": row.get("label"),
-            }
-        )
-    if not wallets:
-        return None
-
-    wallets.sort(key=lambda w: -float(w.get("pct") or 0))
     total_pri = holding_priority_label(total)
     if total >= 15:
         severity = "critical"
@@ -794,25 +782,28 @@ def _rugwatch_flagged_alert(holders_data: dict[str, Any]) -> dict[str, Any] | No
     else:
         severity = "info"
 
+    # Title carries the % so the Alerts color scheme paints it (same as Holders).
+    # No wallet list — addresses live under Holders → Flagged wallets.
     return {
         "id": "rugwatch_flagged",
         "priority": "top",
         "severity": severity,
-        "title": f"Flagged wallets hold ~{total:.2f}% of supply",
+        "title": f"Flagged wallets hold {total:.2f}% of supply",
         "detail": (
-            f"{with_pct} RugWatch-flagged wallet(s) hold a combined "
-            f"~{total:.2f}% of supply on this token"
+            f"Combined bag of {with_pct} flagged wallet(s) on this token: {total:.2f}%"
             + (
-                f" ({total_pri} priority by size)."
+                f" ({total_pri} priority)."
                 if total_pri in {"low", "medium", "high", "critical"}
                 else "."
             )
-            + " LP/program wallets excluded. Heuristic watchlist — not proof of a rug."
+            + " See Holders → Flagged wallets for addresses. LP/program excluded."
         ),
-        "wallets": wallets,
-        "list_all": True,
+        "wallets": [],  # never list addresses in Alerts
+        "items": [],
+        "list_all": False,
         "flagged_total_pct": total,
         "flagged_wallet_count": with_pct,
+        "hide_wallets": True,
     }
 
 
