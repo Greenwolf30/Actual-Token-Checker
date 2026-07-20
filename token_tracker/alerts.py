@@ -749,17 +749,11 @@ def format_alerts_text(data: dict[str, Any]) -> str:
                 lines.append(f"     … and {len(wallets) - max_w} more")
             lines.append("")
 
-    # When no flagged wallet still holds (sold ≥99% / none on mint) — simple placeholder
+    # When no flagged wallet still holds — simple placeholder only
     if not has_flagged_alert:
         lines.append("  FLAGGED WALLETS")
         lines.append("  " + "-" * 40)
         lines.append("  Flagged wallets will show here")
-        lines.append(
-            "  (when any still hold on this mint — sold ≥99% bags are not listed)."
-        )
-        lines.append(
-            "  Upload new sellers to GitHub from Ruggers → yellow Upload."
-        )
         lines.append("")
 
     if data.get("notes"):
