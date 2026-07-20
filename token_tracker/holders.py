@@ -1496,17 +1496,45 @@ def format_holders_text(data: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+# Minimum remaining supply % to treat a flagged wallet as still holding.
+# Below this (or missing from top-holder snapshot) → sold out / left → hide.
+_FLAGGED_STILL_HOLD_MIN_PCT = 0.01
+
+
+def _flagged_notes_sold_out(notes: str | None) -> bool:
+    """True if notes clearly say they sold ≥99% of their bag (e.g. Ruggers upload)."""
+    t = str(notes or "").lower()
+    if not t:
+        return False
+    if "100.0% sold" in t or "100% sold" in t or "sold 100%" in t:
+        return True
+    # "99.0% sold" / "≥99%" / "sold ≥99%"
+    if "sold ≥99" in t or "sold >=99" in t or "≥99% sold" in t or ">=99% sold" in t:
+        return True
+    if re.search(r"\b99(?:\.\d+)?%\s*sold\b", t):
+        return True
+    if re.search(r"\bsold\s+99(?:\.\d+)?%\b", t):
+        return True
+    return False
+
+
 def collect_flagged_holder_pcts(
     rw: dict[str, Any] | None,
     holders: list[dict[str, Any]] | None = None,
+    *,
+    only_current_holders: bool = True,
 ) -> dict[str, Any]:
     """
-    Flagged (non-LP) wallets with known bag % on this token.
+    Flagged (non-LP) wallets for this token.
+
+    only_current_holders=True (default): only wallets that STILL hold a known bag
+    on this mint (in top-holder snapshot with pct > dust). Sold-out / not listed
+    flagged wallets are omitted from Holders + Alerts combined %.
 
     Returns:
       wallets: [{wallet, pct, hold_priority, rank?, label?, ...}]
-      total_pct: sum of known bags
-      shown_count / with_pct_count / skipped_lp
+      total_pct: sum of current bags
+      shown_count / with_pct_count / skipped_lp / skipped_sold
     """
     rw = rw or {}
     holders = list(holders or [])
@@ -1521,6 +1549,15 @@ def collect_flagged_holder_pcts(
         for h in holders
         if (h.get("wallet") or "").strip()
     }
+    bal_by: dict[str, float | None] = {}
+    for h in holders:
+        w = (h.get("wallet") or "").strip()
+        if not w:
+            continue
+        try:
+            bal_by[w] = float(h["balance"]) if h.get("balance") is not None else None
+        except (TypeError, ValueError):
+            bal_by[w] = None
 
     all_flagged = list(rw.get("all_flagged") or [])
     if not all_flagged:
@@ -1558,6 +1595,7 @@ def collect_flagged_holder_pcts(
     wallets_out: list[dict[str, Any]] = []
     total_pct = 0.0
     with_pct = 0
+    skipped_sold = 0
     for w in shown:
         addr = (w.get("address") or "").strip()
         if not addr:
@@ -1567,11 +1605,31 @@ def collect_flagged_holder_pcts(
             for key, p in pct_by.items():
                 if key.lower() == addr.lower():
                     owns = p
+                    addr = key  # use map key for bal lookup
                     break
         try:
             owns_f = float(owns) if owns is not None else None
         except (TypeError, ValueError):
             owns_f = None
+
+        notes = str(w.get("notes") or w.get("evidence") or "")
+        sold_out_notes = _flagged_notes_sold_out(notes)
+
+        # Still holding? Need known bag on this mint above dust threshold.
+        still_holds = (
+            owns_f is not None
+            and owns_f >= _FLAGGED_STILL_HOLD_MIN_PCT
+            and not sold_out_notes
+        )
+        # Dust balance with 0% also counts as gone
+        bal = bal_by.get(addr)
+        if still_holds and bal is not None and bal <= 0 and (owns_f or 0) <= 0:
+            still_holds = False
+
+        if only_current_holders and not still_holds:
+            skipped_sold += 1
+            continue
+
         row = {
             "wallet": addr,
             "pct": owns_f,
@@ -1583,11 +1641,12 @@ def collect_flagged_holder_pcts(
             "on_this_mint": bool(w.get("on_this_mint")),
             "in_top_holders": bool(w.get("in_top_holders")),
             "origin": (w.get("tag") or w.get("origin") or w.get("location") or ""),
-            "notes": w.get("notes") or w.get("evidence") or "",
+            "notes": notes,
             "raw": w,
+            "still_holds": still_holds,
         }
         wallets_out.append(row)
-        if owns_f is not None:
+        if owns_f is not None and owns_f >= _FLAGGED_STILL_HOLD_MIN_PCT:
             total_pct += owns_f
             with_pct += 1
 
@@ -1604,6 +1663,8 @@ def collect_flagged_holder_pcts(
         "with_pct_count": with_pct,
         "shown_count": len(wallets_out),
         "skipped_lp": skipped_lp,
+        "skipped_sold": skipped_sold,
+        "only_current_holders": only_current_holders,
     }
 
 
@@ -1625,15 +1686,18 @@ def _format_rugwatch_flagged_section(
         else ""
     )
 
+    skipped_sold = int(stats.get("skipped_sold") or 0)
     lines: list[str] = [
         "",
         f"  ── FLAGGED WALLETS (RugWatch) · combined {total_s}{total_pri_s} ──",
         "  This list is NOT bundlers and is NOT the Bundles tab.",
+        "  Only CURRENT holders: flagged wallets that still hold on this mint.",
+        "  Sold ≥99% / dropped off the list / not in top snapshot → hidden.",
         "  These are RugWatch watchlist wallets only (heuristic — not proven ruggers).",
         "  A [creator] tag means creator of SOME OTHER scanned token,",
         "  NOT automatically the creator of THIS token (see Creator line above).",
         "  [this mint] = linked to the token you are viewing now.",
-        "  Combined % = sum of known bags for flagged wallets on this token.",
+        "  Combined % = sum of current bags still held by flagged wallets.",
     ]
     if not rw:
         lines.append("  RugWatch: no data (scan holders to load).")
@@ -1677,15 +1741,21 @@ def _format_rugwatch_flagged_section(
     wallets = list(stats.get("wallets") or [])
     skipped_lp = int(stats.get("skipped_lp") or 0)
     if not wallets:
-        lines.append(
-            "  (No wallets flagged in RugWatch yet — scan rugs in RugWatch to fill the list.)"
-        )
+        if skipped_sold:
+            lines.append(
+                f"  (No flagged wallets still holding — {skipped_sold} sold out / "
+                "not in top holders hidden.)"
+            )
+        else:
+            lines.append(
+                "  (No flagged wallets currently holding on this mint.)"
+            )
         return lines
 
     lines.append(
-        f"  Flagged wallets · combined {total_s}{total_pri_s} "
+        f"  Flagged wallets (still holding) · combined {total_s}{total_pri_s} "
         f"({len(wallets)} shown"
-        + (f", {with_pct_n} with known bag" if with_pct_n else ", none in top snapshot")
+        + (f", {skipped_sold} sold/left hidden" if skipped_sold else "")
         + (f", {skipped_lp} LP/program excluded" if skipped_lp else "")
         + "):"
     )
@@ -1732,26 +1802,26 @@ def _format_rugwatch_flagged_section(
             lines.append(f"         {(note[:100])}")
 
     if len(wallets) > 100:
-        lines.append(f"  … and {len(wallets) - 100} more in RugWatch DB")
+        lines.append(f"  … and {len(wallets) - 100} more still holding")
 
-    # Quick callout if any match current token
-    mint_hits = [
-        w for w in wallets if w.get("on_this_mint") or w.get("in_top_holders")
-    ]
     lines.append("")
     if with_pct_n:
         lines.append(
-            f"  Combined flagged bag on this token: {total_s}"
+            f"  Combined flagged bag (still holding): {total_s}"
             + (f" ({total_pri} priority)" if total_pri_s else "")
-            + f" across {with_pct_n} wallet(s) with known %"
+            + f" across {with_pct_n} wallet(s)"
         )
-    if mint_hits:
+    if skipped_sold:
         lines.append(
-            f"  ⚠ {len(mint_hits)} flagged wallet(s) tied to this mint or top holders"
+            f"  Hidden: {skipped_sold} flagged wallet(s) sold ≥99% / left list / no current bag"
+        )
+    if with_pct_n:
+        lines.append(
+            f"  ⚠ {with_pct_n} flagged wallet(s) still hold on this mint"
         )
     else:
         lines.append(
-            "  (None of these flagged wallets matched this mint’s top holders yet.)"
+            "  (No flagged wallets currently holding a bag on this mint.)"
         )
 
     return lines
