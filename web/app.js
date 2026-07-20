@@ -2039,11 +2039,15 @@ function copyTextToClipboard(text, onOk) {
 function wireCopyMintClicks(root) {
   const scope = root || document;
   scope.querySelectorAll("a.copy-mint, .copy-mint").forEach((a) => {
+    // Never wire the top summary mint bar
+    if (a.id === "sumAddr" || (a.closest && a.closest("#summaryBar"))) return;
     if (a.dataset.copyWired === "1") return;
     a.dataset.copyWired = "1";
     a.addEventListener("click", (ev) => {
       ev.preventDefault();
-      const text = a.getAttribute("data-copy") || a.textContent || "";
+      ev.stopPropagation();
+      const text = (a.getAttribute("data-copy") || a.textContent || "").trim();
+      if (!text || text === "copied!") return;
       copyTextToClipboard(text, () => {
         const prev = a.textContent;
         a.textContent = "copied!";
@@ -2421,12 +2425,12 @@ function renderSummary(data) {
   const mint = (t.address || m.address || "").trim();
   const sumAddr = $("sumAddr");
   if (sumAddr) {
+    // Top-of-page mint: display only (not yellow, not copyable)
     sumAddr.textContent = mint;
-    sumAddr.classList.add("copy-mint");
-    sumAddr.setAttribute("data-copy", mint);
-    sumAddr.title = mint ? "Left-click to copy mint / CA" : "";
+    sumAddr.classList.remove("copy-mint");
+    sumAddr.removeAttribute("data-copy");
+    sumAddr.removeAttribute("title");
     sumAddr.dataset.copyWired = "";
-    if (mint) wireCopyMintClicks(sumAddr.parentElement || document);
   }
   $("sumPrice").textContent = fmtUsd(m.price_usd);
   $("sumMc").textContent = fmtUsd(m.market_cap_usd);
