@@ -936,6 +936,11 @@ function shortWhen(iso) {
   return String(iso).slice(0, 19).replace("T", " ") + " UTC";
 }
 
+/** Last Ruggers render — used by per-section Export buttons */
+let _lastRuggersBuckets = null;
+let _lastRuggersRec = null;
+let _lastRuggersKey = "";
+
 function renderRuggersWalletRow(row) {
   const w = row.wallet || "";
   const sold =
@@ -986,25 +991,161 @@ function renderRuggersWalletRow(row) {
   );
 }
 
-function renderRuggersSection(title, hint, rows) {
+/**
+ * @param {string} title
+ * @param {string} hint
+ * @param {object[]} rows
+ * @param {string} [exportKey]  "creator" | "similar" | "single" — shows Export for RugWatch
+ */
+function renderRuggersSection(title, hint, rows, exportKey) {
   let body;
   if (!rows || !rows.length) {
     body = '<p class="rug-empty">None yet.</p>';
   } else {
     body = rows.map(renderRuggersWalletRow).join("");
   }
+  const n = rows ? rows.length : 0;
+  const exportBtn =
+    exportKey
+      ? '<button type="button" class="ghost history-btn rug-export-btn" data-rug-export="' +
+        escHtml(exportKey) +
+        '" title="Download wallets for RugWatch Upload tab (JSON or one address per line)">' +
+        "Export" +
+        (n ? " (" + n + ")" : "") +
+        "</button>"
+      : "";
   return (
     '<section class="rug-section">' +
+    '<div class="rug-section-head">' +
     '<h3 class="rug-section-title">' +
     escHtml(title) +
     ' <span class="rug-count">' +
-    (rows ? rows.length : 0) +
+    n +
     "</span></h3>" +
+    exportBtn +
+    "</div>" +
     (hint ? '<p class="rug-section-hint">' + escHtml(hint) + "</p>" : "") +
     '<div class="rug-section-body">' +
     body +
     "</div></section>"
   );
+}
+
+function ruggersRowsForExportKey(key) {
+  const b = _lastRuggersBuckets;
+  if (!b) return [];
+  if (key === "creator") return b.creatorSold || [];
+  if (key === "similar") return b.similarSellers || [];
+  if (key === "single") return b.singleSellers || [];
+  return [];
+}
+
+function ruggersExportLabel(key) {
+  if (key === "creator") return "creator_sellers";
+  if (key === "similar") return "similar_sellers";
+  if (key === "single") return "single_sellers";
+  return String(key || "sellers");
+}
+
+/**
+ * Build RugWatch-compatible wallet list from a Ruggers seller section.
+ * JSON matches rugwatch_wallets_v1 so RugWatch Upload can import it.
+ */
+function buildRuggersExportPayload(exportKey, rows) {
+  const rec = _lastRuggersRec || {};
+  const section = ruggersExportLabel(exportKey);
+  const mint = rec.address || _lastRuggersKey || "";
+  const symbol = rec.symbol || "";
+  const wallets = (rows || [])
+    .map((r) => {
+      const addr = (r.wallet || "").trim();
+      if (!addr) return null;
+      const sold =
+        r.sold_pct != null && Number.isFinite(Number(r.sold_pct))
+          ? Number(r.sold_pct).toFixed(1) + "% sold of first bag"
+          : "seller ≥99% first bag";
+      const notes = [
+        "ruggers " + section,
+        symbol ? "$" + symbol : "",
+        mint ? "mint " + mint : "",
+        sold,
+        r.reason || "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      return {
+        address: addr,
+        wallet: addr,
+        chain_id: (rec.chain || "solana").toString(),
+        label: "ruggers_" + section,
+        risk_score: 80,
+        notes: notes,
+        source: "adtc_ruggers_export",
+      };
+    })
+    .filter(Boolean);
+  return {
+    format: "rugwatch_wallets_v1",
+    source: "adtc_ruggers",
+    section: section,
+    mint: mint,
+    symbol: symbol,
+    exported_at: new Date().toISOString(),
+    wallets: wallets,
+  };
+}
+
+function downloadRuggersSection(exportKey) {
+  const rows = ruggersRowsForExportKey(exportKey);
+  if (!rows.length) {
+    alert(
+      "No wallets in this section to export.\n\n" +
+        "Re-analyze the mint after sellers appear, then Export again."
+    );
+    return;
+  }
+  const payload = buildRuggersExportPayload(exportKey, rows);
+  const section = ruggersExportLabel(exportKey);
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  const asJson = window.confirm(
+    "Export " +
+      rows.length +
+      " wallet(s) from “" +
+      section +
+      "” for RugWatch.\n\n" +
+      "OK = JSON (RugWatch Upload tab — recommended)\n" +
+      "Cancel = plain text (one address per line)"
+  );
+  let blob;
+  let name;
+  if (asJson) {
+    blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json",
+    });
+    name = "ruggers_" + section + "_" + stamp + ".json";
+  } else {
+    const lines = payload.wallets.map((w) => w.address);
+    blob = new Blob([lines.join("\n") + "\n"], {
+      type: "text/plain;charset=utf-8",
+    });
+    name = "ruggers_" + section + "_" + stamp + ".txt";
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+function wireRuggersExportButtons() {
+  const body = $("ruggersBody");
+  if (!body) return;
+  body.querySelectorAll("[data-rug-export]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const key = btn.getAttribute("data-rug-export") || "";
+      downloadRuggersSection(key);
+    });
+  });
 }
 
 function refreshRuggersPanel(focusKey) {
@@ -1031,12 +1172,17 @@ function refreshRuggersPanel(focusKey) {
   if (!activeKey && keys.length) activeKey = keys[0];
 
   if (!keys.length) {
+    _lastRuggersBuckets = null;
+    _lastRuggersRec = null;
+    _lastRuggersKey = "";
     const emptyMsg =
       "No Ruggers tracking yet.\n\n" +
       "Run a full Analyze (Quick off) on a mint. The first successful holder snapshot " +
       "is frozen as a baseline (top holders + similar-size wallets + creator).\n\n" +
       "Re-analyze later: wallets that sold ≥99% of their first bag (or disappeared " +
-      "from the holder list) appear here as seller. If they buy back, they are labeled swing.";
+      "from the holder list) appear here as seller. If they buy back, they are labeled swing.\n\n" +
+      "When sellers appear, use Export on Creator / Similar / Single sections, " +
+      "then import the file in RugWatch → Upload tab.";
     if (body) {
       body.innerHTML =
         '<p class="logs-empty">' +
@@ -1049,6 +1195,9 @@ function refreshRuggersPanel(focusKey) {
 
   const rec = store[activeKey];
   const buckets = ruggersBuckets(rec);
+  _lastRuggersBuckets = buckets;
+  _lastRuggersRec = rec;
+  _lastRuggersKey = activeKey;
   const title =
     (rec.symbol ? "$" + rec.symbol + " · " : "") +
     (rec.name ? rec.name + " · " : "") +
@@ -1071,7 +1220,9 @@ function refreshRuggersPanel(focusKey) {
     '<p class="rug-rules">Rules: only wallets that sold <strong>≥99%</strong> of their ' +
     "<em>first-lookup</em> bag (or left the holder list) are listed. " +
     "Buy-back after a dump → <span class=\"rug-tag rug-tag-swing\">swing</span>. " +
-    "Holders who never dumped 99% are ignored.</p>";
+    "Holders who never dumped 99% are ignored. " +
+    "Use <strong>Export</strong> on Creator / Similar / Single sections to download " +
+    "wallets for the RugWatch <strong>Upload</strong> tab.</p>";
 
   if (keys.length > 1) {
     html += '<label class="rug-mint-pick">Tracked mint ';
@@ -1097,18 +1248,21 @@ function refreshRuggersPanel(focusKey) {
 
   html += renderRuggersSection(
     "Creator (sold ≥99%)",
-    "Creator wallet only — listed if they sold ≥99% of their first-lookup bag or left the list.",
-    buckets.creatorSold
+    "Creator wallet only — listed if they sold ≥99% of their first-lookup bag or left the list. Export → RugWatch Upload.",
+    buckets.creatorSold,
+    "creator"
   );
   html += renderRuggersSection(
     "Similar wallets (sellers)",
-    "Wallets that were in a similar-size group on first lookup and later sold ≥99% / dropped off.",
-    buckets.similarSellers
+    "Wallets that were in a similar-size group on first lookup and later sold ≥99% / dropped off. Export → RugWatch Upload.",
+    buckets.similarSellers,
+    "similar"
   );
   html += renderRuggersSection(
     "Single wallets (sellers)",
-    "Individual top holders (not similar-group) that sold ≥99% of first bag or are no longer listed.",
-    buckets.singleSellers
+    "Individual top holders (not similar-group) that sold ≥99% of first bag or are no longer listed. Export → RugWatch Upload.",
+    buckets.singleSellers,
+    "single"
   );
   html += renderRuggersSection(
     "Swing traders",
@@ -1128,6 +1282,7 @@ function refreshRuggersPanel(focusKey) {
     buckets.swings.length +
     " · Tracked mints: " +
     keys.length +
+    " · Export JSON from a section, then open RugWatch → Upload tab." +
     "</p>";
 
   if (body) body.innerHTML = html;
@@ -1139,6 +1294,7 @@ function refreshRuggersPanel(focusKey) {
   if (sel) {
     sel.addEventListener("change", () => refreshRuggersPanel(sel.value));
   }
+  wireRuggersExportButtons();
 }
 
 function formatRuggersPlain(rec, buckets, key) {

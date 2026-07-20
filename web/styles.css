@@ -587,6 +587,28 @@ button, .ghost, .primary {
   background: var(--bg-panel);
   overflow: hidden;
 }
+.rug-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px 8px 0;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+}
+.rug-section-head .rug-section-title {
+  border-bottom: none;
+  background: transparent;
+  flex: 1;
+  min-width: 140px;
+}
+.rug-section-head .rug-export-btn {
+  margin-right: 8px;
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  padding: 4px 10px;
+}
 .rug-section-title {
   margin: 0;
   padding: 10px 12px;

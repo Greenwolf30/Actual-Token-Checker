@@ -7,7 +7,8 @@
 
   This guide explains what each part of the app does, in plain language —
   including Quick mode, social scores, news, wallets, Rugcheck / creators,
-  the About tab, and the Ruggers sell-out tracker.
+  the About tab, the Ruggers sell-out tracker, and how YOU save seller
+  wallets into RugWatch (your local serial-rugger database on the desktop).
 
   Everything here is a HEURISTIC from public data. Not financial advice.
 ================================================================================
@@ -480,6 +481,8 @@ What Ruggers is for
     first bag — or disappeared from the holder list.
   - Separate similar-size group members from single whales and the creator.
   - Flag buy-backs after a dump as swing (section: Swing traders).
+  - Help YOU spot dump wallets so you can copy them into RugWatch yourself
+    (see §12 — RugWatch is your local DB; the website does not fill it).
 
 How tracking starts (first lookup)
   After a successful full Analyze (Quick OFF) with holders:
@@ -492,6 +495,24 @@ How tracking starts (first lookup)
 
   Quick mode does not start or update Ruggers (no full holder scan).
 
+Does the number of lookups before they sell matter?
+  NO. Lookup count does not matter.
+
+  - Sale is always measured against the FIRST full lookup bag only.
+  - It does not matter if the dump shows up on the 2nd, 3rd, 10th, or
+    50th full Analyze of the same mint.
+  - Creator, similar wallets, and single wallets from that first freeze
+    are all treated the same way: whenever a later full Analyze first
+    shows they sold ≥99% (or dropped off the list), they count as sellers.
+  - Intermediate lookups do not reset or weaken tracking. You do not need
+    to “catch” the sell on a particular lookup number.
+
+  Example
+    Lookup 1: wallet holds 5% (frozen as first bag)
+    Lookups 2–9: still holds ~5% → not listed as seller
+    Lookup 10: holds 0.02% or gone from the list → SELLER
+      (same rule as if they had sold on lookup 2)
+
 What “sold ≥99%” means
   A wallet is listed only if it dumped at least 99% of its FIRST-lookup bag:
 
@@ -503,18 +524,21 @@ What “sold ≥99%” means
     First hold 5.00% → still listed with 0.10% → NOT listed (only 98% sold)
     First hold 5.00% → gone from top holders → seller (not listed anymore)
     First hold 5.00% → sold out, then later holds 1% again → swing
+    First hold 5.00% → still holding until 10th lookup, then sold ≥99%
+      → still a seller (lookup number does not matter)
 
   Wallets that never sold ≥99% are ignored (not shown).
 
 Sections on the Ruggers tab
   1. Creator (sold ≥99%)
-       Creator only, and only if they sold ≥99% of first bag or left the list.
+       Creator only, and only if they sold ≥99% of first bag or left the list
+       on any later full Analyze (2nd, 10th, … — count does not matter).
   2. Similar wallets (sellers)
        Wallets that were in a similar-size group on first lookup and later
-       sold ≥99% / dropped off the list. Listed as SELLER.
+       sold ≥99% / dropped off the list (any later lookup). Listed as SELLER.
   3. Single wallets (sellers)
        Individual top holders (not in a similar group) that sold ≥99% or
-       are no longer listed. Listed as SELLER.
+       are no longer listed on any later full Analyze. Listed as SELLER.
   4. Swing traders
        Wallets that previously met the seller rule, then bought back on a
        later lookup. Labeled swing (not seller).
@@ -538,20 +562,86 @@ Where it lives
 Typical workflow
   1. Full Analyze a new mint (Quick off) → baseline freezes (may show
      empty seller sections — nothing has dumped yet).
-  2. Later, Analyze the same mint again.
-  3. Open Ruggers → see who sold ≥99% since first lookup, by section.
+  2. Later, Analyze the same mint again (2nd, 3rd, 10th… — any later full
+     run; how many times you looked first does not change the rule).
+  3. Open Ruggers → see who sold ≥99% of their first bag, by section.
   4. If a dumper buys back, they move to Swing traders.
+  5. To keep wallets long-term as serial suspects in YOUR RugWatch database,
+     copy them into RugWatch yourself — see §12. The website does not write
+     into that database for you.
 
 What Ruggers is not
   - Not a live mempool dump alert
   - Not proof wallets are the same person or a “rug team”
-  - Not RugWatch / serial-wallet cloud DB (that is a separate desktop tool)
+  - Not RugWatch (RugWatch is the separate desktop serial-wallet database)
+  - Not auto-sync to RugWatch — you must copy wallets yourself (see §12)
   - Not updated by Quick-only searches
   - Not a substitute for Solscan trade history (top-holder snapshots only)
 
 
 --------------------------------------------------------------------------------
-12. LOGS
+12. SAVING SELLER WALLETS TO RUGWATCH (MANUAL — YOU BUILD YOUR OWN LIST)
+--------------------------------------------------------------------------------
+
+Subtitle: RugWatch (manual)
+
+Read this even if you only use the website.
+
+Two different things (do not mix them up)
+  Ruggers (website tab)
+    - Temporary dump spotting for mints you analyze in THIS browser.
+    - Stored only in browser localStorage (not on the website host).
+    - Does NOT create or update any serial-rugger database by itself.
+
+  RugWatch (desktop tool)
+    - THIS is where you build your serial-rugger / flagged-wallet database.
+    - Local SQLite on your PC (e.g. rugwatch.db under your RugWatch data
+      folder) — your own database of wallets you chose to track.
+    - The token checker can READ that DB (Holders “flagged wallets”) when
+      the file is present; it does not invent the list for you.
+
+So when the guide says the website does not create a “server-side serial
+rugger database,” it means: the live site (Render / web host) does not
+store serial ruggers for everyone and does not auto-fill RugWatch.
+It does NOT mean “there is no database.” RugWatch IS your database — you
+create and grow it by adding wallets (including sellers you copy from
+Ruggers).
+
+What you should do (manual workflow)
+  1. Run full Analyzes (Quick OFF) so Ruggers can baseline and update.
+  2. When Creator / Similar / Single seller sections list wallets, copy
+     each address you care about (from the Ruggers tab UI).
+  3. Optional: paste into your own notes (text file, spreadsheet) with
+     mint, date, and why (e.g. “creator sold ≥99% after 3rd lookup”).
+  4. Open RugWatch on the desktop and add those wallets into YOUR
+     RugWatch database / serial-rugger tracking (the way RugWatch supports).
+     That is how your serial-rugger DB grows.
+  5. When new sellers appear on later lookups (2nd, 10th, any later full
+     Analyze — count does not matter; see §11), copy and add those too.
+
+What the website host will NOT do
+  - Will NOT write Ruggers sellers into RugWatch automatically
+  - Will NOT host a shared public “serial rugger police” DB for all users
+  - Will NOT replace your local RugWatch database
+  - Will NOT sync your browser Ruggers list to other users or devices
+
+Why add sellers to RugWatch yourself
+  - Ruggers “seller” = ≥99% of that wallet’s first-lookup bag (or left the
+    holder list) on one mint you tracked — a heuristic, not a court verdict.
+  - YOU decide which wallets belong in the long-term RugWatch database.
+  - Once they are in RugWatch, later token checks can show them as flagged
+    when that local DB is available.
+
+Summary
+  Ruggers  = temporary browser tool to spot dumps on a mint.
+  RugWatch = YOUR serial-rugger / flagged-wallet database (local desktop).
+  Link them by hand: copy seller from Ruggers → add in RugWatch.
+  That is how the serial-rugger database is created and updated — by you,
+  in RugWatch — not automatically by the website server.
+
+
+--------------------------------------------------------------------------------
+13. LOGS
 --------------------------------------------------------------------------------
 
 Subtitle: Logs
@@ -656,7 +746,7 @@ What Logs is not
 
 
 --------------------------------------------------------------------------------
-12. ROBINHOOD CHAIN (BRIEF)
+14. ROBINHOOD CHAIN (BRIEF)
 --------------------------------------------------------------------------------
 
   - DexScreener chain id: robinhood (EVM mainnet id 4663)
@@ -666,7 +756,7 @@ What Logs is not
 
 
 --------------------------------------------------------------------------------
-13. COMMON QUESTIONS
+15. COMMON QUESTIONS
 --------------------------------------------------------------------------------
 
 Q: Can visitors add their own Helius keys?
@@ -694,9 +784,20 @@ A: Desktop Logs are saved in history_log.json next to the app. Website
    Logs live in the browser only. If you move the app folder or clear
    site data, the list may be gone. Use Download to keep a backup.
 
+Q: Is there a serial-rugger database? Who creates it?
+A: Yes — RugWatch on your desktop is that database (local SQLite, wallets
+   you flag). The website Ruggers tab does not create or update it. Copy
+   seller addresses from Ruggers and add them in RugWatch yourself (§12).
+   The live website host does not keep a shared serial-rugger DB for all
+   users.
+
+Q: If a wallet sells on my 10th lookup, do they still count as a seller?
+A: Yes. Lookup count does not matter. Sales are always measured against
+   the first full Analyze bag (see §11).
+
 
 --------------------------------------------------------------------------------
-14. DISCLAIMER
+16. DISCLAIMER
 --------------------------------------------------------------------------------
 
   Heuristics only. Data can be wrong, late, or incomplete.
