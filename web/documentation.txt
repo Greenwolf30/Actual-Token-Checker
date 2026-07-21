@@ -193,9 +193,11 @@ Solana
   Known LP / AMM / program wallets are labeled and usually treated as
   “not a random human bag” for risk lists.
   Bundles uses the same LP tagging as Holders (program map + pair address +
-  Pump.fun curve/pool PDAs). When a wallet is known LP it shows
-  [label] on Bundles lines and is excluded from bundle-risk / suspect
-  scoring (it can still appear in launch-window history with the label).
+  Pump.fun curve/pool PDAs). Pump.fun / known liquidity vaults are:
+    - excluded from same-slot multi-buys (Launch-window) lists and totals
+    - not tagged for Ruggers launch-window sellers
+    - blocked from Ruggers Upload / Export payloads
+  RugWatch also blocks them on manual upload and scrubs them from cloud on push.
 
 Other chains (Ethereum, Base, Robinhood, …)
   Market works via DexScreener.
