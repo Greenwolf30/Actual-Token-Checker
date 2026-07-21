@@ -4625,6 +4625,9 @@ function isMajorSectionTitleLine(plain) {
   if (!t) return false;
   // Explicit ── TITLE ── markers (About / Alerts categories)
   if (/^[─\-–—]{2,}\s*.+\s*[─\-–—]{2,}$/.test(t)) return true;
+  // Bundles bare headers (title-case + colon; not field labels with values)
+  const bare = t.toLowerCase().replace(/:+\s*$/, ":");
+  if (bare === "signals:" || bare === "provider status:") return true;
   // Bare ALL-CAPS block titles only (no %, no decimals, short)
   if (
     t.length >= 3 &&
