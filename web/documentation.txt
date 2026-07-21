@@ -190,14 +190,18 @@ Display (website)
 Solana
   Multi-source fusion when possible:
     Helius / Solana RPC, Rugcheck top holders, Solscan, Birdeye, Pump.fun
-  Known LP / AMM / program wallets are labeled and usually treated as
-  “not a random human bag” for risk lists.
-  Bundles uses the same LP tagging as Holders (program map + pair address +
-  Pump.fun curve/pool PDAs). Pump.fun / known liquidity vaults are:
-    - excluded from same-slot multi-buys (Launch-window) lists and totals
-    - not tagged for Ruggers launch-window sellers
-    - blocked from Ruggers Upload / Export payloads
-  RugWatch also blocks them on manual upload and scrubs them from cloud on push.
+  Known LP / AMM / program wallets are labeled and treated as pool vaults,
+  not risk whales / sellers:
+    - Hardcoded program map (Raydium / Orca / Meteora programs, …)
+    - ALL DexScreener pair addresses for the mint (Meteora, Raydium, Orca,
+      PumpSwap, Pump.fun, …) — not only the primary pair
+    - Pump.fun per-mint curve / pool PDAs
+  Those addresses are excluded from:
+    - Holders risk flags / concentration “flagged whale” lines
+    - Alerts over-2% / whale priority lists
+    - Bundles similar-size, multi-account risk clusters, launch-window multi-buys
+    - Ruggers sellers / launch tags / Upload-Export payloads
+  They may still appear in Top Holders with an LP label (for context only).
 
 Other chains (Ethereum, Base, Robinhood, …)
   Market works via DexScreener.

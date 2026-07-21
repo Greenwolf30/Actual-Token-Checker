@@ -105,6 +105,71 @@ def is_known_lp_or_program(
     return False
 
 
+def _dex_pool_label(dex_id: str | None) -> str:
+    d = (dex_id or "dex").strip().lower()
+    if "meteora" in d:
+        return "Meteora pool (liquidity)"
+    if "raydium" in d:
+        return "Raydium pool (liquidity)"
+    if "orca" in d or "whirlpool" in d:
+        return "Orca pool (liquidity)"
+    if d in {"pumpswap", "pump-swap"} or "pumpswap" in d:
+        return "PumpSwap pool (liquidity)"
+    if d in {"pumpfun", "pump", "pump-fun"} or "pumpfun" in d:
+        return "Pump.fun bonding curve / pair"
+    if "jupiter" in d:
+        return "Jupiter pool (liquidity)"
+    if "lifinity" in d:
+        return "Lifinity pool (liquidity)"
+    if "phoenix" in d:
+        return "Phoenix market (liquidity)"
+    pretty = (dex_id or "DEX").strip() or "DEX"
+    return f"{pretty} pool (liquidity)"
+
+
+def fetch_dex_pool_accounts(mint: str | None) -> dict[str, str]:
+    """
+    Map pair/pool address → label for ALL DexScreener pairs on this mint.
+
+    Includes Meteora, Raydium, Orca, PumpSwap, etc. — not only the primary pair.
+    """
+    m = (mint or "").strip()
+    if not m or len(m) < 32:
+        return {}
+    out: dict[str, str] = {}
+    try:
+        from .http_util import get_json
+
+        data = get_json(
+            f"https://api.dexscreener.com/latest/dex/tokens/{m}",
+            timeout=12.0,
+            retries=0,
+        )
+    except Exception:  # noqa: BLE001
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    ml = m.lower()
+    for p in data.get("pairs") or []:
+        if not isinstance(p, dict):
+            continue
+        base = ((p.get("baseToken") or {}).get("address") or "").strip().lower()
+        quote = ((p.get("quoteToken") or {}).get("address") or "").strip().lower()
+        if base != ml and quote != ml:
+            continue
+        pair = (p.get("pairAddress") or "").strip()
+        if not pair or len(pair) < 32:
+            continue
+        lab = _dex_pool_label(p.get("dexId"))
+        # Prefer Meteora/Raydium-style labels over generic if address already seen
+        prev = out.get(pair)
+        if not prev or (
+            "meteora" in lab.lower() and "meteora" not in prev.lower()
+        ):
+            out[pair] = lab
+    return out
+
+
 def apply_known_lp_tags(
     holders: list[dict[str, Any]],
     *,
@@ -114,22 +179,33 @@ def apply_known_lp_tags(
     """
     Stamp is_known_program + human labels on holder rows.
 
-    Same rules as the Holders tab: hardcoded program map, Dex pair address,
-    per-mint Pump.fun bonding curve / pool PDAs, and label heuristics.
+    Sources:
+      - hardcoded program map
+      - primary pair_address
+      - ALL DexScreener pair addresses for the mint (Meteora, Raydium, …)
+      - per-mint Pump.fun curve/pool PDAs
+      - label heuristics
     Mutates rows in place; returns the same list for chaining.
     """
-    pump_lp: dict[str, str] = {}
+    pool_map: dict[str, str] = {}
     m = (mint or "").strip()
     if m:
+        try:
+            pool_map.update(fetch_dex_pool_accounts(m) or {})
+        except Exception:  # noqa: BLE001
+            pass
         try:
             from .pumpfun import fetch_pump_lp_accounts, is_pump_mint
 
             if is_pump_mint(m):
-                pump_lp = fetch_pump_lp_accounts(m) or {}
+                pool_map.update(fetch_pump_lp_accounts(m) or {})
         except Exception:  # noqa: BLE001
-            pump_lp = {}
+            pass
 
     pair = (pair_address or "").strip()
+    if pair and pair not in pool_map:
+        pool_map[pair] = "Liquidity pair"
+
     for h in holders:
         if not isinstance(h, dict):
             continue
@@ -139,14 +215,11 @@ def apply_known_lp_tags(
         if w in _KNOWN_OWNERS:
             h["is_known_program"] = True
             h["label"] = h.get("label") or _KNOWN_OWNERS[w]
-        if pair and w == pair:
-            h["is_known_program"] = True
-            h["label"] = h.get("label") or "Liquidity pair"
-        if w in pump_lp:
+        if w in pool_map:
             h["is_known_program"] = True
             cur = (h.get("label") or "").strip()
-            plab = pump_lp[w]
-            if not cur or cur.lower() in {"liquidity pair", "unknown"}:
+            plab = pool_map[w]
+            if not cur or cur.lower() in {"liquidity pair", "unknown", "known liquidity / program"}:
                 h["label"] = plab
             elif plab.lower() not in cur.lower():
                 h["label"] = cur + " · " + plab
@@ -209,6 +282,23 @@ def pump_lp_addresses_for_mint(mint: str | None) -> set[str]:
         return set()
 
 
+def known_pool_addresses_for_mint(mint: str | None) -> set[str]:
+    """
+    All known pool/LP addresses for a mint:
+    DexScreener pairs (Meteora, Raydium, …) + Pump curve/pool PDAs.
+    """
+    m = (mint or "").strip()
+    if not m:
+        return set()
+    out: set[str] = set()
+    try:
+        out |= {a for a in (fetch_dex_pool_accounts(m) or {}) if a}
+    except Exception:  # noqa: BLE001
+        pass
+    out |= pump_lp_addresses_for_mint(m)
+    return out
+
+
 def is_excluded_lp_wallet(
     wallet: str | None = None,
     *,
@@ -220,8 +310,9 @@ def is_excluded_lp_wallet(
     pump_lp_set: set[str] | None = None,
 ) -> bool:
     """
-    True for wallets that must never enter same-slot multi-buys risk lists
-    or RugWatch uploads (Pump.fun LP PDAs + known DEX/program liquidity).
+    True for wallets that must never enter same-slot multi-buys, Alerts risk
+    lists, Holders risk flags, or Ruggers/sellers / RugWatch uploads.
+    (Known DEX pools + Pump PDAs + program authorities.)
     """
     w = (wallet or "").strip()
     if is_known_program or is_known_lp_or_program(
@@ -234,7 +325,7 @@ def is_excluded_lp_wallet(
         return True
     lp_set = pump_lp_set
     if lp_set is None and mint:
-        lp_set = pump_lp_addresses_for_mint(mint)
+        lp_set = known_pool_addresses_for_mint(mint)
     if w and lp_set and w in lp_set:
         return True
     return False

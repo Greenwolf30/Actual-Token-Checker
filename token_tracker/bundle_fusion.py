@@ -75,7 +75,8 @@ def comprehensive_bundle_check(
     try:
         from . import holders as hold_mod
 
-        lp_wallets |= hold_mod.pump_lp_addresses_for_mint(mint)
+        # Pump PDAs + all DexScreener pairs (Meteora, Raydium, PumpSwap, …)
+        lp_wallets |= hold_mod.known_pool_addresses_for_mint(mint)
     except Exception:  # noqa: BLE001
         pass
     for h in holders_data.get("holders") or []:

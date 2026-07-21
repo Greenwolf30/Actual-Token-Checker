@@ -13,6 +13,59 @@ from __future__ import annotations
 from typing import Any
 
 
+def _holder_is_known_lp(
+    holders: list[dict[str, Any]], wallet: str | None
+) -> bool:
+    w = (wallet or "").strip()
+    if not w:
+        return False
+    for h in holders or []:
+        if not isinstance(h, dict):
+            continue
+        if (h.get("wallet") or "").strip() != w:
+            continue
+        if h.get("is_known_program"):
+            return True
+        lab = (h.get("label") or "").lower()
+        if any(
+            k in lab
+            for k in (
+                "liquidity",
+                "pool",
+                "meteora",
+                "raydium",
+                "orca",
+                "pump",
+                "vault",
+                "amm",
+                "bonding",
+            )
+        ):
+            return True
+    return False
+
+
+def is_known_lp_label(label: Any) -> bool:
+    lab = (str(label or "")).lower()
+    if not lab:
+        return False
+    return any(
+        k in lab
+        for k in (
+            "liquidity",
+            "pool",
+            "meteora",
+            "raydium",
+            "orca",
+            "pump",
+            "vault",
+            "amm",
+            "bonding",
+            "known program",
+        )
+    )
+
+
 def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
     """Build a structured BUNDLES section from holder scan output."""
     if not holders_data:
@@ -31,11 +84,25 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
 
     # Enrich multi-account clusters with pct of supply when possible
     multi_clusters = _enrich_clusters(clusters_in, holders, summary)
+    # Drop known pool / program owners from multi-account risk clusters
+    multi_clusters = [
+        c
+        for c in multi_clusters
+        if not (
+            c.get("is_known_program")
+            or is_known_lp_label(c.get("label"))
+            or _holder_is_known_lp(holders, c.get("wallet") or c.get("owner"))
+        )
+    ]
 
     # Similar-size groups among non-program wallets (heuristic bundle)
     similar_groups = _similar_size_groups(holders)
 
-    insiders = [h for h in holders if h.get("insider")]
+    insiders = [
+        h
+        for h in holders
+        if h.get("insider") and not h.get("is_known_program")
+    ]
     non_lp = [h for h in holders if not h.get("is_known_program")]
 
     top10_ex = summary.get("top10_pct_excluding_known_programs")
@@ -981,7 +1048,7 @@ def _similar_size_groups(holders: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Group non-program top wallets with nearly equal pct_supply / balance."""
     rows: list[dict[str, Any]] = []
     for h in holders:
-        if h.get("is_known_program"):
+        if h.get("is_known_program") or is_known_lp_label(h.get("label")):
             continue
         pct = h.get("pct_supply")
         bal = h.get("balance")

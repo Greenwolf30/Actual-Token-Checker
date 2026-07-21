@@ -443,13 +443,14 @@ def _ruggers_track_snapshot(
             if hw:
                 lp_exclude.add(hw)
     try:
-        from token_tracker.holders import pump_lp_addresses_for_mint
+        from token_tracker.holders import known_pool_addresses_for_mint
 
         mint_for_lp = (
             (holders.get("token_address") or holders.get("mint") or "")
             or (bundles.get("token_address") or "")
         )
-        lp_exclude |= pump_lp_addresses_for_mint(str(mint_for_lp))
+        # Pump + Meteora + Raydium + all Dex pair addresses for this mint
+        lp_exclude |= known_pool_addresses_for_mint(str(mint_for_lp))
     except Exception:  # noqa: BLE001
         pass
 

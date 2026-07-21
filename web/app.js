@@ -3224,8 +3224,12 @@ function isRuggersExcludedLpWallet(row) {
     "raydium authority",
     "raydium amm",
     "orca whirlpool",
+    "orca pool",
     "meteora",
+    "meteora pool",
+    "pool (liquidity)",
     "pump swap",
+    "known program",
   ];
   return keys.some((k) => blob.includes(k));
 }
