@@ -9,11 +9,13 @@ const HISTORY_KEY = "adtc_history_log";
 const HISTORY_MAX = 200;
 const RUGGERS_KEY = "adtc_ruggers_track";
 /** Bump when Flagged-wallet rules change so sticky junk is wiped once. */
-const RUGGERS_RULES_VERSION = 6;
+const RUGGERS_RULES_VERSION = 7;
 /** Sold ≥ this fraction of first-lookup bag → list as seller (99%). */
 const RUGGERS_SOLD_FRAC = 0.99;
 /** Remaining bag must be ≤ (1 - RUGGERS_SOLD_FRAC) of first_pct to count as sold. */
 const RUGGERS_REMAIN_FRAC = 1 - RUGGERS_SOLD_FRAC;
+/** Single sellers: min first bag % of supply (top → least holder cutoff). */
+const RUGGERS_SINGLE_MIN_PCT = 0.01;
 
 const $ = (id) => document.getElementById(id);
 
@@ -685,13 +687,51 @@ function migrateRuggersStore(store) {
       copy.flagged_known = {};
       copy.flagged_sellers = {};
       copy.rugwatch_known = {};
+      // v7: Single only for plain ≥0.01% holders — clear sticky Single so re-Analyze reclassifies
+      if (copy.sticky_lane_sellers && typeof copy.sticky_lane_sellers === "object") {
+        const sticky = {};
+        for (const [w, metaW] of Object.entries(copy.sticky_lane_sellers)) {
+          const lane = metaW && metaW.origin_lane;
+          if (lane === "single") {
+            changed = true;
+            continue; // drop old Single stickies
+          }
+          sticky[w] = metaW;
+        }
+        copy.sticky_lane_sellers = sticky;
+      }
       if (copy.status && typeof copy.status === "object") {
         const st = {};
         for (const [w, row] of Object.entries(copy.status)) {
           if (!row || typeof row !== "object") continue;
-          st[w] = { ...row, is_flagged: false };
+          const nextRow = { ...row, is_flagged: false };
+          // Drop seller tag on legacy Single so next Analyze rebuilds lanes
+          if (
+            nextRow.origin_lane === "single" ||
+            (nextRow.tag === "seller" &&
+              nextRow.origin_lane !== "similar" &&
+              nextRow.origin_lane !== "creator" &&
+              !nextRow.in_similar &&
+              !nextRow.is_creator)
+          ) {
+            if (nextRow.origin_lane === "single" || !nextRow.origin_lane) {
+              nextRow.tag = "holding";
+              nextRow.origin_lane = undefined;
+              nextRow.ever_sold = false;
+            }
+          }
+          st[w] = nextRow;
         }
         copy.status = st;
+      }
+      // Clear frozen single lanes on first_wallets (re-resolve next Analyze)
+      if (copy.first_wallets && typeof copy.first_wallets === "object") {
+        for (const fw of Object.values(copy.first_wallets)) {
+          if (fw && fw.origin_lane === "single") {
+            delete fw.origin_lane;
+            changed = true;
+          }
+        }
       }
       copy.rules_version = RUGGERS_RULES_VERSION;
       changed = true;
@@ -790,6 +830,12 @@ function extractRuggersSnapshot(data) {
         rank: row.rank != null ? row.rank : null,
         label: row.label || null,
         in_similar: !!row.in_similar,
+        in_multi: !!row.in_multi,
+        in_insider: !!row.in_insider,
+        in_suspect: !!row.in_suspect,
+        in_funding: !!row.in_funding,
+        in_launch: !!row.in_launch,
+        exclude_from_single: !!row.exclude_from_single,
       };
     }
     const similar_groups = (track.similar_groups || []).map((g, i) => ({
@@ -804,16 +850,43 @@ function extractRuggersSnapshot(data) {
     // ensure in_similar from groups
     for (const g of similar_groups) {
       for (const w of g.wallets || []) {
-        if (wallets[w]) wallets[w].in_similar = true;
-        else
+        if (wallets[w]) {
+          wallets[w].in_similar = true;
+          wallets[w].exclude_from_single = true;
+        } else
           wallets[w] = {
             pct_supply: g.avg_pct,
             balance: null,
             rank: null,
             label: null,
             in_similar: true,
+            exclude_from_single: true,
           };
       }
+    }
+    // Final Single exclusion: any bundle category or bag below min %
+    for (const w of Object.keys(wallets)) {
+      const row = wallets[w];
+      if (!row) continue;
+      const pct =
+        row.pct_supply != null && Number.isFinite(Number(row.pct_supply))
+          ? Number(row.pct_supply)
+          : null;
+      const bundleCat = !!(
+        row.in_similar ||
+        row.in_multi ||
+        row.in_insider ||
+        row.in_suspect ||
+        row.in_funding ||
+        row.in_launch
+      );
+      const belowMin = pct == null || pct < RUGGERS_SINGLE_MIN_PCT;
+      row.exclude_from_single = !!(
+        row.exclude_from_single ||
+        bundleCat ||
+        belowMin ||
+        row.label === "creator"
+      );
     }
     const creator = (track.creator || "").trim() || null;
     if (creator && !wallets[creator]) {
@@ -823,7 +896,10 @@ function extractRuggersSnapshot(data) {
         rank: null,
         label: "creator",
         in_similar: false,
+        exclude_from_single: true,
       };
+    } else if (creator && wallets[creator]) {
+      wallets[creator].exclude_from_single = true;
     }
     // Previously flagged (RugWatch) — separate Ruggers section, not mixed into similar
     const flagged_known = {};
@@ -1260,25 +1336,86 @@ function isRuggersCreatorWallet(rec, w, first, prev) {
 }
 
 /**
+ * True if wallet is in a bundle category that must never become Single sellers.
+ * (similar-size, multi-account, insider, suspect, shared funder, launch-window)
+ */
+function isRuggersBundleCategory(first, prev, cur) {
+  const rows = [first, prev, cur].filter(Boolean);
+  for (const r of rows) {
+    if (
+      r.in_similar ||
+      r.in_multi ||
+      r.in_insider ||
+      r.in_suspect ||
+      r.in_funding ||
+      r.in_launch ||
+      r.exclude_from_single
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Freeze lane at first discovery on THIS mint (never follows other-mint Flagged).
- * similar | single | creator
+ * similar | single | creator | excluded
  * Creator is permanent: once creator, always origin_lane "creator".
+ * Single only for plain holders ≥0.01% not in bundle categories.
  */
 function resolveRuggersOriginLane(rec, w, first, prev, cur, uploadedSimilar) {
   // Creator never loses its lane / label
   if (isRuggersCreatorWallet(rec, w, first, prev)) {
     return "creator";
   }
-  const prevLane = prev && prev.origin_lane;
-  if (prevLane === "similar" || prevLane === "single" || prevLane === "creator") {
-    return prevLane;
-  }
-  if (first && first.origin_lane) return first.origin_lane;
   if (uploadedSimilar || (first && first.in_similar) || (prev && prev.in_similar)) {
     return "similar";
   }
   if (cur && cur.in_similar) return "similar";
-  return "single";
+
+  const prevLane = prev && prev.origin_lane;
+  // Sticky similar / creator always keep
+  if (prevLane === "similar" || prevLane === "creator") {
+    return prevLane;
+  }
+  // Sticky single only if still eligible (not reclassified as bundle category)
+  if (prevLane === "single") {
+    if (!isRuggersBundleCategory(first, prev, cur) && isRuggersSingleEligible(first, cur)) {
+      return "single";
+    }
+    return "excluded";
+  }
+  if (first && first.origin_lane === "similar") return "similar";
+  if (first && first.origin_lane === "creator") return "creator";
+  if (
+    first &&
+    first.origin_lane === "single" &&
+    !isRuggersBundleCategory(first, prev, cur) &&
+    isRuggersSingleEligible(first, cur)
+  ) {
+    return "single";
+  }
+
+  // Bundle categories → never Single
+  if (isRuggersBundleCategory(first, prev, cur)) {
+    return "excluded";
+  }
+  // Plain top holders with bag ≥ 0.01% only
+  if (isRuggersSingleEligible(first, cur)) {
+    return "single";
+  }
+  return "excluded";
+}
+
+/** First bag ≥ RUGGERS_SINGLE_MIN_PCT (0.01%) for Single lane. */
+function isRuggersSingleEligible(first, cur) {
+  const pct =
+    first && first.pct_supply != null && Number.isFinite(Number(first.pct_supply))
+      ? Number(first.pct_supply)
+      : cur && cur.pct_supply != null && Number.isFinite(Number(cur.pct_supply))
+        ? Number(cur.pct_supply)
+        : null;
+  return pct != null && pct >= RUGGERS_SINGLE_MIN_PCT;
 }
 
 /**
@@ -1337,6 +1474,12 @@ function processRuggersFromAnalyze(data) {
         rank: info.rank,
         label: info.label,
         in_similar: !!info.in_similar,
+        in_multi: !!info.in_multi,
+        in_insider: !!info.in_insider,
+        in_suspect: !!info.in_suspect,
+        in_funding: !!info.in_funding,
+        in_launch: !!info.in_launch,
+        exclude_from_single: !!info.exclude_from_single,
       };
     }
     if (snap.creator && !rec.first_wallets[snap.creator]) {
@@ -1346,6 +1489,7 @@ function processRuggersFromAnalyze(data) {
         rank: null,
         label: "creator",
         in_similar: false,
+        exclude_from_single: true,
       };
     }
   } else {
@@ -1401,7 +1545,7 @@ function processRuggersFromAnalyze(data) {
     }
   }
 
-  // Current listed map
+  // Current listed map (+ bundle-category tags for Single exclusion)
   const current = {};
   for (const [w, info] of Object.entries(snap.wallets || {})) {
     current[w] = {
@@ -1409,7 +1553,34 @@ function processRuggersFromAnalyze(data) {
       pct_supply: info.pct_supply,
       balance: info.balance,
       in_similar: !!info.in_similar,
+      in_multi: !!info.in_multi,
+      in_insider: !!info.in_insider,
+      in_suspect: !!info.in_suspect,
+      in_funding: !!info.in_funding,
+      in_launch: !!info.in_launch,
+      exclude_from_single: !!info.exclude_from_single,
     };
+    // Refresh bundle tags on first_wallets when re-Analyze sees them
+    if (rec.first_wallets && rec.first_wallets[w]) {
+      const fw = rec.first_wallets[w];
+      if (info.in_similar) fw.in_similar = true;
+      if (info.in_multi) fw.in_multi = true;
+      if (info.in_insider) fw.in_insider = true;
+      if (info.in_suspect) fw.in_suspect = true;
+      if (info.in_funding) fw.in_funding = true;
+      if (info.in_launch) fw.in_launch = true;
+      if (
+        info.in_similar ||
+        info.in_multi ||
+        info.in_insider ||
+        info.in_suspect ||
+        info.in_funding ||
+        info.in_launch ||
+        info.exclude_from_single
+      ) {
+        fw.exclude_from_single = true;
+      }
+    }
   }
 
   // Learn similar-group membership from this snap + freeze it on first_wallets.
@@ -1834,6 +2005,17 @@ function processRuggersFromAnalyze(data) {
       current_pct: cur.listed ? cur.pct_supply : 0,
       current_balance: cur.listed ? cur.balance : 0,
       listed: !!cur.listed,
+      in_multi: !!(first.in_multi || prev.in_multi || (cur && cur.in_multi)),
+      in_insider: !!(first.in_insider || prev.in_insider || (cur && cur.in_insider)),
+      in_suspect: !!(first.in_suspect || prev.in_suspect || (cur && cur.in_suspect)),
+      in_funding: !!(first.in_funding || prev.in_funding || (cur && cur.in_funding)),
+      in_launch: !!(first.in_launch || prev.in_launch || (cur && cur.in_launch)),
+      exclude_from_single: !!(
+        originLane === "excluded" ||
+        first.exclude_from_single ||
+        prev.exclude_from_single ||
+        (cur && cur.exclude_from_single)
+      ),
       // % of first bag (rule helper; not shown as "100% of supply")
       sold_pct:
         soldState.sold_pct != null
@@ -2417,7 +2599,11 @@ function ruggersBuckets(rec) {
       }
       continue;
     }
-    singleSellers.push(row);
+    // Single only: plain holders ≥0.01%, not bundle categories
+    if (lane === "single") {
+      singleSellers.push(row);
+    }
+    // lane === "excluded" (multi/insider/suspect/funder/launch) → no Single list
   }
 
   // Flagged meta without status row (sold phase only)

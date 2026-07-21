@@ -343,45 +343,77 @@ def _ruggers_track_snapshot(
     Client stores first-seen holdings per mint, then flags wallets that later
     sold ≥99% of that bag (or dropped off the list), including similar-size
     group members and creator.
+
+    Single sellers (client) only from plain holders ≥0.01% that are NOT
+    similar-size, multi-account, insider, suspect, shared-funder, or launch-window.
     """
     holders = holders or {}
     bundles = bundles or {}
     meta = holders.get("meta") if isinstance(holders.get("meta"), dict) else {}
     creator = (meta.get("creator") or "").strip() or None
 
-    wallet_rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for h in list(holders.get("holders") or [])[:40]:
-        if not isinstance(h, dict):
-            continue
-        if h.get("is_known_program"):
-            continue
-        w = (h.get("wallet") or "").strip()
-        if not w or w in seen:
-            continue
-        seen.add(w)
-        pct = h.get("pct_supply")
-        try:
-            pct_f = float(pct) if pct is not None else None
-        except (TypeError, ValueError):
-            pct_f = None
-        bal = h.get("balance")
-        try:
-            bal_f = float(bal) if bal is not None else None
-        except (TypeError, ValueError):
-            bal_f = None
-        wallet_rows.append(
-            {
-                "wallet": w,
-                "pct_supply": pct_f,
-                "balance": bal_f,
-                "rank": h.get("rank"),
-                "label": h.get("label"),
-            }
-        )
-
-    similar_groups: list[dict[str, Any]] = []
+    # Bundle-category sets — excluded from Ruggers Single lane
     similar_wallets: set[str] = set()
+    multi_wallets: set[str] = set()
+    insider_wallets: set[str] = set()
+    suspect_wallets: set[str] = set()
+    funding_wallets: set[str] = set()
+    launch_wallets: set[str] = set()
+
+    for c in list(holders.get("owner_clusters") or []) + list(
+        bundles.get("clusters") or []
+    ):
+        if not isinstance(c, dict):
+            continue
+        w = (c.get("wallet") or c.get("owner") or "").strip()
+        if w:
+            multi_wallets.add(w)
+
+    for h in list(holders.get("holders") or []):
+        if isinstance(h, dict) and h.get("insider"):
+            w = (h.get("wallet") or "").strip()
+            if w:
+                insider_wallets.add(w)
+    for h in list(bundles.get("insider_wallets") or []):
+        if isinstance(h, dict):
+            w = (h.get("wallet") or "").strip()
+        else:
+            w = str(h or "").strip()
+        if w:
+            insider_wallets.add(w)
+
+    for s in list(bundles.get("suspect_wallets") or []):
+        if isinstance(s, dict):
+            w = (s.get("wallet") or "").strip()
+        else:
+            w = str(s or "").strip()
+        if w:
+            suspect_wallets.add(w)
+
+    for fc in list(bundles.get("funding_clusters") or []):
+        if not isinstance(fc, dict):
+            continue
+        funder = (fc.get("funder") or "").strip()
+        if funder:
+            funding_wallets.add(funder)
+        for c in list(fc.get("children") or []):
+            if isinstance(c, dict):
+                w = (c.get("wallet") or "").strip()
+            else:
+                w = str(c or "").strip()
+            if w:
+                funding_wallets.add(w)
+
+    for g in list(bundles.get("same_slot_groups") or []):
+        if not isinstance(g, dict):
+            continue
+        for w in list(g.get("wallets") or []):
+            ws = str(w or "").strip()
+            if ws:
+                launch_wallets.add(ws)
+
+    # Parse similar-size groups first (needed for tagging + Single exclusion)
+    similar_groups: list[dict[str, Any]] = []
     for i, g in enumerate(list(bundles.get("similar_size_groups") or [])[:12]):
         if not isinstance(g, dict):
             continue
@@ -401,7 +433,6 @@ def _ruggers_track_snapshot(
                 mp_f = None
             members_out.append({"wallet": mw, "pct_supply": mp_f})
             similar_wallets.add(mw)
-        # fallback when only wallets list present
         if not members_out:
             avg = g.get("avg_pct")
             try:
@@ -434,14 +465,66 @@ def _ruggers_track_snapshot(
             }
         )
 
-    # Mark similar on wallet rows; add similar-only wallets not already in top list
-    for row in wallet_rows:
-        row["in_similar"] = row["wallet"] in similar_wallets
+    SINGLE_MIN_PCT = 0.01  # Single lane: top→least holder cutoff
+
+    def _bundle_tags(addr: str) -> dict[str, Any]:
+        in_sim = addr in similar_wallets
+        in_multi = addr in multi_wallets
+        in_ins = addr in insider_wallets
+        in_sus = addr in suspect_wallets
+        in_fund = addr in funding_wallets
+        in_launch = addr in launch_wallets
+        return {
+            "in_similar": in_sim,
+            "in_multi": in_multi,
+            "in_insider": in_ins,
+            "in_suspect": in_sus,
+            "in_funding": in_fund,
+            "in_launch": in_launch,
+            "exclude_from_single": bool(
+                in_sim or in_multi or in_ins or in_sus or in_fund or in_launch
+            ),
+        }
+
+    wallet_rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    # All non-LP holders in snapshot with bag ≥ 0.01% (not only top 40)
+    for h in list(holders.get("holders") or []):
+        if not isinstance(h, dict):
+            continue
+        if h.get("is_known_program"):
+            continue
+        w = (h.get("wallet") or "").strip()
+        if not w or w in seen:
+            continue
+        pct = h.get("pct_supply")
+        try:
+            pct_f = float(pct) if pct is not None else None
+        except (TypeError, ValueError):
+            pct_f = None
+        if pct_f is None or pct_f < SINGLE_MIN_PCT:
+            continue
+        seen.add(w)
+        bal = h.get("balance")
+        try:
+            bal_f = float(bal) if bal is not None else None
+        except (TypeError, ValueError):
+            bal_f = None
+        row: dict[str, Any] = {
+            "wallet": w,
+            "pct_supply": pct_f,
+            "balance": bal_f,
+            "rank": h.get("rank"),
+            "label": h.get("label"),
+        }
+        row.update(_bundle_tags(w))
+        wallet_rows.append(row)
+
+    # Similar-only wallets not already listed (still track Similar sellers)
     for addr in similar_wallets:
         if addr in seen:
             continue
         seen.add(addr)
-        # find pct from groups
         pct_f = None
         for g in similar_groups:
             for m in g.get("members") or []:
@@ -450,21 +533,19 @@ def _ruggers_track_snapshot(
                     break
             if pct_f is not None:
                 break
-        wallet_rows.append(
-            {
-                "wallet": addr,
-                "pct_supply": pct_f,
-                "balance": None,
-                "rank": None,
-                "label": None,
-                "in_similar": True,
-            }
-        )
+        row = {
+            "wallet": addr,
+            "pct_supply": pct_f,
+            "balance": None,
+            "rank": None,
+            "label": None,
+        }
+        row.update(_bundle_tags(addr))
+        row["in_similar"] = True
+        row["exclude_from_single"] = True
+        wallet_rows.append(row)
 
     if creator and creator not in seen:
-        # Include creator for labeling, but only with a real bag when found.
-        # Null pct/balance must NOT be treated as a sellable baseline client-side
-        # (was false “creator sold 100%” when creator holds outside top-N).
         c_pct = None
         c_bal = None
         c_rank = None
@@ -484,18 +565,18 @@ def _ruggers_track_snapshot(
                     c_bal = None
                 c_rank = h.get("rank")
                 break
-        wallet_rows.append(
-            {
-                "wallet": creator,
-                "pct_supply": c_pct,
-                "balance": c_bal,
-                "rank": c_rank,
-                "label": "creator",
-                "in_similar": creator in similar_wallets,
-                # Client: do not pin sell baseline until a positive bag is observed
-                "baseline_pending": c_pct is None and c_bal is None,
-            }
-        )
+        row = {
+            "wallet": creator,
+            "pct_supply": c_pct,
+            "balance": c_bal,
+            "rank": c_rank,
+            "label": "creator",
+            "baseline_pending": c_pct is None and c_bal is None,
+        }
+        row.update(_bundle_tags(creator))
+        row["exclude_from_single"] = True  # creator never Single
+        wallet_rows.append(row)
+        seen.add(creator)
 
     # RugWatch-flagged addresses that actually touch THIS mint only.
     # Never dump global high_risk_db / all_flagged — those are unrelated wallets.
@@ -504,9 +585,6 @@ def _ruggers_track_snapshot(
     rw = holders.get("rugwatch_flagged") if isinstance(holders.get("rugwatch_flagged"), dict) else {}
     if rw and rw.get("ok") and not rw.get("skipped"):
         seen_f: set[str] = set()
-        # in_top_holders = currently on this mint's holder list + on RugWatch
-        # linked_to_mint = historically linked to this mint in RugWatch DB
-        # also include any flagged wallet already in our tracked rows (creator/similar)
         for group_key in ("in_top_holders", "linked_to_mint"):
             for w in list(rw.get(group_key) or []):
                 if not isinstance(w, dict):
@@ -533,8 +611,6 @@ def _ruggers_track_snapshot(
                     break
             if len(flagged_addresses) >= 80:
                 break
-        # Tracked rows that match RugWatch but were not in the two lists above
-        # (e.g. similar-only wallets). Match against in_top style maps if present.
         if len(flagged_addresses) < 80:
             by_addr: dict[str, dict[str, Any]] = {}
             for group_key in ("in_top_holders", "linked_to_mint", "all_flagged"):
@@ -564,13 +640,22 @@ def _ruggers_track_snapshot(
                 if len(flagged_addresses) >= 80:
                     break
 
+    # Cap payload size (holders ≥0.01% + similar/creator extras)
+    wallet_rows.sort(
+        key=lambda r: (
+            -(float(r["pct_supply"]) if r.get("pct_supply") is not None else -1.0),
+            str(r.get("wallet") or ""),
+        )
+    )
     return {
         "ok": bool(holders.get("ok")) and bool(wallet_rows),
         "creator": creator,
-        "wallets": wallet_rows[:50],
+        "single_min_pct": SINGLE_MIN_PCT,
+        "wallets": wallet_rows[:200],
         "similar_groups": similar_groups,
         "flagged_addresses": flagged_addresses,
     }
+
 
 
 def build_public_payload(report: dict[str, Any]) -> dict[str, Any]:
