@@ -634,7 +634,7 @@ What people often ask
   updated local Ruggers tracking for that wallet on this mint.
 
   | Label   | Meaning                                                      |
-  |---------||--------------------------------------------------------------|
+  |---------| | ------------------------------------------------------------ |
   | seen    | First time ATC tracked this wallet on this mint (baseline /  |
   |         | first status).                                               |
   | sold    | First time tracking marked them a seller (≥99% of first bag  |
