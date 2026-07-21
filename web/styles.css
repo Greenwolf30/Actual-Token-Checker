@@ -622,24 +622,115 @@ button, .ghost, .primary {
 .rug-mint-pick-wrap {
   flex: 0 1 auto;
   min-width: 160px;
+  position: relative;
+  z-index: 5;
 }
-.rug-mint-pick {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.rug-mint-pick-label {
+  display: block;
   font-size: 0.75rem;
   color: var(--text-muted);
   font-weight: 600;
+  margin-bottom: 4px;
 }
-.rug-mint-pick select {
+/* Custom scrollable mint dropdown (not a native select list) */
+.rug-mint-dd {
+  position: relative;
+  min-width: 180px;
+  max-width: min(300px, 80vw);
+}
+.rug-mint-dd-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
   background: var(--bg-input);
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: 7px;
   padding: 7px 10px;
   font-size: 0.82rem;
-  min-width: 180px;
-  max-width: 280px;
+  cursor: pointer;
+  text-align: left;
+}
+.rug-mint-dd-btn:hover {
+  border-color: var(--accent-border, rgba(79, 140, 255, 0.45));
+}
+.rug-mint-dd.is-open .rug-mint-dd-btn {
+  border-color: var(--accent-border, rgba(79, 140, 255, 0.45));
+  box-shadow: 0 0 0 2px var(--accent-soft, rgba(79, 140, 255, 0.12));
+}
+.rug-mint-dd-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.rug-mint-dd-caret {
+  flex: 0 0 auto;
+  opacity: 0.7;
+  font-size: 0.7rem;
+}
+.rug-mint-dd.is-open .rug-mint-dd-caret {
+  transform: rotate(180deg);
+}
+.rug-mint-dd-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 50;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  background: var(--bg-panel, #12161e);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  /* Scroll — does not fill the screen */
+  max-height: min(220px, 38vh);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-muted) transparent;
+}
+.rug-mint-dd-list::-webkit-scrollbar {
+  width: 8px;
+}
+.rug-mint-dd-list::-webkit-scrollbar-thumb {
+  background: var(--text-muted);
+  border-radius: 4px;
+}
+.rug-mint-dd-opt {
+  padding: 7px 10px;
+  font-size: 0.8rem;
+  font-family: var(--mono);
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rug-mint-dd-opt:hover {
+  background: var(--accent-soft, rgba(79, 140, 255, 0.12));
+  color: var(--text);
+}
+.rug-mint-dd-opt.is-active {
+  color: var(--accent, #4f8cff);
+  background: rgba(79, 140, 255, 0.1);
+  font-weight: 600;
+}
+.rug-mint-select-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  border: 0 !important;
 }
 .rug-ca-search {
   flex: 1 1 220px;
@@ -797,23 +888,6 @@ a.copy-mint:hover,
   font-size: 0.8rem;
   color: var(--text-secondary);
   line-height: 1.45;
-}
-.rug-mint-pick {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 10px;
-  font-size: 0.78rem;
-  color: var(--text-muted);
-}
-.rug-mint-pick select {
-  background: var(--bg-input);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 4px 8px;
-  font-size: 0.78rem;
-  max-width: min(360px, 70vw);
 }
 .rug-section {
   margin: 14px 0;

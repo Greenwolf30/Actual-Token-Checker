@@ -3587,24 +3587,51 @@ function refreshRuggersPanel(focusKey) {
 
   html += '<div class="rug-mint-search-row">';
   html += '<div class="rug-mint-pick-wrap">';
-  html += '<label class="rug-mint-pick" for="ruggersMintSelect">Tracked mint';
-  html += '<select id="ruggersMintSelect">';
+  html += '<span class="rug-mint-pick-label">Tracked mint</span>';
+  // Custom dropdown (scrollable) — native <select> lists can't max-height reliably
+  const activeRec = store[activeKey] || {};
+  const activeLab =
+    (activeRec.symbol ? "$" + activeRec.symbol + " " : "") +
+    (activeRec.address || activeKey).slice(0, 14) +
+    "…";
+  html +=
+    '<div class="rug-mint-dd" id="ruggersMintDropdown">' +
+    '<button type="button" class="rug-mint-dd-btn" id="ruggersMintDdBtn" ' +
+    'aria-haspopup="listbox" aria-expanded="false" title="Previously looked-up mints">' +
+    '<span class="rug-mint-dd-label mono" id="ruggersMintDdLabel">' +
+    escHtml(activeLab) +
+    "</span>" +
+    '<span class="rug-mint-dd-caret" aria-hidden="true">▾</span>' +
+    "</button>" +
+    '<ul class="rug-mint-dd-list" id="ruggersMintDdList" role="listbox" hidden>';
   for (const k of keys) {
     const r = store[k] || {};
     const lab =
       (r.symbol ? "$" + r.symbol + " " : "") +
-      (r.address || k).slice(0, 12) +
+      (r.address || k).slice(0, 14) +
       "…";
+    html +=
+      '<li role="option" class="rug-mint-dd-opt' +
+      (k === activeKey ? " is-active" : "") +
+      '" data-value="' +
+      escHtml(k) +
+      '" tabindex="-1">' +
+      escHtml(lab) +
+      "</li>";
+  }
+  html += "</ul></div>";
+  // Hidden select kept for any legacy code that reads #ruggersMintSelect
+  html +=
+    '<select id="ruggersMintSelect" class="rug-mint-select-hidden" aria-hidden="true" tabindex="-1">';
+  for (const k of keys) {
     html +=
       '<option value="' +
       escHtml(k) +
       '"' +
       (k === activeKey ? " selected" : "") +
-      ">" +
-      escHtml(lab) +
-      "</option>";
+      "></option>";
   }
-  html += "</select></label></div>";
+  html += "</select></div>";
 
   html +=
     '<form class="rug-ca-search" id="ruggersCaForm" autocomplete="off">' +
@@ -3753,13 +3780,85 @@ function refreshRuggersPanel(focusKey) {
     dump.textContent = formatRuggersPlain(rec, buckets, activeKey);
   }
 
-  const sel = $("ruggersMintSelect");
-  if (sel) {
-    sel.addEventListener("change", () => refreshRuggersPanel(sel.value));
-  }
+  wireRuggersMintDropdown();
   wireRuggersExportButtons();
   wireCopyMintClicks(body);
   wireRuggersCaSearch();
+}
+
+/** Scrollable “Tracked mint” dropdown (max-height; does not fill the screen). */
+function wireRuggersMintDropdown() {
+  const root = $("ruggersMintDropdown");
+  const btn = $("ruggersMintDdBtn");
+  const list = $("ruggersMintDdList");
+  const sel = $("ruggersMintSelect");
+  if (!root || !btn || !list) return;
+
+  function close() {
+    list.hidden = true;
+    btn.setAttribute("aria-expanded", "false");
+    root.classList.remove("is-open");
+  }
+  function open() {
+    list.hidden = false;
+    btn.setAttribute("aria-expanded", "true");
+    root.classList.add("is-open");
+    const active = list.querySelector(".rug-mint-dd-opt.is-active");
+    if (active && typeof active.scrollIntoView === "function") {
+      try {
+        active.scrollIntoView({ block: "nearest" });
+      } catch (_) {
+        /* ignore */
+      }
+    }
+  }
+  function toggle() {
+    if (list.hidden) open();
+    else close();
+  }
+
+  btn.onclick = (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    toggle();
+  };
+
+  list.querySelectorAll(".rug-mint-dd-opt").forEach((li) => {
+    li.onclick = (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const key = li.getAttribute("data-value") || "";
+      if (!key) return;
+      if (sel) sel.value = key;
+      close();
+      refreshRuggersPanel(key);
+    };
+  });
+
+  // Close on outside click / Escape
+  if (!document.documentElement.dataset.rugMintDdDoc) {
+    document.documentElement.dataset.rugMintDdDoc = "1";
+    document.addEventListener("click", (ev) => {
+      const dd = $("ruggersMintDropdown");
+      if (!dd || !dd.classList.contains("is-open")) return;
+      if (dd.contains(ev.target)) return;
+      const listEl = $("ruggersMintDdList");
+      const btnEl = $("ruggersMintDdBtn");
+      if (listEl) listEl.hidden = true;
+      if (btnEl) btnEl.setAttribute("aria-expanded", "false");
+      dd.classList.remove("is-open");
+    });
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Escape") return;
+      const dd = $("ruggersMintDropdown");
+      if (!dd || !dd.classList.contains("is-open")) return;
+      const listEl = $("ruggersMintDdList");
+      const btnEl = $("ruggersMintDdBtn");
+      if (listEl) listEl.hidden = true;
+      if (btnEl) btnEl.setAttribute("aria-expanded", "false");
+      dd.classList.remove("is-open");
+    });
+  }
 }
 
 /** Wire CA search form (re-run after each Ruggers panel render). */
