@@ -31,14 +31,14 @@ pulls public market and risk data and shows it in tabs:
 It does NOT trade for you, custody funds, or guarantee a token is safe.
 
 What this guide covers vs RugWatch
-  THIS DOC (Token Checker / ATC)
+  THIS DOC (Actual Data Token Checker)
     - Analyze UI, tabs, Quick mode, Ruggers lanes, Logs, Alerts, Maps, About
-    - How ATC *reads* Flagged (RugWatch) and shows hold %
+    - How Actual Data Token Checker *reads* Flagged (RugWatch) and shows hold %
     - How Ruggers Upload/Export *sends* wallets into YOUR RugWatch
   RUGWATCH DOC (separate app — RugCheck Documentation.md)
     - Building the wallet list, risk_score 0–100, Monitor, Push/Pull cloud
-    - Scan mint, Add/Upload wallets, local DB shards, capacity
-  Do not paste full RugWatch manuals into ATC docs (and vice versa).
+    - Scan mint, Add/Upload wallets, Local database shards, capacity
+  Do not paste full RugWatch manuals into Actual Data Token Checker docs (and vice versa).
 
 
 --------------------------------------------------------------------------------
@@ -72,7 +72,7 @@ Navigation bar (compact)
 Analyze options (next to the search form)
   quick      — faster market-only style run (see §3)
   RugWatch   — yellow checkbox; when checked, Holders merge RugWatch
-               flagged wallets from local DB + cloud URL. When unchecked,
+               flagged wallets from Local database + cloud URL. When unchecked,
                that section is skipped for this lookup. Choice is remembered
                in this browser.
 
@@ -328,7 +328,7 @@ What people often ask
   Each token mint uses a separate token account. The standard one for
   “this owner + this mint” is the Associated Token Account.
 
-    Wallet / owner  — the key people usually share (what ATC colors as
+    Wallet / owner  — the key people usually share (what Actual Data Token Checker colors as
                       the holder when possible)
     Associated Token Account — the on-chain account that actually holds
                       that mint’s balance for that owner
@@ -337,7 +337,7 @@ What people often ask
   Multi-account / multi Associated Token Account cluster
     - Same owner controls more than one large token account for this mint
     - Holder lists sometimes show the token-account address, not the owner
-    - ATC rolls those up by owner when it can, so one person is not counted
+    - Actual Data Token Checker rolls those up by owner when it can, so one person is not counted
       as several unrelated holders
     - Shown under ── MULTI-ACCOUNT CLUSTERS ── and Ruggers “Multi-account
       clusters (1 Owner)”
@@ -353,7 +353,7 @@ What people often ask
   Launch-window ≈ early mint history (toward the beginning of the token’s
   on-chain life in the scan window) — NOT “the start of each buy cluster”
   as a separate concept, and NOT a guaranteed “block 0 / first second of
-  launch” clock. ATC paginates mint signatures toward older activity and
+  launch” clock. Actual Data Token Checker paginates mint signatures toward older activity and
   finds multi-wallet same-slot buy bursts in that early range.
 
   Same-slot multi-buys = several DIFFERENT wallets bought this mint in the
@@ -400,7 +400,7 @@ What people often ask
     (on the order of ~400 ms under normal conditions; not a wall-clock minute).
   - Many transactions may confirm in one slot; a single wallet may send
     multiple txs inside one slot.
-  - “Same slot” on ATC means the same integer slot field from getTransaction,
+  - “Same slot” on Actual Data Token Checker means the same integer slot field from getTransaction,
     i.e. the same on-chain time bucket — not “same day” and not “same human
     session.”
 
@@ -468,7 +468,7 @@ What people often ask
     │  │    SLOT_ID = Solana slot integer
     │  │    UTC     = blockTime for that slot when available
     │  │    U       = unique non-LP buyers in THIS slot only
-    │  │    Tx      = transactions ATC attributed to this slot bucket
+    │  │    Tx      = transactions Actual Data Token Checker attributed to this slot bucket
     │  │    G%      = sum of unique wallets’ CURRENT % inside this slot
     │  │              (n/a if no % known for any member)
     │  │
@@ -569,7 +569,7 @@ What people often ask
     Shared SOL funder               →  different wallets, common funder hop
 
   Same-slot multi-wallet activity is consistent with bots, snipers, team
-  wallets, or independent buyers colliding on the same slot. ATC records the
+  wallets, or independent buyers colliding on the same slot. Actual Data Token Checker records the
   pattern; it does not adjudicate which story is true.
 
 
@@ -612,7 +612,7 @@ What people often ask
     - When those multi-wallet buys landed on Solana for that slot
     - NOT the time you clicked Analyze / looked up the mint
 
-  Where ATC sources it
+  Where Actual Data Token Checker sources it
     1) Helius Solana RPC: getSignaturesForAddress on the mint
     2) Helius: getTransaction (jsonParsed) for each signature scanned
     3) Fields used: slot + blockTime (unix seconds → displayed UTC)
@@ -620,7 +620,7 @@ What people often ask
        grouped by slot (need ≥2 wallets for a multi-buy group)
 
   Launch-window vs slot time
-    - Launch-window = early mint history ATC scanned (toward older activity)
+    - Launch-window = early mint history Actual Data Token Checker scanned (toward older activity)
     - Slot timestamp = when that particular co-timed buy burst confirmed
     - holds X% next to a wallet = CURRENT bag from holders map (if known),
       not “% bought at that timestamp”
@@ -639,7 +639,7 @@ What people often ask
 
   | Label   | Meaning                                                      |
   |---------| | ------------------------------------------------------------ |
-  | seen    | First time ATC tracked this wallet on this mint (baseline /  |
+  | seen    | First time Actual Data Token Checker tracked this wallet on this mint (baseline /  |
   |         | first status).                                               |
   | sold    | First time tracking marked them a seller (≥99% of first bag  |
   |         | or equivalent rule after a later Analyze).                   |
@@ -911,7 +911,7 @@ B) Community / web chatter — social_sources (secondary only)
   - IG/TikTok: only public links and search mentions, not full scrapes.
 
 C) What About does NOT use
-  - RugWatch local/cloud wallet DB (that is Holders / Alerts / Ruggers)
+  - RugWatch local/cloud wallet database (that is Holders / Alerts / Ruggers)
   - Full holder scans
   - Paid news terminals (Bloomberg, etc.)
   - Invented backstory when no official copy exists
@@ -1225,7 +1225,7 @@ UI controls (website)
 Per-section actions (every seller section — not Swing)
   Export (gray)  — download JSON / address list for RugWatch manual import
   Upload (yellow)— CLOUD upload path for that section’s NEW wallets:
-                   1) import into YOUR RugWatch local DB
+                   1) import into YOUR RugWatch Local database
                    2) Push cloud → GitHub wallets_index / cloud shards
                    Requires RugWatch running (default http://127.0.0.1:8790)
                    with GITHUB_TOKEN. Configure rugwatchUrl in config.js.
@@ -1239,7 +1239,7 @@ Per-section actions (every seller section — not Swing)
 
 Where it lives
   Website only: browser localStorage key adtc_ruggers_track
-  (separate from Logs). Not on the ATC server. Not shared across devices.
+  (separate from Logs). Not on the Actual Data Token Checker server. Not shared across devices.
   Clearing site data resets it.
 
   Multiple mints: use the scrollable “Tracked mint” dropdown to switch.
@@ -1256,10 +1256,10 @@ Typical workflow
 What Ruggers is not
   - Not a live mempool dump alert
   - Not proof wallets are the same person or a “rug team”
-  - Not RugWatch itself (RugWatch is the separate wallet DB / website)
+  - Not RugWatch itself (RugWatch is the separate wallet database / website)
   - Not updated by Quick-only searches
   - Not a substitute for Solscan trade history (top-holder snapshots only)
-  - Yellow Upload needs YOUR RugWatch instance; not a shared public police DB
+  - Yellow Upload needs YOUR RugWatch instance; not a shared public police database
   - Insider-flagged (Rugcheck) ≠ Flagged wallets (RugWatch)
 
 
@@ -1267,7 +1267,7 @@ What Ruggers is not
 12. SAVING SELLER WALLETS TO RUGWATCH (LOCAL + CLOUD)
 --------------------------------------------------------------------------------
 
-Subtitle: ATC side only — full RugWatch product guide is separate
+Subtitle: Actual Data Token Checker side only — full RugWatch product guide is separate
 
 Two different tools (do not mix them up)
   Ruggers (this site)
@@ -1280,52 +1280,52 @@ Two different tools (do not mix them up)
     - Full how-to: RugWatch “RugCheck Documentation.md” (How wallets are rated,
       Add/Upload, Monitor, cloud). Do not duplicate that manual here.
 
-Ways to grow YOUR RugWatch list from ATC Ruggers
+Ways to grow YOUR RugWatch list from Actual Data Token Checker Ruggers
   A) Yellow Upload on any seller section → RugWatch /api/upload + Push cloud
   B) Export file → RugWatch “Upload manual wallets” → Push cloud
   C) Copy address → RugWatch Add wallet (you set score)
 
-What ATC does after wallets are in cloud
+What Actual Data Token Checker does after wallets are in cloud
   - Live site: almost always CLOUD only via RUGWATCH_WALLETS_URL
-  - Local PC: may merge local DB + cloud → tags [local] / [cloud] / [both]
+  - Local PC: may merge Local database + cloud → tags [local] / [cloud] / [both]
   - Shows hold % on the mint; does NOT invent a token-level RugWatch rating
 
-What ATC will NOT do
-  - Shared public “serial rugger police” DB for all users
+What Actual Data Token Checker will NOT do
+  - Shared public “serial rugger police” database for all users
   - Host your private RugWatch scores (you curate scores in RugWatch)
   - Sync browser Ruggers lists across devices
 
 Summary
   Ruggers  = temporary dump tracker (this browser).
   RugWatch = your scored wallet list + cloud (see RugWatch docs for scoring).
-  ATC flags = match list → Holders / Ruggers Flagged (RugWatch) / Alerts.
+  Actual Data Token Checker flags = match list → Holders / Ruggers Flagged (RugWatch) / Alerts.
 
 
 --------------------------------------------------------------------------------
-12b. WHERE ATC GETS FLAGGED WALLETS (LOCAL, CLOUD, OR BOTH)
+12b. WHERE Actual Data Token Checker GETS FLAGGED WALLETS (LOCAL, CLOUD, OR BOTH)
 --------------------------------------------------------------------------------
 
-Subtitle: Flagged wallets (RugWatch) on ATC — not Rugcheck insiders
+Subtitle: Flagged wallets (RugWatch) on Actual Data Token Checker — not Rugcheck insiders
 
 Ruggers title: Flagged wallets (RugWatch) — “RugWatch” in dim yellow.
 Holders: FLAGGED WALLETS (RugWatch) when the checkbox is ON.
 
-Sources ATC merges
-  1) Local  — rugwatch*.db shards if present on the machine running ATC,
+Sources Actual Data Token Checker merges
+  1) Local  — rugwatch*.db shards if present on the machine running Actual Data Token Checker,
               OR (if missing) live RugWatch site local list via RUGWATCH_URL
-              (/api/wallets) so hosted ATC can mirror RugWatch local DB
+              (/api/wallets) so hosted Actual Data Token Checker can mirror RugWatch Local database
   2) Cloud  — RUGWATCH_WALLETS_URL (prefer wallets_index.json multi-shard)
 
 Tags on matches: [local] · [cloud] · [both]
 
-Wallet counts on the Token Checker site (RugWatch wallets bar)
+Wallet counts on the Actual Data Token Checker site (RugWatch wallets bar)
   Full-width bar under the title:
-    Local DB N · Cloud M · Refresh
+    Local database N · Cloud M · Refresh
 
-  Local DB (how ATC fills the number)
-    1) On-disk rugwatch*.db if present on the ATC host (desktop / self-host)
+  Local database (how Actual Data Token Checker fills the number)
+    1) On-disk rugwatch*.db if present on the Actual Data Token Checker host (desktop / self-host)
     2) Else live RugWatch site GET {RUGWATCH_URL}/api/stats → stats.wallets
-       so hosted ATC (Render) mirrors RugWatch’s *site* local DB count.
+       so hosted Actual Data Token Checker (Render) mirrors RugWatch’s *site* Local database count.
        Default RUGWATCH_URL=https://rugwatch.onrender.com
        Set RUGWATCH_URL=off to disable remote local.
 
@@ -1339,15 +1339,15 @@ Wallet counts on the Token Checker site (RugWatch wallets bar)
        JSON: { local: {count, source: sqlite|rugwatch_site, …}, cloud: {…} }
        Does not return wallet addresses.
 
-Live Token Checker site (e.g. Render): almost always CLOUD only.
-Local ATC + RugWatch on the same PC: local and/or cloud.
+Live Actual Data Actual Data Token Checker site (e.g. Render): almost always CLOUD only.
+Local Actual Data Token Checker + RugWatch on the same PC: local and/or cloud.
 
 Checkbox OFF → no RugWatch merge for that Analyze.
 
 Wallet risk_score (0–100)
   Defined and edited only in RugWatch. See RugWatch docs:
-  “How wallets are rated (risk score)”. ATC may show score when present;
-  hold-% colors are ATC concentration bands, not the RugWatch score.
+  “How wallets are rated (risk score)”. Actual Data Token Checker may show score when present;
+  hold-% colors are Actual Data Token Checker concentration bands, not the RugWatch score.
 
 Do not confuse with
   Insider-flagged (Rugcheck) — third-party holder tags in Bundles / Ruggers
@@ -1443,7 +1443,7 @@ Buttons
       holders/bundles snapshots)
     · .json — full structured data for backup or tools
     Does not delete Logs from the app. Does not re-fetch market data.
-    Does NOT upload to RugWatch cloud, GitHub, or any ATC server.
+    Does NOT upload to RugWatch cloud, GitHub, or any Actual Data Token Checker server.
     Private browser/app log only.
 
 Upload vs Logs (important)
@@ -1452,7 +1452,7 @@ Upload vs Logs (important)
   Ruggers tab:
 
     Ruggers → Creator / Similar / Single → yellow Upload
-      → imports into YOUR RugWatch local DB
+      → imports into YOUR RugWatch Local database
       → Push cloud → GitHub (cloud wallet count increases)
 
   Requirements for that Upload: RugWatch website running (default
@@ -1502,7 +1502,7 @@ What Logs is not
 --------------------------------------------------------------------------------
 
   You cannot eliminate every slowdown, but you can stop most breakdowns and
-  429 storms with habits + plan choices. This applies to Actual Token Checker
+  429 storms with habits + plan choices. This applies to Actual Data Token Checker
   (and RugWatch when Upload / flags use cloud).
 
 Why you get 429s and slowness
@@ -1513,7 +1513,7 @@ Why you get 429s and slowness
   | Many full Analyzes at once         | Free host does ~1 heavy job well; parallel clicks |
   |                                    | stack and time out                                |
   | Cold starts (free web sleep)       | First request after idle ~30–90s feels “broken”   |
-  | Large RugWatch cloud               | Pull / ATC flags load big JSON → slow or OOM      |
+  | Large RugWatch cloud               | Pull / Actual Data Token Checker flags load big JSON → slow or OOM      |
   | Immediate retries after 429        | Makes the limit worse                             |
 
   429 is usually the API provider refusing more traffic — not your laptop
@@ -1533,11 +1533,11 @@ Practical prevention (do these first)
 
   4. Keep RugWatch cloud curated, not millions of wallets.
      Ideal: hundreds – low tens of thousands.
-     Heavy: 100k–200k+ (slower Push/Pull, slower ATC flags).
+     Heavy: 100k–200k+ (slower Push/Pull, slower Actual Data Token Checker flags).
      Upload from Ruggers only when you care about those sellers.
 
   5. Wake services before heavy work.
-     Open ATC (and RugWatch if you will Upload) once after idle, wait for
+     Open Actual Data Token Checker (and RugWatch if you will Upload) once after idle, wait for
      cold start, then Analyze / Upload. Avoid Upload while RugWatch is
      still sleeping.
 
@@ -1565,13 +1565,13 @@ Keys / tiers (biggest real fix for 429s)
 Hosting habits (e.g. free Render)
   - Treat free as personal, light use — not multi-user production.
   - Expect sleep after ~15 minutes idle.
-  - Avoid two free services both cold at once (ATC + RugWatch): open
-    RugWatch first, then ATC Upload.
+  - Avoid two free services both cold at once (Actual Data Token Checker + RugWatch): open
+    RugWatch first, then Actual Data Token Checker Upload.
   - Large cloud Pull on free can OOM / restart — pull when idle, not mid-
     Analyze.
 
 Stable day-to-day workflow
-  1. Open ATC + RugWatch (wake cold starts).
+  1. Open Actual Data Token Checker + RugWatch (wake cold starts).
   2. One mint → Quick or full Analyze.
   3. Wait for finish.
   4. If Ruggers has new sellers → Upload once (do not spam).
@@ -1589,7 +1589,7 @@ What “slow” usually is (not always a crash)
 
 Optional upgrades if you want fewer headaches
   1. Helius paid (best ROI for 429s).
-  2. Always-on host for ATC (and RugWatch if you Upload daily).
+  2. Always-on host for Actual Data Token Checker (and RugWatch if you Upload daily).
   3. Use Logs instead of re-fetching the same mint.
   4. (Optional code later) retry with backoff on 429, single-flight Analyze
      queue, short TTL cache per mint.
@@ -1648,7 +1648,7 @@ Q: Is there a serial-rugger database? Who creates it?
 A: Yes — RugWatch on your desktop is that database (local SQLite, wallets
    you flag). The website Ruggers tab does not create or update it. Copy
    seller addresses from Ruggers and add them in RugWatch yourself (§12).
-   The live website host does not keep a shared serial-rugger DB for all
+   The live website host does not keep a shared serial-rugger database for all
    users.
 
 Q: If a wallet sells on my 10th lookup, do they still count as a seller?
@@ -1657,7 +1657,7 @@ A: Yes. Lookup count does not matter. Sales are always measured against
 
 
 --------------------------------------------------------------------------------
-16b. FEATURE CHECKLIST (ATC — vs what is documented)
+16b. FEATURE CHECKLIST (Actual Data Token Checker — vs what is documented)
 --------------------------------------------------------------------------------
 
 | Area | Documented? |
