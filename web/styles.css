@@ -1156,6 +1156,15 @@ a.copy-mint:hover,
 }
 
 /* Token holding amounts (balances) — dim yellow (not bright) */
+/* Bundles section / category titles — green + dim */
+.report .bundle-cat-name,
+.logs-col-body .bundle-cat-name {
+  color: #6a9e7a;
+  font-weight: 600;
+  opacity: 0.72;
+  letter-spacing: 0.02em;
+}
+
 .report .hold-amt,
 .logs-col-body .hold-amt {
   color: #b8a85c;

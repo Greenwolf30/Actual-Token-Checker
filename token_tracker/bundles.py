@@ -375,8 +375,9 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             pct = h.get("pct_supply")
             if pct is None and w in pct_map:
                 pct = pct_map[w]
+            # holds X% · total Y% (category total of all wallets in this section)
             lines.append(
-                f"    #{h.get('rank') or '—'} {w}  holds {_pct(pct)}"
+                f"    #{h.get('rank') or '—'} {w}  holds {_pct(pct)} · total {total_s}"
             )
     else:
         lines.append(
@@ -401,23 +402,21 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             ]
             funder = (fc.get("funder") or "").strip()
             funder_pct = pct_map.get(funder)
-            c_total, c_n = _sum_wallets_pct(child_rows)
-            # Include funder in section total when they also hold
-            if funder_pct is not None:
-                try:
-                    c_total = (c_total or 0.0) + float(funder_pct)
-                    if c_total > 100:
-                        c_total = 100.0
-                except (TypeError, ValueError):
-                    pass
+            # Category total = funder (if holds) + all children in this cluster
+            all_rows = list(child_rows)
+            if funder:
+                all_rows.append({"wallet": funder, "pct_supply": funder_pct})
+            c_total, c_n = _sum_wallets_pct(all_rows)
             total_s = _pct(c_total) if c_total is not None else "n/a"
             lines.append(
-                f"    • funder {funder}  holds {_pct(funder_pct)} → "
-                f"{fc.get('child_count') or c_n} wallets  ·  total {total_s}"
+                f"    • funder {funder}  holds {_pct(funder_pct)} · total {total_s} → "
+                f"{fc.get('child_count') or len(child_rows)} wallets"
             )
             for row in child_rows[:8]:
                 w = row.get("wallet") or ""
-                lines.append(f"         {w}  holds {_pct(row.get('pct_supply'))}")
+                lines.append(
+                    f"         {w}  holds {_pct(row.get('pct_supply'))} · total {total_s}"
+                )
             if len(child_rows) > 8:
                 lines.append(f"         … +{len(child_rows) - 8} more")
     else:
@@ -448,7 +447,9 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             )
             for row in rows[:10]:
                 w = row.get("wallet") or ""
-                lines.append(f"         {w}  holds {_pct(row.get('pct_supply'))}")
+                lines.append(
+                    f"         {w}  holds {_pct(row.get('pct_supply'))} · total {total_s}"
+                )
             if len(rows) > 10:
                 lines.append(f"         … +{len(rows) - 10} more")
     else:

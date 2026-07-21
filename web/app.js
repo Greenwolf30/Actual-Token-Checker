@@ -4161,10 +4161,48 @@ function colorBundlesSelectivePcts(html) {
     .join("\n");
 }
 
+/** Green dim highlight for Bundles category / section titles */
+function colorBundlesCategoryNames(html) {
+  if (!html) return html;
+  // Match section headers (indented titles ending with : or starting a section)
+  const categories = [
+    "Multi-account clusters",
+    "Similar-size wallet groups",
+    "Insider-flagged \\(Rugcheck\\)",
+    "Insider-flagged wallets",
+    "Shared SOL funder clusters \\(1-hop\\)",
+    "Shared SOL funder clusters",
+    "Launch-window same-slot multi-buys",
+    "Suspect wallets \\(union of signals\\)",
+    "Suspect wallets",
+    "Signals",
+    "BUNDLES / COORDINATED WALLETS",
+  ];
+  let out = html;
+  for (const cat of categories) {
+    // Line starts with optional spaces, then category name
+    const re = new RegExp(
+      "(^|\\n)([ \\t]*)(" + cat + ")(?=\\s*[—:\\-–]|$)",
+      "gim"
+    );
+    out = out.replace(re, (m, br, sp, name) => {
+      return (
+        br +
+        sp +
+        '<span class="bundle-cat-name">' +
+        name +
+        "</span>"
+      );
+    });
+  }
+  return out;
+}
+
 function formatBundlesRichHtml(text) {
   if (!text) return "";
   // Same address hold colors as Holders/Alerts (>5% yellow · >10% red · skip LP)
   let html = linkify(text, true);
+  html = colorBundlesCategoryNames(html);
   html = colorBundlesSelectivePcts(html);
   html = colorHoldingAmounts(html);
   return html;
