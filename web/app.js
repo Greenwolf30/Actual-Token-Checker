@@ -3786,6 +3786,58 @@ function formatRuggersSoldSupplyTotal(pct) {
 }
 
 /**
+ * Sum of mint-supply % currently held / bought back (Swing traders).
+ * Prefers holds_supply_pct, then bought_back_supply_pct, then current_pct.
+ */
+function sumRuggersCategoryBoughtSupplyPct(rows) {
+  let sum = 0;
+  const seen = new Set();
+  for (const r of rows || []) {
+    if (!r) continue;
+    const w = String(r.wallet || "").trim();
+    if (w) {
+      if (seen.has(w)) continue;
+      seen.add(w);
+    }
+    let v = null;
+    if (
+      r.holds_supply_pct != null &&
+      Number.isFinite(Number(r.holds_supply_pct))
+    ) {
+      v = Number(r.holds_supply_pct);
+    } else if (
+      r.bought_back_supply_pct != null &&
+      Number.isFinite(Number(r.bought_back_supply_pct))
+    ) {
+      v = Number(r.bought_back_supply_pct);
+    } else if (
+      r.current_pct != null &&
+      Number.isFinite(Number(r.current_pct)) &&
+      Number(r.current_pct) > 0
+    ) {
+      v = Number(r.current_pct);
+    } else if (
+      r.swing_bag_pct != null &&
+      Number.isFinite(Number(r.swing_bag_pct))
+    ) {
+      v = Number(r.swing_bag_pct);
+    }
+    if (v != null && Number.isFinite(v) && v > 0) sum += v;
+  }
+  if (sum > 100) sum = 100;
+  return sum;
+}
+
+function formatRuggersBoughtSupplyTotal(pct) {
+  if (pct == null || !Number.isFinite(Number(pct)) || Number(pct) <= 0) {
+    return "0% supply bought";
+  }
+  const n = Number(pct);
+  const s = n >= 10 ? n.toFixed(1) : n >= 1 ? n.toFixed(2) : n.toFixed(3);
+  return s.replace(/\.?0+$/, "") + "% supply bought";
+}
+
+/**
  * @param {string} title
  * @param {string} hint
  * @param {object[]} rows
@@ -3800,8 +3852,24 @@ function renderRuggersSection(title, hint, rows, exportKey, opts) {
     body = rows.map(renderRuggersWalletRow).join("");
   }
   const n = rows ? rows.length : 0;
-  const soldSupplyTot = sumRuggersCategorySoldSupplyPct(rows);
-  const soldSupplyLabel = formatRuggersSoldSupplyTotal(soldSupplyTot);
+  // Swing = bought-back / currently held supply; all seller sections = sold supply
+  const supplyMode =
+    (opts && opts.supplyMode) ||
+    (String(title || "").toLowerCase().indexOf("swing") >= 0
+      ? "bought"
+      : "sold");
+  const supplyTot =
+    supplyMode === "bought"
+      ? sumRuggersCategoryBoughtSupplyPct(rows)
+      : sumRuggersCategorySoldSupplyPct(rows);
+  const supplyLabel =
+    supplyMode === "bought"
+      ? formatRuggersBoughtSupplyTotal(supplyTot)
+      : formatRuggersSoldSupplyTotal(supplyTot);
+  const supplyTitle =
+    supplyMode === "bought"
+      ? "Sum of mint-supply % currently held (bought back) across Swing wallets (capped at 100%)"
+      : "Sum of mint-supply % sold across wallets in this section (capped at 100%)";
   // Upload count = not yet uploaded on this mint (ignores already-uploaded)
   const rec = _lastRuggersRec;
   const nUpload = (rows || []).filter(
@@ -3852,8 +3920,12 @@ function renderRuggersSection(title, hint, rows, exportKey, opts) {
     ' <span class="rug-count">' +
     n +
     "</span>" +
-    ' <span class="rug-supply-sold" title="Sum of mint-supply % sold across wallets in this section (capped at 100%)">' +
-    escHtml(soldSupplyLabel) +
+    ' <span class="rug-supply-sold' +
+    (supplyMode === "bought" ? " rug-supply-bought" : "") +
+    '" title="' +
+    escHtml(supplyTitle) +
+    '">' +
+    escHtml(supplyLabel) +
     "</span></h3>" +
     actions +
     "</div>" +
@@ -4595,8 +4667,11 @@ function refreshRuggersPanel(focusKey) {
     "Swing traders",
     "Buy-back after ≥99% sell — stay while they hold (holds % of supply). " +
       "Category label is kept (e.g. multi-account · swing, insider · swing). " +
-      "Sell ≥99% of that swing bag again → back to the same origin section. Loop continues.",
-    buckets.swings
+      "Sell ≥99% of that swing bag again → back to the same origin section. Loop continues. " +
+      "Title total = mint-supply % currently held (bought), not sold.",
+    buckets.swings,
+    null,
+    { supplyMode: "bought" }
   );
 
   // Summary counts

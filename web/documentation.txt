@@ -1227,10 +1227,10 @@ Labels (examples)
   seller / swing heuristics only — not legal proof of collusion
 
   Section titles (each Ruggers category head)
-    Show wallet count plus total mint-supply sold in that category, e.g.
-      Similar wallets (sellers)  12  ·  4.2% supply sold
-    Sum of each wallet’s sold_supply_pct (mint supply dumped), deduped by
-    address, capped at 100%. Hover the pill for the same explanation.
+    Show wallet count plus a mint-supply total for that category:
+      Seller sections: sum of sold_supply_pct → e.g. 4.2% supply sold
+      Swing traders: sum of holds / bought-back supply → e.g. 1.1% supply bought
+    Deduped by address, capped at 100%. Hover the pill for the explanation.
 
   Per-row status phrases (sellers — not Swing) often include:
     dropped off holder list | dumped ≥99% of first bag | dumped full first bag
