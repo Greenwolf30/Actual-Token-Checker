@@ -13,8 +13,8 @@
   local + cloud.
 
   Everything here is a HEURISTIC from public data. Not financial advice.
-  Last major docs update: 2026-07-21 (Launch-window slots: full pipeline,
-  UI layout map, % / n/a semantics; Associated Token Account spelled out).
+  Last major docs update: 2026-07-21 (wallet capacity §12c; Local database
+  mirror; product name Actual Data Token Checker; Ruggers / flags notes).
 ================================================================================
 
 
@@ -1339,8 +1339,9 @@ Wallet counts on the Actual Data Token Checker site (RugWatch wallets bar)
        JSON: { local: {count, source: sqlite|rugwatch_site, …}, cloud: {…} }
        Does not return wallet addresses.
 
-Live Actual Data Actual Data Token Checker site (e.g. Render): almost always CLOUD only.
-Local Actual Data Token Checker + RugWatch on the same PC: local and/or cloud.
+Live Actual Data Token Checker site (e.g. Render): local via RugWatch site mirror
+and/or cloud; often both when RugWatch is awake.
+Local Actual Data Token Checker + RugWatch on the same PC: local disk and/or cloud.
 
 Checkbox OFF → no RugWatch merge for that Analyze.
 
@@ -1352,6 +1353,72 @@ Wallet risk_score (0–100)
 Do not confuse with
   Insider-flagged (Rugcheck) — third-party holder tags in Bundles / Ruggers
   Insider section. Not your RugWatch list.
+
+
+--------------------------------------------------------------------------------
+12c. WALLET CAPACITY (SERVER, CLOUD, AND THIS SITE)
+--------------------------------------------------------------------------------
+
+Subtitle: How many wallets can you store and still serve flags well?
+
+Actual Data Token Checker does not own a separate flagged-wallet warehouse.
+Capacity is driven by **RugWatch Local database** and **GitHub cloud**.
+Full charts: RugWatch **EXTERNAL_STORAGE.md** and **RugCheck Documentation.md**
+→ “How many wallets? (capacity scheme)”.
+
+Designed limits (RugWatch — no hard total ceiling)
+  | Store                    | Per file (default) | When full                         |
+  |--------------------------|--------------------|-----------------------------------|
+  | Local database (SQLite)  | 100,000 wallets    | rugwatch_002.db, _003, …          |
+  | Cloud JSON (GitHub)      | 100,000 wallets    | wallets_cloud_002.json, … + index |
+
+  Totals scale with shards: 1 file ≈ 100k · 2 ≈ 200k · 10 ≈ 1M · …
+
+Where data lives (important)
+  | How you run                         | Local database location              |
+  |-------------------------------------|--------------------------------------|
+  | Hosted RugWatch website (Render)    | On the **server** disk — NOT the     |
+  |                                     | visitor’s desktop or browser         |
+  | RugWatch desktop / run_web on a PC  | That PC’s data/rugwatch.db           |
+  | Hosted Actual Data Token Checker    | No own wallet SQLite; reads cloud +  |
+  |                                     | optional live RugWatch local mirror  |
+  | Browser (either site)               | Never stores the wallet warehouse    |
+
+  Cloud always lives on **your GitHub** (wallets_index.json + shards).
+
+Effective ranges (speed / free hosting — not code hard caps)
+  | Total wallets        | Desktop PC     | Free hosted server   | Flags on this site      |
+  |----------------------|----------------|----------------------|-------------------------|
+  | Hundreds – few k     | Ideal          | Ideal                | Ideal                   |
+  | ~10k – 100k          | Strong         | OK                   | OK                      |
+  | ~100k – few hundred k| Multi-shard OK | Heavy; may OOM       | Slower Analyze flags    |
+  | ~1M+                 | Careful        | Not recommended free | Risky on free hosts     |
+
+  Practical sweet spot for free Render + free Actual Data Token Checker:
+  **tens of thousands to about 100k**; stretch toward **low hundreds of k** only
+  if you keep notes short and avoid huge Pulls mid-work.
+
+Rough cloud size
+  10k ≈ 2–5 MB · 100k ≈ 20–50 MB · 200k ≈ 40–100 MB (longer notes = larger).
+  Disk is rarely the first limit; **RAM**, **Push/Pull time**, and **Analyze
+  load** of all shards hit first.
+
+What bottlenecks first
+  - Free server RAM / ephemeral disk (large Pull or load)
+  - GitHub Push with many shards
+  - RugWatch website listing huge wallet tables in the browser
+  - This site’s Analyze merging a huge cloud index
+  - Provider free tiers (Helius, etc.) — separate from wallet count
+
+Guidance for users of this site
+  1. Prefer the **index** URL for RUGWATCH_WALLETS_URL (every cloud shard).
+  2. Keep cloud curated (serial-suspects only); do not dump millions.
+  3. Always **Push cloud** after Upload so hosted flags stay current.
+  4. For very large lists, use desktop RugWatch / always-on hosting, not free only.
+
+This site’s Logs / Ruggers track
+  Browser localStorage only (max 200 Logs). Not counted toward RugWatch local
+  or cloud capacity.
 
 
 --------------------------------------------------------------------------------
@@ -1533,7 +1600,8 @@ Practical prevention (do these first)
 
   4. Keep RugWatch cloud curated, not millions of wallets.
      Ideal: hundreds – low tens of thousands.
-     Heavy: 100k–200k+ (slower Push/Pull, slower Actual Data Token Checker flags).
+     Strong free-host range: ~10k – ~100k (see §12c).
+     Heavy: 100k–200k+ (slower Push/Pull, slower flags).
      Upload from Ruggers only when you care about those sellers.
 
   5. Wake services before heavy work.
