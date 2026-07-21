@@ -349,13 +349,34 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             "  Similar-size wallet groups will show here if value returns True"
         )
 
+    # Wallet → supply % map for sections that only had addresses
+    pct_map = _wallet_pct_map(data)
+
     insiders = data.get("insider_wallets") or []
     lines.append("")
     if insiders:
-        lines.append("  Insider-flagged (Rugcheck):")
-        for h in insiders[:10]:
+        ins_total, ins_n = _sum_wallets_pct(
+            [
+                {
+                    "wallet": h.get("wallet"),
+                    "pct_supply": h.get("pct_supply")
+                    if h.get("pct_supply") is not None
+                    else pct_map.get((h.get("wallet") or "").strip()),
+                }
+                for h in insiders
+            ]
+        )
+        total_s = _pct(ins_total) if ins_total is not None else "n/a"
+        lines.append(
+            f"  Insider-flagged (Rugcheck) — total {total_s} across {ins_n} wallet(s):"
+        )
+        for h in insiders[:12]:
+            w = (h.get("wallet") or "").strip()
+            pct = h.get("pct_supply")
+            if pct is None and w in pct_map:
+                pct = pct_map[w]
             lines.append(
-                f"    #{h.get('rank')} {h.get('wallet')}  holds {_pct(h.get('pct_supply'))}"
+                f"    #{h.get('rank') or '—'} {w}  holds {_pct(pct)}"
             )
     else:
         lines.append(
@@ -369,13 +390,36 @@ def format_bundles_text(data: dict[str, Any]) -> str:
         lines.append("  Shared SOL funder clusters (1-hop):")
         for fc in funding[:6]:
             kids = list(fc.get("children") or [])
+            child_rows = [
+                {
+                    "wallet": c if isinstance(c, str) else (c or {}).get("wallet"),
+                    "pct_supply": pct_map.get(
+                        (c if isinstance(c, str) else (c or {}).get("wallet") or "").strip()
+                    ),
+                }
+                for c in kids
+            ]
+            funder = (fc.get("funder") or "").strip()
+            funder_pct = pct_map.get(funder)
+            c_total, c_n = _sum_wallets_pct(child_rows)
+            # Include funder in section total when they also hold
+            if funder_pct is not None:
+                try:
+                    c_total = (c_total or 0.0) + float(funder_pct)
+                    if c_total > 100:
+                        c_total = 100.0
+                except (TypeError, ValueError):
+                    pass
+            total_s = _pct(c_total) if c_total is not None else "n/a"
             lines.append(
-                f"    • funder {fc.get('funder')} → {fc.get('child_count') or len(kids)} wallets"
+                f"    • funder {funder}  holds {_pct(funder_pct)} → "
+                f"{fc.get('child_count') or c_n} wallets  ·  total {total_s}"
             )
-            for c in kids[:6]:
-                lines.append(f"         {c}")
-            if len(kids) > 6:
-                lines.append(f"         … +{len(kids) - 6} more")
+            for row in child_rows[:8]:
+                w = row.get("wallet") or ""
+                lines.append(f"         {w}  holds {_pct(row.get('pct_supply'))}")
+            if len(child_rows) > 8:
+                lines.append(f"         … +{len(child_rows) - 8} more")
     else:
         lines.append("")
         lines.append(
@@ -388,12 +432,25 @@ def format_bundles_text(data: dict[str, Any]) -> str:
         lines.append("")
         lines.append("  Launch-window same-slot multi-buys:")
         for g in slots[:5]:
+            wallets = list(g.get("wallets") or [])
+            rows = [
+                {
+                    "wallet": w,
+                    "pct_supply": pct_map.get((w or "").strip()),
+                }
+                for w in wallets
+            ]
+            g_total, g_n = _sum_wallets_pct(rows)
+            total_s = _pct(g_total) if g_total is not None else "n/a"
             lines.append(
-                f"    • slot {g.get('slot')}: {g.get('unique_buyers')} wallets / "
-                f"{g.get('tx_count')} txs"
+                f"    • slot {g.get('slot')}: {g.get('unique_buyers') or g_n} wallets / "
+                f"{g.get('tx_count')} txs  ·  total {total_s}"
             )
-            for w in (g.get("wallets") or [])[:5]:
-                lines.append(f"         {w}")
+            for row in rows[:10]:
+                w = row.get("wallet") or ""
+                lines.append(f"         {w}  holds {_pct(row.get('pct_supply'))}")
+            if len(rows) > 10:
+                lines.append(f"         … +{len(rows) - 10} more")
     else:
         lines.append("")
         lines.append(
@@ -457,8 +514,60 @@ def _suspect_total_percent(
     suspects: list[dict[str, Any]],
 ) -> tuple[float | None, int]:
     """Sum unique suspect wallets' supply % (cap 100)."""
+    return _sum_wallets_pct(suspects or [])
+
+
+def _wallet_pct_map(data: dict[str, Any]) -> dict[str, float]:
+    """Collect wallet → supply % from all bundle payload lists."""
+    out: dict[str, float] = {}
+
+    def _put(w: Any, pct: Any) -> None:
+        ws = (str(w) if w is not None else "").strip()
+        if not ws:
+            return
+        try:
+            p = float(pct) if pct is not None else None
+        except (TypeError, ValueError):
+            return
+        if p is None:
+            return
+        out[ws] = max(out.get(ws, 0.0), p)
+
+    for h in data.get("insider_wallets") or []:
+        if isinstance(h, dict):
+            _put(h.get("wallet"), h.get("pct_supply"))
+    for s in data.get("suspect_wallets") or []:
+        if isinstance(s, dict):
+            _put(s.get("wallet"), s.get("pct_supply"))
+    for g in data.get("similar_size_groups") or []:
+        if not isinstance(g, dict):
+            continue
+        for m in g.get("members") or []:
+            if isinstance(m, dict):
+                _put(m.get("wallet"), m.get("pct_supply"))
+        avg = g.get("avg_pct")
+        for w in g.get("wallets") or []:
+            if (str(w).strip() not in out) and avg is not None:
+                _put(w, avg)
+    for c in data.get("clusters") or []:
+        if not isinstance(c, dict):
+            continue
+        _put(c.get("wallet") or c.get("owner"), c.get("pct_supply") or c.get("combined_pct"))
+    # Optional holders snapshot if present on comprehensive payload
+    for h in data.get("holders") or []:
+        if isinstance(h, dict):
+            _put(h.get("wallet"), h.get("pct_supply"))
+    return out
+
+
+def _sum_wallets_pct(
+    rows: list[dict[str, Any]],
+) -> tuple[float | None, int]:
+    """Sum unique wallets' supply % (cap 100). Returns (total|None, wallet_count)."""
     by_w: dict[str, float] = {}
-    for s in suspects or []:
+    for s in rows or []:
+        if not isinstance(s, dict):
+            continue
         w = (s.get("wallet") or "").strip()
         if not w:
             continue
@@ -467,7 +576,6 @@ def _suspect_total_percent(
         except (TypeError, ValueError):
             pct = None
         if pct is None:
-            # still count wallet even without %
             by_w.setdefault(w, by_w.get(w, 0.0))
             continue
         by_w[w] = max(by_w.get(w, 0.0), pct)
@@ -476,7 +584,6 @@ def _suspect_total_percent(
     total = sum(by_w.values())
     if total > 100.0:
         total = 100.0
-    # if all zeros / none usable for sum but wallets exist
     has_any = any(v > 0 for v in by_w.values())
     return (round(total, 4) if has_any else 0.0), len(by_w)
 

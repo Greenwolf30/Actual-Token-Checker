@@ -444,6 +444,7 @@ def _url_from_handle(platform: str, handle: str) -> str:
 def summarize_pair(pair: dict[str, Any]) -> dict[str, Any]:
     base = pair.get("baseToken") or {}
     quote = pair.get("quoteToken") or {}
+    info = pair.get("info") or {}
     price_usd = _f(pair.get("priceUsd"))
     mcap = _f(pair.get("marketCap"))
     fdv = _f(pair.get("fdv"))
@@ -452,6 +453,13 @@ def summarize_pair(pair: dict[str, Any]) -> dict[str, Any]:
     chg = pair.get("priceChange") or {}
     txns = pair.get("txns") or {}
     h24 = txns.get("h24") or {}
+    image_url = (
+        info.get("imageUrl")
+        or pair.get("imageUrl")
+        or base.get("image")
+        or base.get("logoURI")
+        or None
+    )
 
     return {
         "chain_id": pair.get("chainId"),
@@ -462,6 +470,7 @@ def summarize_pair(pair: dict[str, Any]) -> dict[str, Any]:
             "address": base.get("address"),
             "name": base.get("name"),
             "symbol": base.get("symbol"),
+            "image_url": image_url,
         },
         "quote_token": {
             "address": quote.get("address"),
@@ -486,6 +495,7 @@ def summarize_pair(pair: dict[str, Any]) -> dict[str, Any]:
         "pair_created_at_ms": pair.get("pairCreatedAt"),
         "labels": pair.get("labels") or [],
         "boosts_active": ((pair.get("boosts") or {}).get("active")),
+        "image_url": image_url,
     }
 
 

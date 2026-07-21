@@ -52,10 +52,28 @@ def comprehensive_bundle_check(
     # enriched with Rugcheck insiders + Birdeye tags; aggregate by owner (not ATA)
     holders_data = _merge_holder_layers(helius, rug, bird)
     base = bun.analyze_bundles(holders_data)
+    # Keep holders on payload so format_bundles can attach % to launch/funding wallets
+    if base.get("ok") and holders_data.get("holders"):
+        base = dict(base)
+        base["holders"] = list(holders_data.get("holders") or [])
 
     fusion_signals: list[dict[str, Any]] = []
     extra_score = 0
     funding_report: dict[str, Any] = {"ok": False, "clusters": []}
+
+    # wallet → pct for enriching launch/funding lists
+    pct_by_w: dict[str, float] = {}
+    for h in holders_data.get("holders") or []:
+        if not isinstance(h, dict):
+            continue
+        w = (h.get("wallet") or "").strip()
+        if not w:
+            continue
+        try:
+            if h.get("pct_supply") is not None:
+                pct_by_w[w] = max(pct_by_w.get(w, 0.0), float(h["pct_supply"]))
+        except (TypeError, ValueError):
+            pass
 
     # Rugcheck-specific
     if rug.get("ok"):
@@ -189,10 +207,14 @@ def comprehensive_bundle_check(
                             {
                                 "wallet": w,
                                 "reasons": ["same-slot multi-buy (launch window)"],
-                                "pct_supply": None,
+                                "pct_supply": pct_by_w.get(w),
                             }
                         )
                         existing.add(w)
+                    else:
+                        for s in suspects:
+                            if s.get("wallet") == w and s.get("pct_supply") is None:
+                                s["pct_supply"] = pct_by_w.get(w)
             base = dict(base)
             base["suspect_wallets"] = suspects[:40]
             spct, sn = bun._suspect_total_percent(suspects[:40])  # type: ignore[attr-defined]
@@ -200,8 +222,20 @@ def comprehensive_bundle_check(
             s0["suspect_total_pct"] = spct
             s0["suspect_wallet_count"] = sn
             base["summary"] = s0
+        # Attach per-wallet % onto same-slot groups for UI
+        enriched_groups = []
+        for g in groups[:12]:
+            gg = dict(g)
+            wrows = []
+            for w in g.get("wallets") or []:
+                wrows.append({"wallet": w, "pct_supply": pct_by_w.get(w)})
+            gg["wallet_rows"] = wrows
+            tot, n = bun._sum_wallets_pct(wrows)  # type: ignore[attr-defined]
+            gg["total_pct"] = tot
+            gg["wallets_with_pct"] = n
+            enriched_groups.append(gg)
         base = dict(base)
-        base["same_slot_groups"] = groups[:12]
+        base["same_slot_groups"] = enriched_groups
         base["early_buyers"] = list(jito_style.get("early_buyers") or [])[:30]
 
     # Funding hops: common SOL funder among suspects / similar-size / early buyers
@@ -282,9 +316,29 @@ def comprehensive_bundle_check(
                         }
                     )
                     existing.add(funder)
+            # Enrich funding clusters with supply % + section totals
+            enriched_fc = []
+            for fc in f_clusters[:8]:
+                ff = dict(fc)
+                kids = list(fc.get("children") or [])
+                child_rows = [
+                    {"wallet": c, "pct_supply": pct_by_w.get(c)} for c in kids
+                ]
+                funder = (fc.get("funder") or "").strip()
+                tot, n = bun._sum_wallets_pct(child_rows)  # type: ignore[attr-defined]
+                if funder and funder in pct_by_w:
+                    try:
+                        tot = min(100.0, float(tot or 0) + float(pct_by_w[funder]))
+                    except (TypeError, ValueError):
+                        pass
+                ff["child_rows"] = child_rows
+                ff["funder_pct"] = pct_by_w.get(funder)
+                ff["total_pct"] = tot
+                ff["wallets_with_pct"] = n
+                enriched_fc.append(ff)
             base = dict(base)
             base["suspect_wallets"] = suspects[:40]
-            base["funding_clusters"] = f_clusters[:8]
+            base["funding_clusters"] = enriched_fc
             spct, sn = bun._suspect_total_percent(suspects[:40])  # type: ignore[attr-defined]
             s0 = dict(base.get("summary") or {})
             s0["suspect_total_pct"] = spct

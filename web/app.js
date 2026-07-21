@@ -4215,7 +4215,31 @@ function renderSummary(data) {
   const t = data.token || {};
   const name = t.name || m.name || "Token";
   const sym = t.symbol || m.symbol || "?";
-  $("sumName").textContent = `${name} ($${sym}) · ${t.chain_id || m.chain_id || ""}`;
+  const chain = t.chain_id || m.chain_id || "";
+  $("sumName").textContent = `${name} ($${sym}) · ${chain}`;
+  // Token logo next to ticker / name
+  const logoEl = $("sumLogo");
+  const imgUrl = (
+    t.image_url ||
+    m.image_url ||
+    (t.base_token && t.base_token.image_url) ||
+    ""
+  ).trim();
+  if (logoEl) {
+    if (imgUrl && /^https?:\/\//i.test(imgUrl)) {
+      logoEl.hidden = false;
+      logoEl.alt = (sym || name || "token") + " logo";
+      logoEl.onerror = () => {
+        logoEl.hidden = true;
+        logoEl.removeAttribute("src");
+      };
+      logoEl.src = imgUrl;
+    } else {
+      logoEl.hidden = true;
+      logoEl.removeAttribute("src");
+      logoEl.alt = "";
+    }
+  }
   const mint = (t.address || m.address || "").trim();
   const sumAddr = $("sumAddr");
   if (sumAddr) {

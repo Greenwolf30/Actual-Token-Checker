@@ -963,6 +963,12 @@ def analyze_token(
             "symbol": base.get("symbol"),
             "address": token_addr,
             "chain_id": pair_summary.get("chain_id"),
+            "image_url": (
+                pair_summary.get("image_url")
+                or (base.get("image_url") if isinstance(base, dict) else None)
+                or (pump_meta or {}).get("image_url")
+                or (pump_meta or {}).get("image_uri")
+            ),
         },
         "market": {
             "price_usd": pair_summary.get("price_usd"),
@@ -972,6 +978,8 @@ def analyze_token(
             "volume_h24_usd": pair_summary.get("volume_h24_usd"),
             "price_change_pct": pair_summary.get("price_change_pct"),
             "txns_h24": pair_summary.get("txns_h24"),
+            "image_url": pair_summary.get("image_url")
+            or (base.get("image_url") if isinstance(base, dict) else None),
             "pair": {
                 "dex_id": pair_summary.get("dex_id"),
                 "pair_address": pair_summary.get("pair_address"),

@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=wallet-hold-color-7" />
+  <link rel="stylesheet" href="/styles.css?v=sum-logo-bundles-v10" />
   <!-- Public API base only — never put provider keys in config.js -->
   <script src="/config.js"></script>
 </head>
@@ -103,9 +103,19 @@
 
     <section id="summaryBar" class="summary" hidden>
       <div class="sum-main">
-        <div>
-          <div class="sum-name" id="sumName">—</div>
-          <div class="sum-addr mono" id="sumAddr"></div>
+        <div class="sum-identity">
+          <img
+            id="sumLogo"
+            class="sum-logo"
+            alt=""
+            width="44"
+            height="44"
+            hidden
+          />
+          <div class="sum-identity-text">
+            <div class="sum-name" id="sumName">—</div>
+            <div class="sum-addr mono" id="sumAddr"></div>
+          </div>
         </div>
         <div class="sum-stats">
           <div><span class="k">Price</span><span id="sumPrice" class="v">—</span></div>
@@ -236,6 +246,6 @@
     </form>
   </dialog>
 
-  <script src="/app.js?v=ruggers-swing-holds-v9"></script>
+  <script src="/app.js?v=bundles-pct-logo-v10"></script>
 </body>
 </html>
