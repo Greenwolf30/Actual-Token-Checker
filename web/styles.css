@@ -1058,7 +1058,8 @@ a.copy-mint:hover,
   color: var(--accent);
   border: 1px solid var(--accent-border);
 }
-.rug-supply-sold {
+.rug-supply-sold,
+.rug-supply-bought {
   display: inline-block;
   margin-left: 8px;
   padding: 1px 8px;
@@ -1067,15 +1068,19 @@ a.copy-mint:hover,
   font-weight: 600;
   font-family: var(--mono);
   letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+/* Seller sections: sold supply (amber) */
+.rug-supply-sold {
   color: #e0a050;
   background: rgba(255, 159, 10, 0.1);
   border: 1px solid rgba(255, 159, 10, 0.28);
-  white-space: nowrap;
 }
-.rug-supply-sold.rug-supply-bought {
-  color: #8ee4a8;
-  background: rgba(52, 199, 89, 0.1);
-  border-color: rgba(52, 199, 89, 0.3);
+/* Swing: bought / held supply — green */
+.rug-supply-bought {
+  color: #34c759;
+  background: rgba(52, 199, 89, 0.16);
+  border: 1px solid rgba(52, 199, 89, 0.45);
 }
 .rug-section-hint {
   margin: 0;

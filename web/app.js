@@ -3920,8 +3920,8 @@ function renderRuggersSection(title, hint, rows, exportKey, opts) {
     ' <span class="rug-count">' +
     n +
     "</span>" +
-    ' <span class="rug-supply-sold' +
-    (supplyMode === "bought" ? " rug-supply-bought" : "") +
+    ' <span class="' +
+    (supplyMode === "bought" ? "rug-supply-bought" : "rug-supply-sold") +
     '" title="' +
     escHtml(supplyTitle) +
     '">' +
