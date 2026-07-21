@@ -1118,6 +1118,47 @@ function computeSoldState(first, current) {
 }
 
 /**
+ * Sold ≥99% of a reference bag (swing peak or any measured bag).
+ * Used so swingers who dump the buy-back bag return to Similar/Single.
+ */
+function computeSoldVsBag(bagPct, bagBal, current) {
+  const cur = current || null;
+  const listed = !!(cur && cur.listed);
+  const curPct =
+    cur && cur.pct_supply != null && Number.isFinite(Number(cur.pct_supply))
+      ? Number(cur.pct_supply)
+      : null;
+  const curBal =
+    cur && cur.balance != null && Number.isFinite(Number(cur.balance))
+      ? Number(cur.balance)
+      : null;
+  const bp =
+    bagPct != null && Number.isFinite(Number(bagPct)) ? Number(bagPct) : null;
+  const bb =
+    bagBal != null && Number.isFinite(Number(bagBal)) ? Number(bagBal) : null;
+  const hasBag = (bp != null && bp > 0) || (bb != null && bb > 0);
+  if (!hasBag) {
+    return { sold: false, remaining_of_bag: null, reason: "no_swing_bag" };
+  }
+  if (!listed) {
+    return { sold: true, remaining_of_bag: 0, reason: "not_listed" };
+  }
+  let rem = null;
+  if (bp != null && bp > 0 && curPct != null) rem = curPct / bp;
+  else if (bb != null && bb > 0 && curBal != null) rem = curBal / bb;
+  else if (bp != null && bp > 0 && curPct == null) rem = 0;
+  if (rem == null) {
+    return { sold: false, remaining_of_bag: null, reason: "unknown" };
+  }
+  const sold = rem <= RUGGERS_REMAIN_FRAC + 1e-12;
+  return {
+    sold,
+    remaining_of_bag: rem,
+    reason: sold ? (rem <= 0 ? "sold_100" : "sold_99") : "holding",
+  };
+}
+
+/**
  * True when a prior ≥99% seller has bought back onto the mint.
  *
  * Cases:
@@ -1474,24 +1515,84 @@ function processRuggersFromAnalyze(data) {
       everSold = false;
     }
 
-    // ── Phase loop: seller ↔ swing on each concurrent lookup ──────────
-    // sold ≥99% only with known first bag
-    // never return → stay seller indefinitely (sticky_lane_sellers)
-    // buy-back only → swing
+    // ── Phase loop (per concurrent lookup) ────────────────────────────
+    // Similar/Single/Creator:
+    //   sell ≥99% of first bag → seller (sticky until buy-back)
+    //   buy-back → Swing (stay while holding)
+    //   sell ≥99% of *swing bag* again → back to origin (Similar/Single/Creator)
+    //   buy-back again → Swing … (loop)
     const wasStickySeller = !!(stickyLane[w] && baselineOk);
+    const wasSwing = prevTag === "swing";
+    // Peak bag while on Swing (for measuring re-dump of the buy-back hold)
+    let swingBagPct =
+      prev.swing_bag_pct != null && Number.isFinite(Number(prev.swing_bag_pct))
+        ? Number(prev.swing_bag_pct)
+        : null;
+    let swingBagBal =
+      prev.swing_bag_balance != null &&
+      Number.isFinite(Number(prev.swing_bag_balance))
+        ? Number(prev.swing_bag_balance)
+        : null;
+    if (
+      wasSwing &&
+      cur.listed &&
+      cur.pct_supply != null &&
+      Number(cur.pct_supply) > 0
+    ) {
+      const cp = Number(cur.pct_supply);
+      swingBagPct = swingBagPct == null ? cp : Math.max(swingBagPct, cp);
+    }
+    if (
+      wasSwing &&
+      cur.listed &&
+      cur.balance != null &&
+      Number(cur.balance) > 0
+    ) {
+      const cb = Number(cur.balance);
+      swingBagBal = swingBagBal == null ? cb : Math.max(swingBagBal, cb);
+    }
+    const swingDump = wasSwing
+      ? computeSoldVsBag(swingBagPct, swingBagBal, cur)
+      : { sold: false };
+
     if (!baselineOk) {
       // Cannot prove a dump without a first bag
       tag = "holding";
       everSold = false;
+    } else if (wasSwing) {
+      // Already on Swing: stay while holding; leave only on ≥99% dump of swing bag
+      // (or full first-bag dump / off-list with known first bag)
+      everSold = true;
+      if (swingDump.sold || soldState.sold) {
+        tag = "seller"; // back to Similar / Single / Creator / Flagged
+        swingBagPct = null;
+        swingBagBal = null;
+      } else if (
+        cur.listed &&
+        ((cur.pct_supply != null && Number(cur.pct_supply) > 0) ||
+          (cur.balance != null && Number(cur.balance) > 0))
+      ) {
+        tag = "swing"; // still holds → stay on Swing
+      } else {
+        // No measurable hold and not proven sold → stay swing if prior swing
+        // until we see a clear dump (avoids flicker); off-list with swing bag = sold above
+        tag = swingBagPct != null || swingBagBal != null ? "seller" : "swing";
+      }
     } else if (buyBack) {
       everSold = true;
       tag = "swing";
-    } else if (soldState.sold || wasStickySeller || (prevTag === "seller" && baselineOk)) {
+      // New swing bag = what they hold now after buy-back
+      if (cur.listed && cur.pct_supply != null && Number(cur.pct_supply) > 0) {
+        swingBagPct = Number(cur.pct_supply);
+      }
+      if (cur.listed && cur.balance != null && Number(cur.balance) > 0) {
+        swingBagBal = Number(cur.balance);
+      }
+    } else if (soldState.sold || wasStickySeller || prevTag === "seller") {
       everSold = true;
       tag = "seller";
-    } else if (everSold || prevTag === "swing") {
-      everSold = true;
-      tag = "seller";
+      swingBagPct = null;
+      swingBagBal = null;
     } else {
       tag = "holding";
     }
@@ -1647,13 +1748,15 @@ function processRuggersFromAnalyze(data) {
             cur.listed ? cur.pct_supply : 0,
             !!cur.listed
           );
-    const boughtBackSupplyPct =
+    // What they hold now (Swing UI: "holds X% of supply")
+    const holdsSupplyPct =
       tag === "swing"
         ? ruggersBoughtBackSupplyPct(
             cur.listed ? cur.pct_supply : null,
             !!cur.listed
           )
         : null;
+    const boughtBackSupplyPct = holdsSupplyPct; // legacy field name
     // Peak dump supply % remembered while seller (don't shrink on dust noise)
     let peakSoldSupply =
       prev.sold_supply_pct != null && Number.isFinite(Number(prev.sold_supply_pct))
@@ -1745,16 +1848,22 @@ function processRuggersFromAnalyze(data) {
           : stickyLane[w] && stickyLane[w].sold_supply_pct != null
             ? stickyLane[w].sold_supply_pct
             : soldSupplyPct,
-      // % of mint supply bought back (what UI shows for swingers)
+      // % of mint supply currently held (Swing UI: "holds …")
+      holds_supply_pct: holdsSupplyPct,
       bought_back_supply_pct: boughtBackSupplyPct,
+      // Peak bag while on Swing — re-dump ≥99% of this → back to origin lane
+      swing_bag_pct: tag === "swing" ? swingBagPct : null,
+      swing_bag_balance: tag === "swing" ? swingBagBal : null,
       reason:
         tag === "swing" && isFlaggedLineage
           ? "buy_back_flagged_swing"
           : tag === "swing"
-            ? "buy_back"
-            : stickyLane[w]
-              ? soldState.reason || stickyLane[w].reason || "sold_99_sticky"
-              : soldState.reason,
+            ? "holds_after_buy_back"
+            : tag === "seller" && wasSwing
+              ? "sold_swing_bag"
+              : stickyLane[w]
+                ? soldState.reason || stickyLane[w].reason || "sold_99_sticky"
+                : soldState.reason,
       in_similar: inSimilar || uploadedSimilar || originLane === "similar",
       uploaded_similar: uploadedSimilar,
       origin_lane: originLane,
@@ -2485,19 +2594,20 @@ function renderRuggersWalletRow(row) {
       row.listed && row.current_pct != null ? Number(row.current_pct) : 0;
     soldSupply = Math.max(0, Number(row.first_pct) - cur);
   }
-  const boughtBack =
-    row.bought_back_supply_pct != null
-      ? row.bought_back_supply_pct
-      : isSwing && row.current_pct != null
-        ? row.current_pct
-        : null;
+  // Swing: show what they hold now (not "bought back")
+  const holdsNow =
+    row.holds_supply_pct != null
+      ? row.holds_supply_pct
+      : row.bought_back_supply_pct != null
+        ? row.bought_back_supply_pct
+        : isSwing && row.current_pct != null
+          ? row.current_pct
+          : null;
 
   let headline;
   if (isSwing) {
-    const bb = fmtSupplyPct(boughtBack);
-    headline = bb
-      ? "bought back " + bb + " of supply"
-      : "bought back (amount n/a)";
+    const hh = fmtSupplyPct(holdsNow);
+    headline = hh ? "holds " + hh + " of supply" : "holds (amount n/a)";
   } else {
     const ss = fmtSupplyPct(soldSupply);
     headline = ss
@@ -2527,13 +2637,15 @@ function renderRuggersWalletRow(row) {
             ? "already on RugWatch (flagged)"
             : row.reason === "buy_back_flagged_swing"
               ? "flagged buy-back → swing (still flagged)"
-              : row.reason === "buy_back"
-                ? "buy-back after dump"
-                : isSwing && isFlagged
-                  ? "flagged buy-back → swing"
-                  : isSwing
-                    ? "buy-back after dump"
-                    : row.reason || "";
+              : row.reason === "holds_after_buy_back" || row.reason === "buy_back"
+                ? "holding after buy-back"
+                : row.reason === "sold_swing_bag"
+                  ? "sold ≥99% of swing bag → back to origin"
+                  : isSwing && isFlagged
+                    ? "flagged · holding on swing"
+                    : isSwing
+                      ? "holding after buy-back"
+                      : row.reason || "";
   const isCreator = !!(
     row.is_creator ||
     row.origin_lane === "creator" ||
@@ -3218,9 +3330,9 @@ function refreshRuggersPanel(focusKey) {
   }
   html += renderRuggersSection(
     "Swing traders",
-    "Buy-back after ≥99% sell. Creator / Similar / Single use the same loop " +
-      "(creator keeps “creator · swing” label forever). " +
-      "Flagged buy-backs keep purple “flagged · swing” and re-enter Flagged on the next ≥99% sell.",
+    "Buy-back after ≥99% sell — stay here while they hold (shows holds % of supply). " +
+      "Sell ≥99% of that swing bag again → back to Similar / Single / Creator (or Flagged). " +
+      "Buy-back again → Swing. Loop continues. Creator keeps creator label; Flagged stays purple.",
     buckets.swings
   );
 
