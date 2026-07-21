@@ -682,9 +682,10 @@ button, .ghost, .primary {
   animation: fadeIn 0.18s ease;
 }
 .panel.active { display: block; }
-/* Logs / Ruggers panels need flex so the body can scroll correctly */
+/* Logs / Ruggers / Bundles need flex so the body can scroll correctly */
 .panel.panel-logs.active { display: flex; }
 .panel.panel-ruggers.active { display: flex; }
+.panel.panel-bundles.active { display: flex; }
 
 /* ── Ruggers tab ─────────────────────────────────────────── */
 .panel-ruggers {
@@ -1326,10 +1327,14 @@ a.copy-mint:hover,
 }
 
 /* ── Bundles card UI (structured, not raw text dump) ──────── */
+/* Must stay display:none when inactive — never override .panel hide */
 .panel-bundles {
-  display: flex;
+  display: none;
   flex-direction: column;
   min-height: 0;
+}
+.panel-bundles.active {
+  display: flex;
 }
 .bundles-ui {
   flex: 1;
