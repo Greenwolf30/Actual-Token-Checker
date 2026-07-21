@@ -2706,6 +2706,7 @@ function ruggersBuckets(rec) {
       continue;
     }
     if (lane === "launch") {
+      if (isRuggersExcludedLpWallet(row)) continue;
       pushLaneSeller(
         "launch",
         { ...row, in_launch: true },
@@ -3148,18 +3149,62 @@ function ruggersLaunchTitleHtml() {
   );
 }
 
+/**
+ * Pump.fun / DEX liquidity vaults must not enter Ruggers Upload or launch-window sellers.
+ */
+function isRuggersExcludedLpWallet(row) {
+  if (!row) return false;
+  if (row.is_known_program || row.is_lp || row.isKnownProgram) return true;
+  const blob = [
+    row.label,
+    row.reason,
+    row.notes,
+    row.origin,
+    row.tag,
+    ...(Array.isArray(row.reasons) ? row.reasons : []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  if (!blob) return false;
+  const keys = [
+    "pump.fun",
+    "pumpfun",
+    "pumpswap",
+    "bonding curve",
+    "associated bonding",
+    "liquidity pair",
+    "liquidity pool",
+    "known liquidity",
+    "raydium pool",
+    "raydium authority",
+    "raydium amm",
+    "orca whirlpool",
+    "meteora",
+    "pump swap",
+  ];
+  return keys.some((k) => blob.includes(k));
+}
+
+function filterOutRuggersLpRows(rows) {
+  return (rows || []).filter(
+    (r) => r && r.wallet && !isRuggersExcludedLpWallet(r)
+  );
+}
+
 function ruggersRowsForExportKey(key) {
   const b = _lastRuggersBuckets;
   if (!b) return [];
-  if (key === "creator") return b.creatorSold || [];
-  if (key === "similar") return b.similarSellers || [];
-  if (key === "multi") return b.multiSellers || [];
-  if (key === "funding") return b.fundingSellers || [];
-  if (key === "insider") return b.insiderSellers || [];
-  if (key === "launch") return b.launchSellers || [];
-  if (key === "suspect") return b.suspectSellers || [];
-  if (key === "single") return b.singleSellers || [];
-  return [];
+  let rows = [];
+  if (key === "creator") rows = b.creatorSold || [];
+  else if (key === "similar") rows = b.similarSellers || [];
+  else if (key === "multi") rows = b.multiSellers || [];
+  else if (key === "funding") rows = b.fundingSellers || [];
+  else if (key === "insider") rows = b.insiderSellers || [];
+  else if (key === "launch") rows = b.launchSellers || [];
+  else if (key === "suspect") rows = b.suspectSellers || [];
+  else if (key === "single") rows = b.singleSellers || [];
+  return filterOutRuggersLpRows(rows);
 }
 
 /** Section rows that have not been Uploaded yet on this mint. */
@@ -3196,6 +3241,7 @@ function buildRuggersExportPayload(exportKey, rows) {
   const seen = new Set();
   const wallets = [];
   for (const r of rows || []) {
+    if (isRuggersExcludedLpWallet(r)) continue;
     const addr = (r && r.wallet || "").trim();
     if (!addr || seen.has(addr)) continue;
     seen.add(addr);
@@ -3735,7 +3781,7 @@ function refreshRuggersPanel(focusKey) {
   html += renderRuggersSection(
     "Same-slot multi-buys (bots) (launch-window)",
     "",
-    buckets.launchSellers || [],
+    filterOutRuggersLpRows(buckets.launchSellers || []),
     "launch",
     {
       sectionClass: "rug-section-launch-bots",
@@ -3746,6 +3792,7 @@ function refreshRuggersPanel(focusKey) {
         "<strong>Possibly</strong> bots, snipers, MEV/bundle-style entry, and/or " +
         "team multi-wallet buys — co-timed activity is a heuristic, not proof of " +
         "identity or automation. " +
+        "Pump.fun / known liquidity vaults are excluded from this list and from Upload. " +
         "Tagged at first full Analyze · Sell ≥99% → stay here · buy-back → Swing " +
         "(label kept as same-slot multi-buys (bots)) · " +
         "sell again → back here. Export + Upload.",

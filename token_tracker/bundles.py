@@ -496,22 +496,33 @@ def format_bundles_text(data: dict[str, Any]) -> str:
         "  Slot = Solana chain time unit (~400ms). Same-slot multi-buys = several "
         "different wallets buy this mint in the same slot (often at launch)."
     )
+    def _is_lp_row(r: dict[str, Any]) -> bool:
+        if r.get("is_known_program"):
+            return True
+        lab = str(
+            r.get("label") or label_map.get((r.get("wallet") or "").strip()) or ""
+        )
+        low = lab.lower()
+        return any(
+            k in low
+            for k in (
+                "liquidity",
+                "raydium",
+                "orca",
+                "meteora",
+                "pool",
+                "vault",
+                "pump",
+                "amm",
+                "bonding",
+            )
+        )
+
     if slots:
-        # Category total across all slots (unique wallets)
+        # Rebuild non-LP groups for display + totals
+        shown_groups: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
         launch_rows: list[dict[str, Any]] = []
         for g in slots:
-            for w in g.get("wallets") or []:
-                ws = (str(w) if w is not None else "").strip()
-                if ws:
-                    launch_rows.append(
-                        {"wallet": ws, "pct_supply": pct_map.get(ws)}
-                    )
-        launch_total, launch_n = _sum_wallets_pct(launch_rows)
-        lines.append(
-            f"  Same-slot multi-buys — total {_pct(launch_total)} across {launch_n} wallet(s):"
-        )
-        for g in slots[:5]:
-            # Prefer enriched wallet_rows (labels + LP flags) when fusion attached them
             if g.get("wallet_rows"):
                 rows = list(g.get("wallet_rows") or [])
             else:
@@ -524,45 +535,52 @@ def format_bundles_text(data: dict[str, Any]) -> str:
                     }
                     for w in wallets
                 ]
-            non_lp = [r for r in rows if not r.get("is_known_program")]
-            g_total, g_n = _sum_wallets_pct(non_lp if non_lp else rows)
-            total_s = _pct(g_total) if g_total is not None else "n/a"
-            # Subgroup (slot) total only — no per-wallet total
+            rows = [r for r in rows if not _is_lp_row(r)]
+            if len(rows) < 2:
+                continue
+            shown_groups.append((g, rows))
+            for r in rows:
+                ws = (r.get("wallet") or "").strip()
+                if ws:
+                    launch_rows.append(
+                        {
+                            "wallet": ws,
+                            "pct_supply": r.get("pct_supply")
+                            if r.get("pct_supply") is not None
+                            else pct_map.get(ws),
+                        }
+                    )
+        if shown_groups:
+            launch_total, launch_n = _sum_wallets_pct(launch_rows)
             lines.append(
-                f"    • slot {g.get('slot')}: {g.get('unique_buyers') or g_n} wallets / "
-                f"{g.get('tx_count')} txs  ·  total {total_s}"
+                f"  Same-slot multi-buys — total {_pct(launch_total)} across "
+                f"{launch_n} wallet(s) (Pump.fun / known LP vaults excluded):"
             )
-            for row in rows[:10]:
-                w = (row.get("wallet") or "").strip()
-                lab = row.get("label") or label_map.get(w)
-                is_lp = bool(row.get("is_known_program")) or (
-                    bool(lab)
-                    and any(
-                        k in str(lab).lower()
-                        for k in (
-                            "liquidity",
-                            "raydium",
-                            "orca",
-                            "meteora",
-                            "pool",
-                            "vault",
-                            "pump",
-                            "amm",
+            for g, rows in shown_groups[:5]:
+                g_total, g_n = _sum_wallets_pct(rows)
+                total_s = _pct(g_total) if g_total is not None else "n/a"
+                lines.append(
+                    f"    • slot {g.get('slot')}: {g.get('unique_buyers') or g_n} wallets / "
+                    f"{g.get('tx_count')} txs  ·  total {total_s}"
+                )
+                for row in rows[:10]:
+                    w = (row.get("wallet") or "").strip()
+                    lines.append(
+                        _fmt_wallet_hold_line(
+                            w,
+                            row.get("pct_supply")
+                            if row.get("pct_supply") is not None
+                            else pct_map.get(w),
+                            label=row.get("label") or label_map.get(w),
+                            is_lp=False,
                         )
                     )
-                )
-                lines.append(
-                    _fmt_wallet_hold_line(
-                        w,
-                        row.get("pct_supply")
-                        if row.get("pct_supply") is not None
-                        else pct_map.get(w),
-                        label=lab,
-                        is_lp=is_lp,
-                    )
-                )
-            if len(rows) > 10:
-                lines.append(f"         … +{len(rows) - 10} more")
+                if len(rows) > 10:
+                    lines.append(f"         … +{len(rows) - 10} more")
+        else:
+            lines.append(
+                "  Launch-window same-slot multi-buys will show here if value returns True"
+            )
     else:
         lines.append(
             "  Launch-window same-slot multi-buys will show here if value returns True"

@@ -72,6 +72,12 @@ def comprehensive_bundle_check(
     pct_by_w: dict[str, float] = {}
     label_by_w: dict[str, str] = {}
     lp_wallets: set[str] = set()
+    try:
+        from . import holders as hold_mod
+
+        lp_wallets |= hold_mod.pump_lp_addresses_for_mint(mint)
+    except Exception:  # noqa: BLE001
+        pass
     for h in holders_data.get("holders") or []:
         if not isinstance(h, dict):
             continue
@@ -99,6 +105,7 @@ def comprehensive_bundle_check(
                     "vault",
                     "pump",
                     "amm",
+                    "bonding",
                 )
             )
         ):
@@ -255,38 +262,63 @@ def comprehensive_bundle_check(
             s0["suspect_total_pct"] = spct
             s0["suspect_wallet_count"] = sn
             base["summary"] = s0
-        # Attach per-wallet % + LP labels onto same-slot groups for UI
+        # Attach per-wallet %; DROP Pump.fun / known LP wallets entirely
+        # (they must not appear in same-slot multi-buys)
         enriched_groups = []
         for g in groups[:12]:
             gg = dict(g)
             wrows = []
+            kept_wallets: list[str] = []
             for w in g.get("wallets") or []:
                 ws = (str(w) if w is not None else "").strip()
-                if not ws:
+                if not ws or ws in lp_wallets:
                     continue
+                lab = label_by_w.get(ws)
+                if lab and any(
+                    k in lab.lower()
+                    for k in (
+                        "liquidity",
+                        "pump",
+                        "bonding",
+                        "raydium",
+                        "orca",
+                        "meteora",
+                        "pool",
+                        "vault",
+                        "amm",
+                    )
+                ):
+                    continue
+                kept_wallets.append(ws)
                 row: dict[str, Any] = {
                     "wallet": ws,
                     "pct_supply": pct_by_w.get(ws),
                 }
-                if ws in label_by_w:
-                    row["label"] = label_by_w[ws]
-                if ws in lp_wallets:
-                    row["is_known_program"] = True
-                    if not row.get("label"):
-                        row["label"] = "Known liquidity / program"
+                if lab:
+                    row["label"] = lab
                 wrows.append(row)
+            # Need ≥2 non-LP wallets to keep a multi-buy slot group
+            if len(kept_wallets) < 2:
+                continue
+            gg["wallets"] = kept_wallets[:24]
+            gg["unique_buyers"] = len(kept_wallets)
             gg["wallet_rows"] = wrows
-            # Category totals exclude known LP bags (same as Holders risk lists)
-            non_lp_rows = [r for r in wrows if not r.get("is_known_program")]
-            tot, n = bun._sum_wallets_pct(
-                non_lp_rows if non_lp_rows else wrows
-            )  # type: ignore[attr-defined]
+            tot, n = bun._sum_wallets_pct(wrows)  # type: ignore[attr-defined]
             gg["total_pct"] = tot
             gg["wallets_with_pct"] = n
             enriched_groups.append(gg)
         base = dict(base)
         base["same_slot_groups"] = enriched_groups
-        base["early_buyers"] = list(jito_style.get("early_buyers") or [])[:30]
+        # early_buyers: strip LP vaults too
+        early_clean = []
+        for eb in list(jito_style.get("early_buyers") or [])[:40]:
+            if not isinstance(eb, dict):
+                continue
+            ew = (eb.get("wallet") or "").strip()
+            if not ew or ew in lp_wallets:
+                continue
+            early_clean.append(eb)
+        base["early_buyers"] = early_clean[:30]
 
     # Funding hops: common SOL funder among suspects / similar-size / early buyers
     seed_wallets: list[str] = []

@@ -163,6 +163,83 @@ def apply_known_lp_tags(
     return holders
 
 
+def is_pump_or_dex_lp_text(*parts: Any) -> bool:
+    """True if label/notes/reason text looks like Pump.fun or DEX liquidity."""
+    blob = " ".join(str(p or "") for p in parts).lower()
+    if not blob.strip():
+        return False
+    keys = (
+        "pump.fun",
+        "pumpfun",
+        "pumpswap",
+        "bonding curve",
+        "associated bonding",
+        "liquidity pair",
+        "liquidity pool",
+        "raydium pool",
+        "raydium authority",
+        "raydium amm",
+        "raydium clmm",
+        "raydium cpmm",
+        "orca whirlpool",
+        "meteora",
+        "known liquidity",
+        "liquidity / program",
+        "pump swap",
+    )
+    return any(k in blob for k in keys)
+
+
+def pump_lp_addresses_for_mint(mint: str | None) -> set[str]:
+    """Per-mint Pump.fun curve/pool PDAs (empty if not a pump mint / fetch fails)."""
+    m = (mint or "").strip()
+    if not m:
+        return set()
+    try:
+        from .pumpfun import fetch_pump_lp_accounts, is_pump_mint
+
+        if not is_pump_mint(m):
+            return set()
+        return {
+            (a or "").strip()
+            for a in (fetch_pump_lp_accounts(m) or {})
+            if (a or "").strip()
+        }
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def is_excluded_lp_wallet(
+    wallet: str | None = None,
+    *,
+    label: str | None = None,
+    notes: str | None = None,
+    reason: str | None = None,
+    is_known_program: bool = False,
+    mint: str | None = None,
+    pump_lp_set: set[str] | None = None,
+) -> bool:
+    """
+    True for wallets that must never enter same-slot multi-buys risk lists
+    or RugWatch uploads (Pump.fun LP PDAs + known DEX/program liquidity).
+    """
+    w = (wallet or "").strip()
+    if is_known_program or is_known_lp_or_program(
+        w, label=label, is_known_program=is_known_program
+    ):
+        return True
+    if is_pump_or_dex_lp_text(label, notes, reason):
+        return True
+    if w and w in _KNOWN_OWNERS:
+        return True
+    lp_set = pump_lp_set
+    if lp_set is None and mint:
+        lp_set = pump_lp_addresses_for_mint(mint)
+    if w and lp_set and w in lp_set:
+        return True
+    return False
+
+
 def holding_priority_label(pct: float | None) -> str:
     """
     Priority by holding size (non-LP).

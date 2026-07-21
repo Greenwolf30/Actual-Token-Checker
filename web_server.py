@@ -415,12 +415,50 @@ def _ruggers_track_snapshot(
             if w:
                 funding_wallets.add(w)
 
+    # Known LP / Pump.fun pool PDAs — never tag as launch-window multi-buys
+    lp_exclude: set[str] = set()
+    for h in list(holders.get("holders") or []):
+        if not isinstance(h, dict):
+            continue
+        if h.get("is_known_program"):
+            hw = (h.get("wallet") or "").strip()
+            if hw:
+                lp_exclude.add(hw)
+        lab = (h.get("label") or "").strip().lower()
+        if lab and any(
+            k in lab
+            for k in (
+                "liquidity",
+                "pump",
+                "bonding",
+                "raydium",
+                "orca",
+                "meteora",
+                "pool",
+                "vault",
+                "amm",
+            )
+        ):
+            hw = (h.get("wallet") or "").strip()
+            if hw:
+                lp_exclude.add(hw)
+    try:
+        from token_tracker.holders import pump_lp_addresses_for_mint
+
+        mint_for_lp = (
+            (holders.get("token_address") or holders.get("mint") or "")
+            or (bundles.get("token_address") or "")
+        )
+        lp_exclude |= pump_lp_addresses_for_mint(str(mint_for_lp))
+    except Exception:  # noqa: BLE001
+        pass
+
     for g in list(bundles.get("same_slot_groups") or []):
         if not isinstance(g, dict):
             continue
         for w in list(g.get("wallets") or []):
             ws = str(w or "").strip()
-            if ws:
+            if ws and ws not in lp_exclude:
                 launch_wallets.add(ws)
 
     # Parse similar-size groups first (needed for tagging + Single exclusion)
