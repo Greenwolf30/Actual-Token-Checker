@@ -7,6 +7,7 @@ load only from server-side .env and are never sent to the browser.
   GET  /              → web UI
   GET  /health
   GET  /api/health
+  GET  /api/rugwatch-counts  local DB + cloud wallet counts (no addresses)
   POST /api/analyze   JSON: {"query": "...", "chain": "solana"?, "quick": false?}
   GET  /api/analyze?q=...&chain=solana&quick=0
 
@@ -1064,6 +1065,30 @@ class WebHandler(BaseHTTPRequestHandler):
                 return self._json(
                     200,
                     {"ok": True, "profile_views": 0, "analyzes": 0, "error": str(exc)[:120]},
+                )
+
+        # RugWatch local SQLite + cloud list sizes (no wallet addresses returned)
+        if path in {"/api/rugwatch-counts", "/api/rugwatch_counts", "/rugwatch-counts"}:
+            try:
+                from token_tracker.rugwatch_bridge import rugwatch_wallet_counts
+
+                full = str((qs.get("full") or ["0"])[0]).strip().lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                    "full",
+                }
+                return self._json(200, rugwatch_wallet_counts(full_cloud=full))
+            except Exception as exc:  # noqa: BLE001
+                return self._json(
+                    200,
+                    {
+                        "ok": False,
+                        "local": {"count": 0, "db_found": False, "ok": False},
+                        "cloud": {"count": 0, "url_set": False, "ok": False},
+                        "sources": [],
+                        "error": str(exc)[:200],
+                    },
                 )
 
         if path in {"/api/view", "/api/hit"}:

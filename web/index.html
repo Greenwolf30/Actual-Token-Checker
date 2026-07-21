@@ -10,8 +10,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=ruggers-launch-hint-banner-v34" />
-  <!-- app cache: exclude-pump-lp-v35 -->
+  <link rel="stylesheet" href="/styles.css?v=rugwatch-header-pills-v37" />
+  <!-- app cache: rugwatch-header-pills-v49 -->
   <!-- Public API base only — never put provider keys in config.js -->
   <script src="/config.js"></script>
 </head>
@@ -64,7 +64,27 @@
           <p class="tag">Token research · server-side keys · not financial advice</p>
         </div>
       </div>
-      <div class="status-row">
+      <div
+        class="status-row"
+        id="pillsBar"
+        title="local = RugWatch SQLite on this ATC host · cloud = GitHub wallet list · click a pill to refresh"
+      >
+        <span
+          class="pill pill-wallets"
+          id="pillWallets"
+          role="button"
+          tabindex="0"
+          title="Local RugWatch DB wallet count on this server (same style as RugWatch site)"
+          >local —</span
+        >
+        <span
+          class="pill pill-cloud"
+          id="pillCloud"
+          role="button"
+          tabindex="0"
+          title="Cloud (GitHub) flagged wallet count — click to refresh"
+          >cloud —</span
+        >
         <span id="viewStats" class="pill muted" title="Public profile views for this site">views —</span>
         <span id="serverStatus" class="pill muted">checking…</span>
         <button type="button" id="settingsBtn" class="ghost" title="Site passcode (optional)" aria-label="Settings">⚙</button>
@@ -254,6 +274,6 @@
     </form>
   </dialog>
 
-  <script src="/app.js?v=creator-upload-flag-counts-v47"></script>
+  <script src="/app.js?v=rugwatch-header-pills-v49"></script>
 </body>
 </html>

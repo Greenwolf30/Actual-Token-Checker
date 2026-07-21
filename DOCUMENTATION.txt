@@ -1104,6 +1104,7 @@ Where each Ruggers section comes from (Holders / Bundles)
   |                                         | proof of automation or shared ownership.  |
   | Suspect wallets                         | Bundles suspect union (if not more specific)|
   | Single wallets (sellers)                | Plain holders ≥0.01%, none of the above   |
+  |                                         | (see “Lane: Single” below)                |
   | Flagged wallets (RugWatch)              | YOUR RugWatch cloud/local + sold ≥99%     |
   | Swing traders                           | Buy-back after ≥99% sell (any origin lane)|
 
@@ -1113,6 +1114,31 @@ Where each Ruggers section comes from (Holders / Bundles)
   Flagged (RugWatch) is a separate path (sold while on your RugWatch list),
   not a Bundles category name. Title on the site: Flagged wallets (RugWatch)
   with “RugWatch” in dim yellow.
+
+Lane: Single (Single wallets (sellers))
+  “Single” is an origin lane — not “one-time seller” and not “sold alone.”
+
+  Who lands here (at FIRST full Analyze of this mint):
+    - Non-LP holder with a measurable bag ≥ ~0.01% of supply, AND
+    - Not creator, not similar-size, not multi-account, not shared funder,
+      not Rugcheck insider, not launch same-slot multi-buy, not suspect
+      (after the priority list above).
+
+  Meaning in plain language:
+    A “normal-looking” plain holder who later dumped ≥99% of that first bag
+    (or dropped off the holder list). No special Bundles/cluster tag beat
+    them into a higher lane.
+
+  Sticky like other origin lanes:
+    - Once Single on this mint, later Analyzes do not re-lane them just
+      because tags change.
+    - Sell → stay under Single; buy-back → Swing (label kept single);
+      sell swing bag → back to Single.
+
+  Not Single:
+    - Creator, Similar, Multi, Funder, Insider, Launch, Suspect (higher priority)
+    - Flagged (RugWatch) path (separate — sold while already on your list)
+    - Holders who never reached ≥0.01% on first full Analyze
 
 Does the number of lookups before they sell matter?
   NO. Lookup count does not matter.
@@ -1133,13 +1159,40 @@ What “sold ≥99%” means
     remaining_first_bag ≤ 1% of first bag
     OR the wallet is no longer on the holder list (treated as sold 100%)
 
+  “Dropped off holder list” (UI reason text)
+    Shown on a seller row when reason = not_listed.
+
+    Meaning:
+      We froze a positive first bag on an earlier full Analyze for this mint,
+      and on a later full Analyze that wallet is no longer on the top-holders
+      snapshot. Ruggers treats that as sold 100% of the first bag
+      (same seller threshold family as ≥99%).
+
+    UI companion texts on seller rows:
+      dropped off holder list  — had first bag → gone from holders → full dump
+      dumped ≥99% of first bag  — still listed, remaining ≤1% of first bag
+      dumped full first bag     — still listed at ~0 of first bag
+      sold ≥99% of swing bag → back to origin  — dumped after a buy-back
+
+    Safety rule (not a false sell):
+      Unknown / empty first bag + off the holder list is NOT counted as a sell.
+      (Common for creator-style wallets that hold but sit outside top-N —
+       we never freeze a real bag for them, so “gone from list” alone is not
+       treated as 100% sold.)
+
+    Display on seller rows also shows “now not listed” when they are off the
+    current holder snapshot (vs “now X%” when still listed).
+
   Examples
     First hold 5.00% of supply → still listed with 0.04% → seller (~99.2% sold)
     First hold 5.00% → still listed with 0.10% → NOT listed (only 98% sold)
-    First hold 5.00% → gone from top holders → seller (not listed anymore)
+    First hold 5.00% → gone from top holders → seller
+      (UI: “dropped off holder list”; treated as 100% of first bag)
     First hold 5.00% → sold out, then later holds 1% again → swing
     First hold 5.00% → still holding until 10th lookup, then sold ≥99%
       → still a seller (lookup number does not matter)
+    Never had measurable first bag → off list → NOT a seller
+      (unknown baseline; avoids false “100% sold”)
 
   Wallets that never sold ≥99% are ignored (not shown).
 
@@ -1155,8 +1208,13 @@ Sell ↔ Swing loop (all sticky origin lanes)
 
 Labels (examples)
   multi-account · seller   similar · seller   same-slot multi-buys (bots) · seller
-  multi-account · swing    flagged · swing    creator · swing
+  single · seller          creator · seller   flagged · seller
+  multi-account · swing    flagged · swing    creator · swing   single · swing
   seller / swing heuristics only — not legal proof of collusion
+
+  Per-row status phrases (sellers — not Swing) often include:
+    dropped off holder list | dumped ≥99% of first bag | dumped full first bag
+  See “Dropped off holder list” under What “sold ≥99%” means above.
 
 UI controls (website)
   - No Refresh / Clear mint / Clear all toolbar (removed).
@@ -1257,6 +1315,22 @@ Sources ATC merges
   2) Cloud  — RUGWATCH_WALLETS_URL (prefer wallets_index.json multi-shard)
 
 Tags on matches: [local] · [cloud] · [both]
+
+Wallet counts on the Token Checker site (header pills — same idea as RugWatch)
+  Top-right next to views / server:
+    local N   — COUNT(*) in rugwatch*.db on this ATC host (click to refresh)
+    cloud N   — public GitHub index total (click to refresh)
+
+  Same pattern as RugWatch’s “wallets / cloud” pills; ATC labels the first
+  pill “local” so it is clear this is the SQLite read on the ATC server.
+
+  Local  — desktop/self-host with RugWatch data. Hosted ATC often “local n/a”.
+  Cloud  — wallets_index.json (same list Analyze merges when RugWatch is on).
+
+  API: GET /api/rugwatch-counts
+       JSON: { local: {count, db_found, shards, …}, cloud: {count, shards, …} }
+       Does not return wallet addresses. Optional ?full=1 re-parses every shard
+       for a de-duped unique cloud count (slower).
 
 Live Token Checker site (e.g. Render): almost always CLOUD only.
 Local ATC + RugWatch on the same PC: local and/or cloud.

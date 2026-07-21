@@ -269,6 +269,151 @@ def fetch_cloud_wallets() -> dict[str, Any]:
         return result
 
 
+def count_local_wallets() -> dict[str, Any]:
+    """
+    Fast COUNT(*) across local RugWatch SQLite shards (no full row load).
+    Returns unique-address estimate as sum of per-shard counts (shards are
+    overflow partitions — addresses are not expected to repeat across files).
+    """
+    paths = rugwatch_db_paths()
+    out: dict[str, Any] = {
+        "ok": bool(paths),
+        "db_found": bool(paths),
+        "local_shards": len(paths),
+        "count": 0,
+        "error": None,
+        # Never expose absolute paths to the website
+        "shard_names": [p.name for p in paths],
+    }
+    if not paths:
+        out["error"] = (
+            "RugWatch DB not found on this server. Local counts only work when "
+            "rugwatch.db is present (desktop / self-host) or RUGWATCH_DB is set."
+        )
+        return out
+    total = 0
+    errs: list[str] = []
+    for path in paths:
+        try:
+            conn = sqlite3.connect(str(path), timeout=5.0)
+            try:
+                total += int(conn.execute("SELECT COUNT(*) FROM wallets").fetchone()[0])
+            finally:
+                conn.close()
+        except sqlite3.Error as exc:
+            errs.append(f"{path.name}: {exc}")
+        except OSError as exc:
+            errs.append(f"{path.name}: {exc}")
+    out["count"] = total
+    out["ok"] = True
+    if errs:
+        out["error"] = "; ".join(errs)
+    return out
+
+
+def count_cloud_wallets(*, full_parse: bool = False) -> dict[str, Any]:
+    """
+    Cloud wallet count from RUGWATCH_WALLETS_URL.
+
+    Prefer index total_count / sum of shard counts (one lightweight HTTP GET).
+    Set full_parse=True to load every shard and de-dupe (slower, unique count).
+    """
+    url = _wallets_url()
+    out: dict[str, Any] = {
+        "ok": False,
+        "url_set": bool(url),
+        "count": 0,
+        "shards": 0,
+        "error": None,
+        "method": None,
+    }
+    if not url:
+        out["error"] = "RUGWATCH_WALLETS_URL not set (cloud list disabled)"
+        return out
+
+    if full_parse:
+        full = fetch_cloud_wallets()
+        out["ok"] = bool(full.get("ok"))
+        out["count"] = int(full.get("count") or 0)
+        out["shards"] = int(full.get("shards") or 0)
+        out["error"] = full.get("error")
+        out["method"] = "full_parse"
+        return out
+
+    try:
+        payload = _http_get_json(url)
+        if isinstance(payload, dict) and payload.get("format") == "rugwatch_wallets_index_v1":
+            shards = payload.get("shards") or []
+            out["shards"] = len(shards) if isinstance(shards, list) else 0
+            if isinstance(payload.get("total_count"), int):
+                out["count"] = int(payload["total_count"])
+                out["method"] = "index_total_count"
+            else:
+                ssum = 0
+                for s in shards if isinstance(shards, list) else []:
+                    if isinstance(s, dict) and s.get("count") is not None:
+                        try:
+                            ssum += int(s["count"])
+                        except (TypeError, ValueError):
+                            pass
+                out["count"] = ssum
+                out["method"] = "index_shard_sum"
+            out["ok"] = True
+            return out
+
+        # Single-file payload
+        wallets = _parse_wallet_items(payload)
+        out["count"] = len(wallets)
+        out["shards"] = 1 if wallets or payload else 0
+        out["method"] = "single_file"
+        out["ok"] = True
+        return out
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = str(exc)
+        out["ok"] = False
+        return out
+
+
+def rugwatch_wallet_counts(*, full_cloud: bool = False) -> dict[str, Any]:
+    """
+    Local DB + cloud wallet counts for the ATC website status strip.
+    Does not return wallet addresses or filesystem paths.
+    """
+    local = count_local_wallets()
+    cloud = count_cloud_wallets(full_parse=full_cloud)
+    sources: list[str] = []
+    if local.get("db_found") and local.get("ok"):
+        sources.append("local")
+    if cloud.get("url_set") and cloud.get("ok"):
+        sources.append("cloud")
+    errs: list[str] = []
+    if local.get("error"):
+        errs.append(str(local["error"]))
+    if cloud.get("error"):
+        errs.append(f"cloud: {cloud['error']}")
+    return {
+        "ok": bool(sources) or bool(local.get("ok") or cloud.get("ok")),
+        "local": {
+            "count": int(local.get("count") or 0),
+            "db_found": bool(local.get("db_found")),
+            "shards": int(local.get("local_shards") or 0),
+            "shard_names": list(local.get("shard_names") or []),
+            "ok": bool(local.get("ok")),
+            "error": local.get("error"),
+        },
+        "cloud": {
+            "count": int(cloud.get("count") or 0),
+            "url_set": bool(cloud.get("url_set")),
+            "shards": int(cloud.get("shards") or 0),
+            "ok": bool(cloud.get("ok")),
+            "method": cloud.get("method"),
+            "error": cloud.get("error"),
+        },
+        "sources": sources,
+        "error": "; ".join(errs) if errs else None,
+    }
+
+
 def _load_local_wallets(
     *,
     min_score: int = 0,
