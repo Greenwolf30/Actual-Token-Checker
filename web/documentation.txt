@@ -347,6 +347,29 @@ What people often ask
 6.3c Launch-window slots and same-slot multi-buys (reference)
 
   ---------------------------------------------------------------------------
+  QUICK GLOSSARY (moved off the Bundles UI — read here)
+  ---------------------------------------------------------------------------
+  Slot
+    Solana chain time unit (~400 ms under normal conditions). Many txs can
+    land in one slot.
+
+  Launch-window
+    Early mint history Actual Data Token Checker scanned (toward older activity) —
+    not the full trading tape and not a guaranteed “second zero of launch.”
+
+  Same-slot multi-buys
+    Several different wallets bought this mint in the same Solana slot.
+    Multiple slot rows = multiple early co-timed bursts, not one owner repeated.
+
+  holds %
+    CURRENT bag size when known (from the holders snapshot when the address
+    matches) — not launch fill size / “% bought at that slot.” holds n/a =
+    current % unknown (not proof of a sell).
+
+  (These four lines used to appear under ── LAUNCH-WINDOW ── in Bundles;
+   they are documentation-only so the tab stays data-first.)
+
+  ---------------------------------------------------------------------------
   PURPOSE (plain summary)
   ---------------------------------------------------------------------------
   Launch-window ≈ early mint history (toward the beginning of the token’s
@@ -454,9 +477,7 @@ What people often ask
 
     ── LAUNCH-WINDOW ──
     │
-    ├─ [definition line]
-    │     Slot = Solana chain time unit (~400ms). Same-slot multi-buys =
-    │     several different wallets buy this mint in the same slot …
+    ├─ (glossary is not on the Bundles UI — see QUICK GLOSSARY above)
     │
     ├─ Same-slot multi-buys — total T% across N wallet(s):
     │     T% = sum of UNIQUE wallets’ CURRENT supply % (deduped; cap 100)

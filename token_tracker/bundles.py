@@ -559,11 +559,8 @@ def format_bundles_text(data: dict[str, Any]) -> str:
     slots = data.get("same_slot_groups") or []
     lines.append("")
     lines.append("── LAUNCH-WINDOW ──")
-    lines.append(
-        "  Slot = Solana chain time unit (~400ms). Launch-window = early mint "
-        "history (not full tape). Same-slot multi-buys = several wallets buy in "
-        "the same slot. holds % = CURRENT bag when known (not launch fill size)."
-    )
+    # Glossary (Slot / launch-window / same-slot / holds %) lives in
+    # DOCUMENTATION.txt §6.3c — not repeated in the Bundles UI.
     def _is_lp_row(r: dict[str, Any]) -> bool:
         if r.get("is_known_program"):
             return True
