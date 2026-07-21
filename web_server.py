@@ -1048,11 +1048,15 @@ class WebHandler(BaseHTTPRequestHandler):
         # Static files from /web
         if path == "/" or path == "/index.html":
             return self._serve_static("index.html")
-        # On-site documentation (full user guide in web/documentation.txt)
+        # On-site documentation (full user guide = web/documentation.txt
+        # which is kept in sync with repo-root DOCUMENTATION.txt)
         if path in {"/docs", "/docs/", "/documentation", "/documentation/"}:
             return self._serve_static("docs.html")
-        if path in {"/DOCUMENTATION.txt", "/Documentation.txt"}:
-            return self._serve_static("documentation.txt")
+        if path.lower() in {
+            "/documentation.txt",
+            "/documentations.txt",
+        } or path in {"/DOCUMENTATION.txt", "/Documentation.txt"}:
+            return self._serve_doc_text()
         if path.startswith("/"):
             rel = path.lstrip("/")
             # block path traversal
@@ -1154,6 +1158,40 @@ class WebHandler(BaseHTTPRequestHandler):
             code = 429
         return self._json(code, result)
 
+    def _serve_doc_text(self) -> None:
+        """Serve the Token Checker user guide as plain text (no-cache).
+
+        Prefer web/documentation.txt; fall back to repo-root DOCUMENTATION.txt
+        so Docs still works if only the root file is present on the host.
+        """
+        candidates = [
+            WEB_DIR / "documentation.txt",
+            ROOT / "DOCUMENTATION.txt",
+            WEB_DIR / "DOCUMENTATION.txt",
+        ]
+        target = next((p for p in candidates if p.is_file()), None)
+        if target is None:
+            return self._json(
+                404,
+                {
+                    "ok": False,
+                    "error": (
+                        "documentation.txt not found. Expected web/documentation.txt "
+                        "or DOCUMENTATION.txt next to web_server.py."
+                    ),
+                },
+            )
+        data = target.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self._cors()
+        self.end_headers()
+        self.wfile.write(data)
+        return None
+
     def _serve_static(self, rel: str) -> None:
         if not WEB_DIR.is_dir():
             return self._json(
@@ -1172,6 +1210,16 @@ class WebHandler(BaseHTTPRequestHandler):
             return self._json(404, {"ok": False, "error": "not found"})
         data = target.read_bytes()
         ctype = STATIC_TYPES.get(target.suffix.lower(), "application/octet-stream")
+        # Always revalidate HTML/JS so Docs + app updates appear after deploy
+        if target.suffix.lower() in {".html", ".js", ".txt", ".css"}:
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-cache, must-revalidate")
+            self._cors()
+            self.end_headers()
+            self.wfile.write(data)
+            return None
         return self._bytes(200, data, ctype)
 
 

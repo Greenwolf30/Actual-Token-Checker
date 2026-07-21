@@ -111,7 +111,11 @@
     <div class="docs-top">
       <div>
         <h1>Actual Data Token Checker — User Guide</h1>
-        <p>Full website documentation (same content as documentation.txt on this site)</p>
+        <p>
+          Loads the <strong>Actual Token Checker</strong> user guide
+          (<code>web/documentation.txt</code> on this host, same as
+          <code>DOCUMENTATION.txt</code> in the GitHub repo).
+        </p>
       </div>
       <div class="docs-actions">
         <a class="primary" href="/">← Back to Analyze</a>
@@ -120,12 +124,12 @@
           href="https://github.com/Greenwolf30/Actual-Token-Checker/blob/main/DOCUMENTATION.txt"
           target="_blank"
           rel="noopener noreferrer"
-          >GitHub copy</a
+          >GitHub DOCUMENTATION.txt</a
         >
       </div>
     </div>
 
-    <p id="docsStatus" class="docs-status">Loading documentation…</p>
+    <p id="docsStatus" class="docs-status">Loading Token Checker documentation…</p>
     <div class="docs-body">
       <pre id="docsContent"></pre>
     </div>
@@ -135,21 +139,58 @@
     (async function () {
       const status = document.getElementById("docsStatus");
       const pre = document.getElementById("docsContent");
-      try {
-        const r = await fetch("/documentation.txt", { cache: "no-cache" });
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        const text = await r.text();
-        pre.textContent = text;
-        status.textContent =
-          "Loaded from this website · " + text.length.toLocaleString() + " characters";
-      } catch (e) {
-        status.className = "docs-status err";
-        status.textContent =
-          "Could not load /documentation.txt — " + (e && e.message ? e.message : e);
-        pre.textContent =
-          "Documentation file missing from the web/ folder on the server.\n" +
-          "Upload web/documentation.txt next to index.html, then refresh.";
+      // Prefer this site's copy; fall back to GitHub so Docs still works
+      // if the deploy is missing the file or the free host is cold-starting badly.
+      const sources = [
+        { url: "/documentation.txt", label: "this website (/documentation.txt)" },
+        { url: "/DOCUMENTATION.txt", label: "this website (/DOCUMENTATION.txt)" },
+        {
+          url:
+            "https://raw.githubusercontent.com/Greenwolf30/Actual-Token-Checker/main/DOCUMENTATION.txt",
+          label: "GitHub raw DOCUMENTATION.txt (fallback)",
+        },
+      ];
+      let lastErr = null;
+      for (const src of sources) {
+        try {
+          const r = await fetch(src.url, {
+            cache: "no-cache",
+            credentials: src.url.startsWith("/") ? "same-origin" : "omit",
+          });
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          const text = await r.text();
+          if (!text || text.length < 200) {
+            throw new Error("file too short / empty");
+          }
+          // Reject accidental HTML error pages
+          if (/^\s*<(!doctype|html)/i.test(text)) {
+            throw new Error("got HTML instead of plain-text guide");
+          }
+          pre.textContent = text;
+          status.className = "docs-status";
+          status.textContent =
+            "Loaded Token Checker guide from " +
+            src.label +
+            " · " +
+            text.length.toLocaleString() +
+            " characters";
+          return;
+        } catch (e) {
+          lastErr = e;
+        }
       }
+      status.className = "docs-status err";
+      status.textContent =
+        "Could not load Token Checker documentation — " +
+        (lastErr && lastErr.message ? lastErr.message : lastErr);
+      pre.textContent =
+        "The Docs page needs the Token Checker user guide.\n\n" +
+        "Tried:\n" +
+        "  1) /documentation.txt  (deployed from web/documentation.txt)\n" +
+        "  2) /DOCUMENTATION.txt\n" +
+        "  3) GitHub raw main/DOCUMENTATION.txt\n\n" +
+        "Fix: ensure web/documentation.txt is in the deploy, or open GitHub:\n" +
+        "https://github.com/Greenwolf30/Actual-Token-Checker/blob/main/DOCUMENTATION.txt\n";
     })();
   </script>
 </body>
