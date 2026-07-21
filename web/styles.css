@@ -896,7 +896,7 @@ a.copy-mint:hover,
   font-weight: 600;
   opacity: 0.92;
 }
-/* Same-slot multi-buys — dim yellow TITLE BANNER only (not hint / body) */
+/* Same-slot multi-buys — dim yellow on DESCRIPTION strip only (not title head / body) */
 .rug-section-title .rug-label-launch-bots,
 .rug-label-launch-bots,
 .rug-section-title .rug-label-launch-window,
@@ -905,16 +905,23 @@ a.copy-mint:hover,
   font-weight: 600;
   opacity: 0.92;
 }
+/* Title row stays default elevated styling */
 .rug-section.rug-section-launch-bots > .rug-section-head {
-  background: rgba(184, 168, 92, 0.08);
-  border-bottom-color: rgba(184, 168, 92, 0.22);
+  background: var(--bg-elevated);
+  border-bottom-color: var(--border);
 }
 .rug-section.rug-section-launch-bots > .rug-section-head .rug-section-title {
-  color: #b8a85c;
+  color: var(--text);
   background: transparent;
-  opacity: 0.95;
+  opacity: 1;
 }
-/* Hint + wallet body keep default muted/normal colors (not yellow) */
+/* Subcategory / hint under the title — dim yellow banner */
+.rug-section.rug-section-launch-bots > .rug-section-hint {
+  color: #b8a85c;
+  background: rgba(184, 168, 92, 0.1);
+  border-bottom: 1px solid rgba(184, 168, 92, 0.22);
+  padding: 8px 12px;
+}
 .rug-section {
   margin: 14px 0;
   border: 1px solid var(--border);
