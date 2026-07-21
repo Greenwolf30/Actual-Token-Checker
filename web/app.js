@@ -995,9 +995,14 @@ function computeSoldState(first, current) {
       sold_pct: 100,
       remaining_pct: 0,
       remaining_of_first: 0,
+      listed: false,
+      has_positive_hold: false,
       reason: "not_listed",
     };
   }
+
+  const hasPositiveHold =
+    (curPct != null && curPct > 0) || (curBal != null && curBal > 0);
 
   let remainingOfFirst = null;
   if (firstPct != null && firstPct > 0 && curPct != null) {
@@ -1014,6 +1019,8 @@ function computeSoldState(first, current) {
       sold_pct: null,
       remaining_pct: curPct,
       remaining_of_first: null,
+      listed: true,
+      has_positive_hold: hasPositiveHold,
       reason: "unknown",
     };
   }
@@ -1025,8 +1032,83 @@ function computeSoldState(first, current) {
     sold_pct: Math.round(soldFrac * 10000) / 100,
     remaining_pct: curPct,
     remaining_of_first: remainingOfFirst,
+    listed: true,
+    has_positive_hold: hasPositiveHold,
     reason: sold ? (remainingOfFirst <= 0 ? "sold_100" : "sold_99") : "holding",
   };
+}
+
+/**
+ * True when a prior ≥99% seller has bought back onto the mint.
+ *
+ * Cases:
+ *  - Was off the list / zero bag, now listed with any positive hold
+ *  - Still “sold” vs first bag (≤1% of first) but bag grew from a lower residual
+ *  - Recovered above the 1% first-bag threshold (no longer soldState.sold)
+ *
+ * Used so Similar + Single (+ Creator/Flagged) leave Sellers → Swing.
+ */
+function isRuggersBuyBack(prev, soldState, cur) {
+  const ever =
+    !!(prev && (prev.ever_sold || prev.tag === "seller" || prev.tag === "swing"));
+  if (!ever) return false;
+
+  const listed = !!(soldState && soldState.listed) || !!(cur && cur.listed);
+  const hasHold = !!(
+    (soldState && soldState.has_positive_hold) ||
+    (cur &&
+      ((cur.pct_supply != null && Number(cur.pct_supply) > 0) ||
+        (cur.balance != null && Number(cur.balance) > 0)))
+  );
+  if (!listed || !hasHold) return false;
+
+  // Fully recovered vs first bag → always swing
+  if (soldState && soldState.sold === false) return true;
+
+  const prevListed = prev.listed === true;
+  const prevPct =
+    prev.current_pct != null && Number.isFinite(Number(prev.current_pct))
+      ? Number(prev.current_pct)
+      : null;
+  const curPct =
+    cur && cur.pct_supply != null && Number.isFinite(Number(cur.pct_supply))
+      ? Number(cur.pct_supply)
+      : soldState && soldState.remaining_pct != null
+        ? Number(soldState.remaining_pct)
+        : null;
+  const prevBal =
+    prev.current_balance != null && Number.isFinite(Number(prev.current_balance))
+      ? Number(prev.current_balance)
+      : null;
+  const curBal =
+    cur && cur.balance != null && Number.isFinite(Number(cur.balance))
+      ? Number(cur.balance)
+      : null;
+
+  // Re-entered the holder list after being gone (classic buy-back)
+  if (!prevListed && listed && hasHold) return true;
+
+  // Bag grew from zero / dust residual while still under the 99% sold rule
+  if (prevPct != null && curPct != null && curPct > prevPct + 1e-12) {
+    if (prevPct <= 0) return true;
+    // Meaningful re-accumulation (at least 2× residual or +0.05% supply)
+    if (curPct >= prevPct * 2 || curPct - prevPct >= 0.05) return true;
+  }
+  if (prevBal != null && curBal != null && curBal > prevBal + 1e-12) {
+    if (prevBal <= 0) return true;
+    if (curBal >= prevBal * 2) return true;
+  }
+
+  // Previous tag was seller with zero bag, now positive
+  if (
+    (prev.tag === "seller" || prev.tag === "swing") &&
+    (prevPct == null || prevPct <= 0) &&
+    hasHold
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -1217,19 +1299,25 @@ function processRuggersFromAnalyze(data) {
     const prev = status[w] || {};
     let tag = "holding";
     let everSold = !!prev.ever_sold;
+    const buyBack = isRuggersBuyBack(prev, soldState, cur);
 
     if (soldState.sold) {
       everSold = true;
-      tag = "seller";
-    } else if (everSold && cur.listed) {
-      // Buy-back after a ≥99% dump → swing
-      const hasBag =
-        (cur.pct_supply != null && Number(cur.pct_supply) > 0) ||
-        (cur.balance != null && Number(cur.balance) > 0);
+      // Similar / Single / Creator / Flagged: any real buy-back → Swing
+      // (not stuck as seller just because bag is still <1% of first lookup)
+      if (buyBack) {
+        tag = "swing";
+      } else {
+        tag = "seller";
+      }
+    } else if (everSold || buyBack || prev.tag === "seller" || prev.tag === "swing") {
+      everSold = true;
+      // Recovered above 99% sold threshold, or re-accumulated → Swing
       if (
-        hasBag ||
-        (soldState.remaining_of_first != null &&
-          soldState.remaining_of_first > RUGGERS_REMAIN_FRAC)
+        buyBack ||
+        (cur.listed &&
+          ((cur.pct_supply != null && Number(cur.pct_supply) > 0) ||
+            (cur.balance != null && Number(cur.balance) > 0)))
       ) {
         tag = "swing";
       } else {
@@ -2440,13 +2528,15 @@ function refreshRuggersPanel(focusKey) {
     "Similar-size group sellers (≥99% sold / left list). " +
       "Upload → cloud/RugWatch; they stay under Similar on THIS mint indefinitely " +
       "(never move to Flagged here). On any other mint they go straight to Flagged " +
-      "when they sell ≥99%. Buy-back still records Swing; pin remains Similar forever.",
+      "when they sell ≥99%. Buy-back → leave this list and go to Swing " +
+      "(permanent Similar Upload still also stays pinned under Similar).",
     buckets.similarSellers,
     "similar"
   );
   html += renderRuggersSection(
     "Single wallets (sellers)",
-    "New individual sellers not already on RugWatch. Export only (no Upload).",
+    "New individual sellers not already on RugWatch. Export only (no Upload). " +
+      "Buy-back → leave this list and go to Swing.",
     buckets.singleSellers,
     "single",
     { exportOnly: true }
@@ -2478,7 +2568,9 @@ function refreshRuggersPanel(focusKey) {
   }
   html += renderRuggersSection(
     "Swing traders",
-    "Sold ≥99%, then bought back. Former flagged sellers are unflagged and removed from cloud.",
+    "Sold ≥99%, then bought back (Similar, Single, Creator, or Flagged). " +
+      "Former flagged sellers are unflagged and removed from cloud. " +
+      "Permanent Similar Uploads stay under Similar as well as Swing.",
     buckets.swings
   );
 
