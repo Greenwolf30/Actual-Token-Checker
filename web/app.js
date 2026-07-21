@@ -1455,12 +1455,64 @@ function isRuggersStickyOriginLane(lane) {
 }
 
 /**
+ * Enroll a wallet into the Ruggers baseline the first time we see them holding.
+ * Used on first Analyze for everyone, and on later Analyzes for NEW holders
+ * (and RugWatch-flagged wallets that appear as holders later).
+ */
+function enrollRuggersBaselineWallet(rec, w, info, now) {
+  if (!rec || !w || !info) return false;
+  if (!rec.first_wallets || typeof rec.first_wallets !== "object") {
+    rec.first_wallets = {};
+  }
+  if (rec.first_wallets[w]) return false; // already baseline
+  const pct =
+    info.pct_supply != null && Number.isFinite(Number(info.pct_supply))
+      ? Number(info.pct_supply)
+      : null;
+  const bal =
+    info.balance != null && Number.isFinite(Number(info.balance))
+      ? Number(info.balance)
+      : null;
+  // Skip empty / dust rows with no measurable bag (except explicit creator)
+  const isCreatorLabel =
+    info.label === "creator" ||
+    !!(rec.creator && String(rec.creator).toLowerCase() === String(w).toLowerCase());
+  if (!isCreatorLabel && (pct == null || pct <= 0) && (bal == null || bal <= 0)) {
+    return false;
+  }
+  rec.first_wallets[w] = {
+    pct_supply: pct,
+    balance: bal,
+    rank: info.rank != null ? info.rank : null,
+    label: isCreatorLabel ? "creator" : info.label || null,
+    in_similar: !!info.in_similar,
+    in_multi: !!info.in_multi,
+    in_insider: !!info.in_insider,
+    in_suspect: !!info.in_suspect,
+    in_funding: !!info.in_funding,
+    in_launch: !!info.in_launch,
+    exclude_from_single: !!info.exclude_from_single,
+    first_seen_at: now,
+    enrolled_after_baseline: true,
+  };
+  if (isCreatorLabel) {
+    rec.first_wallets[w].origin_lane = "creator";
+    rec.first_wallets[w].is_creator = true;
+    rec.first_wallets[w].label = "creator";
+  }
+  return true;
+}
+
+/**
  * Update (or seed) tracking for one mint from a successful full Analyze.
- * First lookup freezes baseline; later lookups recompute sellers / swings.
+ * First lookup freezes baseline; later lookups recompute sellers / swings
+ * and enroll NEW holders seen for the first time.
  *
  * Loop (per mint, concurrent re-Analyze):
  *  similar/single/creator sellers  ↔  Swing  (origin_lane frozen at first discovery)
  *  Flagged sellers                 ↔  Swing (still purple “flagged” on Swing)
+ *  New holders on later Analyzes: added to baseline; sell → similar/single
+ *    or Flagged if on RugWatch
  * Flagged for mint B never rewrites lanes on mint A (per-mint store).
  */
 function processRuggersFromAnalyze(data) {
@@ -1651,6 +1703,57 @@ function processRuggersFromAnalyze(data) {
     for (const w of g.wallets || []) {
       if (!w) continue;
       if (rec.first_wallets[w]) rec.first_wallets[w].in_similar = true;
+      // New similar member not yet baseline — enroll as holder on this Analyze
+      else if (current[w] || (snap.wallets && snap.wallets[w])) {
+        const info = (snap.wallets && snap.wallets[w]) || {
+          in_similar: true,
+          pct_supply: null,
+          balance: null,
+        };
+        info.in_similar = true;
+        enrollRuggersBaselineWallet(rec, w, info, now);
+      }
+    }
+  }
+
+  // ── Subsequent Analyzes: enroll NEW holders into baseline ─────────────
+  // First sight freezes their bag. If they sell later → Similar / Single / …
+  // or Flagged if on RugWatch. Flagged wallets that show up as holders are
+  // enrolled the same way so a later dump lands in Flagged.
+  if (!isFirstLookup) {
+    for (const [w, info] of Object.entries(snap.wallets || {})) {
+      if (!w || !info) continue;
+      if (rec.first_wallets[w]) continue;
+      // Prefer measurable bag (or creator)
+      enrollRuggersBaselineWallet(rec, w, info, now);
+    }
+    // RugWatch-known addresses currently holding but missing from snap.wallets
+    // (edge: server tagged them but holder row thin) — still enroll if current
+    for (const [fw, meta] of Object.entries(snap.flagged_known || {})) {
+      if (!fw || rec.first_wallets[fw]) continue;
+      if (!current[fw] && !(snap.wallets && snap.wallets[fw])) continue;
+      const info = (snap.wallets && snap.wallets[fw]) || current[fw] || {};
+      enrollRuggersBaselineWallet(
+        rec,
+        fw,
+        {
+          pct_supply: info.pct_supply,
+          balance: info.balance,
+          rank: info.rank,
+          label: info.label || null,
+          in_similar: !!info.in_similar,
+          in_multi: !!info.in_multi,
+          in_insider: !!info.in_insider,
+          in_suspect: !!info.in_suspect,
+          in_funding: !!info.in_funding,
+          in_launch: !!info.in_launch,
+          exclude_from_single: !!info.exclude_from_single,
+        },
+        now
+      );
+      if (rec.first_wallets[fw]) {
+        rec.first_wallets[fw].from_rugwatch_holder = true;
+      }
     }
   }
 
@@ -1662,8 +1765,8 @@ function processRuggersFromAnalyze(data) {
       : {};
   for (const [fw, meta] of Object.entries(snap.flagged_known || {})) {
     if (!fw) continue;
-    // Only remember if on this mint track (in baseline or currently listed)
-    // OR already a sticky flagged seller for this mint
+    // Remember if on this mint track (baseline / currently listed / flagged seller)
+    // New holders enrolled above are already in first_wallets
     const onTrack =
       !!(rec.first_wallets && rec.first_wallets[fw]) ||
       !!current[fw] ||
@@ -1879,7 +1982,6 @@ function processRuggersFromAnalyze(data) {
     }
 
     // Similar lineage on THIS mint (upload pin, frozen lane, or baseline tag).
-    // These wallets never enter Ruggers Flagged on this mint — stay Similar ↔ Swing.
     const similarLineageOnMint = !!(
       uploadedSimilar ||
       originLane === "similar" ||
@@ -1891,19 +1993,9 @@ function processRuggersFromAnalyze(data) {
         (rec.first_wallets[w].in_similar ||
           rec.first_wallets[w].origin_lane === "similar"))
     );
-    if (similarLineageOnMint) {
-      // Force sticky similar origin so later Analyzes cannot re-lane to single → Flagged
-      originLane = "similar";
-      if (rec.first_wallets[w]) {
-        rec.first_wallets[w].in_similar = true;
-        rec.first_wallets[w].origin_lane = "similar";
-      }
-      if (flaggedSellers[w]) delete flaggedSellers[w];
-    }
 
     // Uploaded from any Ruggers section on THIS mint (Single, multi, Creator, …).
     // Stay in that origin section ↔ Swing — never Ruggers Flagged on this mint.
-    // (Cloud still has them; OTHER mints can still Flag them when they sell.)
     const uploadedOnThisMint = isRuggersAlreadyUploaded(rec, w);
     let uploadedSection =
       (rec.ruggers_uploaded &&
@@ -1923,11 +2015,30 @@ function processRuggersFromAnalyze(data) {
         rec.ruggers_uploaded[w].section = "single";
       }
     }
+
+    const wasFlaggedSeller = !!flaggedSellers[w];
+    const onRugWatchEarly =
+      wasFlaggedSeller ||
+      !!rwKnown[w] ||
+      isRuggersRugwatchKnown(rec, w) ||
+      !!(snap.flagged_known && snap.flagged_known[w]);
+
+    // Similar sticky only when NOT on RugWatch (or permanent Similar-Upload).
+    // On RugWatch + sell → Flagged (unless this-mint Upload / creator).
+    if (similarLineageOnMint && (!onRugWatchEarly || uploadedSimilar)) {
+      originLane = "similar";
+      if (rec.first_wallets[w]) {
+        rec.first_wallets[w].in_similar = true;
+        rec.first_wallets[w].origin_lane = "similar";
+      }
+      if (!onRugWatchEarly && flaggedSellers[w]) delete flaggedSellers[w];
+    }
+
     if (
       uploadedOnThisMint &&
       uploadedSection &&
       RUGGERS_STICKY_LANES.has(String(uploadedSection)) &&
-      !similarLineageOnMint &&
+      !(similarLineageOnMint && (!onRugWatchEarly || uploadedSimilar)) &&
       !isCreator
     ) {
       originLane = String(uploadedSection);
@@ -1944,7 +2055,7 @@ function processRuggersFromAnalyze(data) {
     // Only the real mint creator keeps creator origin / is_creator
     if (!isCreator && (originLane === "creator" || (first && first.is_creator))) {
       originLane =
-        similarLineageOnMint
+        similarLineageOnMint && !onRugWatchEarly
           ? "similar"
           : uploadedSection &&
               RUGGERS_STICKY_LANES.has(String(uploadedSection)) &&
@@ -1967,12 +2078,11 @@ function processRuggersFromAnalyze(data) {
       delete flaggedSellers[w];
     }
 
-    const wasFlaggedSeller = !!flaggedSellers[w];
     // Once flagged on THIS mint, never drop the label (buy-back / swing / re-sell)
-    // Similar lineage / this-mint Upload are never "flagged" here even if on cloud.
+    // This-mint Upload / permanent Similar-Upload never use Flagged identity here.
     const everFlaggedOnMint = !!(
-      !similarLineageOnMint &&
       !uploadedOnThisMint &&
+      !uploadedSimilar &&
       (prev.ever_flagged_on_mint ||
         wasFlaggedSeller ||
         (flaggedSellers[w] &&
@@ -1981,23 +2091,14 @@ function processRuggersFromAnalyze(data) {
           (prev.flagged_meta.ever_flagged || prev.flagged_meta.phase)) ||
         (prev.is_flagged && prev.ever_sold))
     );
-    const onRugWatch =
-      wasFlaggedSeller ||
-      everFlaggedOnMint ||
-      !!rwKnown[w] ||
-      isRuggersRugwatchKnown(rec, w);
+    const onRugWatch = onRugWatchEarly || everFlaggedOnMint;
 
-    // Enter / re-enter Flagged when sold ≥99% while on RugWatch lineage.
-    // Includes swing → seller again after concurrent lookups (buy-back then dump).
-    // NOT if: Similar lineage, Creator, or Uploaded from this mint (Single etc.).
-    // Those stay in their origin section on THIS mint.
+    // Flagged when sold ≥99% while on RugWatch (new holders included once enrolled).
+    // Priority over Similar/Single unless Creator / permanent Similar-Upload / this-mint Upload.
     const soldWhileFlaggedPath =
-      !isFirstLookup &&
       tag === "seller" &&
-      !similarLineageOnMint &&
       !uploadedSimilar &&
       !uploadedOnThisMint &&
-      originLane !== "similar" &&
       originLane !== "creator" &&
       !isCreator &&
       (onRugWatch || everFlaggedOnMint);
@@ -2883,7 +2984,15 @@ function ruggersBuckets(rec) {
   }
 
   function isSimilarLineageRow(w, st) {
+    // Permanent Similar-Upload always similar for UI
     if (isUploadedSimilarOnThisMint(rec, w)) return true;
+    // If they are on Flagged sell path this row, do not force Similar UI
+    if (st && st.is_flagged && st.tag === "seller" && st.ever_flagged_on_mint) {
+      return false;
+    }
+    if (flaggedSellers[w] && String(flaggedSellers[w].phase || "sold") === "sold") {
+      return false;
+    }
     if (st && (st.origin_lane === "similar" || st.in_similar || st.permanent_similar || st.uploaded_similar)) {
       return true;
     }
@@ -2893,17 +3002,11 @@ function ruggersBuckets(rec) {
   }
 
   function isFlaggedSold(w, st) {
-    // Similar (including when they were similar at upload) never list under Flagged
-    if (isSimilarLineageRow(w, st)) return false;
-    // Uploaded from Single / multi / Creator / … on THIS mint → stay that section
+    // Permanent Similar-Upload / this-mint Upload stay out of Flagged UI
+    if (isUploadedSimilarOnThisMint(rec, w)) return false;
     if (isRuggersAlreadyUploaded(rec, w)) return false;
     const meta = flaggedSellers[w];
     if (meta && String(meta.phase || "sold") === "sold" && st.tag === "seller") {
-      // Defense: meta may be stale if they were re-tagged similar later
-      if (meta.origin_lane === "similar") return false;
-      if (meta.origin_lane === "single" && isRuggersAlreadyUploaded(rec, w)) {
-        return false;
-      }
       return true;
     }
     if (st.is_flagged && st.tag === "seller" && st.ever_flagged_on_mint) {

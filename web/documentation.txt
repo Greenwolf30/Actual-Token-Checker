@@ -1085,6 +1085,20 @@ How tracking starts (first lookup)
   5. Origin lane is frozen once (see chart below). Later Analyzes do not
      rename the wallet to another lane (except promote to similar in rare cases).
 
+New holders on later Analyzes (after the first full Analyze)
+  On each subsequent full Analyze:
+
+  1. Any NEW wallet currently holding (not already in the baseline) is
+     enrolled into the track — first bag = what they hold on that first sight.
+  2. RugWatch-flagged wallets that show up as holders later are enrolled too.
+  3. If they later sell ≥99% of that first-sight bag (or drop off holders):
+       · On RugWatch list → Ruggers Flagged (RugWatch) ↔ Swing
+       · Similar-size (and not forced Flagged) → Similar ↔ Swing
+       · Otherwise plain holder → Single ↔ Swing
+       · Creator still only the one mint creator address
+  4. Wallets Uploaded from this mint’s Ruggers sections still stay in their
+     origin section on this mint (not re-routed to Flagged here).
+
   Quick mode does not start or update Ruggers (no full holder scan).
 
 Where each Ruggers section comes from (Holders / Bundles)
