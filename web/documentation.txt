@@ -13,8 +13,8 @@
   local + cloud.
 
   Everything here is a HEURISTIC from public data. Not financial advice.
-  Last major docs update: 2026-07-21 (slot / same-slot multi-buys; spell out
-  Associated Token Account in full, not “ATA”).
+  Last major docs update: 2026-07-21 (Launch-window slots: full pipeline,
+  UI layout map, % / n/a semantics; Associated Token Account spelled out).
 ================================================================================
 
 
@@ -265,7 +265,8 @@ What people often ask
   - ── SIMILAR-SIZE GROUPS ──     nearly same bag size among top wallets
   - ── INSIDER-FLAGGED ──         Rugcheck insider tags (not RugWatch)
   - ── SHARED SOL FUNDER ──       1-hop common SOL funder (Helius when available)
-  - ── LAUNCH-WINDOW ──           same-slot multi-buys at launch (see §6.3c)
+  - ── LAUNCH-WINDOW ──           same-slot multi-buys; full slot pipeline,
+                                  UI layout map, % / n/a (§6.3c)
   - ── SUSPECT WALLETS ──         union of signals (heuristic)
   - Signals: multi Associated Token Account clusters, similar-size, insiders,
     funder, launch-window, Birdeye tags, rugged
@@ -334,27 +335,223 @@ What people often ask
   This is a heuristic (“looks like one operator with several bags”), not
   proof of identity.
 
-6.3c What a slot is, and same-slot multi-buys (Launch-window)
-  Slot (Solana)
-    - A short unit of chain time (about ~400 milliseconds)
-    - Many transactions can land in the same slot
-    - “Same slot” means roughly the same on-chain moment — not the same day
+6.3c Launch-window slots and same-slot multi-buys (reference)
 
-  Same-slot multi-buys
-    - Several different wallets buy the same token in the same slot
-      (often right at launch)
-    - “Multi” = more than one buy; “multi-wallet” = different addresses
-    - Random organic buyers usually hit different slots over time
-    - Many wallets in one slot often looks like a coordinated snipe,
-      bot stack, or MEV-style bundle (still a heuristic, not proof)
+  ---------------------------------------------------------------------------
+  PURPOSE
+  ---------------------------------------------------------------------------
+  Launch-window answers: “In early mint history, which multi-wallet buy
+  bursts landed in the same Solana slot?” It is a TIME-sliced BUY history
+  reconstructed from Helius-enhanced transaction data — not a live holders
+  table and not a Jito archive dump.
 
-  Where ATC shows this
-    - Bundles: ── LAUNCH-WINDOW ── and Signals (Jito-style / Helius history
-      when available)
-    - Ruggers: “Same-slot multi-buys (Launch-window)” for sellers tagged
-      that way at first full Analyze
-    - Not the same as similar-size (bag size) or shared SOL funder (funding
-      parent) — see the comparison table under §6.3
+  UI location
+    Bundles tab → ── LAUNCH-WINDOW ──
+    Bundles Signals → “Launch-window same-slot multi-wallet buys” (when hit)
+    Ruggers → “Same-slot multi-buys (Launch-window)” (sellers tagged at first
+              full Analyze when Quick is OFF)
+
+  Related (not the same signal)
+    Multi-account     → same owner, multiple Associated Token Accounts (§6.3b)
+    Similar-size      → similar current bag size (not time)
+    Shared SOL funder → common 1-hop SOL parent (not slot)
+    Holders tab       → current concentration snapshot
+
+
+  ---------------------------------------------------------------------------
+  SOLANA SLOT (chain definition)
+  ---------------------------------------------------------------------------
+  - Slot = discrete unit of Solana leader schedule / block production time
+    (on the order of ~400 ms under normal conditions; not a wall-clock minute).
+  - Many transactions may confirm in one slot; a single wallet may send
+    multiple txs inside one slot.
+  - “Same slot” on ATC means the same integer slot field from getTransaction,
+    i.e. the same on-chain time bucket — not “same day” and not “same human
+    session.”
+
+
+  ---------------------------------------------------------------------------
+  HOW TOKEN CHECKER BUILDS SLOT GROUPS (pipeline)
+  ---------------------------------------------------------------------------
+  Source label in reports: jito_style / helius_enhanced_txs_same_slot_launch_window
+  Requires Helius (RPC / enhanced path). Without Helius the section stays empty
+  or unavailable.
+
+  1) Signature collection
+     - getSignaturesForAddress on the mint, paginated toward older activity
+       (launch / early window), not only the latest trades.
+     - Caps: limited signature pages and a max number of full tx fetches
+       (implementation defaults are finite — not an exhaustive chain archive).
+
+  2) Transaction decode
+     - For each signature: getTransaction (jsonParsed).
+     - Read slot (and blockTime when present).
+     - Extract buyers for this mint (§ buyer extraction below).
+
+  3) Bucket by slot
+     - by_slot[slot] ← list of { signature, buyers[], block_time }
+     - Within a slot, unique buyer addresses are unioned (set).
+
+  4) Emit group only if multi-wallet
+     - A slot becomes a displayed group only if unique_buyers >= 2.
+     - Single-wallet slots are dropped (not “multi-buy”).
+     - Group fields include: slot, tx_count, unique_buyers, wallets[],
+       signatures (sample), block_time, strength (medium if 2 wallets,
+       high if 3+).
+
+  5) Rank and attach
+     - Groups sorted by strength (unique_buyers, then tx_count).
+     - Fusion attaches current supply % from the holders map when the
+       address matches (see % semantics below).
+     - Bundles UI shows up to the top groups (not every historical slot).
+
+  Buyer extraction (per tx, best-effort)
+    - Fee payer (message.accountKeys[0]), and/or
+    - Token balance owners for this mint where post balance > pre balance
+      (owner field from pre/post token balances).
+    - Addresses are wallet/owner-oriented when balances expose owner; not a
+      guarantee against edge-case program accounts.
+
+
+  ---------------------------------------------------------------------------
+  UI LAYOUT MAP (Bundles → Launch-window)
+  ---------------------------------------------------------------------------
+  Conceptual structure of the report block:
+
+    ── LAUNCH-WINDOW ──
+    │
+    ├─ [definition line]
+    │     Slot = Solana chain time unit (~400ms). Same-slot multi-buys =
+    │     several different wallets buy this mint in the same slot …
+    │
+    ├─ Same-slot multi-buys — total T% across N wallet(s):
+    │     T% = sum of UNIQUE wallets’ CURRENT supply % (deduped; cap 100)
+    │     N  = unique wallet count across all listed groups
+    │     (not sum of per-slot totals; repeats do not double-count T% / N)
+    │
+    ├─ • slot <SLOT_ID>: <U> wallets / <Tx> txs  ·  total G%
+    │  │    SLOT_ID = Solana slot integer
+    │  │    U       = unique buyers in THIS slot only
+    │  │    Tx      = transactions ATC attributed to this slot bucket
+    │  │    G%      = sum of unique wallets’ CURRENT % inside this slot
+    │  │              (n/a if no % known for any member)
+    │  │
+    │  ├─ <wallet_A>  holds 22.00%     ← CURRENT bag % if in holders map
+    │  ├─ <wallet_B>  holds n/a        ← CURRENT % unknown (see below)
+    │  └─ …
+    │
+    ├─ • slot <SLOT_ID_2>: …
+    │  └─ <wallet_A>  holds 22.00%     ← SAME address, DIFFERENT time bucket
+    │                                   (same CURRENT % reprinted)
+    │
+    └─ (empty placeholder if no multi-wallet slot groups)
+
+  Signals (summary line, when fusion fires)
+    “Launch-window same-slot multi-wallet buys”
+      → highlights the strongest group (most unique_buyers), with slot id,
+        wallet/tx counts, and how many slot groups / sigs were scanned.
+
+
+  ---------------------------------------------------------------------------
+  SEMANTICS: WHAT A SLOT REPRESENTS
+  ---------------------------------------------------------------------------
+  A slot row IS
+    - One time bucket in reconstructed early multi-wallet buy activity
+    - A set of DISTINCT addresses that increased mint exposure (buyer set)
+      in transactions landing in that slot
+    - Part of a partial history of buy *bursts*, not a complete trade tape
+
+  A slot row is NOT
+    - One owner (unless the group happens to list only addresses you later
+      prove related via multi-account / funder — Launch-window alone does not)
+    - Current holders roster for the mint
+    - Proof of Jito inclusion, same searcher, or same human operator
+    - The % of supply purchased *in that slot*
+
+
+  ---------------------------------------------------------------------------
+  MULTIPLE SLOTS AND THE SAME ADDRESS
+  ---------------------------------------------------------------------------
+  If address W appears under slot S1 and slot S2:
+    - W was classified as a buyer in (at least) both time buckets.
+    - That is multiple on-chain time periods of buy-side activity, not
+      multiple distinct owners.
+    - holds X% under both lines is the SAME current snapshot value
+      (reprinted for context), not “bought X% in S1 and another X% in S2.”
+    - Category total T% / N still count W once.
+
+  Example (illustrative)
+
+    Time ──►  [slot 500]     [slot 512]     [slot 520]     … later …
+                 W,A,B          W,C            W,D
+                 buy burst      buy burst      buy burst
+
+    Now holders snapshot: W ≈ 22%
+
+    UI:
+      • slot 500: …  W holds 22%   A holds …   B holds …
+      • slot 512: …  W holds 22%   C holds …
+      • slot 520: …  W holds 22%   D holds …
+
+    Interpretation:
+      W participated in three multi-wallet slots; current bag still ~22%
+      (net of all later sells/transfers — not a rising total of 22%×3).
+
+
+  ---------------------------------------------------------------------------
+  PERCENTAGES AND “n/a”
+  ---------------------------------------------------------------------------
+  holds P%
+    - P is CURRENT supply percentage from the Analyze holders fusion map
+      when the address matches a known holder row.
+    - It is NOT estimated buy size at launch, not cost basis, not per-slot
+      fill size.
+
+  holds n/a
+    - CURRENT % unavailable for that address in this run.
+    - Typical causes: not in top-holder snapshot; bag too small / sold down;
+      address not joined to owner map; holders path incomplete.
+    - Does NOT mean the wallet is nonexistent, invalid, or “sold for sure.”
+    - The address still appeared as a historical buyer in that slot.
+
+  Slot “total G%” / category “total T%”
+    - Aggregates of current holder % over unique wallets in scope.
+    - Unknown % wallets contribute no numeric share (they still count toward
+      wallet counts when listed).
+
+
+  ---------------------------------------------------------------------------
+  MULTIPLE WALLETS INSIDE ONE SLOT (OWNERSHIP)
+  ---------------------------------------------------------------------------
+  Addresses listed under one slot are different public keys unless the string
+  is identical. Launch-window does not merge them into one owner.
+
+    Same slot, different addresses  →  co-temporal buys (coordination signal)
+    Same address, different slots   →  one wallet, multi-period buy activity
+    Multi-account section           →  same owner, multiple Associated Token
+                                       Accounts (ownership heuristic)
+    Shared SOL funder               →  different wallets, common funder hop
+
+  Same-slot multi-wallet activity is consistent with bots, snipers, team
+  wallets, or independent buyers colliding on the same slot. ATC records the
+  pattern; it does not adjudicate which story is true.
+
+
+  ---------------------------------------------------------------------------
+  DEPENDENCIES AND LIMITS
+  ---------------------------------------------------------------------------
+  - Solana-focused; full same-slot fusion is not the primary path on EVM
+    chains.
+  - Needs Helius; scan depth is capped (not full mint lifetime).
+  - Prefers older collected signatures (launch-oriented window), so recent-
+    only activity may be under-represented if outside the scanned set.
+  - Buyer extraction is heuristic (fee payer + balance deltas).
+  - Strength labels and suspect tagging are risk heuristics, not forensic
+    identity.
+
+  Quick mode
+    Full holder/bundle paths (including launch-window enrichment) are reduced
+    or skipped; use full Analyze for Launch-window + Ruggers baseline tags.
 
 6.4 Bundle % alert scheme (Alerts tab)
   Alerts use ONE number: estimated bundle % of supply
