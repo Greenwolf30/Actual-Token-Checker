@@ -1047,7 +1047,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
         if suspect_total is None:
             suspect_total, suspect_n = _suspect_total_percent(suspects)
         lines.append(
-            f"  Union of signals — total {_pct(suspect_total)} across "
+            f"  Suspect wallets — total {_pct(suspect_total)} across "
             f"{suspect_n or len(suspects)} wallet(s):"
         )
         for sw in suspects[:12]:
@@ -1877,6 +1877,17 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
         )
         if r:
             suspects_out.append(r)
+    sus_tot, sus_n = _sum_wallets_pct(suspects_out)
+    if s.get("suspect_total_pct") is not None:
+        try:
+            sus_tot = float(s.get("suspect_total_pct"))
+        except (TypeError, ValueError):
+            pass
+    if s.get("suspect_wallet_count") is not None:
+        try:
+            sus_n = int(s.get("suspect_wallet_count"))
+        except (TypeError, ValueError):
+            pass
 
     # Signals
     signals_out: list[dict[str, Any]] = []
@@ -1930,6 +1941,8 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
             "token_multi_send_clusters": s.get("token_multi_send_clusters")
             or len(token_ms),
             "sol_multi_send_clusters": s.get("sol_multi_send_clusters") or len(sol_ms),
+            "suspect_total_pct": sus_tot,
+            "suspect_wallet_count": sus_n if sus_n else len(suspects_out),
             "sources_used": list(s.get("sources_used") or [])[:16],
         },
         "providers": providers,

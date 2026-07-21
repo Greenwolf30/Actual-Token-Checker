@@ -1402,14 +1402,32 @@ a.copy-mint:hover,
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
-.bun-stat-value.pct-low { color: #6a9e78; }
-.bun-stat-value.pct-medium { color: #b8a85c; }
-.bun-stat-value.pct-high { color: #c47a4a; }
-.bun-stat-value.pct-critical { color: #c45c5c; }
-.bun-stat-value.risk-high,
-.bun-stat-value.risk-elevated { color: #c45c5c; }
-.bun-stat-value.risk-moderate { color: #b8a85c; }
-.bun-stat-value.risk-lower { color: #6a9e78; }
+/* Supply % bands inside stats / section totals (class may be on child span) */
+.bun-stat-value .pct-low,
+.bun-stat-value.pct-low,
+.bun-section-total .pct-low { color: #6a9e78; }
+.bun-stat-value .pct-medium,
+.bun-stat-value.pct-medium,
+.bun-section-total .pct-medium { color: #b8a85c; }
+.bun-stat-value .pct-high,
+.bun-stat-value.pct-high,
+.bun-section-total .pct-high { color: #c47a4a; }
+.bun-stat-value .pct-critical,
+.bun-stat-value.pct-critical,
+.bun-section-total .pct-critical { color: #c45c5c; }
+/* Bundle risk score: 1–25 green · 25–50 yellow · 50–75 orange · 75–100 red */
+.bun-stat-value .risk-score-green,
+.bun-stat-value.risk-score-green,
+.risk-score-green { color: #6a9e78; font-weight: 600; }
+.bun-stat-value .risk-score-yellow,
+.bun-stat-value.risk-score-yellow,
+.risk-score-yellow { color: #b8a85c; font-weight: 600; }
+.bun-stat-value .risk-score-orange,
+.bun-stat-value.risk-score-orange,
+.risk-score-orange { color: #c47a4a; font-weight: 600; }
+.bun-stat-value .risk-score-red,
+.bun-stat-value.risk-score-red,
+.risk-score-red { color: #c45c5c; font-weight: 600; }
 .bun-meta {
   font-size: 0.78rem;
   color: var(--text-muted);

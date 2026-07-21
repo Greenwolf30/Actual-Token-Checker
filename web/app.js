@@ -5690,7 +5690,26 @@ function colorBundlesSelectivePcts(html) {
     .split("\n")
     .map((line) => {
       if (isUncoloredPctLine(line)) return line;
-      return colorPctTokens(line);
+      let out = colorPctTokens(line);
+      // Color "Bundle risk: … (score N/100)" with risk score bands
+      out = out.replace(
+        /(Bundle\s+risk:\s*)([a-zA-Z]+)(\s*\(score\s*)(\d+(?:\.\d+)?)(\s*\/\s*100\))/i,
+        (full, pre, label, mid, num, end) => {
+          const cls = bundleRiskScoreClass(Number(num));
+          return (
+            pre +
+            '<span class="' +
+            cls +
+            '">' +
+            label +
+            mid +
+            num +
+            end +
+            "</span>"
+          );
+        }
+      );
+      return out;
     })
     .join("\n");
 }
@@ -6060,6 +6079,20 @@ function bunPctHtml(n) {
     : escHtml(label);
 }
 
+/**
+ * Bundle risk score color bands (user scheme):
+ *   1–25 green · 25–50 yellow · 50–75 orange · 75–100 red
+ * Boundaries: ≤25 green, ≤50 yellow, ≤75 orange, else red.
+ */
+function bundleRiskScoreClass(score) {
+  const n = Number(score);
+  if (!Number.isFinite(n) || n <= 0) return "risk-score-green";
+  if (n <= 25) return "risk-score-green";
+  if (n <= 50) return "risk-score-yellow";
+  if (n <= 75) return "risk-score-orange";
+  return "risk-score-red";
+}
+
 function bunEmptySection(title, hint) {
   return (
     '<section class="bun-section">' +
@@ -6130,15 +6163,11 @@ function renderBundlesUi(data) {
   }
 
   const s = view.summary || {};
-  const risk = String(s.bundle_risk || "—").toLowerCase();
-  const riskCls =
-    risk === "high" || risk === "elevated"
-      ? "risk-" + risk
-      : risk === "moderate"
-        ? "risk-moderate"
-        : risk === "lower"
-          ? "risk-lower"
-          : "";
+  const riskScore =
+    s.bundle_risk_score != null && Number.isFinite(Number(s.bundle_risk_score))
+      ? Number(s.bundle_risk_score)
+      : null;
+  const riskCls = bundleRiskScoreClass(riskScore != null ? riskScore : 0);
 
   function stat(label, valueHtml) {
     return (
@@ -6152,23 +6181,24 @@ function renderBundlesUi(data) {
 
   let html = "";
   html += '<div class="bun-stats">';
+  // Risk label + score share the 1–25 / 25–50 / 50–75 / 75–100 color scheme
   html += stat(
     "Risk",
     '<span class="' +
       riskCls +
       '">' +
       escHtml(s.bundle_risk || "—") +
-      "</span>" +
-      (s.bundle_risk_score != null
-        ? ' <span style="font-size:0.75rem;color:var(--text-muted)">(' +
-          escHtml(String(s.bundle_risk_score)) +
-          "/100)</span>"
-        : "")
+      (riskScore != null
+        ? " (" + escHtml(String(Math.round(riskScore))) + "/100)"
+        : "") +
+      "</span>"
   );
+  // Summary % tiles — same Holders priority color bands
   html += stat("Total bundle", bunPctHtml(s.total_bundle_pct));
   html += stat("Similar-size", bunPctHtml(s.similar_size_total_pct));
   html += stat("Fresh total", bunPctHtml(s.fresh_total_pct));
   html += stat("Multi-send total", bunPctHtml(s.multi_send_total_pct));
+  html += stat("Suspect total", bunPctHtml(s.suspect_total_pct));
   html += stat("Top10 ex-LP", bunPctHtml(s.top10_pct_excluding_known_programs));
   html += "</div>";
 
@@ -6456,14 +6486,31 @@ function renderBundlesUi(data) {
     );
   }
 
-  // Suspects
+  // Suspects — total supply % across unique suspect wallets (right of title)
   const sus = view.suspect_wallets || [];
+  // Prefer API total; fall back to client sum of rows
+  let susTot = s.suspect_total_pct;
+  if (susTot == null && sus.length) {
+    let sum = 0;
+    const seen = new Set();
+    for (const r of sus) {
+      const w = String((r && r.wallet) || "").trim();
+      if (!w || seen.has(w)) continue;
+      seen.add(w);
+      const p = Number(r.pct_supply);
+      if (Number.isFinite(p) && p > 0) sum += p;
+    }
+    if (sum > 100) sum = 100;
+    susTot = sum > 0 ? sum : null;
+  }
   if (sus.length) {
     html +=
       '<section class="bun-section"><div class="bun-section-head">' +
       '<span class="bun-section-title">Suspect wallets</span>' +
-      '<span class="bun-section-total">' +
-      escHtml(String(sus.length)) +
+      '<span class="bun-section-total">total ' +
+      bunPctHtml(susTot) +
+      " · " +
+      escHtml(String(s.suspect_wallet_count || sus.length)) +
       " wallet(s)</span></div><div class=\"bun-section-body\">";
     html += bunWalletTable(sus, [
       { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
@@ -6477,7 +6524,10 @@ function renderBundlesUi(data) {
     ]);
     html += "</div></section>";
   } else {
-    html += bunEmptySection("Suspect wallets", "None tagged this scan.");
+    html += bunEmptySection(
+      "Suspect wallets",
+      "None tagged this scan."
+    );
   }
 
   root.innerHTML = html;
