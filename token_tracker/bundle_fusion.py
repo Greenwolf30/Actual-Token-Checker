@@ -531,7 +531,7 @@ def comprehensive_bundle_check(
                     "id": "fresh_sole_token",
                     "provider": "helius",
                     "severity": "medium" if len(fresh_rows) < 4 else "high",
-                    "title": "Fresh / sole-token wallets",
+                    "title": "Fresh wallets",
                     "detail": (
                         f"{len(fresh_rows)} holder(s) hold this mint with almost no "
                         f"other SPL tokens (scanned {fresh_report.get('wallets_scanned') or 0})."

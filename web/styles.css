@@ -1059,6 +1059,40 @@ a.copy-mint:hover,
   color: var(--accent);
   border: 1px solid var(--accent-border);
 }
+/* Ruggers / Bundles shared supply-% bands (same as Holders) */
+.rug-wallet-meta .pct-low,
+.rug-supply-sold.pct-low,
+.rug-supply-bought.pct-low,
+.bun-section-total .pct-low,
+.bun-table .pct-low {
+  color: #6a9e78;
+  font-weight: 500;
+}
+.rug-wallet-meta .pct-medium,
+.rug-supply-sold.pct-medium,
+.rug-supply-bought.pct-medium,
+.bun-section-total .pct-medium,
+.bun-table .pct-medium {
+  color: #b8a85c;
+  font-weight: 500;
+}
+.rug-wallet-meta .pct-high,
+.rug-supply-sold.pct-high,
+.rug-supply-bought.pct-high,
+.bun-section-total .pct-high,
+.bun-table .pct-high {
+  color: #c47a4a;
+  font-weight: 600;
+}
+.rug-wallet-meta .pct-critical,
+.rug-supply-sold.pct-critical,
+.rug-supply-bought.pct-critical,
+.bun-section-total .pct-critical,
+.bun-table .pct-critical {
+  color: #c45c5c;
+  font-weight: 600;
+}
+
 .rug-supply-sold,
 .rug-supply-bought {
   display: inline-block;

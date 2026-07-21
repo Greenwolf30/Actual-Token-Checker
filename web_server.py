@@ -358,7 +358,8 @@ def _ruggers_track_snapshot(
     group members and creator.
 
     Single sellers (client) only from plain holders ≥0.01% that are NOT
-    similar-size, multi-account, insider, suspect, shared-funder, or launch-window.
+    similar-size, multi-account, multi-send, insider, suspect, shared-funder,
+    launch-window, or fresh wallets.
     """
     holders = holders or {}
     bundles = bundles or {}
@@ -368,10 +369,12 @@ def _ruggers_track_snapshot(
     # Bundle-category sets — excluded from Ruggers Single lane
     similar_wallets: set[str] = set()
     multi_wallets: set[str] = set()
+    multi_send_wallets: set[str] = set()
     insider_wallets: set[str] = set()
     suspect_wallets: set[str] = set()
     funding_wallets: set[str] = set()
     launch_wallets: set[str] = set()
+    fresh_wallets: set[str] = set()
 
     for c in list(holders.get("owner_clusters") or []) + list(
         bundles.get("clusters") or []
@@ -463,6 +466,42 @@ def _ruggers_track_snapshot(
             ws = str(w or "").strip()
             if ws and ws not in lp_exclude:
                 launch_wallets.add(ws)
+        for row in list(g.get("wallet_rows") or []):
+            if isinstance(row, dict):
+                ws = (row.get("wallet") or "").strip()
+                if ws and ws not in lp_exclude:
+                    launch_wallets.add(ws)
+
+    # Fresh wallets (sole-token / near-sole — almost only this mint)
+    for fw in list(bundles.get("fresh_wallets") or []):
+        if isinstance(fw, dict):
+            w = (fw.get("wallet") or "").strip()
+        else:
+            w = str(fw or "").strip()
+        if w:
+            fresh_wallets.add(w)
+
+    # Multi-send (token + SOL): one sender → many receivers (NOT multi-account)
+    for mc in list(bundles.get("multi_send_clusters") or []) + list(
+        bundles.get("sol_multi_send_clusters") or []
+    ):
+        if not isinstance(mc, dict):
+            continue
+        sender = (mc.get("sender") or mc.get("funder") or "").strip()
+        if sender:
+            multi_send_wallets.add(sender)
+        for r in list(mc.get("receivers") or mc.get("children") or []):
+            if isinstance(r, dict):
+                w = (r.get("wallet") or "").strip()
+            else:
+                w = str(r or "").strip()
+            if w:
+                multi_send_wallets.add(w)
+        for row in list(mc.get("child_rows") or []):
+            if isinstance(row, dict):
+                w = (row.get("wallet") or "").strip()
+                if w:
+                    multi_send_wallets.add(w)
 
     # Parse similar-size groups first (needed for tagging + Single exclusion)
     similar_groups: list[dict[str, Any]] = []
@@ -522,19 +561,30 @@ def _ruggers_track_snapshot(
     def _bundle_tags(addr: str) -> dict[str, Any]:
         in_sim = addr in similar_wallets
         in_multi = addr in multi_wallets
+        in_ms = addr in multi_send_wallets
         in_ins = addr in insider_wallets
         in_sus = addr in suspect_wallets
         in_fund = addr in funding_wallets
         in_launch = addr in launch_wallets
+        in_fresh = addr in fresh_wallets
         return {
             "in_similar": in_sim,
             "in_multi": in_multi,
+            "in_multi_send": in_ms,
             "in_insider": in_ins,
             "in_suspect": in_sus,
             "in_funding": in_fund,
             "in_launch": in_launch,
+            "in_fresh": in_fresh,
             "exclude_from_single": bool(
-                in_sim or in_multi or in_ins or in_sus or in_fund or in_launch
+                in_sim
+                or in_multi
+                or in_ms
+                or in_ins
+                or in_sus
+                or in_fund
+                or in_launch
+                or in_fresh
             ),
         }
 
@@ -602,6 +652,52 @@ def _ruggers_track_snapshot(
         }
         row.update(_bundle_tags(addr))
         row["in_similar"] = True
+        row["exclude_from_single"] = True
+        wallet_rows.append(row)
+
+    # Fresh-only wallets not already listed (track Fresh wallets sellers)
+    for addr in fresh_wallets:
+        if addr in seen:
+            continue
+        seen.add(addr)
+        pct_f = None
+        for fw in list(bundles.get("fresh_wallets") or []):
+            if isinstance(fw, dict) and (fw.get("wallet") or "").strip() == addr:
+                try:
+                    pct_f = (
+                        float(fw["pct_supply"])
+                        if fw.get("pct_supply") is not None
+                        else None
+                    )
+                except (TypeError, ValueError):
+                    pct_f = None
+                break
+        row = {
+            "wallet": addr,
+            "pct_supply": pct_f,
+            "balance": None,
+            "rank": None,
+            "label": "fresh",
+        }
+        row.update(_bundle_tags(addr))
+        row["in_fresh"] = True
+        row["exclude_from_single"] = True
+        wallet_rows.append(row)
+
+    # Multi-send-only wallets not already listed
+    for addr in multi_send_wallets:
+        if addr in seen:
+            continue
+        seen.add(addr)
+        row = {
+            "wallet": addr,
+            "pct_supply": None,
+            "balance": None,
+            "rank": None,
+            "label": "multi-send",
+        }
+        row.update(_bundle_tags(addr))
+        row["in_multi_send"] = True
         row["exclude_from_single"] = True
         wallet_rows.append(row)
 

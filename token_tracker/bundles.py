@@ -628,7 +628,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
     # Fresh / sole-token wallets — total supply % + list sorted by hold %
     # (same layout as multi-send: category total → flat list by current %)
     lines.append("")
-    lines.append("── FRESH / SOLE-TOKEN WALLETS ──")
+    lines.append("── FRESH WALLETS ──")
     fresh = list(data.get("fresh_wallets") or [])
     # Enrich missing % from holders map; sort largest bag first
     fresh_enriched: list[dict[str, Any]] = []
@@ -658,7 +658,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
         ]
         f_tot, f_n = _sum_wallets_pct(f_rows)
         lines.append(
-            f"  Fresh / sole-token wallets — total {_pct(f_tot)} across {f_n} wallet(s):"
+            f"  Fresh wallets — total {_pct(f_tot)} across {f_n} wallet(s):"
         )
         lines.append("  All wallets (by current supply %):")
         for i, r in enumerate(fresh_enriched[:24], start=1):
@@ -675,7 +675,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             lines.append(f"    … +{len(fresh_enriched) - 24} more")
     else:
         lines.append(
-            "  (none — no fresh / sole-token wallets this scan; needs Helius + full Analyze)"
+            "  (none — no fresh wallets this scan; needs Helius + full Analyze)"
         )
 
     # Multi-send: total supply % of all unique wallets involved + cluster lists

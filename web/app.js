@@ -25,9 +25,11 @@ const RUGGERS_LANE_PRIORITY = [
   "creator",
   "similar",
   "multi",
+  "multi_send",
   "funding",
   "insider",
   "launch",
+  "fresh",
   "suspect",
   "single",
 ];
@@ -36,9 +38,11 @@ const RUGGERS_LANE_LABEL = {
   creator: "creator",
   similar: "similar",
   multi: "multi-account",
+  multi_send: "multi-send",
   funding: "shared funder",
   insider: "insider",
   launch: "same-slot multi-buys (bots)",
+  fresh: "fresh wallets",
   suspect: "suspect",
   single: "single",
 };
@@ -846,10 +850,12 @@ function extractRuggersSnapshot(data) {
         label: row.label || null,
         in_similar: !!row.in_similar,
         in_multi: !!row.in_multi,
+        in_multi_send: !!row.in_multi_send,
         in_insider: !!row.in_insider,
         in_suspect: !!row.in_suspect,
         in_funding: !!row.in_funding,
         in_launch: !!row.in_launch,
+        in_fresh: !!row.in_fresh,
         exclude_from_single: !!row.exclude_from_single,
       };
     }
@@ -890,10 +896,12 @@ function extractRuggersSnapshot(data) {
       const bundleCat = !!(
         row.in_similar ||
         row.in_multi ||
+        row.in_multi_send ||
         row.in_insider ||
         row.in_suspect ||
         row.in_funding ||
-        row.in_launch
+        row.in_launch ||
+        row.in_fresh
       );
       const belowMin = pct == null || pct < RUGGERS_SINGLE_MIN_PCT;
       row.exclude_from_single = !!(
@@ -1389,9 +1397,11 @@ function primaryLaneFromBaselineFlags(first, uploadedSimilar) {
   }
   if (uploadedSimilar || first.in_similar) return "similar";
   if (first.in_multi) return "multi";
+  if (first.in_multi_send) return "multi_send";
   if (first.in_funding) return "funding";
   if (first.in_insider) return "insider";
   if (first.in_launch) return "launch";
+  if (first.in_fresh) return "fresh";
   if (first.in_suspect) return "suspect";
   if (isRuggersSingleEligible(first, null)) return "single";
   return null;
@@ -1399,7 +1409,8 @@ function primaryLaneFromBaselineFlags(first, uploadedSimilar) {
 
 /**
  * Freeze lane at first discovery on THIS mint.
- * Lanes: creator | similar | multi | funding | insider | launch | suspect | single
+ * Lanes: creator | similar | multi | multi_send | funding | insider | launch |
+ *        fresh | suspect | single
  * Each keeps its label on Swing; sell ≥99% again → back to same lane (like Flagged).
  */
 function resolveRuggersOriginLane(rec, w, first, prev, cur, uploadedSimilar) {
@@ -1487,10 +1498,12 @@ function enrollRuggersBaselineWallet(rec, w, info, now) {
     label: isCreatorLabel ? "creator" : info.label || null,
     in_similar: !!info.in_similar,
     in_multi: !!info.in_multi,
+    in_multi_send: !!info.in_multi_send,
     in_insider: !!info.in_insider,
     in_suspect: !!info.in_suspect,
     in_funding: !!info.in_funding,
     in_launch: !!info.in_launch,
+    in_fresh: !!info.in_fresh,
     exclude_from_single: !!info.exclude_from_single,
     first_seen_at: now,
     enrolled_after_baseline: true,
@@ -1563,10 +1576,12 @@ function processRuggersFromAnalyze(data) {
         label: info.label,
         in_similar: !!info.in_similar,
         in_multi: !!info.in_multi,
+        in_multi_send: !!info.in_multi_send,
         in_insider: !!info.in_insider,
         in_suspect: !!info.in_suspect,
         in_funding: !!info.in_funding,
         in_launch: !!info.in_launch,
+        in_fresh: !!info.in_fresh,
         exclude_from_single: !!info.exclude_from_single,
         first_seen_at: now,
       };
@@ -1672,16 +1687,38 @@ function processRuggersFromAnalyze(data) {
       balance: info.balance,
       in_similar: !!info.in_similar,
       in_multi: !!info.in_multi,
+      in_multi_send: !!info.in_multi_send,
       in_insider: !!info.in_insider,
       in_suspect: !!info.in_suspect,
       in_funding: !!info.in_funding,
       in_launch: !!info.in_launch,
+      in_fresh: !!info.in_fresh,
       exclude_from_single: !!info.exclude_from_single,
     };
-    // Only sticky-promote similar on first_wallets. Do NOT rewrite multi/insider/
-    // suspect/exclude tags after baseline — that was hiding Single sellers.
-    if (rec.first_wallets && rec.first_wallets[w] && info.in_similar) {
-      rec.first_wallets[w].in_similar = true;
+    // Sticky-promote category tags on first_wallets (identity kept).
+    // Do NOT clear them later — that was hiding Single / mis-routing lanes.
+    if (rec.first_wallets && rec.first_wallets[w]) {
+      const fw = rec.first_wallets[w];
+      if (info.in_similar) fw.in_similar = true;
+      if (info.in_multi) fw.in_multi = true;
+      if (info.in_multi_send) fw.in_multi_send = true;
+      if (info.in_funding) fw.in_funding = true;
+      if (info.in_insider) fw.in_insider = true;
+      if (info.in_launch) fw.in_launch = true;
+      if (info.in_fresh) fw.in_fresh = true;
+      if (info.in_suspect) fw.in_suspect = true;
+      if (
+        info.in_similar ||
+        info.in_multi ||
+        info.in_multi_send ||
+        info.in_funding ||
+        info.in_insider ||
+        info.in_launch ||
+        info.in_fresh ||
+        info.in_suspect
+      ) {
+        fw.exclude_from_single = true;
+      }
     }
   }
 
@@ -1743,10 +1780,12 @@ function processRuggersFromAnalyze(data) {
           label: info.label || null,
           in_similar: !!info.in_similar,
           in_multi: !!info.in_multi,
+          in_multi_send: !!info.in_multi_send,
           in_insider: !!info.in_insider,
           in_suspect: !!info.in_suspect,
           in_funding: !!info.in_funding,
           in_launch: !!info.in_launch,
+          in_fresh: !!info.in_fresh,
           exclude_from_single: !!info.exclude_from_single,
         },
         now
@@ -2306,13 +2345,52 @@ function processRuggersFromAnalyze(data) {
       first_seen_at: firstSeenAt,
       sold_at: soldAt,
       swing_at: swingAt,
-      in_multi: !!(first.in_multi || prev.in_multi || (cur && cur.in_multi)),
-      in_insider: !!(first.in_insider || prev.in_insider || (cur && cur.in_insider)),
-      in_suspect: !!(first.in_suspect || prev.in_suspect || (cur && cur.in_suspect)),
-      in_funding: !!(first.in_funding || prev.in_funding || (cur && cur.in_funding)),
-      in_launch: !!(first.in_launch || prev.in_launch || (cur && cur.in_launch)),
+      in_multi: !!(
+        originLane === "multi" ||
+        first.in_multi ||
+        prev.in_multi ||
+        (cur && cur.in_multi)
+      ),
+      in_multi_send: !!(
+        originLane === "multi_send" ||
+        first.in_multi_send ||
+        prev.in_multi_send ||
+        (cur && cur.in_multi_send)
+      ),
+      in_insider: !!(
+        originLane === "insider" ||
+        first.in_insider ||
+        prev.in_insider ||
+        (cur && cur.in_insider)
+      ),
+      in_suspect: !!(
+        originLane === "suspect" ||
+        first.in_suspect ||
+        prev.in_suspect ||
+        (cur && cur.in_suspect)
+      ),
+      in_funding: !!(
+        originLane === "funding" ||
+        first.in_funding ||
+        prev.in_funding ||
+        (cur && cur.in_funding)
+      ),
+      in_launch: !!(
+        originLane === "launch" ||
+        first.in_launch ||
+        prev.in_launch ||
+        (cur && cur.in_launch)
+      ),
+      in_fresh: !!(
+        originLane === "fresh" ||
+        first.in_fresh ||
+        prev.in_fresh ||
+        (cur && cur.in_fresh)
+      ),
       exclude_from_single: !!(
         originLane === "excluded" ||
+        originLane === "fresh" ||
+        originLane === "multi_send" ||
         first.exclude_from_single ||
         prev.exclude_from_single ||
         (cur && cur.exclude_from_single)
@@ -2754,9 +2832,11 @@ function markRuggersUploadedAsFlagged(exportKey, rows) {
     "creator",
     "similar",
     "multi",
+    "multi_send",
     "funding",
     "insider",
     "launch",
+    "fresh",
     "suspect",
     "single",
   ]);
@@ -2891,9 +2971,11 @@ function ruggersBuckets(rec) {
   const creatorSold = [];
   const similarSellers = [];
   const multiSellers = [];
+  const multiSendSellers = [];
   const fundingSellers = [];
   const insiderSellers = [];
   const launchSellers = [];
+  const freshSellers = [];
   const suspectSellers = [];
   const singleSellers = [];
   const flaggedWallets = [];
@@ -2901,9 +2983,11 @@ function ruggersBuckets(rec) {
   const flaggedSeen = new Set();
   const similarSeen = new Set();
   const multiSeen = new Set();
+  const multiSendSeen = new Set();
   const fundingSeen = new Set();
   const insiderSeen = new Set();
   const launchSeen = new Set();
+  const freshSeen = new Set();
   const suspectSeen = new Set();
   const singleSeen = new Set();
   const swingSeen = new Set();
@@ -2911,9 +2995,11 @@ function ruggersBuckets(rec) {
     creatorSold,
     similarSellers,
     multiSellers,
+    multiSendSellers,
     fundingSellers,
     insiderSellers,
     launchSellers,
+    freshSellers,
     suspectSellers,
     singleSellers,
     flaggedWallets,
@@ -2966,9 +3052,11 @@ function ruggersBuckets(rec) {
     }
     if (fw && fw.in_similar) return "similar";
     if (fw && fw.in_multi) return "multi";
+    if (fw && fw.in_multi_send) return "multi_send";
     if (fw && fw.in_funding) return "funding";
     if (fw && fw.in_insider) return "insider";
     if (fw && fw.in_launch) return "launch";
+    if (fw && fw.in_fresh) return "fresh";
     if (fw && fw.in_suspect) return "suspect";
     return "single";
   }
@@ -3194,6 +3282,15 @@ function ruggersBuckets(rec) {
       pushLaneSeller("multi", { ...row, in_multi: true }, multiSeen, multiSellers);
       continue;
     }
+    if (lane === "multi_send") {
+      pushLaneSeller(
+        "multi_send",
+        { ...row, in_multi_send: true },
+        multiSendSeen,
+        multiSendSellers
+      );
+      continue;
+    }
     if (lane === "funding") {
       pushLaneSeller(
         "funding",
@@ -3219,6 +3316,15 @@ function ruggersBuckets(rec) {
         { ...row, in_launch: true },
         launchSeen,
         launchSellers
+      );
+      continue;
+    }
+    if (lane === "fresh") {
+      pushLaneSeller(
+        "fresh",
+        { ...row, in_fresh: true },
+        freshSeen,
+        freshSellers
       );
       continue;
     }
@@ -3340,9 +3446,11 @@ function ruggersBuckets(rec) {
       is_flagged: false,
       in_similar: lane === "similar",
       in_multi: lane === "multi" || !!meta.in_multi,
+      in_multi_send: lane === "multi_send" || !!meta.in_multi_send,
       in_funding: lane === "funding" || !!meta.in_funding,
       in_insider: lane === "insider" || !!meta.in_insider,
       in_launch: lane === "launch" || !!meta.in_launch,
+      in_fresh: lane === "fresh" || !!meta.in_fresh,
       in_suspect: lane === "suspect" || !!meta.in_suspect,
       origin_lane: lane,
       lane_label: RUGGERS_LANE_LABEL[lane] || lane,
@@ -3403,12 +3511,16 @@ function ruggersBuckets(rec) {
       pushLaneSeller("similar", row, similarSeen, similarSellers);
     } else if (lane === "multi") {
       pushLaneSeller("multi", row, multiSeen, multiSellers);
+    } else if (lane === "multi_send") {
+      pushLaneSeller("multi_send", row, multiSendSeen, multiSendSellers);
     } else if (lane === "funding") {
       pushLaneSeller("funding", row, fundingSeen, fundingSellers);
     } else if (lane === "insider") {
       pushLaneSeller("insider", row, insiderSeen, insiderSellers);
     } else if (lane === "launch") {
       pushLaneSeller("launch", row, launchSeen, launchSellers);
+    } else if (lane === "fresh") {
+      pushLaneSeller("fresh", row, freshSeen, freshSellers);
     } else if (lane === "suspect") {
       pushLaneSeller("suspect", row, suspectSeen, suspectSellers);
     } else if (lane === "single" && !flaggedSeen.has(w)) {
@@ -3434,9 +3546,11 @@ function ruggersBuckets(rec) {
   creatorSold.sort(bySold);
   similarSellers.sort(bySold);
   multiSellers.sort(bySold);
+  multiSendSellers.sort(bySold);
   fundingSellers.sort(bySold);
   insiderSellers.sort(bySold);
   launchSellers.sort(bySold);
+  freshSellers.sort(bySold);
   suspectSellers.sort(bySold);
   singleSellers.sort(bySold);
   flaggedWallets.sort(bySold);
@@ -3445,9 +3559,11 @@ function ruggersBuckets(rec) {
     creatorSold,
     similarSellers,
     multiSellers,
+    multiSendSellers,
     fundingSellers,
     insiderSellers,
     launchSellers,
+    freshSellers,
     suspectSellers,
     singleSellers,
     flaggedWallets,
@@ -3552,6 +3668,20 @@ function fmtSupplyPct(n) {
   return v.toFixed(4).replace(/\.?0+$/, "") + "%";
 }
 
+/** Color a supply % with Holders priority bands (low/med/high/critical). */
+function rugColoredPct(n, formatted) {
+  const label =
+    formatted != null
+      ? String(formatted)
+      : fmtSupplyPct(n) || fmtRugPct(n);
+  if (!label || label === "—") return "—";
+  const x = Number(n);
+  const cls = Number.isFinite(x) ? pctPriorityClass(x) : "";
+  return cls
+    ? '<span class="' + cls + '">' + escHtml(label) + "</span>"
+    : escHtml(label);
+}
+
 function renderRuggersWalletRow(row) {
   const w = row.wallet || "";
   const isFlagged = !!row.is_flagged || row.tag === "flagged";
@@ -3576,29 +3706,36 @@ function renderRuggersWalletRow(row) {
           ? row.current_pct
           : null;
 
-  let headline;
+  // Headline + first/now with colored supply % (same bands as Holders/Bundles)
+  let headlineHtml;
   if (isSwing) {
-    // Always "holds" — never "bought back"
     const hh = fmtSupplyPct(holdsNow);
-    headline = hh ? "holds " + hh + " of supply" : "holds (amount n/a)";
+    headlineHtml = hh
+      ? "holds " + rugColoredPct(holdsNow, hh) + " of supply"
+      : "holds (amount n/a)";
   } else {
     const ss = fmtSupplyPct(soldSupply);
-    headline = ss
-      ? "sold " + ss + " of supply"
+    headlineHtml = ss
+      ? "sold " + rugColoredPct(soldSupply, ss) + " of supply"
       : isFlagged && row.tag === "flagged"
         ? "on RugWatch list"
         : "sold (supply % n/a)";
   }
 
-  const first = "first " + fmtRugPct(row.first_pct);
+  const firstHtml =
+    "first " + rugColoredPct(row.first_pct, fmtRugPct(row.first_pct));
   // For swing, "now" is redundant with "holds" — skip or keep brief
-  const now = isSwing
-    ? null
-    : row.listed
-      ? "now " + fmtRugPct(row.current_pct)
-      : row.tag === "flagged" && row.listed == null
-        ? "watchlist"
-        : "now not listed";
+  let nowHtml = null;
+  if (!isSwing) {
+    if (row.listed) {
+      nowHtml =
+        "now " + rugColoredPct(row.current_pct, fmtRugPct(row.current_pct));
+    } else if (row.tag === "flagged" && row.listed == null) {
+      nowHtml = "watchlist";
+    } else {
+      nowHtml = "now not listed";
+    }
+  }
   const reason = isSwing
     ? isFlagged
       ? "still flagged · holding"
@@ -3641,7 +3778,7 @@ function renderRuggersWalletRow(row) {
     tagCls = "rug-tag-swing rug-tag-creator";
     tagLabel = "creator · swing";
   } else if (isSwing && laneName) {
-    // Keep category label on Swing (multi · swing, insider · swing, …)
+    // Keep category label on Swing (multi · swing, fresh wallets · swing, …)
     tagCls = "rug-tag-swing";
     tagLabel = laneName + " · swing";
   } else if (isSwing) {
@@ -3718,7 +3855,7 @@ function renderRuggersWalletRow(row) {
     '<span class="rug-tag ' +
     tagCls +
     '">' +
-    tagLabel +
+    escHtml(tagLabel) +
     "</span> " +
     '<a class="wallet-link" href="https://solscan.io/account/' +
     encodeURIComponent(w) +
@@ -3727,10 +3864,10 @@ function renderRuggersWalletRow(row) {
     "</a>" +
     "</div>" +
     '<div class="rug-wallet-meta">' +
-    escHtml(headline) +
+    headlineHtml +
     " · " +
-    escHtml(first) +
-    (now ? " → " + escHtml(now) : "") +
+    firstHtml +
+    (nowHtml ? " → " + nowHtml : "") +
     (lane ? " · lane " + escHtml(lane) : "") +
     (reason ? " · " + escHtml(reason) : "") +
     escHtml(tsLine) +
@@ -3939,6 +4076,9 @@ function renderRuggersSection(title, hint, rows, exportKey, opts) {
         (isSwingSection || supplyMode === "bought"
           ? "rug-supply-bought"
           : "rug-supply-sold") +
+        (pctPriorityClass(Number(supplyTot))
+          ? " " + pctPriorityClass(Number(supplyTot))
+          : "") +
         '" title="' +
         escHtml(supplyTitle) +
         '">' +
@@ -4030,9 +4170,11 @@ function ruggersRowsForExportKey(key) {
   if (key === "creator") rows = b.creatorSold || [];
   else if (key === "similar") rows = b.similarSellers || [];
   else if (key === "multi") rows = b.multiSellers || [];
+  else if (key === "multi_send") rows = b.multiSendSellers || [];
   else if (key === "funding") rows = b.fundingSellers || [];
   else if (key === "insider") rows = b.insiderSellers || [];
   else if (key === "launch") rows = b.launchSellers || [];
+  else if (key === "fresh") rows = b.freshSellers || [];
   else if (key === "suspect") rows = b.suspectSellers || [];
   else if (key === "single") rows = b.singleSellers || [];
   return filterOutRuggersLpRows(rows);
@@ -4051,9 +4193,11 @@ function ruggersExportLabel(key) {
   if (key === "creator") return "creator_sellers";
   if (key === "similar") return "similar_sellers";
   if (key === "multi") return "multi_account_sellers";
+  if (key === "multi_send") return "multi_send_sellers";
   if (key === "funding") return "shared_funder_sellers";
   if (key === "insider") return "insider_sellers";
   if (key === "launch") return "launch_window_sellers";
+  if (key === "fresh") return "fresh_wallet_sellers";
   if (key === "suspect") return "suspect_sellers";
   if (key === "single") return "single_sellers";
   return String(key || "sellers");
@@ -4602,6 +4746,14 @@ function refreshRuggersPanel(focusKey) {
     "multi"
   );
   html += renderRuggersSection(
+    "Multi-send (one → many)",
+    "Token or SOL multi-send wallets (one sender distributed to many receivers) at first lookup — " +
+      "not multi-account clusters. Same identity rules as other lanes: first bag, sold % of supply, " +
+      "seen/sold/swing times, sticky sell ↔ Swing loop, Export + Upload.",
+    buckets.multiSendSellers || [],
+    "multi_send"
+  );
+  html += renderRuggersSection(
     "Shared SOL funder clusters (1-Owner)",
     "Wallets that shared a common SOL funder (1-hop) at first lookup. " +
       "Sell ≥99% → stay here · buy-back → Swing (shared funder label kept) · " +
@@ -4637,6 +4789,15 @@ function refreshRuggersPanel(focusKey) {
     }
   );
   html += renderRuggersSection(
+    "Fresh wallets",
+    "Holders whose bag is almost only this mint (sole / near-sole token) at first lookup. " +
+      "Same identity parameters as other Ruggers lanes: first bag %, sold % of supply, " +
+      "holds % on Swing, seen/sold/swing times, sticky sell ↔ Swing loop (label “fresh wallets”), " +
+      "Export + Upload. Not multi-account and not multi-send.",
+    buckets.freshSellers || [],
+    "fresh"
+  );
+  html += renderRuggersSection(
     "Suspect wallets",
     "Bundles suspect-union wallets (not already in a more specific lane above). " +
       "Sell ≥99% → stay here · buy-back → Swing (suspect label kept) · " +
@@ -4646,7 +4807,7 @@ function refreshRuggersPanel(focusKey) {
   );
   html += renderRuggersSection(
     "Single wallets (sellers)",
-    "Plain top holders ≥0.01% (not multi / funder / insider / launch / suspect / similar). " +
+    "Plain top holders ≥0.01% (not multi / multi-send / funder / insider / launch / fresh / suspect / similar). " +
       "Sell ≥99% → stay here · buy-back → Swing · sell again → back here. Export + Upload.",
     buckets.singleSellers,
     "single"
@@ -4697,9 +4858,11 @@ function refreshRuggersPanel(focusKey) {
     buckets.creatorSold.length +
     buckets.similarSellers.length +
     (buckets.multiSellers || []).length +
+    (buckets.multiSendSellers || []).length +
     (buckets.fundingSellers || []).length +
     (buckets.insiderSellers || []).length +
     (buckets.launchSellers || []).length +
+    (buckets.freshSellers || []).length +
     (buckets.suspectSellers || []).length +
     buckets.singleSellers.length;
   const nFlag = (buckets.flaggedWallets || []).length;
@@ -6156,7 +6319,7 @@ function renderBundlesUi(data) {
   if (fresh.length) {
     html +=
       '<section class="bun-section"><div class="bun-section-head">' +
-      '<span class="bun-section-title">Fresh / sole-token wallets</span>' +
+      '<span class="bun-section-title">Fresh wallets</span>' +
       '<span class="bun-section-total">total ' +
       bunPctHtml(s.fresh_total_pct) +
       " · " +
@@ -6187,7 +6350,7 @@ function renderBundlesUi(data) {
     html += "</div></section>";
   } else {
     html += bunEmptySection(
-      "Fresh / sole-token wallets",
+      "Fresh wallets",
       "None found — wallets holding almost only this mint (needs Helius + full Analyze)."
     );
   }
