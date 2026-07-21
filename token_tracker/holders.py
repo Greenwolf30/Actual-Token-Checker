@@ -226,6 +226,112 @@ def fetch_dex_pool_accounts(mint: str | None) -> dict[str, str]:
     return out
 
 
+def _lp_label_rank(lab: str | None) -> int:
+    """Higher = more specific / preferred (Meteora must not lose to Pump)."""
+    low = (lab or "").lower()
+    if not low:
+        return 0
+    if "meteora" in low:
+        return 100
+    if "raydium" in low:
+        return 90
+    if "orca" in low or "whirlpool" in low:
+        return 90
+    if "pumpswap" in low:
+        return 70
+    if "pump.fun" in low or "bonding curve" in low or low.startswith("pump"):
+        return 60
+    if "liquidity pair" in low:
+        return 40
+    if "pool (liquidity)" in low or "liquidity" in low:
+        return 50
+    return 20
+
+
+def _merge_pool_label(pool_map: dict[str, str], addr: str, lab: str) -> None:
+    """Set pool_map[addr]=lab unless existing label ranks higher (e.g. Meteora)."""
+    a = (addr or "").strip()
+    lab = (lab or "").strip()
+    if not a or not lab:
+        return
+    prev = pool_map.get(a)
+    if not prev or _lp_label_rank(lab) >= _lp_label_rank(prev):
+        pool_map[a] = lab
+
+
+def _expand_pool_token_accounts(
+    mint: str, pool_map: dict[str, str]
+) -> dict[str, str]:
+    """
+    For each known pool owner, resolve token accounts for this mint
+    (getTokenAccountsByOwner) so Top Holders rows match even when the listed
+    address is the pool's token account rather than the pair id.
+    """
+    m = (mint or "").strip()
+    if not m or not pool_map:
+        return {}
+    extra: dict[str, str] = {}
+    # Prefer Helius when available
+    urls: list[str] = []
+    try:
+        key = helius_api_key()
+        if key:
+            urls.append(f"https://mainnet.helius-rpc.com/?api-key={key}")
+    except Exception:  # noqa: BLE001
+        pass
+    for u in _rpc_endpoints():
+        if u and u not in urls:
+            urls.append(u)
+    if not urls:
+        return {}
+
+    def _rpc_one(url: str, method: str, params: list[Any]) -> Any:
+        body = json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={**DEFAULT_HEADERS, "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=6.0, context=_ssl_context()) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+        if isinstance(data, dict) and data.get("error"):
+            raise RuntimeError(str(data.get("error")))
+        return (data or {}).get("result")
+
+    # Only expand Meteora (and Raydium) pool owners — where Top Holders often
+    # show a token account, not the pair id. Keep fanout tiny for latency.
+    owners = [
+        (o, lab)
+        for o, lab in pool_map.items()
+        if any(k in (lab or "").lower() for k in ("meteora", "raydium"))
+    ][:6]
+    url = urls[0]
+    for owner, lab in owners:
+        try:
+            result = _rpc_one(
+                url,
+                "getTokenAccountsByOwner",
+                [
+                    owner,
+                    {"mint": m},
+                    {"encoding": "jsonParsed"},
+                ],
+            )
+            vals = (result or {}).get("value") or []
+            for v in vals if isinstance(vals, list) else []:
+                if not isinstance(v, dict):
+                    continue
+                pubkey = (v.get("pubkey") or "").strip()
+                if pubkey and len(pubkey) >= 32:
+                    _merge_pool_label(extra, pubkey, lab)
+        except Exception:  # noqa: BLE001
+            continue
+    return extra
+
+
 def apply_known_lp_tags(
     holders: list[dict[str, Any]],
     *,
@@ -238,8 +344,9 @@ def apply_known_lp_tags(
     Sources:
       - hardcoded program map
       - primary pair_address
-      - ALL DexScreener pair addresses for the mint (Meteora, Raydium, …)
+      - ALL DexScreener / Gecko pair addresses (Meteora, Raydium, …)
       - per-mint Pump.fun curve/pool PDAs
+      - token accounts owned by those pools (so Top Holders match)
       - label heuristics
     Mutates rows in place; returns the same list for chaining.
     """
@@ -247,20 +354,33 @@ def apply_known_lp_tags(
     m = (mint or "").strip()
     if m:
         try:
-            pool_map.update(fetch_dex_pool_accounts(m) or {})
+            for addr, lab in (fetch_dex_pool_accounts(m) or {}).items():
+                _merge_pool_label(pool_map, addr, lab)
         except Exception:  # noqa: BLE001
             pass
         try:
             from .pumpfun import fetch_pump_lp_accounts, is_pump_mint
 
             if is_pump_mint(m):
-                pool_map.update(fetch_pump_lp_accounts(m) or {})
+                for addr, lab in (fetch_pump_lp_accounts(m) or {}).items():
+                    # Never overwrite a stronger Meteora/Raydium label with Pump
+                    _merge_pool_label(pool_map, addr, lab)
+        except Exception:  # noqa: BLE001
+            pass
+        # Expand pool → token accounts for this mint (Top Holders matching)
+        try:
+            for addr, lab in (_expand_pool_token_accounts(m, pool_map) or {}).items():
+                _merge_pool_label(pool_map, addr, lab)
         except Exception:  # noqa: BLE001
             pass
 
     pair = (pair_address or "").strip()
-    if pair and pair not in pool_map:
-        pool_map[pair] = "Liquidity pair"
+    if pair:
+        # Primary pair: only fill if unknown; don't demote Meteora → Liquidity pair
+        if pair not in pool_map:
+            # Infer label from dex map if we know this pair elsewhere
+            pool_map[pair] = "Liquidity pair"
+        # If primary pair was only "Liquidity pair" but dex map has better, keep better
 
     # Lowercase map for case-insensitive address match
     pool_map_l = {k.lower(): (k, v) for k, v in pool_map.items() if k}
@@ -274,7 +394,23 @@ def apply_known_lp_tags(
             "known liquidity / program",
         }:
             h["label"] = plab
-        elif plab.lower() not in cur.lower():
+            return
+        # Prefer higher-ranked label (Meteora > Pump)
+        if _lp_label_rank(plab) > _lp_label_rank(cur):
+            h["label"] = plab
+            return
+        if _lp_label_rank(plab) == _lp_label_rank(cur) and plab.lower() not in cur.lower():
+            # same rank, keep first (cleaner single label for pools)
+            if "meteora" in plab.lower() or "meteora" in cur.lower():
+                h["label"] = plab if "meteora" in plab.lower() else cur
+            return
+        # Do not append Pump onto an existing Meteora label
+        if "meteora" in cur.lower() and "pump" in plab.lower():
+            return
+        if plab.lower() not in cur.lower() and _lp_label_rank(plab) >= 50:
+            # optional second tag only for non-conflicting high-rank
+            if "pump" in plab.lower() and "meteora" in cur.lower():
+                return
             h["label"] = cur + " · " + plab
 
     for h in holders:
@@ -286,8 +422,12 @@ def apply_known_lp_tags(
             continue
         if w in _KNOWN_OWNERS:
             h["is_known_program"] = True
-            h["label"] = h.get("label") or _KNOWN_OWNERS[w]
+            # Program id alone is weak — pool stamp below can override for real pools
+            if not h.get("label"):
+                h["label"] = _KNOWN_OWNERS[w]
         # Match wallet or token account to known pool / pair addresses
+        best_hit: str | None = None
+        best_rank = -1
         for addr in (w, ata):
             if not addr:
                 continue
@@ -296,8 +436,11 @@ def apply_known_lp_tags(
                 if addr.lower() in pool_map_l
                 else None
             )
-            if hit:
-                _stamp_pool(h, hit)
+            if hit and _lp_label_rank(hit) > best_rank:
+                best_hit = hit
+                best_rank = _lp_label_rank(hit)
+        if best_hit:
+            _stamp_pool(h, best_hit)
         if is_known_lp_or_program(
             w,
             label=h.get("label"),
