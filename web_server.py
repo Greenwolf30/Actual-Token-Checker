@@ -651,6 +651,10 @@ def _ruggers_track_snapshot(
                 if not addr or addr in seen_f:
                     continue
                 seen_f.add(addr)
+                fm = w.get("flagged_from_mint")
+                if not fm:
+                    fms = list(w.get("flagged_from_mints") or [])
+                    fm = fms[0] if fms else None
                 flagged_addresses.append(
                     {
                         "wallet": addr,
@@ -658,10 +662,12 @@ def _ruggers_track_snapshot(
                         "label": w.get("label") or w.get("role"),
                         "origin": w.get("origin") or w.get("tag") or w.get("location"),
                         "notes": w.get("notes"),
-                        "flagged_from_mints": list(
-                            w.get("flagged_from_mints") or []
+                        "times_flagged": int(
+                            w.get("times_flagged") or w.get("times_seen") or 0
                         ),
-                        "flagged_from_mint": w.get("flagged_from_mint"),
+                        "mint_flag_count": int(w.get("mint_flag_count") or 0),
+                        "flagged_from_mints": [fm] if fm else [],
+                        "flagged_from_mint": fm,
                         "on_this_mint": bool(
                             w.get("on_this_mint") or group_key == "linked_to_mint"
                         ),
@@ -690,6 +696,10 @@ def _ruggers_track_snapshot(
                 if not w:
                     continue
                 seen_f.add(addr)
+                fm = w.get("flagged_from_mint")
+                if not fm:
+                    fms = list(w.get("flagged_from_mints") or [])
+                    fm = fms[0] if fms else None
                 flagged_addresses.append(
                     {
                         "wallet": addr,
@@ -697,10 +707,12 @@ def _ruggers_track_snapshot(
                         "label": w.get("label") or w.get("role"),
                         "origin": w.get("origin") or w.get("tag") or w.get("location"),
                         "notes": w.get("notes"),
-                        "flagged_from_mints": list(
-                            w.get("flagged_from_mints") or []
+                        "times_flagged": int(
+                            w.get("times_flagged") or w.get("times_seen") or 0
                         ),
-                        "flagged_from_mint": w.get("flagged_from_mint"),
+                        "mint_flag_count": int(w.get("mint_flag_count") or 0),
+                        "flagged_from_mints": [fm] if fm else [],
+                        "flagged_from_mint": fm,
                         "on_this_mint": bool(w.get("on_this_mint")),
                         "in_top_holders": True,
                     }

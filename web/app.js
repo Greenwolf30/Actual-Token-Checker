@@ -924,11 +924,27 @@ function extractRuggersSnapshot(data) {
       // Only the first mint ever — ignore extra mints from notes / API lists
       const notes = String(f.notes || "");
       const initial = pickInitialFlaggedFromMint(f, { notes });
+      let timesFlagged = 0;
+      try {
+        timesFlagged = Number(
+          f.times_flagged != null ? f.times_flagged : f.times_seen || 0
+        );
+      } catch (_) {
+        timesFlagged = 0;
+      }
+      let mintFlagCount = 0;
+      try {
+        mintFlagCount = Number(f.mint_flag_count || 0);
+      } catch (_) {
+        mintFlagCount = 0;
+      }
       flagged_known[fw] = {
         risk_score: f.risk_score != null ? Number(f.risk_score) : null,
         label: f.label || null,
         origin: f.origin || null,
         notes: notes || null,
+        times_flagged: timesFlagged,
+        mint_flag_count: mintFlagCount,
         flagged_from_mint: initial || null,
         flagged_from_mints: initial ? [initial] : [],
         on_this_mint: !!f.on_this_mint,
@@ -2445,9 +2461,10 @@ function markRuggersUploadedAsFlagged(exportKey, rows) {
     rec.ruggers_uploaded = {};
   }
   const now = new Date().toISOString();
-  const fromSimilar = exportKey === "similar";
-  // Lane sections keep their category after Upload (like Similar). Creator → Flagged.
+  // All lane Uploads stay in their section on THIS mint (never move Creator → Flagged).
+  // Creator / Similar / Single / multi / … remain in place; cloud still gets the wallets.
   const keepOriginLane = new Set([
+    "creator",
     "similar",
     "multi",
     "funding",
@@ -2466,11 +2483,14 @@ function markRuggersUploadedAsFlagged(exportKey, rows) {
       origin: "uploaded",
       last_seen: now,
       uploaded_section: exportKey || "unknown",
+      // Initial mint identity for this flag upload (ticker resolved in UI from store)
+      flagged_from_mint: rec.address || null,
+      flagged_from_mints: rec.address ? [rec.address] : [],
     };
     const st = (rec.status && rec.status[w]) || row;
     const tag = st.tag || row.tag;
 
-    if (fromSimilar) {
+    if (exportKey === "similar") {
       // Permanent Similar pin on this mint — never Flagged here, ever
       pinUploadedSimilarOnMint(rec, w, {
         uploaded_at: now,
@@ -2482,14 +2502,22 @@ function markRuggersUploadedAsFlagged(exportKey, rows) {
     }
 
     if (keepOriginLane.has(exportKey)) {
-      // Stay under multi / funder / insider / launch / suspect / single on this mint
+      // Stay under Creator / multi / funder / insider / launch / suspect / single
       if (rec.status && rec.status[w]) {
         rec.status[w].origin_lane = exportKey;
         rec.status[w].ruggers_uploaded = true;
         rec.status[w].is_flagged = false;
+        if (exportKey === "creator") {
+          rec.status[w].is_creator = true;
+          rec.status[w].origin_lane = "creator";
+        }
       }
       if (rec.first_wallets && rec.first_wallets[w]) {
         rec.first_wallets[w].origin_lane = exportKey;
+        if (exportKey === "creator") {
+          rec.first_wallets[w].label = "creator";
+          rec.first_wallets[w].origin_lane = "creator";
+        }
       }
       // Ensure sticky pin so section stays populated after refresh
       if (!rec.sticky_lane_sellers || typeof rec.sticky_lane_sellers !== "object") {
@@ -2498,7 +2526,7 @@ function markRuggersUploadedAsFlagged(exportKey, rows) {
       if (tag === "seller" || row.sold_pct != null || row.ever_sold) {
         rec.sticky_lane_sellers[w] = {
           ...(rec.sticky_lane_sellers[w] || {}),
-          origin_lane: exportKey,
+          origin_lane: exportKey === "creator" ? "creator" : exportKey,
           entered_at: (rec.sticky_lane_sellers[w] && rec.sticky_lane_sellers[w].entered_at) || now,
           last_update: now,
           sold_pct: st.sold_pct != null ? st.sold_pct : row.sold_pct,
@@ -2510,30 +2538,14 @@ function markRuggersUploadedAsFlagged(exportKey, rows) {
           indefinite: true,
         };
       }
+      // Never put uploaded Creator into Flagged on this mint
+      if (exportKey === "creator" && rec.flagged_sellers && rec.flagged_sellers[w]) {
+        delete rec.flagged_sellers[w];
+      }
       continue;
     }
-
-    // Creator upload → Flagged on this mint
-    if (tag === "seller" || tag === "swing" || row.sold_pct != null) {
-      if (tag !== "swing") {
-        rec.flagged_sellers[w] = {
-          ...(rec.flagged_sellers[w] || {}),
-          entered_at: (rec.flagged_sellers[w] && rec.flagged_sellers[w].entered_at) || now,
-          last_update: now,
-          sold_pct: st.sold_pct != null ? st.sold_pct : row.sold_pct,
-          first_pct: st.first_pct != null ? st.first_pct : row.first_pct,
-          reason: st.reason || row.reason || "sold_99",
-          origin: "uploaded",
-          entered_via: "sold_while_flagged",
-          rules_v: RUGGERS_RULES_VERSION,
-        };
-        if (rec.status && rec.status[w]) {
-          rec.status[w].is_flagged = true;
-        }
-      }
-    }
   }
-  rec.flagged_known = { ...rec.flagged_sellers };
+  // Do not rebuild flagged_known from flagged_sellers only (would wipe RugWatch hits)
   store[_lastRuggersKey] = rec;
   saveRuggersStore(store);
 }
@@ -2697,6 +2709,14 @@ function ruggersBuckets(rec) {
             !!(row.ever_flagged_on_mint || flaggedSwing || row.is_flagged),
           flagged_from_mint: metaF.flagged_from_mint || null,
           flagged_from_mints: metaF.flagged_from_mints || [],
+          times_flagged:
+            metaF.times_flagged != null
+              ? metaF.times_flagged
+              : (rwKnown[w] && rwKnown[w].times_flagged) || 0,
+          mint_flag_count:
+            metaF.mint_flag_count != null
+              ? metaF.mint_flag_count
+              : (rwKnown[w] && rwKnown[w].mint_flag_count) || 0,
           flagged_meta: metaF,
         });
       }
@@ -2736,6 +2756,14 @@ function ruggersBuckets(rec) {
           label: metaF.label || st.label,
           flagged_from_mint: metaF.flagged_from_mint || null,
           flagged_from_mints: metaF.flagged_from_mints || [],
+          times_flagged:
+            metaF.times_flagged != null
+              ? metaF.times_flagged
+              : (rwKnown[w] && rwKnown[w].times_flagged) || 0,
+          mint_flag_count:
+            metaF.mint_flag_count != null
+              ? metaF.mint_flag_count
+              : (rwKnown[w] && rwKnown[w].mint_flag_count) || 0,
         });
       }
       continue;
@@ -2842,6 +2870,21 @@ function ruggersBuckets(rec) {
       label: meta.label,
       flagged_from_mint: sealed.flagged_from_mint || null,
       flagged_from_mints: sealed.flagged_from_mints || [],
+      times_flagged:
+        sealed.times_flagged != null
+          ? sealed.times_flagged
+          : meta.times_flagged != null
+            ? meta.times_flagged
+            : (rec.rugwatch_known &&
+                rec.rugwatch_known[fw] &&
+                rec.rugwatch_known[fw].times_flagged) ||
+              0,
+      mint_flag_count:
+        sealed.mint_flag_count != null
+          ? sealed.mint_flag_count
+          : meta.mint_flag_count != null
+            ? meta.mint_flag_count
+            : 0,
       first_seen_at: meta.entered_at || st.first_seen_at,
       sold_at: meta.entered_at || st.sold_at,
       last_update: meta.last_update || st.last_update,
@@ -3203,7 +3246,8 @@ function renderRuggersWalletRow(row) {
   if (!tsParts.length && row.flagged_meta && row.flagged_meta.entered_at) {
     tsParts.push("sold " + shortWhen(row.flagged_meta.entered_at));
   }
-  // Flagged (RugWatch) + flagged · swing: ONLY the first initial mint
+  // Flagged (RugWatch) + flagged · swing: identity = initial mint ticker+address
+  // + how many times this address has been flagged (RugWatch times_flagged)
   let flaggedFromLine = "";
   if (isFlagged || flaggedSwing || row.tag === "flagged" || row.ever_flagged_on_mint) {
     const initial =
@@ -3211,8 +3255,22 @@ function renderRuggersWalletRow(row) {
       String(row.flagged_from_mint || "").trim();
     if (initial) {
       const label = formatFlaggedFromMint(initial);
-      // One mint only — never join multiple
       if (label) flaggedFromLine = " · flagged from " + label;
+    }
+    let times = 0;
+    try {
+      times = Number(
+        row.times_flagged != null
+          ? row.times_flagged
+          : row.flagged_meta && row.flagged_meta.times_flagged != null
+            ? row.flagged_meta.times_flagged
+            : row.times_seen || 0
+      );
+    } catch (_) {
+      times = 0;
+    }
+    if (times > 0) {
+      flaggedFromLine += " · flagged " + times + "×";
     }
   }
   const tsLine =
@@ -3464,6 +3522,11 @@ function buildRuggersExportPayload(exportKey, rows) {
       risk_score: 80,
       notes: notes,
       source: "adtc_ruggers_export",
+      mint: mint || null,
+      symbol: symbol || null,
+      // Initial mint identity for this upload (source mint of the flag)
+      flagged_from_mint: mint || null,
+      flagged_from_mints: mint ? [mint] : [],
     });
   }
   return {

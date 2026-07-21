@@ -159,18 +159,33 @@ def _parse_wallet_items(payload: Any) -> list[dict[str, Any]]:
         fm = (it.get("flagged_from_mint") or "").strip()
         if fm and fm not in from_m:
             from_m.insert(0, fm)
+        initial = from_m[0] if from_m else None
+        try:
+            times_flagged = int(
+                it.get("times_flagged")
+                if it.get("times_flagged") is not None
+                else it.get("times_seen") or 0
+            )
+        except (TypeError, ValueError):
+            times_flagged = 0
+        try:
+            mint_flag_count = int(it.get("mint_flag_count") or 0)
+        except (TypeError, ValueError):
+            mint_flag_count = 0
         out.append(
             {
                 "address": addr,
                 "label": it.get("label") or "cloud",
                 "risk_score": score,
                 "times_seen": int(it.get("times_seen") or 0),
+                "times_flagged": times_flagged,
+                "mint_flag_count": mint_flag_count,
                 "notes": notes,
                 "source": it.get("source") or "cloud",
                 "last_seen_at": it.get("last_seen_at"),
                 "origin": "cloud",
-                "flagged_from_mints": from_m,
-                "flagged_from_mint": from_m[0] if from_m else None,
+                "flagged_from_mints": [initial] if initial else [],
+                "flagged_from_mint": initial,
             }
         )
     return out
@@ -651,17 +666,22 @@ def _wallet_row(
         if m and m not in seen_m:
             seen_m.add(m)
             flagged_from.append(m)
+    times_flagged = int(r.get("times_flagged") or r.get("times_seen") or 0)
+    # Only first mint as identity source
+    initial = flagged_from[0] if flagged_from else None
     return {
         "address": addr,
         "label": r.get("label"),
         "risk_score": int(r.get("risk_score") or 0),
         "times_seen": int(r.get("times_seen") or 0),
+        "times_flagged": times_flagged,
         "notes": r.get("notes"),
         "source": r.get("source"),
         "last_seen_at": r.get("last_seen_at"),
         "role": role,
         "evidence": evidence,
-        "flagged_from_mints": flagged_from,
-        "flagged_from_mint": flagged_from[0] if flagged_from else None,
+        "flagged_from_mints": [initial] if initial else [],
+        "flagged_from_mint": initial,
+        "mint_flag_count": int(r.get("mint_flag_count") or 0),
         "solscan_url": f"https://solscan.io/account/{addr}" if addr else None,
     }
