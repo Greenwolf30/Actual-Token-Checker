@@ -1156,13 +1156,46 @@ a.copy-mint:hover,
 }
 
 /* Token holding amounts (balances) — dim yellow (not bright) */
-/* Bundles section / category titles — green + dim */
+/* All tabs: section titles + subcategories — green + dim */
 .report .bundle-cat-name,
-.logs-col-body .bundle-cat-name {
+.report .section-title-green,
+.logs-col-body .bundle-cat-name,
+.logs-col-body .section-title-green {
   color: #6a9e7a;
   font-weight: 600;
-  opacity: 0.72;
+  opacity: 0.78;
   letter-spacing: 0.02em;
+}
+/* Ruggers HTML section titles */
+.rug-section-title {
+  color: #6a9e7a !important;
+  opacity: 0.88;
+}
+.rug-section-title .rug-count {
+  opacity: 0.75;
+  color: #6a9e7a;
+}
+/* Logs column titles */
+.logs-col-title {
+  color: #6a9e7a !important;
+  opacity: 0.85;
+}
+/* Logs entry headers */
+.logs-entry-head {
+  color: #6a9e7a !important;
+  opacity: 0.9;
+}
+/* Summary bar labels (Price, MC, …) as subcategories */
+.sum-stats .k {
+  color: #6a9e7a !important;
+  opacity: 0.8;
+}
+/* Main report tab buttons — subtle green for inactive titles */
+.tabs .tab {
+  color: #7a9e88;
+}
+.tabs .tab.active {
+  color: #8fbf9a;
 }
 
 .report .hold-amt,

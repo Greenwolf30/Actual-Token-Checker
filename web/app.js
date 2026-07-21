@@ -4136,9 +4136,9 @@ function formatHoldersRichHtml(text) {
   if (!text) return "";
   // Wallet addresses: >5% yellow · >10% red · skip known LP (inline style)
   let html = linkify(text, true);
-  html = colorBundlesCategoryNames(html);
   html = colorWalletHolderPcts(html);
   html = colorHoldingAmounts(html);
+  html = colorAllSectionTitles(html);
   return html;
 }
 
@@ -4162,56 +4162,143 @@ function colorBundlesSelectivePcts(html) {
     .join("\n");
 }
 
-/** Green dim highlight for Bundles / Holders category section titles */
-function colorBundlesCategoryNames(html) {
+/** Strip tags for line classification */
+function plainTextFromHtmlLine(line) {
+  return String(line || "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"');
+}
+
+/**
+ * True for section titles / subcategory headers (not wallet data rows).
+ * Used across Overview, Holders, Bundles, Alerts, About, Maps, Logs, etc.
+ */
+function isSectionTitleOrSubcategoryLine(plain) {
+  const t = String(plain || "").trim();
+  if (!t || t.length < 2) return false;
+
+  // Explicit data / wallet rows — never title
+  if (/^#\d+\b/.test(t)) return false;
+  if (/^\d+\.\s*\[/.test(t)) return false; // alerts "1. [HIGH]"
+  if (/\bholds\s+[\dn]/i.test(t) && !/—\s*total\b/i.test(t)) return false;
+  if (/\bowns\s+[\dn]/i.test(t)) return false;
+  if (/\bscore\s*=/i.test(t)) return false;
+  if (/^https?:\/\//i.test(t)) return false;
+  if (/solscan\.io/i.test(t)) return false;
+  if (/^ATA\s/i.test(t)) return false;
+  if (/^bal\s/i.test(t)) return false;
+  if (/^\.{2,}|^…/.test(t)) return false;
+  if (/^Tags:/i.test(t)) return false;
+  if (/^Tip:/i.test(t)) return false;
+  if (/^Note:\s+/i.test(t) && t.length > 80) return false;
+  // Pure wallet address line
+  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(t)) return false;
+  // Bullet that is only a wallet (+ holds)
+  if (
+    /^[•*·]\s+[1-9A-HJ-NP-Za-km-z]{32,44}\b/.test(t) &&
+    !/\b(funder|slot|wallets|ATAs|accounts)\b/i.test(t)
+  ) {
+    return false;
+  }
+
+  // ── SECTION ──
+  if (/[─\-–—]{2,}.+[─\-–—]{2,}/.test(t) || /FLAGGED WALLETS/i.test(t)) {
+    return true;
+  }
+  // ALL-CAPS block titles (HOLDERS, BUNDLES / …, ABOUT, …)
+  if (
+    t.length >= 3 &&
+    t === t.toUpperCase() &&
+    /[A-Z]/.test(t) &&
+    !/\d\.\d/.test(t) &&
+    !/%/.test(t)
+  ) {
+    return true;
+  }
+  // Subcategory bullets: funder / slot / similar-group / multi-ATA subgroup
+  if (/^[•*·]\s+/.test(t)) {
+    if (/^[•*·]\s+funder\b/i.test(t)) return true;
+    if (/^[•*·]\s+slot\s+\d+/i.test(t)) return true;
+    if (/\bwallets\s*≈/i.test(t) || /\beach\b.*\brange\b/i.test(t)) return true;
+    if (/\bATAs\b/i.test(t) && /\btotal\b/i.test(t)) return true;
+    if (/\baccounts\b/i.test(t) && /\btotal\b/i.test(t)) return true;
+    return false;
+  }
+  // Category headers: "Name — total …" or end with ":" or placeholder
+  if (
+    /—\s*total\b/i.test(t) ||
+    /\sacross\s+\d+\s+wallet/i.test(t) ||
+    /\swill show here if value returns True/i.test(t)
+  ) {
+    return true;
+  }
+  if (t.endsWith(":") && !/https?:/i.test(t)) {
+    // "Signals:" "Flags:" "Creator wallet:" "Top holders …:"
+    return true;
+  }
+  // Key labels "Method:   foo" / "Bundle risk:  high" — whole line as title-ish
+  if (
+    /^[A-Za-z][A-Za-z0-9 /()&+\-]{1,40}:\s+\S/.test(t) &&
+    !/\bholds\b|\bowns\b|score=/i.test(t)
+  ) {
+    return true;
+  }
+  // Standalone section names without trailing colon
+  if (
+    /^(Top holders|Creator wallet|Flags|Signals|Provider status|RugWatch|Still holding|Previously holding|Combined bag|Multi-account|Similar-size|Insider|Shared SOL|Launch-window|Suspect|Public news|X \/ COMMUNITY|LINKS|NARRATIVE|Key hooks|Description sources)/i.test(
+      t
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Color all section titles + subcategory headers green (dim) across tabs.
+ * Works on HTML (after linkify) line-by-line.
+ */
+function colorAllSectionTitles(html) {
   if (!html) return html;
-  // Match section headers (indented titles)
-  const categories = [
-    "Multi-account clusters \\(same wallet → several large ATAs\\)",
-    "Multi-account clusters \\(same wallet, several large ATAs\\)",
-    "Multi-account clusters",
-    "Similar-size wallet groups",
-    "Insider-flagged \\(Rugcheck\\)",
-    "Insider-flagged wallets",
-    "Shared SOL funder clusters \\(1-hop\\)",
-    "Shared SOL funder clusters",
-    "Launch-window same-slot multi-buys",
-    "Suspect wallets \\(union of signals\\)",
-    "Suspect wallets",
-    "Flagged wallets \\(still holding\\)",
-    "Flagged wallets",
-    "── FLAGGED WALLETS \\(RugWatch\\) ──",
-    "Top holders",
-    "Creator wallet",
-    "Signals",
-    "BUNDLES / COORDINATED WALLETS",
-  ];
-  let out = html;
-  for (const cat of categories) {
-    const re = new RegExp(
-      "(^|\\n)([ \\t]*)(" + cat + ")(?=\\s*[—:\\-–]|$)",
-      "gim"
-    );
-    out = out.replace(re, (m, br, sp, name) => {
+  return html
+    .split("\n")
+    .map((line) => {
+      const plain = plainTextFromHtmlLine(line);
+      if (!isSectionTitleOrSubcategoryLine(plain)) return line;
+      // Preserve leading whitespace; wrap the rest
+      const m = line.match(/^([ \t]*)([\s\S]*)$/);
+      if (!m) return line;
+      const indent = m[1] || "";
+      const rest = m[2] || "";
+      if (!rest.trim() || /bundle-cat-name|section-title-green/.test(rest)) {
+        return line;
+      }
       return (
-        br +
-        sp +
-        '<span class="bundle-cat-name">' +
-        name +
+        indent +
+        '<span class="section-title-green bundle-cat-name">' +
+        rest +
         "</span>"
       );
-    });
-  }
-  return out;
+    })
+    .join("\n");
+}
+
+/** @deprecated name — use colorAllSectionTitles */
+function colorBundlesCategoryNames(html) {
+  return colorAllSectionTitles(html);
 }
 
 function formatBundlesRichHtml(text) {
   if (!text) return "";
   // Same address hold colors as Holders/Alerts (>5% yellow · >10% red · skip LP)
   let html = linkify(text, true);
-  html = colorBundlesCategoryNames(html);
   html = colorBundlesSelectivePcts(html);
   html = colorHoldingAmounts(html);
+  html = colorAllSectionTitles(html);
   return html;
 }
 
@@ -4228,12 +4315,15 @@ function setPanelText(tab, text) {
     html = linkify(raw, true);
     html = colorWalletHolderPcts(html);
     html = colorHoldingAmounts(html);
+    html = colorAllSectionTitles(html);
   } else if (tab === "bundles") {
     // Summary + each wallet group % colored; Top10 ex-LP uncolored; bal yellow
     // + wallet address hold colors
     html = formatBundlesRichHtml(raw);
   } else {
+    // Overview, About, Maps, History text, etc.
     html = linkify(raw);
+    html = colorAllSectionTitles(html);
   }
   el.innerHTML = html;
 }
