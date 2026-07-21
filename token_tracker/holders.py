@@ -2276,40 +2276,27 @@ def _format_rugwatch_flagged_section(
         else ""
     )
 
-    skipped_sold = int(stats.get("skipped_sold") or 0)
     still_n = int(
         (rw or {}).get("still_holding_count")
         or stats.get("still_holding_count")
         or with_pct_n
         or 0
     )
-    prev_n = int(
-        (rw or {}).get("previously_holding_count")
-        or stats.get("previously_holding_count")
-        or 0
-    )
-    if prev_n < skipped_sold:
-        prev_n = skipped_sold
     still_line = (
         f"  Still holding: {still_n}"
         if still_n > 0
         else "  Still holding will show here if value returns True"
-    )
-    prev_line = (
-        f"  Previously holding: {prev_n}"
-        if prev_n > 0
-        else "  Previously holding will show here if value returns True"
     )
     combined_line = (
         f"  Combined bag: {total_s}{total_pri_s}"
         if with_pct_n > 0 and total_pct > 0
         else "  Combined flagged bag % will show here if value returns True"
     )
+    # "Previously holding" is not shown on Holders (sold/dumped wallets → Ruggers).
     lines: list[str] = [
         "",
         "── FLAGGED WALLETS (RugWatch) ──",
         still_line,
-        prev_line,
         combined_line,
     ]
     if not rw:
@@ -2355,7 +2342,6 @@ def _format_rugwatch_flagged_section(
     lines.append(
         f"  Flagged wallets (still holding) — total {total_s}{total_pri_s} "
         f"across {len(wallets)} wallet(s)"
-        + (f" · previously holding {prev_n}" if prev_n else "")
         + (f" · {skipped_lp} LP excluded" if skipped_lp else "")
         + ":"
     )

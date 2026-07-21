@@ -172,8 +172,9 @@ Website section markers (dim green):
 
   Total wallets by source when available (Pump.fun / Birdeye / DexScreener /
   Solscan). Top holders with supply % priority colors. Creator, mint/freeze
-  authority when known. RugWatch flagged still-holding / previously-holding
-  when checkbox ON (see §12b).
+  authority when known. RugWatch flagged **still-holding** wallets when
+  checkbox ON (see §12b). Sold/dumped flagged wallets are not listed here
+  (see Ruggers Flagged).
 
 Purpose
   Show who holds the token (top wallets) and how concentrated supply is.
