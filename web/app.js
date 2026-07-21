@@ -3048,7 +3048,7 @@ function renderRuggersWalletRow(row) {
     tagLabel = laneName + " · seller";
   }
   const lane = laneName;
-  // Timestamps for every Ruggers wallet row (ISO → short UTC display)
+  // Timestamps: seen / sold / swing only (no “last”) — see docs §6.3d TIME SLOTS
   const tsParts = [];
   if (row.first_seen_at) {
     tsParts.push("seen " + shortWhen(row.first_seen_at));
@@ -3059,14 +3059,12 @@ function renderRuggersWalletRow(row) {
   if (isSwing && row.swing_at) {
     tsParts.push("swing " + shortWhen(row.swing_at));
   }
-  if (row.last_update) {
-    tsParts.push("last " + shortWhen(row.last_update));
-  } else if (row.entered_at) {
-    tsParts.push("entered " + shortWhen(row.entered_at));
+  // Fallback if nothing else: sticky / flagged entered_at as sold/seen proxy
+  if (!tsParts.length && row.entered_at) {
+    tsParts.push("sold " + shortWhen(row.entered_at));
   }
-  // Fallback: sticky meta / flagged meta entered_at
   if (!tsParts.length && row.flagged_meta && row.flagged_meta.entered_at) {
-    tsParts.push("entered " + shortWhen(row.flagged_meta.entered_at));
+    tsParts.push("sold " + shortWhen(row.flagged_meta.entered_at));
   }
   const tsLine = tsParts.length ? " · " + tsParts.join(" · ") : "";
   return (

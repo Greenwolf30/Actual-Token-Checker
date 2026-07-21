@@ -577,6 +577,10 @@ What people often ask
   - Needs Helius; scan depth is capped (not full mint lifetime).
   - Prefers older collected signatures (launch-oriented window), so recent-
     only activity may be under-represented if outside the scanned set.
+
+  ---------------------------------------------------------------------------
+  See also §6.3d TIME SLOTS for what timestamps mean (on-chain vs Ruggers).
+  ---------------------------------------------------------------------------
   - Buyer extraction is heuristic (fee payer + balance deltas).
   - Strength labels and suspect tagging are risk heuristics, not forensic
     identity.
@@ -584,6 +588,82 @@ What people often ask
   Quick mode
     Full holder/bundle paths (including launch-window enrichment) are reduced
     or skipped; use full Analyze for Launch-window + Ruggers baseline tags.
+
+
+--------------------------------------------------------------------------------
+6.3d TIME SLOTS
+--------------------------------------------------------------------------------
+
+  Two different timestamp systems. Do not mix them up.
+
+  ---------------------------------------------------------------------------
+  A) BUNDLES — same-slot multi-buys (on-chain)
+  ---------------------------------------------------------------------------
+  What the number next to “slot” is
+    - The Solana slot ID (integer from getTransaction.slot)
+    - ~400 ms chain time bucket — not a wallet count or a %
+
+  What “@ YYYY-MM-DD HH:MM:SS UTC” means
+    - On-chain time for that activity (transaction blockTime), when known
+    - When those multi-wallet buys landed on Solana for that slot
+    - NOT the time you clicked Analyze / looked up the mint
+
+  Where ATC sources it
+    1) Helius Solana RPC: getSignaturesForAddress on the mint
+    2) Helius: getTransaction (jsonParsed) for each signature scanned
+    3) Fields used: slot + blockTime (unix seconds → displayed UTC)
+    4) Buyers inferred from the same tx (balance increase / fee payer), then
+       grouped by slot (need ≥2 wallets for a multi-buy group)
+
+  Launch-window vs slot time
+    - Launch-window = early mint history ATC scanned (toward older activity)
+    - Slot timestamp = when that particular co-timed buy burst confirmed
+    - holds X% next to a wallet = CURRENT bag from holders map (if known),
+      not “% bought at that timestamp”
+
+  Limits
+    - Only txs inside the capped early scan (not full mint lifetime)
+    - Needs Helius; missing blockTime → slot number only
+    - Heuristic buyers; not a full DEX trade tape
+
+
+  ---------------------------------------------------------------------------
+  B) RUGGERS — wallet row timestamps (tracking, this browser)
+  ---------------------------------------------------------------------------
+  These are NOT on-chain buy times. They are when THIS site’s full Analyze
+  updated local Ruggers tracking for that wallet on this mint.
+
+  | Label   | Meaning                                                      |
+  |---------||--------------------------------------------------------------|
+  | seen    | First time ATC tracked this wallet on this mint (baseline /  |
+  |         | first status).                                               |
+  | sold    | First time tracking marked them a seller (≥99% of first bag  |
+  |         | or equivalent rule after a later Analyze).                   |
+  | swing   | First time tracking saw a buy-back after a sell (if shown).  |
+
+  Not shown
+    - “last” (last status refresh) is intentionally omitted from the UI.
+
+  Example
+    Analyze 1 full → wallet in baseline     → seen
+    Analyze 2      → bag sold ≥99%          → sold
+    Analyze 3      → holding again          → swing (if buy-back)
+
+  Storage
+    - Browser localStorage for this mint track (not a global server clock)
+    - Different from Bundles @ UTC (Helius blockTime)
+
+
+  ---------------------------------------------------------------------------
+  QUICK COMPARE
+  ---------------------------------------------------------------------------
+  | Where              | Source              | Means                          |
+  |--------------------|---------------------|--------------------------------|
+  | Bundles slot @ UTC | Helius blockTime    | On-chain buy / slot time       |
+  | Bundles slot #     | Solana slot integer | Which chain time bucket        |
+  | Ruggers seen/sold  | Browser tracking    | When Analyze recorded events   |
+  | Ruggers swing      | Browser tracking    | When buy-back was detected     |
+
 
 6.4 Bundle % alert scheme (Alerts tab)
   Alerts use ONE number: estimated bundle % of supply
@@ -986,9 +1066,9 @@ What Ruggers is for
   - Sticky: if they never buy back, they stay in that section permanently
     (this browser). Buy-back → Swing (label kept) → sell again → same section.
   - Upload / Export seller wallets into YOUR RugWatch list (see §12).
-  - Each wallet row shows timestamps when known:
-      first seen · sold at (entered seller) · swing at (buy-back) · last update
-    (browser-local tracking times, UTC-style display).
+  - Each wallet row shows timestamps when known (see §6.3d TIME SLOTS):
+      seen · sold · swing (buy-back). No “last” line.
+    Browser-local tracking times — not on-chain buy times.
 
 How tracking starts (first lookup)
   After a successful full Analyze (Quick OFF) with holders:
