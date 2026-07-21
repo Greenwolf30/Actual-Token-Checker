@@ -3028,6 +3028,40 @@ function shortWhen(iso) {
   return String(iso).slice(0, 19).replace("T", " ") + " UTC";
 }
 
+/**
+ * Resolve a mint CA to display "$TICKER mintAddress" using Ruggers store when known.
+ */
+function formatFlaggedFromMint(mintAddr) {
+  const raw = String(mintAddr || "").trim();
+  if (!raw) return "";
+  let symbol = "";
+  let full = raw;
+  try {
+    const store = loadRuggersStore();
+    for (const [k, rec] of Object.entries(store || {})) {
+      if (k === "__meta" || !rec || typeof rec !== "object") continue;
+      const addr = String(rec.address || "").trim();
+      const keyEnd = k.includes(":") ? k.split(":").pop() : k;
+      if (
+        addr === raw ||
+        keyEnd === raw ||
+        k === raw ||
+        k.endsWith(":" + raw) ||
+        (addr && raw.endsWith(addr)) ||
+        (addr && addr.endsWith(raw))
+      ) {
+        if (rec.symbol) symbol = String(rec.symbol).replace(/^\$/, "");
+        if (addr) full = addr;
+        break;
+      }
+    }
+  } catch (_) {
+    /* ignore */
+  }
+  if (symbol) return "$" + symbol + " " + full;
+  return full;
+}
+
 /** Last Ruggers render — used by per-section Export buttons */
 let _lastRuggersBuckets = null;
 let _lastRuggersRec = null;
@@ -3169,7 +3203,7 @@ function renderRuggersWalletRow(row) {
   if (!tsParts.length && row.flagged_meta && row.flagged_meta.entered_at) {
     tsParts.push("sold " + shortWhen(row.flagged_meta.entered_at));
   }
-  // Flagged (RugWatch) + flagged · swing: which mint(s) they were flagged from
+  // Flagged (RugWatch) + flagged · swing: ticker + full mint address
   let flaggedFromLine = "";
   if (isFlagged || flaggedSwing || row.tag === "flagged" || row.ever_flagged_on_mint) {
     const mints = [];
@@ -3184,12 +3218,12 @@ function renderRuggersWalletRow(row) {
       addM(row.flagged_meta.flagged_from_mint);
     }
     if (mints.length) {
-      const shortM = (m) =>
-        m.length > 12 ? m.slice(0, 6) + "…" + m.slice(-6) : m;
-      flaggedFromLine =
-        " · flagged from " + mints.slice(0, 3).map(shortM).join(", ");
-      if (mints.length > 3) {
-        flaggedFromLine += " +" + (mints.length - 3);
+      const labels = mints.slice(0, 3).map(formatFlaggedFromMint).filter(Boolean);
+      if (labels.length) {
+        flaggedFromLine = " · flagged from " + labels.join(" · ");
+        if (mints.length > 3) {
+          flaggedFromLine += " · +" + (mints.length - 3) + " more";
+        }
       }
     }
   }
