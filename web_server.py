@@ -488,7 +488,10 @@ def _ruggers_track_snapshot(
 
     wallet_rows: list[dict[str, Any]] = []
     seen: set[str] = set()
-    # All non-LP holders in snapshot with bag ≥ 0.01% (not only top 40)
+    # All non-LP holders in snapshot:
+    #  - include if supply % ≥ 0.01% (Single cutoff), OR
+    #  - include if % unknown but balance > 0 (still track; Single needs % later)
+    # Dust below 0.01% with known % is skipped (unless similar/creator added below).
     for h in list(holders.get("holders") or []):
         if not isinstance(h, dict):
             continue
@@ -502,14 +505,16 @@ def _ruggers_track_snapshot(
             pct_f = float(pct) if pct is not None else None
         except (TypeError, ValueError):
             pct_f = None
-        if pct_f is None or pct_f < SINGLE_MIN_PCT:
-            continue
-        seen.add(w)
         bal = h.get("balance")
         try:
             bal_f = float(bal) if bal is not None else None
         except (TypeError, ValueError):
             bal_f = None
+        if pct_f is not None and pct_f < SINGLE_MIN_PCT:
+            continue
+        if pct_f is None and (bal_f is None or bal_f <= 0):
+            continue
+        seen.add(w)
         row: dict[str, Any] = {
             "wallet": w,
             "pct_supply": pct_f,
@@ -518,6 +523,9 @@ def _ruggers_track_snapshot(
             "label": h.get("label"),
         }
         row.update(_bundle_tags(w))
+        # Single lane needs known % ≥ cutoff; balance-only rows track but not Single
+        if pct_f is None or pct_f < SINGLE_MIN_PCT:
+            row["exclude_from_single"] = True
         wallet_rows.append(row)
 
     # Similar-only wallets not already listed (still track Similar sellers)
