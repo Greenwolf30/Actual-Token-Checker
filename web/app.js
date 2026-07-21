@@ -3173,10 +3173,10 @@ function renderRuggersWalletRow(row) {
     tagLabel = "swing";
   } else if (isFlagged && isCreator) {
     tagCls = "rug-tag-flagged rug-tag-creator";
-    tagLabel = "creator · flagged";
-  } else if (isFlagged) {
+    tagLabel = "creator · flagged seller";
+  } else if (isFlagged && !isSwing) {
     tagCls = "rug-tag-flagged";
-    tagLabel = "flagged";
+    tagLabel = "flagged seller";
   } else if (isCreator) {
     tagCls = "rug-tag-creator";
     tagLabel = "creator";
