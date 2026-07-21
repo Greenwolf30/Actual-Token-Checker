@@ -823,13 +823,14 @@ Priority rule
     matching on name/description/posts.
   - Confidence: high / medium / low depending on whether real project
     copy was found (and which source won).
-  - “Why people seem interested” / Key hooks may include:
-      · official description present (stated purpose/story: <text>)
-      · listing categories / tags
+  - “Hype:” (single block; not “Why people seem interested” / Key hooks) may include:
+      · listing categories / tags / theme fits
       · Reddit / news / social signals when they add real content
-  - LinkedIn is only in the About ── LINKEDIN ── section (not repeated under
-    “Why people seem interested”). Hollow lines like “metadata is available”
-    with no prose are not shown.
+      · market move / bonding-curve FOMO when real
+  - Interest + attention drivers are merged and de-duplicated (no repeated
+    language; no restating the official description).
+  - LinkedIn is only in the About ── LINKEDIN ── section (not under Hype).
+    Hollow lines like “metadata is available” with no prose are not shown.
   - If no official description exists, the app refuses to invent a
     backstory (market tags + filtered chatter only).
 

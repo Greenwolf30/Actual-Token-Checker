@@ -662,16 +662,16 @@ def format_about_section(report: dict[str, Any]) -> str:
         lines.append(_will_show_placeholder("Rugcheck risk text"))
         lines.append("")
 
-    why = story.get("why_interested") or []
-    # Dedupe hooks that restate the same description already in the storyline
+    why = list(story.get("why_interested") or [])
+    hype_drv = list(story.get("hype_drivers") or [])
+    # Single Hype block: merge interest + drivers, drop restated / duplicate language
     hook_lines: list[str] = []
     shown_why: list[str] = []
-    for w in _dedupe_str_list(why):
+    for w in _dedupe_str_list(why + hype_drv):
         ws = re.sub(r"\s+", " ", str(w or "")).strip()
         if not ws:
             continue
         low = ws.lower()
-        # Drop pure "we have a description" / restated purpose copy
         if low.startswith("stated purpose/story"):
             continue
         if "publishes an official description" in low:
@@ -687,6 +687,8 @@ def format_about_section(report: dict[str, Any]) -> str:
         if any(
             core.lower() == s
             or (len(core) >= 24 and (core[:50].lower() == s[:50] or core.lower() in s))
+            or (len(core) >= 30 and s in core.lower())
+            or (len(s) >= 30 and core.lower() in s)
             for s in shown_why
         ):
             continue
@@ -695,11 +697,11 @@ def format_about_section(report: dict[str, Any]) -> str:
         if len(hook_lines) >= 6:
             break
     if hook_lines:
-        lines.append("  Key hooks:")
+        lines.append("  Hype:")
         lines.extend(hook_lines)
         lines.append("")
     else:
-        lines.append(_will_show_placeholder("Key hooks"))
+        lines.append(_will_show_placeholder("Hype"))
         lines.append("")
 
     # Official description only if storyline never included it

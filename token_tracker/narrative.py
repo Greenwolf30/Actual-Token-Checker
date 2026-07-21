@@ -484,16 +484,27 @@ def build_narrative(
             "Risk notes (Rugcheck text): " + "; ".join(risk_notes[:3]) + "."
         )
 
-    if interest:
-        para_parts.append("Why people are interested: " + "; ".join(interest[:4]) + ".")
-
-    if hype and (official or categories):
-        para_parts.append("Market / social attention signals: " + "; ".join(hype[:4]) + ".")
-    elif hype and not official:
-        # Softer language when we lack official copy
-        para_parts.append(
-            "Secondary chatter (not verified project copy): " + "; ".join(hype[:3]) + "."
-        )
+    hype_bits: list[str] = []
+    hype_seen: list[str] = [official] if official else []
+    for r in list(interest or []) + list(hype or []):
+        t = re.sub(r"\s+", " ", str(r or "").strip())
+        if not t:
+            continue
+        low = t.lower()
+        if low.startswith("stated purpose/story"):
+            continue
+        if "publishes an official description" in low:
+            continue
+        if _text_redundant(t, hype_seen):
+            continue
+        hype_seen.append(t)
+        if not t.endswith("."):
+            t = t + "."
+        hype_bits.append(t)
+        if len(hype_bits) >= 5:
+            break
+    if hype_bits:
+        para_parts.append("Hype: " + " ".join(hype_bits))
 
     if political and official:
         para_parts.append("Angles in official/community text: " + "; ".join(political[:2]) + ".")
@@ -569,15 +580,28 @@ def build_narrative(
         bullets.append("Rugcheck risk text:")
         bullets.extend(f"  • {r}" for r in risk_notes[:5])
 
-    bullets.append("Why people are interested:")
-    if interest:
-        bullets.extend(f"  • {line}" for line in interest[:5])
+    bullets.append("Hype:")
+    hype_bullet_seen: list[str] = [official] if official else []
+    hype_bullets: list[str] = []
+    for line in list(interest or []) + list(hype or []):
+        t = re.sub(r"\s+", " ", str(line or "").strip())
+        if not t:
+            continue
+        low = t.lower()
+        if low.startswith("stated purpose/story"):
+            continue
+        if "publishes an official description" in low:
+            continue
+        if _text_redundant(t, hype_bullet_seen):
+            continue
+        hype_bullet_seen.append(t)
+        hype_bullets.append(f"  • {t}")
+        if len(hype_bullets) >= 6:
+            break
+    if hype_bullets:
+        bullets.extend(hype_bullets)
     else:
         bullets.append("  • Limited verified copy — attention may be price-only")
-
-    if hype:
-        bullets.append("Attention signals (secondary):")
-        bullets.extend(f"  • {line}" for line in hype[:5])
 
     # Public news events (Google News + news-like web hits) — structured for UI
     news_events: list[dict[str, Any]] = []
@@ -828,45 +852,47 @@ def _build_storyline(
                 "launch mechanics rather than a fully graduated market."
             )
 
-    # Why people care / hype (story, not raw lists)
-    if interest:
-        # Keep each reason intact, but skip restating the official description
-        # (already shown under "What it claims to be").
-        bits = []
-        seen_i: list[str] = [official] if official else []
-        for r in interest[:8]:
-            t = re.sub(r"\s+", " ", str(r or "").strip())
-            if not t:
-                continue
-            # Strip label, check if body is a dupe of official / prior hook
-            low_t = t.lower()
-            if low_t.startswith("stated purpose/story"):
-                continue
-            if "publishes an official description" in low_t:
-                continue
-            body = re.sub(
-                r"^(fits theme/category|secondary angle|listed under)\s*:?\s*",
-                "",
-                t,
-                flags=re.I,
-            ).strip()
-            if official and body and _text_redundant(body, [official]):
-                continue
-            if body and _text_redundant(body, seen_i):
-                continue
-            if body:
-                seen_i.append(body)
-            if not t.endswith("."):
-                t = t + "."
-            bits.append(t)
-            if len(bits) >= 5:
-                break
-        if bits:
-            paras.append("Why people seem interested: " + " ".join(bits))
-    if hype:
-        paras.append(
-            "Attention drivers in the wild: " + "; ".join(hype[:4]) + "."
-        )
+    # Hype (merged interest + attention signals; no duplicate language)
+    bits: list[str] = []
+    # Seed with already-written paras so bonding-curve / story is not repeated
+    seen_i: list[str] = [official] if official else []
+    seen_i.extend(paras[-4:] if paras else [])
+    for r in list(interest or [])[:8] + list(hype or [])[:6]:
+        t = re.sub(r"\s+", " ", str(r or "").strip())
+        if not t:
+            continue
+        low_t = t.lower()
+        if low_t.startswith("stated purpose/story"):
+            continue
+        if "publishes an official description" in low_t:
+            continue
+        # Drop FOMO lines that restate the Pump.fun lifecycle paragraph above
+        if "bonding curve" in low_t and any(
+            "bonding curve" in (p or "").lower() for p in paras[-3:]
+        ):
+            continue
+        body = re.sub(
+            r"^(fits theme/category|secondary angle|listed under)\s*:?\s*",
+            "",
+            t,
+            flags=re.I,
+        ).strip()
+        if official and body and _text_redundant(body, [official]):
+            continue
+        if body and _text_redundant(body, seen_i):
+            continue
+        if t and _text_redundant(t, seen_i):
+            continue
+        if body:
+            seen_i.append(body)
+        seen_i.append(t)
+        if not t.endswith("."):
+            t = t + "."
+        bits.append(t)
+        if len(bits) >= 5:
+            break
+    if bits:
+        paras.append("Hype: " + " ".join(bits))
 
     # Rugcheck risk text as context (not inventing narrative)
     if risks:
