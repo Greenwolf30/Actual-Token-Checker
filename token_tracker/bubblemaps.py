@@ -442,9 +442,10 @@ def open_bubblemap_view(
 
 
 def format_maps_text(data: dict[str, Any]) -> str:
+    # Section markers (── TITLE ──) are colored dim-green in the UI.
     lines = [
         "=" * 72,
-        "  MAPS — Bubblemaps",
+        "── MAPS — Bubblemaps ──",
         "  Wallet clusters & token distribution (live Bubblemaps UI)",
         "=" * 72,
         "",
@@ -456,12 +457,13 @@ def format_maps_text(data: dict[str, Any]) -> str:
         lines.append("  Or click a blue Bubblemaps link below when available.")
         return "\n".join(lines) + "\n"
 
+    lines.append("── TOKEN ──")
     lines.append(f"  Token:     {data.get('name') or ''} (${data.get('symbol') or '?'})")
     lines.append(f"  Chain:     {data.get('chain_id')}  →  Bubblemaps: {data.get('bubble_chain')}")
     lines.append(f"  Address:   {data.get('token_address')}")
     lines.append(f"  Partner:   {data.get('partner_id')}")
     lines.append("")
-    lines.append("  HOW TO VIEW")
+    lines.append("── HOW TO VIEW ──")
     lines.append("  Click Maps — opens Bubblemaps V2 in your default browser (live data).")
     lines.append("  Or click any blue URL below.")
     if data.get("viewer_method"):
@@ -469,7 +471,8 @@ def format_maps_text(data: dict[str, Any]) -> str:
     if data.get("url"):
         lines.append(f"  Last opened: {data.get('url')}")
     lines.append("")
-    lines.append("  MAP LINKS (click blue → browser)")
+    lines.append("── MAP LINKS ──")
+    lines.append("  (click blue → browser)")
     if data.get("v2_url") or data.get("primary_url"):
         lines.append(f"    V2 map:  {data.get('v2_url') or data.get('primary_url')}")
     if data.get("app_url"):
@@ -486,7 +489,7 @@ def format_maps_text(data: dict[str, Any]) -> str:
 
     api = data.get("api") or {}
     if api.get("attempted"):
-        lines.append("  DATA API")
+        lines.append("── DATA API ──")
         if api.get("ok"):
             lines.append(f"  Status:    ok · source {api.get('source')}")
             for k, v in (api.get("summary") or {}).items():

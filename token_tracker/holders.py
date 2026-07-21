@@ -1392,10 +1392,14 @@ def _build_result(
 
 def format_holders_text(data: dict[str, Any]) -> str:
     if not data.get("ok"):
-        return f"HOLDERS\n  {data.get('error') or data.get('notes') or 'unavailable'}\n"
+        return (
+            "── HOLDERS ──\n"
+            f"  {data.get('error') or data.get('notes') or 'unavailable'}\n"
+        )
 
+    # Section markers (── TITLE ──) are colored dim-green in the UI.
     lines = [
-        "HOLDERS / WALLETS",
+        "── HOLDERS / WALLETS ──",
         f"  Source: {data.get('source')}",
     ]
     ps = data.get("provider_status") or {}
@@ -1418,7 +1422,7 @@ def format_holders_text(data: dict[str, Any]) -> str:
         total_w = totals.get("total_wallets")
 
     lines.append("")
-    lines.append("  ── TOTAL WALLETS ──────────────────────────────")
+    lines.append("── TOTAL WALLETS ──")
     lines.append(f"  Total wallets (holders): {_fmt_count(total_w)}")
     lines.append(f"    Pump.fun:     {_fmt_count(by.get('pumpfun'))}")
     lines.append(f"    Birdeye:      {_fmt_count(by.get('birdeye'))}")
@@ -1443,6 +1447,7 @@ def format_holders_text(data: dict[str, Any]) -> str:
     )
 
     lines.append("")
+    lines.append("── CONCENTRATION ──")
     lines.append(f"  Concentration risk: {summary.get('concentration_risk')}")
     lines.append(
         f"  Top1 {_pct(summary.get('top1_pct'))} · "
@@ -1494,7 +1499,8 @@ def format_holders_text(data: dict[str, Any]) -> str:
         lines.append(f"  Rugcheck risks: {', '.join(str(r) for r in meta['risks'][:5])}")
 
     lines.append("")
-    lines.append("  Flags (known LP / program wallets excluded):")
+    lines.append("── FLAGS ──")
+    lines.append("  (known LP / program wallets excluded)")
     flags_list = list(data.get("flags") or [])
     if flags_list:
         for f in flags_list:
@@ -1512,8 +1518,9 @@ def format_holders_text(data: dict[str, Any]) -> str:
     show_n = 40 if data.get("filter_query") else 14
     listed = (data.get("holders") or [])[:show_n]
     lines.append("")
+    lines.append("── TOP HOLDERS ──")
     lines.append(
-        f"  Top holders — showing {len(listed)}"
+        f"  Showing {len(listed)}"
         + (
             f" of {_fmt_count(total_w)} total"
             if total_w is not None
@@ -1572,8 +1579,9 @@ def format_holders_text(data: dict[str, Any]) -> str:
         if cl_total > 100:
             cl_total = 100.0
         total_s = f"{cl_total:.2f}%" if has_pct else "n/a"
+        lines.append("── MULTI-ACCOUNT CLUSTERS ──")
         lines.append(
-            f"  Multi-account clusters (same wallet, several large ATAs) — "
+            f"  Same wallet, several large ATAs — "
             f"total {total_s} across {cl_n} wallet(s):"
         )
         for c in clusters[:8]:
@@ -1592,6 +1600,7 @@ def format_holders_text(data: dict[str, Any]) -> str:
                 except (TypeError, ValueError):
                     lines.append(f"         bal {bal}")
     else:
+        lines.append("── MULTI-ACCOUNT CLUSTERS ──")
         lines.append(
             "  Multi-account clusters will show here if value returns True"
         )
@@ -1845,7 +1854,7 @@ def _format_rugwatch_flagged_section(
     )
     lines: list[str] = [
         "",
-        "  ── FLAGGED WALLETS (RugWatch) ──",
+        "── FLAGGED WALLETS (RugWatch) ──",
         still_line,
         prev_line,
         combined_line,

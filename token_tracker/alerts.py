@@ -612,9 +612,10 @@ def format_alerts_text(data: dict[str, Any]) -> str:
     Format Alerts tab. Active alerts print as usual; any check with no
     real-time hit (0 / missing) gets a “will show here” placeholder.
     """
+    # Section markers (── TITLE ──) are colored dim-green in the UI.
     lines = [
         "=" * 72,
-        "  ALERTS",
+        "── ALERTS ──",
         "  Things to watch out for immediately",
         "=" * 72,
         "",
@@ -800,7 +801,7 @@ def format_alerts_text(data: dict[str, Any]) -> str:
             lines.append(f"     … and {len(wallets) - max_w} more")
         lines.append("")
 
-    lines.append("  ALERT SLOTS")
+    lines.append("── ALERT SLOTS ──")
     lines.append("  " + "-" * 40)
     idx = 1
     for _key, placeholder, id_aliases in placeholder_slots:

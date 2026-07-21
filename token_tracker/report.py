@@ -59,8 +59,9 @@ def format_pretty(report: dict[str, Any]) -> str:
     lines.append(f"  {token.get('address')}")
     lines.append("=" * 72)
 
+    # Section markers (── TITLE ──) are colored dim-green in the UI.
     lines.append("")
-    lines.append("MARKET")
+    lines.append("── MARKET ──")
     lines.append(f"  Price:          {_usd(market.get('price_usd'))}")
     lines.append(f"  Market cap:     {_usd(market.get('market_cap_usd'))}")
     lines.append(f"  FDV:            {_usd(market.get('fdv_usd'))}")
@@ -81,7 +82,7 @@ def format_pretty(report: dict[str, Any]) -> str:
     pump = report.get("pumpfun") or {}
     if pump.get("is_pump_mint") or pump.get("on_bonding_curve") or pump.get("graduated") is True:
         lines.append("")
-        lines.append("PUMP.FUN")
+        lines.append("── PUMP.FUN ──")
         # Explicit yes/no for graduated (main ask)
         grad = pump.get("graduated")
         if grad is True:
@@ -111,7 +112,7 @@ def format_pretty(report: dict[str, Any]) -> str:
             lines.append(f"  Pump.fun:       {pump.get('pump_url')}")
 
     lines.append("")
-    lines.append("INITIAL MARKET CAP (estimate)")
+    lines.append("── INITIAL MARKET CAP ──")
     lines.append(f"  Est. initial MC: {_usd(init.get('estimated_usd'))}")
 
     lines.append(f"  As of:           {init.get('as_of') or 'n/a'}")
@@ -121,7 +122,7 @@ def format_pretty(report: dict[str, Any]) -> str:
         lines.append(f"  Method:          {init.get('method')}")
 
     lines.append("")
-    lines.append("ALL-TIME HIGH (estimate over available history)")
+    lines.append("── ALL-TIME HIGH ──")
     # Price omitted — MC is the primary estimate shown in Overview
     lines.append(f"  ATH market cap:  {_usd(ath.get('estimated_market_cap_usd'))}")
     lines.append(f"  As of:           {ath.get('as_of') or 'n/a'}")
@@ -132,7 +133,7 @@ def format_pretty(report: dict[str, Any]) -> str:
         lines.append(f"  Method:          {ath.get('method')}")
 
     lines.append("")
-    lines.append("SOCIALS")
+    lines.append("── SOCIALS ──")
     try:
         from .alerts import dexscreener_socials_updated
 
@@ -157,7 +158,7 @@ def format_pretty(report: dict[str, Any]) -> str:
         lines.append("  (none listed on DexScreener)")
 
     lines.append("")
-    lines.append("X / COMMUNITY SENTIMENT")
+    lines.append("── X / COMMUNITY SENTIMENT ──")
     kind = sent.get("kind") or ("x_text" if x.get("posts_analyzed") else "unknown")
     lines.append(f"  Label:           {sent.get('label')}")
     lines.append(f"  Score:           {sent.get('score')}")
@@ -179,7 +180,7 @@ def format_pretty(report: dict[str, Any]) -> str:
 
     holders = report.get("holders") or {}
     lines.append("")
-    lines.append("HOLDERS / WALLETS")
+    lines.append("── HOLDERS / WALLETS ──")
     if holders.get("ok"):
         summary = holders.get("summary") or {}
         lines.append(f"  Source:          {holders.get('source')}")
@@ -209,7 +210,7 @@ def format_pretty(report: dict[str, Any]) -> str:
 
     bundles = report.get("bundles") or {}
     lines.append("")
-    lines.append("BUNDLES / COORDINATED WALLETS")
+    lines.append("── BUNDLES / COORDINATED WALLETS ──")
     if bundles.get("ok"):
         bs = bundles.get("summary") or {}
         lines.append(
@@ -275,7 +276,7 @@ def format_pretty(report: dict[str, Any]) -> str:
         lines.append(f"  {bundles.get('error') or bundles.get('notes') or 'n/a'}")
 
     lines.append("")
-    lines.append("ABOUT / NEWS")
+    lines.append("── ABOUT / NEWS ──")
     lines.append("  (See About tab for full X sentiment, narrative, and public news events.)")
     lines.append(f"  Headline: {story.get('headline') or 'n/a'}")
     news_n = len(story.get("news_events") or [])
@@ -308,6 +309,7 @@ def format_overview(report: dict[str, Any]) -> str:
     pump = report.get("pumpfun") or {}
 
     lines: list[str] = []
+    # Section markers (── TITLE ──) are colored dim-green in the UI.
     lines.append("=" * 72)
     lines.append(
         f"  {token.get('name')} (${token.get('symbol')})  |  {token.get('chain_id')}"
@@ -315,7 +317,7 @@ def format_overview(report: dict[str, Any]) -> str:
     lines.append(f"  {token.get('address')}")
     lines.append("=" * 72)
     lines.append("")
-    lines.append("MARKET")
+    lines.append("── MARKET ──")
     lines.append(f"  Price:          {_usd(market.get('price_usd'))}")
     lines.append(f"  Market cap:     {_usd(market.get('market_cap_usd'))}")
     lines.append(f"  FDV:            {_usd(market.get('fdv_usd'))}")
@@ -332,7 +334,7 @@ def format_overview(report: dict[str, Any]) -> str:
 
     if pump.get("is_pump_mint") or pump.get("on_bonding_curve") or pump.get("graduated") is True:
         lines.append("")
-        lines.append("PUMP.FUN")
+        lines.append("── PUMP.FUN ──")
         grad = pump.get("graduated")
         if grad is True:
             grad_s = "yes"
@@ -349,7 +351,7 @@ def format_overview(report: dict[str, Any]) -> str:
             lines.append(f"  Pump.fun:       {pump.get('pump_url')}")
 
     lines.append("")
-    lines.append("INITIAL MARKET CAP (estimate)")
+    lines.append("── INITIAL MARKET CAP ──")
     lines.append(f"  Est. initial MC: {_usd(init.get('estimated_usd'))}")
     lines.append(f"  As of:           {init.get('as_of') or 'n/a'}")
     if init.get("source"):
@@ -358,7 +360,7 @@ def format_overview(report: dict[str, Any]) -> str:
         lines.append(f"  Method:          {init.get('method')}")
 
     lines.append("")
-    lines.append("ALL-TIME HIGH (estimate)")
+    lines.append("── ALL-TIME HIGH ──")
     # Price omitted — Overview shows ATH market cap only (faster path, clearer UI)
     lines.append(f"  ATH market cap:  {_usd(ath.get('estimated_market_cap_usd'))}")
     lines.append(f"  As of:           {ath.get('as_of') or 'n/a'}")
@@ -369,7 +371,7 @@ def format_overview(report: dict[str, Any]) -> str:
         lines.append(f"  Method:          {ath.get('method')}")
 
     lines.append("")
-    lines.append("SOCIALS")
+    lines.append("── SOCIALS ──")
     lines.append("  (Click blue links to open in your browser)")
     try:
         from .alerts import dexscreener_socials_updated
@@ -435,7 +437,10 @@ def format_holders_section(report: dict[str, Any]) -> str:
         return format_holders_text(holders)
     except Exception:  # noqa: BLE001
         if not holders.get("ok"):
-            return f"HOLDERS\n  {holders.get('error') or holders.get('notes') or 'Run Analyze first.'}\n"
+            return (
+                "── HOLDERS ──\n"
+                f"  {holders.get('error') or holders.get('notes') or 'Run Analyze first.'}\n"
+            )
         return json.dumps(holders, indent=2, default=str)
 
 
@@ -473,7 +478,7 @@ def format_maps_section(report: dict[str, Any]) -> str:
             return format_maps_text(maps)
         except Exception as exc:  # noqa: BLE001
             return (
-                "MAPS — Bubblemaps\n"
+                "── MAPS — Bubblemaps ──\n"
                 f"  Could not build map links: {exc}\n"
                 "  Run Analyze first, then open Maps.\n"
             )
@@ -490,7 +495,7 @@ def format_alerts_section(report: dict[str, Any]) -> str:
     alerts = report.get("alerts")
     if alerts is None:
         return (
-            "ALERTS\n"
+            "── ALERTS ──\n"
             "  Things to watch out for immediately\n\n"
             "  Run Analyze first.\n"
             "  Top priority will show if there are any of: unlocked liquidity,\n"
@@ -514,7 +519,7 @@ def format_about_section(report: dict[str, Any]) -> str:
     """About tab: Narrative storyline + X posts + Public News + Links."""
     if not report.get("ok") and not report.get("narrative") and not report.get("community_sentiment_x"):
         return (
-            "ABOUT\n"
+            "── ABOUT ──\n"
             "  Run Analyze to load narrative, X posts, and public news.\n"
             + _will_show_placeholder("Narrative, X posts, and public news")
             + "\n"
@@ -537,8 +542,9 @@ def format_about_section(report: dict[str, Any]) -> str:
     lines.append("=" * 72)
 
     # ── NARRATIVE (storyline) ─────────────────────────────────────────
+    # Section markers (── TITLE ──) are colored dim-green in the UI.
     lines.append("")
-    lines.append("NARRATIVE")
+    lines.append("── NARRATIVE ──")
     lines.append("  What this token is about")
     has_story = bool(story.get("headline") or story.get("theme") or story.get("storyline"))
     if has_story or story:
@@ -706,7 +712,7 @@ def format_about_section(report: dict[str, Any]) -> str:
     # Compact meta (always with values) so nothing crowds/covers post text.
     lines.append("-" * 72)
     lines.append("")
-    lines.append("X / COMMUNITY POSTS")
+    lines.append("── X / COMMUNITY POSTS ──")
     kind = sent.get("kind") or ("x_text" if x.get("posts_analyzed") else "unknown")
     label = sent.get("label")
     label_missing = (
@@ -793,7 +799,7 @@ def format_about_section(report: dict[str, Any]) -> str:
     lines.append("")
     lines.append("-" * 72)
     lines.append("")
-    lines.append("PUBLIC NEWS")
+    lines.append("── PUBLIC NEWS ──")
     lines.append("  Public news events")
     lines.append("  (Click blue links to open in your browser)")
     news = list(story.get("news_events") or [])
@@ -828,7 +834,8 @@ def format_about_section(report: dict[str, Any]) -> str:
     lines.append("")
     lines.append("-" * 72)
     lines.append("")
-    lines.append("LINKS  (click blue URLs to open)")
+    lines.append("── LINKS ──")
+    lines.append("  (click blue URLs to open)")
     link_lines = _collect_about_links(report, story, socials, x)
     if link_lines:
         for lab, url in link_lines:
