@@ -2606,6 +2606,7 @@ function renderRuggersWalletRow(row) {
 
   let headline;
   if (isSwing) {
+    // Always "holds" — never "bought back"
     const hh = fmtSupplyPct(holdsNow);
     headline = hh ? "holds " + hh + " of supply" : "holds (amount n/a)";
   } else {
@@ -2618,34 +2619,29 @@ function renderRuggersWalletRow(row) {
   }
 
   const first = "first " + fmtRugPct(row.first_pct);
-  const now =
-    isSwing
+  // For swing, "now" is redundant with "holds" — skip or keep brief
+  const now = isSwing
+    ? null
+    : row.listed
       ? "now " + fmtRugPct(row.current_pct)
-      : row.listed
-        ? "now " + fmtRugPct(row.current_pct)
-        : row.tag === "flagged" && row.listed == null
-          ? "watchlist"
-          : "now not listed";
-  const reason =
-    row.reason === "not_listed"
+      : row.tag === "flagged" && row.listed == null
+        ? "watchlist"
+        : "now not listed";
+  const reason = isSwing
+    ? isFlagged
+      ? "still flagged · holding"
+      : "holding after re-entry"
+    : row.reason === "not_listed"
       ? "dropped off holder list"
       : row.reason === "sold_100"
         ? "dumped full first bag"
         : row.reason === "sold_99"
           ? "dumped ≥99% of first bag"
-          : row.reason === "rugwatch_flagged"
-            ? "already on RugWatch (flagged)"
-            : row.reason === "buy_back_flagged_swing"
-              ? "flagged buy-back → swing (still flagged)"
-              : row.reason === "holds_after_buy_back" || row.reason === "buy_back"
-                ? "holding after buy-back"
-                : row.reason === "sold_swing_bag"
-                  ? "sold ≥99% of swing bag → back to origin"
-                  : isSwing && isFlagged
-                    ? "flagged · holding on swing"
-                    : isSwing
-                      ? "holding after buy-back"
-                      : row.reason || "";
+          : row.reason === "sold_swing_bag"
+            ? "sold ≥99% of swing bag → back to origin"
+            : row.reason === "rugwatch_flagged"
+              ? "already on RugWatch (flagged)"
+              : row.reason || "";
   const isCreator = !!(
     row.is_creator ||
     row.origin_lane === "creator" ||
@@ -2705,8 +2701,7 @@ function renderRuggersWalletRow(row) {
     escHtml(headline) +
     " · " +
     escHtml(first) +
-    " → " +
-    escHtml(now) +
+    (now ? " → " + escHtml(now) : "") +
     (lane ? " · lane " + escHtml(lane) : "") +
     (reason ? " · " + escHtml(reason) : "") +
     "</div>" +
@@ -3352,7 +3347,7 @@ function refreshRuggersPanel(focusKey) {
     " · Tracked mints: " +
     keys.length +
     " · Upload: Creator / Similar · Export: Creator / Similar / Single" +
-    " · Swing of a flagged seller → unflag + remove from cloud." +
+    " · Swing shows holds % of supply while they hold." +
     "</p>";
 
   if (body) body.innerHTML = html;
@@ -3625,13 +3620,27 @@ function formatRuggersPlain(rec, buckets, key) {
       return;
     }
     for (const r of rows) {
+      const isSw = r.tag === "swing";
+      const hold =
+        r.holds_supply_pct != null
+          ? r.holds_supply_pct
+          : r.current_pct != null
+            ? r.current_pct
+            : null;
+      const soldSup =
+        r.sold_supply_pct != null
+          ? r.sold_supply_pct
+          : r.sold_pct != null
+            ? r.sold_pct
+            : null;
       lines.push(
         "  [" +
           (r.tag || "") +
           "] " +
           r.wallet +
-          "  sold=" +
-          (r.sold_pct != null ? r.sold_pct + "%" : "?") +
+          (isSw
+            ? "  holds=" + (hold != null ? hold + "% supply" : "?")
+            : "  sold=" + (soldSup != null ? soldSup + "% supply" : "?")) +
           "  first=" +
           fmtRugPct(r.first_pct) +
           "  now=" +
