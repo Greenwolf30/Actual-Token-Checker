@@ -493,8 +493,9 @@ def format_bundles_text(data: dict[str, Any]) -> str:
     lines.append("")
     lines.append("── LAUNCH-WINDOW ──")
     lines.append(
-        "  Slot = Solana chain time unit (~400ms). Same-slot multi-buys = several "
-        "different wallets buy this mint in the same slot (often at launch)."
+        "  Slot = Solana chain time unit (~400ms). Launch-window = early mint "
+        "history (not full tape). Same-slot multi-buys = several wallets buy in "
+        "the same slot. holds % = CURRENT bag when known (not launch fill size)."
     )
     def _is_lp_row(r: dict[str, Any]) -> bool:
         if r.get("is_known_program"):
