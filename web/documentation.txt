@@ -787,12 +787,13 @@ What people often ask
   Both can appear on the same mint. Treat them as separate heuristics.
 
 
-6.3f Fresh / sole-token wallets (notation)
+6.3f Fresh wallets (notation)
 
-  Section in Bundles: ── FRESH / SOLE-TOKEN WALLETS ──
+  Section in Bundles: ── FRESH WALLETS ──
   Summary line:       Fresh total: X%  (N wallet(s))
+  Ruggers section:    Fresh wallets (same sell ≥99% / Swing identity rules)
 
-  What “fresh / sole-token” means here
+  What “fresh wallets” means here
     A holder of THIS mint whose wallet has almost no other SPL tokens with
     balance — typically only this mint (tag sole-token) or near-sole
     (very few other tokens). Heuristic via Helius
@@ -825,8 +826,9 @@ What people often ask
     - Heuristic only — not KYC or identity proof.
 
   UI location
-    Bundles tab → summary “Fresh total” + ── FRESH / SOLE-TOKEN WALLETS ──
-    Bundles Signals → “Fresh / sole-token wallets” when any are found
+    Bundles tab → summary “Fresh total” + ── FRESH WALLETS ──
+    Bundles Signals → “Fresh wallets” when any are found
+    Ruggers tab → Fresh wallets (sellers after ≥99% of first bag)
 
 
 6.4 Bundle % alert scheme (Alerts tab)
@@ -1273,12 +1275,16 @@ Where each Ruggers section comes from (Holders / Bundles)
   | Similar wallets (sellers)               | Bundles similar-size groups               |
   | Multi-account clusters (1 Owner)        | Holders/Bundles owner clusters (multiple  |
   |                                         | Associated Token Accounts — §6.3b)        |
+  | Multi-send (one → many)                 | Bundles multi-send (token + SOL fan-out)  |
+  |                                         | — NOT multi-account (§6.3e)               |
   | Shared SOL funder clusters (1-Owner)    | Bundles funding clusters (1-hop SOL)      |
   | Insider-flagged wallets (Rugcheck)      | Rugcheck insider flag (NOT RugWatch)      |
   | Same-slot multi-buys (bots) (launch-window) | Bundles launch-window / same-slot buys|
   |   (yellow banner on Ruggers)            | (§6.3c). Possibly bots, snipers, MEV/     |
   |                                         | bundle entry, team multi-wallet — not     |
   |                                         | proof of automation or shared ownership.  |
+  | Fresh wallets                           | Bundles fresh wallets (almost only this   |
+  |                                         | mint) — §6.3f; same sell/swing identity   |
   | Suspect wallets                         | Bundles suspect union (if not more specific)|
   | Single wallets (sellers)                | Plain holders ≥0.01%, none of the above   |
   |                                         | (see “Lane: Single” below)                |
@@ -1286,7 +1292,12 @@ Where each Ruggers section comes from (Holders / Bundles)
   | Swing traders                           | Buy-back after ≥99% sell (any origin lane)|
 
   Priority if a wallet fits more than one lane at first discovery:
-    creator → similar → multi → funding → insider → launch → suspect → single
+    creator → similar → multi → multi_send → funding → insider → launch →
+    fresh → suspect → single
+
+  Every lane keeps the same wallet identity fields: first bag %, sold % of
+  supply, holds % on Swing, seen/sold/swing times, sticky origin label,
+  Export + Upload.
 
   Flagged (RugWatch) is a separate path (sold while on your RugWatch list),
   not a Bundles category name. Title on the site: Flagged wallets (RugWatch)
@@ -1297,9 +1308,9 @@ Lane: Single (Single wallets (sellers))
 
   Who lands here (at FIRST full Analyze of this mint):
     - Non-LP holder with a measurable bag ≥ ~0.01% of supply, AND
-    - Not creator, not similar-size, not multi-account, not shared funder,
-      not Rugcheck insider, not launch same-slot multi-buy, not suspect
-      (after the priority list above).
+    - Not creator, not similar-size, not multi-account, not multi-send,
+      not shared funder, not Rugcheck insider, not launch same-slot multi-buy,
+      not fresh wallets, not suspect (after the priority list above).
 
   Meaning in plain language:
     A “normal-looking” plain holder who later dumped ≥99% of that first bag
