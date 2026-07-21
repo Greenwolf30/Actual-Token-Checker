@@ -245,6 +245,7 @@ def build_narrative(
         story_lines=story_lines if official else [],
         platforms=platforms,
         has_official=bool(official),
+        official_text=official,
         categories=categories,
     )
     headline = f"{name} (${symbol}) — {theme_label}"
@@ -606,9 +607,18 @@ def _build_storyline(
 
     # Why people care / hype (story, not raw lists)
     if interest:
-        paras.append(
-            "Why people seem interested: " + "; ".join(interest[:4]) + "."
-        )
+        # Keep each reason intact (description after "stated purpose/story:" must
+        # not be lost). Join with full sentences rather than fragile "; ".
+        bits = []
+        for r in interest[:5]:
+            t = re.sub(r"\s+", " ", str(r or "").strip())
+            if not t:
+                continue
+            if not t.endswith("."):
+                t = t + "."
+            bits.append(t)
+        if bits:
+            paras.append("Why people seem interested: " + " ".join(bits))
     if hype:
         paras.append(
             "Attention drivers in the wild: " + "; ".join(hype[:4]) + "."
@@ -756,6 +766,7 @@ def _why_interested(
     story_lines: list[str] | None = None,
     platforms: list[str] | None = None,
     has_official: bool = False,
+    official_text: str = "",
     categories: list[str] | None = None,
 ) -> list[str]:
     """
@@ -764,13 +775,22 @@ def _why_interested(
     """
     reasons: list[str] = []
 
-    if has_official and story_lines:
+    # Prefer the real official description text (not story_lines[0], which can
+    # be an empty/secondary fragment and left "stated purpose/story:" blank).
+    body = re.sub(r"\s+", " ", (official_text or "").strip())
+    if not body and story_lines:
+        for sl in story_lines:
+            cand = re.sub(r"\s+", " ", str(sl or "").strip())
+            # Strip leading [source] labels from fragments
+            cand = re.sub(r"^\[[^\]]+\]\s*", "", cand).strip()
+            if cand:
+                body = cand
+                break
+    if has_official or body:
         reasons.append("project publishes an official description on coin data APIs")
-        # Don't paste full essay as "reason" — one short line only
-        short = story_lines[0]
-        if len(short) > 120:
-            short = short[:117] + "…"
-        reasons.append(f"stated purpose/story: {short}")
+        if body:
+            short = body if len(body) <= 280 else body[:277] + "…"
+            reasons.append(f"stated purpose/story: {short}")
 
     if categories:
         reasons.append("listed under: " + ", ".join(categories[:4]))

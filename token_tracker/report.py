@@ -597,9 +597,23 @@ def format_about_section(report: dict[str, Any]) -> str:
     why = story.get("why_interested") or []
     if why:
         lines.append("  Key hooks:")
-        for w in _dedupe_str_list(why)[:5]:
+        for w in _dedupe_str_list(why)[:6]:
+            # Full reason line (includes stated purpose/story description)
             lines.append(f"    • {w}")
         lines.append("")
+    # Always surface official description here if storyline hooks missed it
+    official_desc = (story.get("official_description") or "").strip()
+    if not official_desc and isinstance(cf, dict):
+        official_desc = str(cf.get("official_description") or "").strip()
+    if official_desc:
+        already = any(
+            official_desc[:40].lower() in str(w).lower() for w in why
+        ) or (official_desc[:50].lower() in storyline.lower() if storyline else False)
+        if not already:
+            od = official_desc if len(official_desc) <= 400 else official_desc[:397] + "…"
+            lines.append("  Official description:")
+            lines.append(_wrap(od, indent="    ", width=72))
+            lines.append("")
 
     # ── X / COMMUNITY POSTS ───────────────────────────────────────────
     # Compact meta (always with values) so nothing crowds/covers post text.
