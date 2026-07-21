@@ -962,11 +962,47 @@ function parseRuggersFromText(address, chain, symbol, name, ts, holdersText, bun
   };
 }
 
+/** Round supply % for display / store (keeps fine precision). */
+function roundSupplyPct(n) {
+  if (n == null || !Number.isFinite(Number(n))) return null;
+  return Math.round(Number(n) * 1e6) / 1e6;
+}
+
+/**
+ * % of *token supply* this wallet sold since first lookup
+ * (first_pct − current_pct). Not “100% of bag”.
+ */
+function ruggersSoldSupplyPct(firstPct, currentPct, listed) {
+  if (firstPct == null || !Number.isFinite(Number(firstPct))) return null;
+  const f = Number(firstPct);
+  if (f < 0) return null;
+  if (!listed || currentPct == null || !Number.isFinite(Number(currentPct))) {
+    return roundSupplyPct(Math.max(0, f));
+  }
+  const c = Math.max(0, Number(currentPct));
+  return roundSupplyPct(Math.max(0, f - c));
+}
+
+/**
+ * % of *token supply* bought back (current hold after re-entry as swing).
+ */
+function ruggersBoughtBackSupplyPct(currentPct, listed) {
+  if (!listed || currentPct == null || !Number.isFinite(Number(currentPct))) {
+    return null;
+  }
+  const c = Number(currentPct);
+  if (c <= 0) return null;
+  return roundSupplyPct(c);
+}
+
 /**
  * Sold ≥99% of first bag when:
  *  - not listed anymore (dropped off top holders), or
  *  - current_pct <= first_pct * 1%, or
  *  - current_balance <= first_balance * 1% (when both known)
+ *
+ * sold_pct = % of *first bag* dumped (0–100).
+ * sold_supply_pct = % of *mint supply* dumped (first − now).
  */
 function computeSoldState(first, current) {
   const firstPct =
@@ -988,11 +1024,14 @@ function computeSoldState(first, current) {
       ? Number(cur.balance)
       : null;
 
+  const soldSupply = ruggersSoldSupplyPct(firstPct, listed ? curPct : 0, listed);
+
   if (!listed) {
-    // Dropped off list → treat as fully sold (100%)
+    // Dropped off list → fully sold their bag; supply sold ≈ first bag
     return {
       sold: true,
-      sold_pct: 100,
+      sold_pct: 100, // of first bag (rule threshold helper)
+      sold_supply_pct: soldSupply != null ? soldSupply : firstPct,
       remaining_pct: 0,
       remaining_of_first: 0,
       listed: false,
@@ -1017,6 +1056,7 @@ function computeSoldState(first, current) {
     return {
       sold: false,
       sold_pct: null,
+      sold_supply_pct: soldSupply,
       remaining_pct: curPct,
       remaining_of_first: null,
       listed: true,
@@ -1030,6 +1070,7 @@ function computeSoldState(first, current) {
   return {
     sold,
     sold_pct: Math.round(soldFrac * 10000) / 100,
+    sold_supply_pct: soldSupply,
     remaining_pct: curPct,
     remaining_of_first: remainingOfFirst,
     listed: true,
@@ -1492,6 +1533,35 @@ function processRuggersFromAnalyze(data) {
 
     // Sticky Similar / Single / Creator sellers: pin until confirmed buy-back.
     // If they never return, they stay in that section indefinitely.
+    const soldSupplyPct =
+      soldState.sold_supply_pct != null
+        ? soldState.sold_supply_pct
+        : ruggersSoldSupplyPct(
+            first.pct_supply,
+            cur.listed ? cur.pct_supply : 0,
+            !!cur.listed
+          );
+    const boughtBackSupplyPct =
+      tag === "swing"
+        ? ruggersBoughtBackSupplyPct(
+            cur.listed ? cur.pct_supply : null,
+            !!cur.listed
+          )
+        : null;
+    // Peak dump supply % remembered while seller (don't shrink on dust noise)
+    let peakSoldSupply =
+      prev.sold_supply_pct != null && Number.isFinite(Number(prev.sold_supply_pct))
+        ? Number(prev.sold_supply_pct)
+        : stickyLane[w] && stickyLane[w].sold_supply_pct != null
+          ? Number(stickyLane[w].sold_supply_pct)
+          : null;
+    if (soldSupplyPct != null) {
+      peakSoldSupply =
+        peakSoldSupply == null
+          ? soldSupplyPct
+          : Math.max(peakSoldSupply, soldSupplyPct);
+    }
+
     if (
       tag === "seller" &&
       everSold &&
@@ -1508,7 +1578,13 @@ function processRuggersFromAnalyze(data) {
         sold_pct:
           soldState.sold_pct != null
             ? soldState.sold_pct
-            : (stickyLane[w] && stickyLane[w].sold_pct) || 100,
+            : (stickyLane[w] && stickyLane[w].sold_pct) || null,
+        sold_supply_pct:
+          peakSoldSupply != null
+            ? peakSoldSupply
+            : stickyLane[w] && stickyLane[w].sold_supply_pct != null
+              ? stickyLane[w].sold_supply_pct
+              : null,
         first_pct: first.pct_supply,
         first_balance: first.balance,
         reason: soldState.reason || (stickyLane[w] && stickyLane[w].reason) || "sold_99",
@@ -1520,6 +1596,25 @@ function processRuggersFromAnalyze(data) {
       delete stickyLane[w];
     }
 
+    // Flagged meta: store supply sold, not fake 100%
+    if (flaggedSellers[w]) {
+      flaggedSellers[w] = {
+        ...flaggedSellers[w],
+        sold_supply_pct:
+          peakSoldSupply != null
+            ? peakSoldSupply
+            : flaggedSellers[w].sold_supply_pct,
+        sold_pct:
+          soldState.sold_pct != null
+            ? soldState.sold_pct
+            : flaggedSellers[w].sold_pct,
+        bought_back_supply_pct:
+          tag === "swing"
+            ? boughtBackSupplyPct
+            : flaggedSellers[w].bought_back_supply_pct,
+      };
+    }
+
     status[w] = {
       tag,
       ever_sold: everSold,
@@ -1528,12 +1623,22 @@ function processRuggersFromAnalyze(data) {
       current_pct: cur.listed ? cur.pct_supply : 0,
       current_balance: cur.listed ? cur.balance : 0,
       listed: !!cur.listed,
+      // % of first bag (rule helper; not shown as "100% of supply")
       sold_pct:
         soldState.sold_pct != null
           ? soldState.sold_pct
           : stickyLane[w] && stickyLane[w].sold_pct != null
             ? stickyLane[w].sold_pct
             : null,
+      // % of mint supply sold (what UI shows for sellers)
+      sold_supply_pct:
+        peakSoldSupply != null
+          ? peakSoldSupply
+          : stickyLane[w] && stickyLane[w].sold_supply_pct != null
+            ? stickyLane[w].sold_supply_pct
+            : soldSupplyPct,
+      // % of mint supply bought back (what UI shows for swingers)
+      bought_back_supply_pct: boughtBackSupplyPct,
       reason:
         tag === "swing" && isFlaggedLineage
           ? "buy_back_flagged_swing"
@@ -1579,7 +1684,14 @@ function processRuggersFromAnalyze(data) {
         current_pct: 0,
         current_balance: 0,
         listed: false,
-        sold_pct: meta.sold_pct != null ? meta.sold_pct : 100,
+        sold_pct: meta.sold_pct != null ? meta.sold_pct : null,
+        sold_supply_pct:
+          meta.sold_supply_pct != null
+            ? meta.sold_supply_pct
+            : meta.first_pct != null
+              ? meta.first_pct
+              : null,
+        bought_back_supply_pct: null,
         reason: meta.reason || "sold_99_sticky",
         in_similar: lane === "similar",
         origin_lane: lane,
@@ -1597,6 +1709,18 @@ function processRuggersFromAnalyze(data) {
       status[sw].in_similar = lane === "similar" || !!status[sw].in_similar;
       if (status[sw].sold_pct == null && meta.sold_pct != null) {
         status[sw].sold_pct = meta.sold_pct;
+      }
+      if (
+        status[sw].sold_supply_pct == null &&
+        meta.sold_supply_pct != null
+      ) {
+        status[sw].sold_supply_pct = meta.sold_supply_pct;
+      }
+      if (
+        status[sw].sold_supply_pct == null &&
+        meta.first_pct != null
+      ) {
+        status[sw].sold_supply_pct = meta.first_pct;
       }
     }
     // Ensure baseline memory so future analyzes still track them
@@ -2082,8 +2206,14 @@ function ruggersBuckets(rec) {
       ever_sold: true,
       ever_flagged_on_mint: true,
       origin_lane: meta.origin_lane || "single",
-      sold_pct: meta.sold_pct != null ? meta.sold_pct : 100,
-      first_pct: meta.first_pct,
+      sold_pct: meta.sold_pct != null ? meta.sold_pct : null,
+      sold_supply_pct:
+        meta.sold_supply_pct != null
+          ? meta.sold_supply_pct
+          : meta.first_pct != null
+            ? meta.first_pct
+            : st.sold_supply_pct,
+      first_pct: meta.first_pct != null ? meta.first_pct : st.first_pct,
       current_pct: st.current_pct != null ? st.current_pct : 0,
       listed: st.listed === true,
       reason: meta.reason || "sold_99",
@@ -2140,7 +2270,17 @@ function ruggersBuckets(rec) {
           ? st.sold_pct
           : meta.sold_pct != null
             ? meta.sold_pct
-            : 100,
+            : null,
+      sold_supply_pct:
+        st.sold_supply_pct != null
+          ? st.sold_supply_pct
+          : meta.sold_supply_pct != null
+            ? meta.sold_supply_pct
+            : meta.first_pct != null
+              ? meta.first_pct
+              : st.first_pct != null
+                ? st.first_pct
+                : null,
       first_pct: st.first_pct != null ? st.first_pct : meta.first_pct,
       current_pct: st.current_pct != null ? st.current_pct : 0,
       listed: st.listed === true,
@@ -2158,7 +2298,21 @@ function ruggersBuckets(rec) {
     }
   }
 
-  const bySold = (a, b) => (Number(b.sold_pct) || 0) - (Number(a.sold_pct) || 0);
+  const bySold = (a, b) => {
+    const as =
+      a.sold_supply_pct != null
+        ? Number(a.sold_supply_pct)
+        : a.bought_back_supply_pct != null
+          ? Number(a.bought_back_supply_pct)
+          : Number(a.sold_pct) || 0;
+    const bs =
+      b.sold_supply_pct != null
+        ? Number(b.sold_supply_pct)
+        : b.bought_back_supply_pct != null
+          ? Number(b.bought_back_supply_pct)
+          : Number(b.sold_pct) || 0;
+    return bs - as;
+  };
   creatorSold.sort(bySold);
   similarSellers.sort(bySold);
   singleSellers.sort(bySold);
@@ -2188,18 +2342,51 @@ let _lastRuggersBuckets = null;
 let _lastRuggersRec = null;
 let _lastRuggersKey = "";
 
+function fmtSupplyPct(n) {
+  if (n == null || !Number.isFinite(Number(n))) return null;
+  const v = Number(n);
+  if (v === 0) return "0%";
+  if (Math.abs(v) >= 1) return v.toFixed(2).replace(/\.?0+$/, "") + "%";
+  if (Math.abs(v) >= 0.01) return v.toFixed(3).replace(/\.?0+$/, "") + "%";
+  return v.toFixed(4).replace(/\.?0+$/, "") + "%";
+}
+
 function renderRuggersWalletRow(row) {
   const w = row.wallet || "";
   const isFlagged = !!row.is_flagged || row.tag === "flagged";
   const isSwing = row.tag === "swing";
   // Flagged-on-swing keeps purple scheme (not gold-only)
   const flaggedSwing = isFlagged && isSwing;
-  const sold =
-    row.sold_pct != null
-      ? Number(row.sold_pct).toFixed(1) + "% sold"
+
+  // Prefer supply % sold (not bag "100%")
+  let soldSupply = row.sold_supply_pct;
+  if (soldSupply == null && row.first_pct != null) {
+    const cur =
+      row.listed && row.current_pct != null ? Number(row.current_pct) : 0;
+    soldSupply = Math.max(0, Number(row.first_pct) - cur);
+  }
+  const boughtBack =
+    row.bought_back_supply_pct != null
+      ? row.bought_back_supply_pct
+      : isSwing && row.current_pct != null
+        ? row.current_pct
+        : null;
+
+  let headline;
+  if (isSwing) {
+    const bb = fmtSupplyPct(boughtBack);
+    headline = bb
+      ? "bought back " + bb + " of supply"
+      : "bought back (amount n/a)";
+  } else {
+    const ss = fmtSupplyPct(soldSupply);
+    headline = ss
+      ? "sold " + ss + " of supply"
       : isFlagged && row.tag === "flagged"
         ? "on RugWatch list"
-        : "sold";
+        : "sold (supply % n/a)";
+  }
+
   const first = "first " + fmtRugPct(row.first_pct);
   const now =
     isSwing
@@ -2213,9 +2400,9 @@ function renderRuggersWalletRow(row) {
     row.reason === "not_listed"
       ? "dropped off holder list"
       : row.reason === "sold_100"
-        ? "sold 100% of first bag"
+        ? "dumped full first bag"
         : row.reason === "sold_99"
-          ? "sold ≥99% of first bag"
+          ? "dumped ≥99% of first bag"
           : row.reason === "rugwatch_flagged"
             ? "already on RugWatch (flagged)"
             : row.reason === "buy_back_flagged_swing"
@@ -2265,7 +2452,7 @@ function renderRuggersWalletRow(row) {
     "</a>" +
     "</div>" +
     '<div class="rug-wallet-meta">' +
-    escHtml(sold) +
+    escHtml(headline) +
     " · " +
     escHtml(first) +
     " → " +
