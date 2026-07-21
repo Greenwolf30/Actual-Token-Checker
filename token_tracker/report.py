@@ -602,34 +602,59 @@ def format_about_section(report: dict[str, Any]) -> str:
         lines.append("")
 
     # ── X / COMMUNITY POSTS ───────────────────────────────────────────
+    # Compact meta (always with values) so nothing crowds/covers post text.
     lines.append("-" * 72)
     lines.append("")
     lines.append("X / COMMUNITY POSTS")
     kind = sent.get("kind") or ("x_text" if x.get("posts_analyzed") else "unknown")
-    lines.append(f"  Label:           {sent.get('label')}")
-    lines.append(f"  Score:           {sent.get('score')}")
-    lines.append(f"  Kind:            {kind}")
-    lines.append(f"  Posts analyzed:  {x.get('posts_analyzed')}")
+    label = sent.get("label")
+    if label is None or str(label).strip() == "" or str(label).lower() == "none":
+        label_s = "n/a"
+    else:
+        label_s = str(label).strip()
+    score = sent.get("score")
+    if score is None or score == "":
+        score_s = "n/a"
+    else:
+        try:
+            score_s = f"{float(score):g}"
+        except (TypeError, ValueError):
+            score_s = str(score)
+    posts_n = x.get("posts_analyzed")
+    if posts_n is None or posts_n == "":
+        posts_s = "0"
+    else:
+        posts_s = str(posts_n)
+    srcs = [str(s) for s in (x.get("sources_used") or []) if s]
+    srcs_s = ", ".join(srcs) if srcs else "n/a"
+    # One tight meta line + optional handle / summary / note
+    lines.append(
+        f"  Tone: {label_s} · score {score_s} · kind {kind} · posts analyzed {posts_s}"
+    )
+    lines.append(f"  Sources: {srcs_s}")
     tw_handle = (
         (x.get("twitter_handle") or socials.get("twitter_handle") or "")
         .strip()
         .lstrip("@")
     )
     if tw_handle:
-        lines.append(f"  Handle:          @{tw_handle}")
-        lines.append(f"  X profile:")
-        lines.append(f"    https://x.com/{tw_handle}")
+        lines.append(f"  Handle: @{tw_handle}")
+        lines.append(f"  Profile: https://x.com/{tw_handle}")
     else:
-        lines.append("  Handle:          (none on DexScreener)")
-    lines.append(f"  Sources:         {', '.join(x.get('sources_used') or [])}")
-    if sent.get("summary"):
-        lines.append(f"  Summary:         {sent.get('summary')}")
-    if x.get("notes"):
-        lines.append(f"  Note:            {x.get('notes')}")
+        lines.append("  Handle: n/a")
+    summary = (sent.get("summary") or "").strip()
+    if summary:
+        lines.append("  Summary: " + summary)
+    notes = (x.get("notes") or "").strip()
+    if notes:
+        lines.append("  Note: " + notes)
+
     samples = x.get("sample_posts") or []
+    lines.append("")
     if samples:
         lines.append("  Recent X posts:")
         seen_posts: set[str] = set()
+        shown = 0
         for p in samples[:10]:
             text = (p.get("text") or "").replace("\n", " ").strip()
             if not text:
@@ -638,8 +663,8 @@ def format_about_section(report: dict[str, Any]) -> str:
             if key in seen_posts:
                 continue
             seen_posts.add(key)
-            if len(text) > 140:
-                text = text[:137] + "..."
+            if len(text) > 160:
+                text = text[:157] + "..."
             lines.append(f"    • {text}")
             post_url = (p.get("url") or p.get("link") or "").strip()
             src = p.get("source") or ""
@@ -649,8 +674,13 @@ def format_about_section(report: dict[str, Any]) -> str:
                 lines.append(f"      {post_url}")
             elif src:
                 lines.append(f"      ({src})")
+            shown += 1
+        if shown == 0:
+            lines.append("  (No readable post text in samples.)")
     else:
-        lines.append("  (No sample posts fetched — tone may use market-crowd fallback.)")
+        lines.append(
+            "  (No sample posts fetched — tone may use market-crowd fallback.)"
+        )
 
     # ── PUBLIC NEWS ───────────────────────────────────────────────────
     lines.append("")
