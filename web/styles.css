@@ -1058,6 +1058,20 @@ a.copy-mint:hover,
   color: var(--accent);
   border: 1px solid var(--accent-border);
 }
+.rug-supply-sold {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  font-family: var(--mono);
+  letter-spacing: 0.01em;
+  color: #e0a050;
+  background: rgba(255, 159, 10, 0.1);
+  border: 1px solid rgba(255, 159, 10, 0.28);
+  white-space: nowrap;
+}
 .rug-section-hint {
   margin: 0;
   padding: 6px 12px 4px;

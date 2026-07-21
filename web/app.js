@@ -3740,6 +3740,52 @@ function renderRuggersWalletRow(row) {
 }
 
 /**
+ * Sum of mint-supply sold % across wallets in a Ruggers category.
+ * Uses sold_supply_pct when set; else first_pct for full dumps; else 0.
+ * Caps display at 100 (overlap possible across wallets).
+ */
+function sumRuggersCategorySoldSupplyPct(rows) {
+  let sum = 0;
+  const seen = new Set();
+  for (const r of rows || []) {
+    if (!r) continue;
+    const w = String(r.wallet || "").trim();
+    if (w) {
+      if (seen.has(w)) continue;
+      seen.add(w);
+    }
+    let v = null;
+    if (r.sold_supply_pct != null && Number.isFinite(Number(r.sold_supply_pct))) {
+      v = Number(r.sold_supply_pct);
+    } else if (
+      r.tag === "seller" &&
+      r.first_pct != null &&
+      Number.isFinite(Number(r.first_pct))
+    ) {
+      // Full / near-full dump of first bag ≈ supply sold for that bag
+      const soldPct = r.sold_pct != null ? Number(r.sold_pct) : 100;
+      if (Number.isFinite(soldPct) && soldPct >= 99) {
+        v = Number(r.first_pct);
+      } else if (Number.isFinite(soldPct) && soldPct > 0) {
+        v = (Number(r.first_pct) * soldPct) / 100;
+      }
+    }
+    if (v != null && Number.isFinite(v) && v > 0) sum += v;
+  }
+  if (sum > 100) sum = 100;
+  return sum;
+}
+
+function formatRuggersSoldSupplyTotal(pct) {
+  if (pct == null || !Number.isFinite(Number(pct)) || Number(pct) <= 0) {
+    return "0% supply sold";
+  }
+  const n = Number(pct);
+  const s = n >= 10 ? n.toFixed(1) : n >= 1 ? n.toFixed(2) : n.toFixed(3);
+  return s.replace(/\.?0+$/, "") + "% supply sold";
+}
+
+/**
  * @param {string} title
  * @param {string} hint
  * @param {object[]} rows
@@ -3754,6 +3800,8 @@ function renderRuggersSection(title, hint, rows, exportKey, opts) {
     body = rows.map(renderRuggersWalletRow).join("");
   }
   const n = rows ? rows.length : 0;
+  const soldSupplyTot = sumRuggersCategorySoldSupplyPct(rows);
+  const soldSupplyLabel = formatRuggersSoldSupplyTotal(soldSupplyTot);
   // Upload count = not yet uploaded on this mint (ignores already-uploaded)
   const rec = _lastRuggersRec;
   const nUpload = (rows || []).filter(
@@ -3803,6 +3851,9 @@ function renderRuggersSection(title, hint, rows, exportKey, opts) {
     titleHtml +
     ' <span class="rug-count">' +
     n +
+    "</span>" +
+    ' <span class="rug-supply-sold" title="Sum of mint-supply % sold across wallets in this section (capped at 100%)">' +
+    escHtml(soldSupplyLabel) +
     "</span></h3>" +
     actions +
     "</div>" +
@@ -4528,7 +4579,9 @@ function refreshRuggersPanel(focusKey) {
       '<div class="rug-section-head">' +
       '<h3 class="rug-section-title">' +
       ruggersFlaggedTitleHtml() +
-      ' <span class="rug-count">0</span></h3>' +
+      ' <span class="rug-count">0</span>' +
+      ' <span class="rug-supply-sold" title="Sum of mint-supply % sold across wallets in this section (capped at 100%)">0% supply sold</span>' +
+      "</h3>" +
       "</div>" +
       '<p class="rug-section-hint">' +
       "Empty until a RugWatch wallet sells ≥99% on this mint. " +
