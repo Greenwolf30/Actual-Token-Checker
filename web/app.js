@@ -3686,7 +3686,7 @@ function refreshRuggersPanel(focusKey) {
   );
   html += renderRuggersSection(
     "Multi-account clusters (1 Owner)",
-    "Same owner, several large ATAs at first lookup. " +
+    "Same owner, several large Associated Token Accounts at first lookup. " +
       "Sell ≥99% of first bag → stay here · buy-back → Swing (multi-account label kept) · " +
       "sell again → back here. Export + Upload (same metrics as Creator/Similar).",
     buckets.multiSellers || [],
@@ -3710,7 +3710,8 @@ function refreshRuggersPanel(focusKey) {
   );
   html += renderRuggersSection(
     "Same-slot multi-buys (Launch-window)",
-    "Launch-window same-slot multi-buy wallets at first lookup. " +
+    "Launch-window same-slot multi-buy wallets at first lookup " +
+      "(Solana slot ≈ ~400ms chain time; several wallets buy in the same slot). " +
       "Sell ≥99% → stay here · buy-back → Swing (launch-window label kept) · " +
       "sell again → back here. Export + Upload.",
     buckets.launchSellers || [],

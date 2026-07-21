@@ -13,7 +13,8 @@
   local + cloud.
 
   Everything here is a HEURISTIC from public data. Not financial advice.
-  Last major docs update: 2026-07-21 (Ruggers lanes, About LinkedIn, UI titles).
+  Last major docs update: 2026-07-21 (slot / same-slot multi-buys; spell out
+  Associated Token Account in full, not “ATA”).
 ================================================================================
 
 
@@ -242,10 +243,12 @@ What people often ask
     - Rugcheck (insiders, rugged flag, risk names, networks)
     - Birdeye (optional): bundler / sniper / insider / dev tags, security flags
     - Heuristics on the holder list:
-        * Multi-account clusters (one wallet, several large ATAs)
+        * Multi-account clusters (one owner, several large Associated Token
+          Accounts — see §6.3b)
         * Similar-sized non-LP top wallets (look like coordinated buys)
         * Concentration of top wallets excluding known LP / programs
-        * Same-slot multi-buy style signals when available (Jito-style / Helius)
+        * Same-slot multi-buy style signals when available (Jito-style / Helius;
+          see §6.3c)
 
   If holders fail, bundles usually cannot run.
 
@@ -257,13 +260,15 @@ What people often ask
 
   - Summary: estimated total bundle % of supply (when available)
   - Similar-size total %: combined supply of unique wallets in similar-size groups
-  - ── MULTI-ACCOUNT CLUSTERS ──  one owner, several large ATAs
+  - ── MULTI-ACCOUNT CLUSTERS ──  one owner, several large Associated Token
+                                  Accounts (see §6.3b)
   - ── SIMILAR-SIZE GROUPS ──     nearly same bag size among top wallets
   - ── INSIDER-FLAGGED ──         Rugcheck insider tags (not RugWatch)
   - ── SHARED SOL FUNDER ──       1-hop common SOL funder (Helius when available)
-  - ── LAUNCH-WINDOW ──           same-slot multi-buys at launch (time window)
+  - ── LAUNCH-WINDOW ──           same-slot multi-buys at launch (see §6.3c)
   - ── SUSPECT WALLETS ──         union of signals (heuristic)
-  - Signals: multi-ATA, similar-size, insiders, funder, launch, Birdeye tags, rugged
+  - Signals: multi Associated Token Account clusters, similar-size, insiders,
+    funder, launch-window, Birdeye tags, rugged
   - Top10 ex-LP (see §6.3a)
   - Notes that methods are partial
 
@@ -280,9 +285,10 @@ What people often ask
     | Section              | What it tracks                              |
     |----------------------|---------------------------------------------|
     | Launch-window        | Many buys in the same slot / short launch   |
-    |                      | time window (not “same bag size”)           |
+    |                      | time window (not “same bag size”) — §6.3c   |
     | Similar-size         | Same holding size, not necessarily same time|
-    | Multi-account        | Same owner, multiple large token accounts   |
+    | Multi-account        | Same owner, multiple large Associated Token |
+    |                      | Accounts (token accounts) — §6.3b           |
     | Shared SOL funder    | Same funding parent (1-hop SOL), not slot   |
     | Insider (Rugcheck)   | Rugcheck insider flag on top holders        |
 
@@ -305,6 +311,50 @@ What people often ask
     - Shown on Bundles (and may appear in Logs bundles snapshot).
     - That % is NOT colored with the wallet holding priority bands
       (same idea as Top1 / Top5 / Top10 summary lines).
+
+6.3b What an Associated Token Account is (multi-account clusters)
+  On Solana, your wallet (owner address) does not hold SPL tokens directly.
+  Each token mint uses a separate token account. The standard one for
+  “this owner + this mint” is the Associated Token Account.
+
+    Wallet / owner  — the key people usually share (what ATC colors as
+                      the holder when possible)
+    Associated Token Account — the on-chain account that actually holds
+                      that mint’s balance for that owner
+    Mint            — the token itself (contract / mint address)
+
+  Multi-account / multi Associated Token Account cluster
+    - Same owner controls more than one large token account for this mint
+    - Holder lists sometimes show the token-account address, not the owner
+    - ATC rolls those up by owner when it can, so one person is not counted
+      as several unrelated holders
+    - Shown under ── MULTI-ACCOUNT CLUSTERS ── and Ruggers “Multi-account
+      clusters (1 Owner)”
+
+  This is a heuristic (“looks like one operator with several bags”), not
+  proof of identity.
+
+6.3c What a slot is, and same-slot multi-buys (Launch-window)
+  Slot (Solana)
+    - A short unit of chain time (about ~400 milliseconds)
+    - Many transactions can land in the same slot
+    - “Same slot” means roughly the same on-chain moment — not the same day
+
+  Same-slot multi-buys
+    - Several different wallets buy the same token in the same slot
+      (often right at launch)
+    - “Multi” = more than one buy; “multi-wallet” = different addresses
+    - Random organic buyers usually hit different slots over time
+    - Many wallets in one slot often looks like a coordinated snipe,
+      bot stack, or MEV-style bundle (still a heuristic, not proof)
+
+  Where ATC shows this
+    - Bundles: ── LAUNCH-WINDOW ── and Signals (Jito-style / Helius history
+      when available)
+    - Ruggers: “Same-slot multi-buys (Launch-window)” for sellers tagged
+      that way at first full Analyze
+    - Not the same as similar-size (bag size) or shared SOL funder (funding
+      parent) — see the comparison table under §6.3
 
 6.4 Bundle % alert scheme (Alerts tab)
   Alerts use ONE number: estimated bundle % of supply
@@ -365,8 +415,10 @@ What people often ask
     - High bundle % with many smaller similar wallets
 
 6.7 Extra signals that feed risk (not the same as the % bands)
-  - Multi-ATA clusters (one owner, several accounts)
+  - Multi Associated Token Account clusters (one owner, several token
+    accounts — §6.3b)
   - Similar-sized top wallets
+  - Launch-window same-slot multi-buys (Jito-style / Helius — §6.3c)
   - Rugcheck insider_count, rugged=true, risk names (bundle/sniper/insider/…)
   - Birdeye bundler/sniper/insider/dev % tags (if API key set)
   - Mint/freeze authority style security flags (Birdeye)
@@ -706,8 +758,9 @@ How tracking starts (first lookup)
   After a successful full Analyze (Quick OFF) with holders:
 
   1. Non-LP holders (bag ≥ 0.01% when % known) are stored as baseline.
-  2. Bundles tags attach: similar-size, multi-account, insider, shared funder,
-     launch-window same-slot, suspect.
+  2. Bundles tags attach: similar-size, multi-account (multiple Associated
+     Token Accounts under one owner), insider, shared funder,
+     launch-window same-slot multi-buys, suspect.
   3. Creator wallet (when known) is included.
   4. Each wallet’s first supply % (and balance when known) is frozen.
   5. Origin lane is frozen once (see chart below). Later Analyzes do not
@@ -721,10 +774,12 @@ Where each Ruggers section comes from (Holders / Bundles)
   |-----------------------------------------|-------------------------------------------|
   | Creator (sold ≥99%)                     | Mint creator (Holders meta / Rugcheck)    |
   | Similar wallets (sellers)               | Bundles similar-size groups               |
-  | Multi-account clusters (1 Owner)        | Holders/Bundles owner clusters (multi-ATA)|
+  | Multi-account clusters (1 Owner)        | Holders/Bundles owner clusters (multiple  |
+  |                                         | Associated Token Accounts — §6.3b)        |
   | Shared SOL funder clusters (1-Owner)    | Bundles funding clusters (1-hop SOL)      |
   | Insider-flagged wallets (Rugcheck)      | Rugcheck insider flag (NOT RugWatch)      |
   | Same-slot multi-buys (Launch-window)    | Bundles launch-window / same-slot buys    |
+  |                                         | (§6.3c — Solana slot ≈ ~400ms chain time) |
   | Suspect wallets                         | Bundles suspect union (if not more specific)|
   | Single wallets (sellers)                | Plain holders ≥0.01%, none of the above   |
   | Flagged wallets (RugWatch)              | YOUR RugWatch cloud/local + sold ≥99%     |

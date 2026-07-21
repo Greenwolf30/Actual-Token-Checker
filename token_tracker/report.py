@@ -230,7 +230,8 @@ def format_pretty(report: dict[str, Any]) -> str:
         else:
             lines.append("  Total % bundles: n/a (none flagged)")
         lines.append(
-            f"  Clusters:        {bs.get('multi_account_clusters')} multi-ATA · "
+            f"  Clusters:        {bs.get('multi_account_clusters')} multi "
+            f"Associated Token Account · "
             f"similar groups {bs.get('similar_size_groups')} · "
             f"insiders {bs.get('insider_accounts')}"
         )
@@ -248,7 +249,7 @@ def format_pretty(report: dict[str, Any]) -> str:
             lines.append("  Multi-account clusters:")
             for c in clusters[:8]:
                 lines.append(
-                    f"    {c.get('wallet')} · {c.get('accounts')} ATAs · "
+                    f"    {c.get('wallet')} · {c.get('accounts')} Associated Token Accounts · "
                     f"~{_pct(c.get('pct_supply'))} · bal {c.get('combined_balance')}"
                 )
         groups = bundles.get("similar_size_groups") or []

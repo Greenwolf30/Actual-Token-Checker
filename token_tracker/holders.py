@@ -1581,7 +1581,7 @@ def format_holders_text(data: dict[str, Any]) -> str:
         total_s = f"{cl_total:.2f}%" if has_pct else "n/a"
         lines.append("── MULTI-ACCOUNT CLUSTERS ──")
         lines.append(
-            f"  Same wallet, several large ATAs — "
+            f"  Same wallet, several large Associated Token Accounts — "
             f"total {total_s} across {cl_n} wallet(s):"
         )
         for c in clusters[:8]:
@@ -1589,7 +1589,7 @@ def format_holders_text(data: dict[str, Any]) -> str:
             pct = pct_by_wallet.get(w)
             pct_s = _pct(pct)
             lines.append(
-                f"    • {w}  ·  {c.get('accounts') or '?'} ATAs"
+                f"    • {w}  ·  {c.get('accounts') or '?'} Associated Token Accounts"
                 f"  ·  total {pct_s}"
             )
             lines.append(f"         {w}  holds {pct_s}")

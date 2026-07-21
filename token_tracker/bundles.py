@@ -2,7 +2,7 @@
 Bundle / coordinated-wallet heuristics from top-holder snapshots.
 
 This is NOT a professional sniper-graph indexer. Signals are derived from:
-  - multi-account clusters (same wallet, multiple large ATAs)
+  - multi-account clusters (same wallet, multiple large Associated Token Accounts)
   - similar-sized non-LP top wallets (possible coordinated buys)
   - Rugcheck insider flags when present
   - concentration of top wallets excluding known programs / LP
@@ -56,7 +56,7 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
                 "title": "Multi-account wallet clusters",
                 "detail": (
                     f"{len(multi_clusters)} wallet(s) control multiple large token accounts "
-                    f"({n_acct} ATAs total in the top set)."
+                    f"({n_acct} Associated Token Accounts total in the top set)."
                 ),
             }
         )
@@ -125,8 +125,8 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
                 "severity": "info",
                 "title": "No strong bundle signals",
                 "detail": (
-                    "Top-holder snapshot does not show multi-ATA clusters, "
-                    "tight similar-size groups, or insider flags."
+                    "Top-holder snapshot does not show multi Associated Token "
+                    "Account clusters, tight similar-size groups, or insider flags."
                 ),
             }
         )
@@ -228,7 +228,9 @@ def format_bundles_text(data: dict[str, Any]) -> str:
     cl_n = int(s.get("multi_account_clusters") or 0)
     sg_n = int(s.get("similar_size_groups") or 0)
     if cl_n > 0:
-        lines.append(f"  Clusters:        {cl_n} multi-ATA wallet(s)")
+        lines.append(
+            f"  Clusters:        {cl_n} multi Associated Token Account wallet(s)"
+        )
     else:
         lines.append("  Clusters will show here if value returns True")
     if sg_n > 0:
@@ -306,7 +308,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
         cl_total, cl_wn = _sum_wallets_pct(cl_rows)
         lines.append("── MULTI-ACCOUNT CLUSTERS ──")
         lines.append(
-            f"  Same wallet → several large ATAs — "
+            f"  Same wallet → several large Associated Token Accounts — "
             f"total {_pct(cl_total)} across {cl_wn} wallet(s):"
         )
         for c in clusters[:10]:
@@ -318,13 +320,13 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             )
             # Subgroup total = this owner's combined bag (like slot total)
             lines.append(
-                f"    • {w}  ·  {c.get('accounts') or '?'} ATAs"
+                f"    • {w}  ·  {c.get('accounts') or '?'} Associated Token Accounts"
                 f"  ·  total {_pct(pct)}"
             )
             lines.append(f"         {w}  holds {_pct(pct)}")
             accts = c.get("token_accounts") or []
             for a in accts[:4]:
-                lines.append(f"         ATA {a}")
+                lines.append(f"         Associated Token Account {a}")
             if len(accts) > 4:
                 lines.append(f"         … +{len(accts) - 4} more")
     else:
@@ -489,6 +491,10 @@ def format_bundles_text(data: dict[str, Any]) -> str:
     slots = data.get("same_slot_groups") or []
     lines.append("")
     lines.append("── LAUNCH-WINDOW ──")
+    lines.append(
+        "  Slot = Solana chain time unit (~400ms). Same-slot multi-buys = several "
+        "different wallets buy this mint in the same slot (often at launch)."
+    )
     if slots:
         # Category total across all slots (unique wallets)
         launch_rows: list[dict[str, Any]] = []
@@ -937,7 +943,11 @@ def _suspect_wallets(
             row["pct_supply"] = pct
 
     for c in clusters:
-        _add(c.get("wallet"), "multi-ATA cluster", c.get("pct_supply"))
+        _add(
+            c.get("wallet"),
+            "multi Associated Token Account cluster",
+            c.get("pct_supply"),
+        )
     for g in groups:
         for w in g.get("wallets") or []:
             _add(w, "similar-size group", g.get("avg_pct"))

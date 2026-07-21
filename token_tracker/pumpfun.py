@@ -62,7 +62,10 @@ def fetch_pump_lp_accounts(mint: str) -> dict[str, str]:
             out[a] = label
 
     _add(data.get("bonding_curve"), "Pump.fun bonding curve")
-    _add(data.get("associated_bonding_curve"), "Pump.fun bonding curve (ATA)")
+    _add(
+        data.get("associated_bonding_curve"),
+        "Pump.fun bonding curve (Associated Token Account)",
+    )
     _add(data.get("pump_swap_pool"), "PumpSwap pool (liquidity)")
     # Some payloads use raydium_pool after migrate
     _add(data.get("raydium_pool"), "Raydium pool (liquidity)")
