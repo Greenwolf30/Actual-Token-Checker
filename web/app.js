@@ -38,7 +38,7 @@ const RUGGERS_LANE_LABEL = {
   multi: "multi-account",
   funding: "shared funder",
   insider: "insider",
-  launch: "launch-window",
+  launch: "same-slot multi-buys (bots)",
   suspect: "suspect",
   single: "single",
 };
@@ -3099,8 +3099,19 @@ function renderRuggersSection(title, hint, rows, exportKey, opts) {
     opts && opts.titleHtml
       ? opts.titleHtml
       : escHtml(title || "");
+  const sectionClass =
+    "rug-section" +
+    (opts && opts.sectionClass ? " " + opts.sectionClass : "");
+  const hintHtml =
+    opts && opts.hintHtml
+      ? opts.hintHtml
+      : hint
+        ? escHtml(hint)
+        : "";
   return (
-    '<section class="rug-section">' +
+    '<section class="' +
+    sectionClass +
+    '">' +
     '<div class="rug-section-head">' +
     '<h3 class="rug-section-title">' +
     titleHtml +
@@ -3109,7 +3120,9 @@ function renderRuggersSection(title, hint, rows, exportKey, opts) {
     "</span></h3>" +
     actions +
     "</div>" +
-    (hint ? '<p class="rug-section-hint">' + escHtml(hint) + "</p>" : "") +
+    (hintHtml
+      ? '<p class="rug-section-hint">' + hintHtml + "</p>"
+      : "") +
     '<div class="rug-section-body">' +
     body +
     "</div></section>"
@@ -3121,6 +3134,17 @@ function ruggersFlaggedTitleHtml() {
   return (
     "Flagged wallets " +
     '(<span class="rug-label-rugwatch">RugWatch</span>)'
+  );
+}
+
+/**
+ * Same-slot multi-buys title — dim-yellow (bots) / (launch-window) tags.
+ */
+function ruggersLaunchTitleHtml() {
+  return (
+    "Same-slot multi-buys " +
+    '(<span class="rug-label-launch-bots">bots</span>) ' +
+    '(<span class="rug-label-launch-window">launch-window</span>)'
   );
 }
 
@@ -3584,7 +3608,7 @@ function refreshRuggersPanel(focusKey) {
     "seller lists start <strong>empty</strong>. " +
     "<strong>Re-Analyze later</strong> — wallets that sold <strong>≥99%</strong> of that first bag " +
     "appear under their baseline category: Creator · Similar · Multi-account · Shared funder · " +
-    "Insider · Launch-window · Suspect · Single · Flagged wallets (RugWatch). " +
+    "Insider · Same-slot multi-buys (bots) · Suspect · Single · Flagged wallets (RugWatch). " +
     "Buy-back → <span class=\"rug-tag rug-tag-swing\">swing</span> (label kept) · " +
     "sell again → back to the same category. Loop continues.</p>";
 
@@ -3709,13 +3733,23 @@ function refreshRuggersPanel(focusKey) {
     "insider"
   );
   html += renderRuggersSection(
-    "Same-slot multi-buys (Launch-window)",
-    "Launch-window same-slot multi-buy wallets at first lookup " +
-      "(Solana slot ≈ ~400ms chain time; several wallets buy in the same slot). " +
-      "Sell ≥99% → stay here · buy-back → Swing (launch-window label kept) · " +
-      "sell again → back here. Export + Upload.",
+    "Same-slot multi-buys (bots) (launch-window)",
+    "",
     buckets.launchSellers || [],
-    "launch"
+    "launch",
+    {
+      sectionClass: "rug-section-launch-bots",
+      titleHtml: ruggersLaunchTitleHtml(),
+      hintHtml:
+        "Same-slot multi-buy sellers from the launch-window scan (several different " +
+        "wallets bought this mint in the same Solana slot ≈ ~400ms). " +
+        "<strong>Possibly</strong> bots, snipers, MEV/bundle-style entry, and/or " +
+        "team multi-wallet buys — co-timed activity is a heuristic, not proof of " +
+        "identity or automation. " +
+        "Tagged at first full Analyze · Sell ≥99% → stay here · buy-back → Swing " +
+        '(label kept as <span class="rug-label-launch-bots">same-slot multi-buys (bots)</span>) · ' +
+        "sell again → back here. Export + Upload.",
+    }
   );
   html += renderRuggersSection(
     "Suspect wallets",

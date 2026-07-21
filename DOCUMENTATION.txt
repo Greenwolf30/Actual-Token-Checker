@@ -348,8 +348,10 @@ What people often ask
   UI location
     Bundles tab → ── LAUNCH-WINDOW ──
     Bundles Signals → “Launch-window same-slot multi-wallet buys” (when hit)
-    Ruggers → “Same-slot multi-buys (Launch-window)” (sellers tagged at first
-              full Analyze when Quick is OFF)
+    Ruggers → “Same-slot multi-buys (bots) (launch-window)” — yellow banner;
+              sellers tagged at first full Analyze when Quick is OFF.
+              Description notes possible bots / snipers / MEV-bundle entry /
+              team multi-wallet buys (heuristic, not proof).
 
   Related (not the same signal)
     Multi-account     → same owner, multiple Associated Token Accounts (§6.3b)
@@ -975,8 +977,10 @@ Where each Ruggers section comes from (Holders / Bundles)
   |                                         | Associated Token Accounts — §6.3b)        |
   | Shared SOL funder clusters (1-Owner)    | Bundles funding clusters (1-hop SOL)      |
   | Insider-flagged wallets (Rugcheck)      | Rugcheck insider flag (NOT RugWatch)      |
-  | Same-slot multi-buys (Launch-window)    | Bundles launch-window / same-slot buys    |
-  |                                         | (§6.3c — Solana slot ≈ ~400ms chain time) |
+  | Same-slot multi-buys (bots) (launch-window) | Bundles launch-window / same-slot buys|
+  |   (yellow banner on Ruggers)            | (§6.3c). Possibly bots, snipers, MEV/     |
+  |                                         | bundle entry, team multi-wallet — not     |
+  |                                         | proof of automation or shared ownership.  |
   | Suspect wallets                         | Bundles suspect union (if not more specific)|
   | Single wallets (sellers)                | Plain holders ≥0.01%, none of the above   |
   | Flagged wallets (RugWatch)              | YOUR RugWatch cloud/local + sold ≥99%     |
@@ -1029,7 +1033,7 @@ Sell ↔ Swing loop (all sticky origin lanes)
   (this browser’s localStorage; until you clear site data).
 
 Labels (examples)
-  multi-account · seller   similar · seller   launch-window · seller
+  multi-account · seller   similar · seller   same-slot multi-buys (bots) · seller
   multi-account · swing    flagged · swing    creator · swing
   seller / swing heuristics only — not legal proof of collusion
 
