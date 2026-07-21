@@ -7,10 +7,13 @@
 
   This guide explains what each part of the app does, in plain language —
   including Quick mode, social scores, news, wallets, Rugcheck / creators,
-  the About tab, the Ruggers sell-out tracker, the RugWatch Analyze
-  checkbox, yellow Ruggers Upload to cloud, and how flags use local + cloud.
+  the About tab (incl. LinkedIn section), the Ruggers sell-out tracker
+  (all seller lanes + sticky sell↔swing), the RugWatch Analyze checkbox,
+  yellow Ruggers Upload/Export on every seller section, and how flags use
+  local + cloud.
 
   Everything here is a HEURISTIC from public data. Not financial advice.
+  Last major docs update: 2026-07-21 (Ruggers lanes, About LinkedIn, UI titles).
 ================================================================================
 
 
@@ -198,25 +201,38 @@ What people often ask
   is Solana-focused.
 
 6.3 What the Bundles tab shows
+  Section titles use dim-green ── TITLE ── markers (website).
+
   - Summary: estimated total bundle % of supply (when available)
-  - Similar-size total %: combined supply of unique wallets that sit in
-    similar-size groups (wallets with nearly the same holding size)
-  - Signals: e.g. multi-ATA clusters, similar-size groups, Rugcheck insiders,
-    Birdeye bundler/sniper tags, rugged flag
-  - Lists of suspect / flagged wallets (heuristic)
+  - Similar-size total %: combined supply of unique wallets in similar-size groups
+  - ── MULTI-ACCOUNT CLUSTERS ──  one owner, several large ATAs
+  - ── SIMILAR-SIZE GROUPS ──     nearly same bag size among top wallets
+  - ── INSIDER-FLAGGED ──         Rugcheck insider tags (not RugWatch)
+  - ── SHARED SOL FUNDER ──       1-hop common SOL funder (Helius when available)
+  - ── LAUNCH-WINDOW ──           same-slot multi-buys at launch (time window)
+  - ── SUSPECT WALLETS ──         union of signals (heuristic)
+  - Signals: multi-ATA, similar-size, insiders, funder, launch, Birdeye tags, rugged
   - Top10 ex-LP (see §6.3a)
   - Notes that methods are partial
 
   Display (website) — % color bands (same as Holders priority scheme)
   - Total % bundles, Similar-size total, Suspect total: colored by %
-  - Each wallet’s percent holdings in every group is colored the same way:
-      multi-account clusters, similar-size group members, insiders, suspects
+  - Each wallet’s percent holdings in every group is colored the same way
       (lines look like “wallet  holds X%”)
-  - Similar-size group header (right side): “sum X%” = combined holdings of
-      all wallets in that group; colored with the same priority bands
+  - Similar-size group header (right side): “sum X%” = combined group holdings
   - Group headers (≈ avg % / range) also use the bands
   - Cluster balances ("bal …") shown in yellow
   - Top10 ex-LP stays uncolored (summary only — see §6.3a)
+
+  Launch-window vs other signals
+    | Section              | What it tracks                              |
+    |----------------------|---------------------------------------------|
+    | Launch-window        | Many buys in the same slot / short launch   |
+    |                      | time window (not “same bag size”)           |
+    | Similar-size         | Same holding size, not necessarily same time|
+    | Multi-account        | Same owner, multiple large token accounts   |
+    | Shared SOL funder    | Same funding parent (1-hop SOL), not slot   |
+    | Insider (Rugcheck)   | Rugcheck insider flag on top holders        |
 
 6.3a What “Top10 ex-LP” means
   Top10 ex-LP = combined % of supply held by the top non-LP / non-program
@@ -398,11 +414,21 @@ Robinhood / EVM maps depend on Bubblemaps support for that chain.
 About is built from several public sources (not one API). Full Analyze loads
 it; Quick mode often skips or thins this work.
 
-About is split into:
-  Narrative (story) · Description sources · X / community · Public news · Links
+About is split into major sections (dim-green ── TITLE ── on the website):
+
+  ── NARRATIVE ──           storyline, theme, description sources, hooks
+  ── X / COMMUNITY POSTS ── tone, sources, recent posts
+  ── PUBLIC NEWS ──         public news headlines + links
+  ── LINKS ──               website, DexScreener, Solscan, X, Telegram, etc.
+  ── LINKEDIN ──            its own section (profiles/company pages + snippets)
 
 Not financial advice. Text is best-effort, filtered, and can be empty when
 APIs block or the token is too new.
+
+Top summary link bar (under market summary)
+  Shows dexscreener · solscan · twitter · website · telegram · etc.
+  Does NOT show raw metadata_uri / image JSON links (hidden by design).
+  metadata_uri is still used internally for About text when available.
 
 --------------------------------------------------------------------------------
 10.0 WHERE THE DATA COMES FROM (SOURCE MAP)
@@ -581,16 +607,20 @@ Priority rule
     - Not a trading signal by itself
 
 --------------------------------------------------------------------------------
-10.5 LINKS
+10.5 LINKS + LINKEDIN
 --------------------------------------------------------------------------------
 
-  Website, X, Telegram, LinkedIn (when found), DexScreener, Pump.fun page,
-  Solscan / explorers (including Robinhood Blockscout when chain is
-  robinhood), etc.
+── LINKS ──
+  Website, X, Telegram, DexScreener, Pump.fun page, Solscan / explorers
+  (including Robinhood Blockscout when chain is robinhood), Bubblemaps, etc.
 
-  Links are merged from DexScreener socials, coin_facts links (including
-  Pump.fun API twitter/telegram/website), and narrative snippets that
-  include a URL (e.g. LinkedIn search hits).
+  Merged from DexScreener socials, coin_facts links (Pump.fun API
+  twitter/telegram/website), and narrative URLs. LinkedIn is NOT mixed
+  into this block.
+
+── LINKEDIN ──
+  Own About section. Company / profile pages and public search snippets
+  when found (LinkedIn has no free full feed API). Empty placeholder if none.
 
 
 --------------------------------------------------------------------------------
@@ -599,45 +629,64 @@ Priority rule
 
 Subtitle: Ruggers
 
-The Ruggers tab sits next to About (before Logs) on the website. It tracks
-wallets from your first successful full Analyze of a mint, then lists only
-those that later sold out almost completely.
+The Ruggers tab sits next to About (before Logs) on the website. It freezes
+a holder/bundle baseline on your FIRST full Analyze of a mint, then on later
+Analyzes lists only wallets that sold ≥99% of that first bag (or left the
+holder list). Buy-backs go to Swing with the same origin label.
 
 Not financial advice. “Seller” / “swing” labels are heuristics from holder
 snapshots, not proof of a rug or intent.
 
 What Ruggers is for
-  - Freeze who held what on your FIRST full lookup of a token (from the
-    same holder/bundle data that feeds Logs).
-  - On later Analyzes of that mint, find wallets that sold ≥99% of that
-    first bag — or disappeared from the holder list.
-  - Separate similar-size group members from single whales and the creator.
-  - Flag buy-backs after a dump as swing (section: Swing traders).
-  - Help YOU spot dump wallets and save them to YOUR RugWatch list
-    (yellow Upload → cloud, or Export file — see §12).
+  - Freeze who held what on FIRST full lookup (Holders + Bundles tags).
+  - On later Analyzes, list wallets that sold ≥99% of that first bag.
+  - Keep each wallet in its category (creator / similar / multi / funder /
+    insider / launch / suspect / single / Flagged RugWatch).
+  - Sticky: if they never buy back, they stay in that section permanently
+    (this browser). Buy-back → Swing (label kept) → sell again → same section.
+  - Upload / Export seller wallets into YOUR RugWatch list (see §12).
 
 How tracking starts (first lookup)
   After a successful full Analyze (Quick OFF) with holders:
 
-  1. Top non-LP holders from the Holders snapshot are stored as a baseline.
-  2. Similar-size wallets from Bundles (similar-size groups) are included.
+  1. Non-LP holders (bag ≥ 0.01% when % known) are stored as baseline.
+  2. Bundles tags attach: similar-size, multi-account, insider, shared funder,
+     launch-window same-slot, suspect.
   3. Creator wallet (when known) is included.
   4. Each wallet’s first supply % (and balance when known) is frozen.
-  5. That freeze is what later “sold % of holdings” is measured against.
+  5. Origin lane is frozen once (see chart below). Later Analyzes do not
+     rename the wallet to another lane (except promote to similar in rare cases).
 
   Quick mode does not start or update Ruggers (no full holder scan).
+
+Where each Ruggers section comes from (Holders / Bundles)
+
+  | Ruggers section                         | Tied to (at first full Analyze)           |
+  |-----------------------------------------|-------------------------------------------|
+  | Creator (sold ≥99%)                     | Mint creator (Holders meta / Rugcheck)    |
+  | Similar wallets (sellers)               | Bundles similar-size groups               |
+  | Multi-account clusters (1 Owner)        | Holders/Bundles owner clusters (multi-ATA)|
+  | Shared SOL funder clusters (1-Owner)    | Bundles funding clusters (1-hop SOL)      |
+  | Insider-flagged wallets (Rugcheck)      | Rugcheck insider flag (NOT RugWatch)      |
+  | Same-slot multi-buys (Launch-window)    | Bundles launch-window / same-slot buys    |
+  | Suspect wallets                         | Bundles suspect union (if not more specific)|
+  | Single wallets (sellers)                | Plain holders ≥0.01%, none of the above   |
+  | Flagged wallets (RugWatch)              | YOUR RugWatch cloud/local + sold ≥99%     |
+  | Swing traders                           | Buy-back after ≥99% sell (any origin lane)|
+
+  Priority if a wallet fits more than one lane at first discovery:
+    creator → similar → multi → funding → insider → launch → suspect → single
+
+  Flagged (RugWatch) is a separate path (sold while on your RugWatch list),
+  not a Bundles category name. Title on the site: Flagged wallets (RugWatch)
+  with “RugWatch” in dim yellow.
 
 Does the number of lookups before they sell matter?
   NO. Lookup count does not matter.
 
   - Sale is always measured against the FIRST full lookup bag only.
-  - It does not matter if the dump shows up on the 2nd, 3rd, 10th, or
-    50th full Analyze of the same mint.
-  - Creator, similar wallets, and single wallets from that first freeze
-    are all treated the same way: whenever a later full Analyze first
-    shows they sold ≥99% (or dropped off the list), they count as sellers.
-  - Intermediate lookups do not reset or weaken tracking. You do not need
-    to “catch” the sell on a particular lookup number.
+  - Dump can appear on the 2nd, 3rd, 10th, or 50th full Analyze — same rule.
+  - Intermediate lookups do not reset tracking.
 
   Example
     Lookup 1: wallet holds 5% (frozen as first bag)
@@ -661,70 +710,57 @@ What “sold ≥99%” means
 
   Wallets that never sold ≥99% are ignored (not shown).
 
-Sections on the Ruggers tab
-  1. Creator (sold ≥99%)
-       Creator only, and only if they sold ≥99% of first bag or left the list
-       on any later full Analyze (2nd, 10th, … — count does not matter).
-  2. Similar wallets (sellers)
-       Wallets that were in a similar-size group on first lookup and later
-       sold ≥99% / dropped off the list (any later lookup). Listed as SELLER.
-  3. Single wallets (sellers)
-       Individual top holders (not in a similar group) that sold ≥99% or
-       are no longer listed on any later full Analyze. Listed as SELLER.
-  4. Swing traders
-       Wallets that previously met the seller rule, then bought back on a
-       later lookup. Labeled swing (not seller).
+Sell ↔ Swing loop (all sticky origin lanes)
+  1. Sell ≥99% of first bag → stay in that section (sticky / permanent if no return)
+  2. Buy-back → Swing traders, label KEPT:
+       e.g. multi-account · swing · insider · swing · flagged · swing
+  3. Sell ≥99% of the swing bag again → back to the SAME origin section
+  4. Buy-back again → Swing … (loop continues)
 
-Labels
-  seller  — sold ≥99% of first bag or dropped off the holder list
-  swing   — was a seller, then reappeared with holdings (buy-back)
+  If they never buy back → they stay in their seller section permanently
+  (this browser’s localStorage; until you clear site data).
 
-Buttons
-  Refresh     — redraw the panel from browser storage
-  Clear mint  — delete tracking for the current / selected mint only
-  Clear all   — wipe all Ruggers tracking on this browser
+Labels (examples)
+  multi-account · seller   similar · seller   launch-window · seller
+  multi-account · swing    flagged · swing    creator · swing
+  seller / swing heuristics only — not legal proof of collusion
 
-Search previous lookup by CA
-  At the top of Ruggers: paste a mint / contract address (CA) you analyzed
-  before on this browser → Find (or press Enter).
-  Opens that mint’s Ruggers tracking if it exists in localStorage.
-  Does not call the network; only searches previous full Analyzes saved
-  on this device/browser.
+UI controls (website)
+  - No Refresh / Clear mint / Clear all toolbar (removed).
+  - Tracked mint: scrollable dropdown (max height; does not fill the screen).
+  - Search previous lookup by CA (local only — no network).
+  - Left-click mint address (yellow) to copy CA.
 
-Mint / CA copy
-  Left-click the mint address in the Ruggers header (yellow) or in the
-  summary bar under the token name to copy it to the clipboard.
-
-Per-section actions (Creator / Similar / Single only — not Swing)
-  Export (gray)  — download JSON or one-address-per-line file for manual
-                   import in RugWatch “Upload manual wallets”
-  Upload (yellow)— CLOUD upload path for seller wallets:
+Per-section actions (every seller section — not Swing)
+  Export (gray)  — download JSON / address list for RugWatch manual import
+  Upload (yellow)— CLOUD upload path for that section’s NEW wallets:
                    1) import into YOUR RugWatch local DB
-                   2) Push cloud → GitHub cloud list / wallets_index.json
-                      (RugWatch blue “cloud” count increases)
-                   This is the ATC action that grows the cloud server list
-                   used by Render ATC flags (RUGWATCH_WALLETS_URL).
+                   2) Push cloud → GitHub wallets_index / cloud shards
                    Requires RugWatch running (default http://127.0.0.1:8790)
-                   with GITHUB_TOKEN set. Configure rugwatchUrl in config.js.
-                   (Not on the Logs tab — Logs only has local Download.)
+                   with GITHUB_TOKEN. Configure rugwatchUrl in config.js.
+
+  After Upload
+    - Creator → treated as Flagged (RugWatch) path on this mint
+    - Similar / multi / funder / insider / launch / suspect / single
+      → stay under their Ruggers category on this mint (also on cloud)
+    - On other mints, cloud-listed wallets can enter Flagged (RugWatch)
+      when they sell ≥99% (checkbox ON)
 
 Where it lives
   Website only: browser localStorage key adtc_ruggers_track
-  (separate from Logs). Not uploaded to the server. Not shared across
-  browsers / devices. Clearing site data resets it.
+  (separate from Logs). Not on the ATC server. Not shared across devices.
+  Clearing site data resets it.
 
-  Multiple mints: use the dropdown on the Ruggers tab to switch.
+  Multiple mints: use the scrollable “Tracked mint” dropdown to switch.
 
 Typical workflow
-  1. Full Analyze a new mint (Quick off) → baseline freezes (may show
-     empty seller sections — nothing has dumped yet).
-  2. Later, Analyze the same mint again (2nd, 3rd, 10th… — any later full
-     run; how many times you looked first does not change the rule).
-  3. Open Ruggers → see who sold ≥99% of their first bag, by section.
-  4. If a dumper buys back, they move to Swing traders.
-  5. Click yellow Upload on Creator / Similar / Single (with RugWatch
-     website running) so those wallets enter your local + cloud list —
-     or Export and import in RugWatch manually (see §12).
+  1. Full Analyze a new mint (Quick off) → baseline freezes (seller sections
+     empty until someone dumps).
+  2. Later, full Analyze the same mint again (any later run).
+  3. Open Ruggers → sellers under Creator / Similar / Multi / Funder /
+     Insider / Launch / Suspect / Single / Flagged (RugWatch).
+  4. Buy-back → Swing (same label). Dump again → same section.
+  5. Upload or Export any seller section → YOUR RugWatch (see §12).
 
 What Ruggers is not
   - Not a live mempool dump alert
@@ -732,8 +768,8 @@ What Ruggers is not
   - Not RugWatch itself (RugWatch is the separate wallet DB / website)
   - Not updated by Quick-only searches
   - Not a substitute for Solscan trade history (top-holder snapshots only)
-  - Yellow Upload needs YOUR RugWatch instance; it does not write to a
-    shared public police DB for everyone
+  - Yellow Upload needs YOUR RugWatch instance; not a shared public police DB
+  - Insider-flagged (Rugcheck) ≠ Flagged wallets (RugWatch)
 
 
 --------------------------------------------------------------------------------
@@ -760,7 +796,8 @@ Two different things (do not mix them up)
 
 Ways to grow YOUR RugWatch list from Ruggers
   A) Yellow Upload (recommended when RugWatch website is running)
-     Ruggers → Creator / Similar / Single → Upload
+     Ruggers → any seller section (Creator / Similar / Multi / Funder /
+     Insider / Launch / Suspect / Single) → Upload
      → RugWatch imports wallets → Push cloud
      → blue cloud pill / GitHub index total increases
   B) Export → file → RugWatch “Upload manual wallets” → Push cloud
@@ -788,10 +825,12 @@ Summary
 12b. WHERE ATC GETS FLAGGED WALLETS (LOCAL, CLOUD, OR BOTH)
 --------------------------------------------------------------------------------
 
-Subtitle: Flagged wallets sources
+Subtitle: Flagged wallets (RugWatch) — not Rugcheck insiders
 
-When Analyze runs with the RugWatch checkbox ON, Holders can show
-“FLAGGED WALLETS (RugWatch)” from:
+Ruggers section title: Flagged wallets (RugWatch) — “RugWatch” in dim yellow.
+Holders can show FLAGGED WALLETS (RugWatch) the same way.
+
+When Analyze runs with the RugWatch checkbox ON, Flagged data comes from:
 
   1) Local  — all RugWatch SQLite shards found (rugwatch.db, _002, …)
   2) Cloud  — JSON from env RUGWATCH_WALLETS_URL
@@ -804,8 +843,8 @@ Each match is tagged:
   [cloud]  — only in the cloud list
   [both]   — in local and cloud
 
-On Render (live ATC)
-  Usually cloud only (no RugWatch folder on the server).
+On the live Token Checker site (e.g. Render)
+  Flagged wallets are almost always CLOUD only (no your PC’s rugwatch.db).
   Set RUGWATCH_WALLETS_URL to the index (or cloud file) and redeploy.
 
 On your PC (local ATC + RugWatch)
@@ -813,6 +852,10 @@ On your PC (local ATC + RugWatch)
 
 Checkbox OFF
   Skip RugWatch merge entirely for that Analyze (no flags from those lists).
+
+Do not confuse with:
+  Insider-flagged wallets (Rugcheck) — third-party insider tags on top holders.
+  That is a Bundles / Ruggers Insider section, not RugWatch.
 
 
 --------------------------------------------------------------------------------

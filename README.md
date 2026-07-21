@@ -51,8 +51,9 @@ Provider keys stay on the server only (never in `web/`).
 |--------|----------------|
 | **RugWatch** checkbox (yellow) | Analyze includes or skips flagged-wallet merge |
 | Top nav **RugWatch** (yellow, next to logo) | Opens RugWatch site (`web/config.js` → `rugwatchUrl`) |
-| Ruggers **Upload** (yellow) | Sends Creator / Similar / Single sellers to RugWatch + Push cloud |
-| Ruggers **Export** | Download JSON/txt for manual RugWatch import |
+| Ruggers **Upload** (yellow) | Any seller section → RugWatch local DB + Push cloud |
+| Ruggers **Export** | Download JSON/txt for manual RugWatch import (all seller sections) |
+| Ruggers lanes | Creator · Similar · Multi · Funder · Insider · Launch · Suspect · Single · Flagged (RugWatch) · Swing |
 | Holders flags | Merges **local** `rugwatch*.db` + **cloud** `RUGWATCH_WALLETS_URL`; tags `[local]` / `[cloud]` / `[both]` |
 
 Render ATC env (cloud flags):
