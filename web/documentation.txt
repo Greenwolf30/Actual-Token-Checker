@@ -454,7 +454,7 @@ alerts you can read.
 9. MAPS TAB
 --------------------------------------------------------------------------------
 
-Website section markers: ── MAPS — Bubblemaps ── · ── TOKEN ── · ── HOW TO VIEW ──
+Website section markers: ── MAPS — Bubblemaps ── · ── TOKEN ── · ── MAP LINKS ──
   · ── MAP LINKS ── · ── DATA API ── (when Pro API is attempted)
 
 

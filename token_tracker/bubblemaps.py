@@ -289,11 +289,6 @@ def build_maps_payload(
         # Preferred open target for live data
         "primary_url": v2 or app or iframe,
         "api": api_info,
-        "notes": (
-            "Click Maps to open the live Bubblemaps V2 map in your browser "
-            "(holder bubbles load on bubblemaps.io). "
-            "Blue links below also work. Partner id defaults to 'demo'."
-        ),
     }
 
 
@@ -463,15 +458,11 @@ def format_maps_text(data: dict[str, Any]) -> str:
     lines.append(f"  Address:   {data.get('token_address')}")
     lines.append(f"  Partner:   {data.get('partner_id')}")
     lines.append("")
-    lines.append("── HOW TO VIEW ──")
-    lines.append("  Click Maps — opens Bubblemaps V2 in your default browser (live data).")
-    lines.append("  Or click any blue URL below.")
+    lines.append("── MAP LINKS ──")
     if data.get("viewer_method"):
         lines.append(f"  Opened via:  {data.get('viewer_method')}")
     if data.get("url"):
         lines.append(f"  Last opened: {data.get('url')}")
-    lines.append("")
-    lines.append("── MAP LINKS ──")
     lines.append("  (click blue → browser)")
     if data.get("v2_url") or data.get("primary_url"):
         lines.append(f"    V2 map:  {data.get('v2_url') or data.get('primary_url')}")
