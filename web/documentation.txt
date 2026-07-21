@@ -482,6 +482,8 @@ What people often ask
     ├─ Same-slot multi-buys — total T% across N wallet(s):
     │     T% = sum of UNIQUE wallets’ CURRENT supply % (deduped; cap 100)
     │     N  = unique wallet count across all listed groups
+    │     Pump.fun / known LP vaults are excluded from the list and totals
+    │     (not shown as a note on the Bundles UI line)
     │     (not sum of per-slot totals; repeats do not double-count T% / N)
     │
     ├─ • slot <SLOT_ID> @ <UTC time>: <U> wallets / <Tx> txs  ·  total G%

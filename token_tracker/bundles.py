@@ -619,7 +619,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             launch_total, launch_n = _sum_wallets_pct(launch_rows)
             lines.append(
                 f"  Same-slot multi-buys — total {_pct(launch_total)} across "
-                f"{launch_n} wallet(s) (Pump.fun / known LP vaults excluded):"
+                f"{launch_n} wallet(s):"
             )
             for g, rows in shown_groups[:5]:
                 g_total, g_n = _sum_wallets_pct(rows)
