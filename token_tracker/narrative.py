@@ -18,27 +18,31 @@ from __future__ import annotations
 import re
 from typing import Any
 
-# Theme keyword buckets (name/symbol/description/posts)
+# Theme keyword buckets. Scored: name/symbol > official > community noise.
+# Do not put bare elon/musk under politics (mislabels Grok/AI tokens).
 _THEME_RULES: list[tuple[str, tuple[str, ...]]] = [
+    ("AI / tech", (
+        "ai", "a.i", "gpt", "openai", "agent", "robot", "neural", "llm", "agi",
+        "machine learning", "deep learning", "grok", "xai", "x.ai", "chatgpt",
+        "claude", "gemini", "anthropic", "tech", "software", "silicon", "compute",
+        "artificial intelligence", "chatbot", "transformer",
+    )),
     ("politics / election", (
         "trump", "biden", "obama", "harris", "maga", "democrat", "republican",
         "election", "vote", "president", "congress", "senate", "political",
-        "government", "whitehouse", "potus", "kamala", "elon", "musk",
-        "policy", "tariff", "border", "left", "right wing", "libertarian",
-    )),
-    ("AI / tech", (
-        "ai", "gpt", "openai", "agent", "robot", "neural", "llm", "agi", "machine",
+        "government", "whitehouse", "potus", "kamala", "ballot", "campaign",
+        "policy", "tariff", "right wing", "libertarian",
     )),
     ("animal / meme pet", (
         "dog", "cat", "inu", "pepe", "frog", "wojak", "doge", "shiba", "kitten",
-        "bonk", "popcat", "monkey", "ape", "penguin", "bear", "bull",
+        "bonk", "popcat", "monkey", "ape", "penguin",
     )),
     ("celebrity / influencer", (
-        "celebrity", "influencer", "rapper", "athlete", "hollywood", "kanye", "drake",
-        "rogan", "musk", "celebrity", "famous",
+        "celebrity", "influencer", "rapper", "athlete", "espn", "kanye", "drake",
+        "rogan", "elon musk", "famous",
     )),
     ("crypto culture / degen", (
-        "meme", "degen", "wagmi", "ngmi", "pump", "moon", "ape", "jeet", "cto",
+        "meme", "degen", "wagmi", "ngmi", "moon", "jeet", "cto",
         "community take over", "community takeover",
     )),
     ("religion / spiritual", (
@@ -49,12 +53,26 @@ _THEME_RULES: list[tuple[str, tuple[str, ...]]] = [
         "inflation", "recession",
     )),
     ("gaming / internet culture", (
-        "game", "gamer", "twitch", "tiktok", "youtube", "stream", "npc", "sigma",
-        "rizz", "skibidi",
+        "videogame", "video game", "gamer", "twitch", "tiktok", "youtube",
+        "livestream", "npc", "skibidi",
     )),
     ("war / geopolitics", (
         "war", "ukraine", "russia", "israel", "gaza", "china", "taiwan", "nato",
         "military", "army",
+    )),
+]
+
+# Name/symbol hard boosts so brand names (Grok, GPT) beat noisy web themes
+_NAME_THEME_HINTS: list[tuple[str, tuple[str, ...]]] = [
+    ("AI / tech", (
+        "grok", "gpt", "openai", "claude", "gemini", "chatgpt", "xai", "ai",
+        "agent", "llm", "neural", "robot", "tech",
+    )),
+    ("politics / election", (
+        "trump", "biden", "maga", "harris", "obama", "potus", "vote", "elect",
+    )),
+    ("animal / meme pet", (
+        "doge", "shiba", "pepe", "bonk", "popcat", "inu", "kitten", "wojak",
     )),
 ]
 
