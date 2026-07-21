@@ -1068,12 +1068,10 @@ def _why_interested(
         reasons.append("picked up in news/search headlines")
     if "reddit" in plats and has_official:
         reasons.append("discussed on Reddit in the recent search window")
-    if "linkedin" in plats:
-        reasons.append(
-            "LinkedIn company/profile links or public search mentions appear"
-        )
-    if "pumpfun" in plats:
-        reasons.append("Pump.fun page metadata is available for this mint")
+    # LinkedIn is its own About section — never duplicate as a “why interested” line
+    # (search hits without content are not claimed here).
+    # Pump.fun “metadata available” with no prose is omitted; real copy is already
+    # covered by “official description” / stated purpose when present.
 
     # Theme identity — only assert strongly when we have official copy
     if has_official and theme_label and theme_label not in {

@@ -826,7 +826,10 @@ Priority rule
   - “Why people seem interested” / Key hooks may include:
       · official description present (stated purpose/story: <text>)
       · listing categories / tags
-      · Reddit / LinkedIn / news / Pump.fun metadata when detected
+      · Reddit / news / social signals when they add real content
+  - LinkedIn is only in the About ── LINKEDIN ── section (not repeated under
+    “Why people seem interested”). Hollow lines like “metadata is available”
+    with no prose are not shown.
   - If no official description exists, the app refuses to invent a
     backstory (market tags + filtered chatter only).
 
