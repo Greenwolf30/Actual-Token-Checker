@@ -1400,10 +1400,15 @@ function processRuggersFromAnalyze(data) {
     }
 
     const wasFlaggedSeller = !!flaggedSellers[w];
+    // Once flagged on THIS mint, never drop the label (buy-back / swing / re-sell)
     const everFlaggedOnMint = !!(
       prev.ever_flagged_on_mint ||
       wasFlaggedSeller ||
-      (flaggedSellers[w] && flaggedSellers[w].ever_flagged)
+      (flaggedSellers[w] &&
+        (flaggedSellers[w].ever_flagged || flaggedSellers[w].phase)) ||
+      (prev.flagged_meta &&
+        (prev.flagged_meta.ever_flagged || prev.flagged_meta.phase)) ||
+      (prev.is_flagged && prev.ever_sold)
     );
     const onRugWatch =
       wasFlaggedSeller ||
@@ -1445,9 +1450,10 @@ function processRuggersFromAnalyze(data) {
       };
     }
 
-    // Buy-back: stay on Flagged lineage (purple on Swing) — do NOT drop identity.
-    // phase=swing keeps them out of Flagged section until they sell ≥99% again.
-    if (tag === "swing" && (wasFlaggedSeller || everFlaggedOnMint) && !uploadedSimilar) {
+    // Buy-back: stay Flagged identity forever — only move section to Swing.
+    // phase=swing → Swing list with purple "flagged · swing"; never remove label.
+    // Sell ≥99% again → phase=sold → Flagged section again (still purple).
+    if (tag === "swing" && everFlaggedOnMint && !uploadedSimilar) {
       const prior = flaggedSellers[w] || prev.flagged_meta || {};
       flaggedSellers[w] = {
         ...prior,
@@ -1462,7 +1468,7 @@ function processRuggersFromAnalyze(data) {
         origin_lane: originLane,
         rules_v: RUGGERS_RULES_VERSION,
       };
-      // Keep rugwatch_known so other mints still treat them as flagged; no cloud unflag
+      // Never cloud-unflag: keep flagged label/identity for this mint loop
     }
 
     // Permanent Similar-Upload: never Flagged on this mint
@@ -1470,10 +1476,10 @@ function processRuggersFromAnalyze(data) {
       delete flaggedSellers[w];
     }
 
+    // Flagged lineage = permanent once set (except similar-upload pin on this mint)
     const isFlaggedLineage = !!(
       !uploadedSimilar &&
-      (flaggedSellers[w] || everFlaggedOnMint) &&
-      (onRugWatch || everFlaggedOnMint || wasFlaggedSeller)
+      (everFlaggedOnMint || flaggedSellers[w] || wasFlaggedSeller)
     );
     const flaggedPhase =
       flaggedSellers[w] && flaggedSellers[w].phase
@@ -1541,9 +1547,12 @@ function processRuggersFromAnalyze(data) {
       origin_lane: originLane,
       is_creator: originLane === "creator",
       sticky_lane_seller: !!stickyLane[w],
-      // Purple flagged look: active Flagged section OR flagged-on-swing
+      // Purple forever once flagged on this mint (seller or swing)
       is_flagged: !!(isFlaggedLineage && !uploadedSimilar),
-      ever_flagged_on_mint: !!(isFlaggedLineage || everFlaggedOnMint),
+      ever_flagged_on_mint: !!(
+        !uploadedSimilar &&
+        (isFlaggedLineage || everFlaggedOnMint)
+      ),
       flagged_phase: flaggedPhase,
       flagged_meta: flaggedSellers[w]
         ? { ...flaggedSellers[w] }
@@ -1968,11 +1977,13 @@ function ruggersBuckets(rec) {
     const lane = laneOf(w, st);
     const flaggedSold = isFlaggedSold(w, st);
     const flaggedSwing = !!(
-      st.is_flagged &&
-      st.tag === "swing" &&
       !keepSimilar &&
-      (st.ever_flagged_on_mint ||
-        (flaggedSellers[w] && String(flaggedSellers[w].phase) === "swing"))
+      st.tag === "swing" &&
+      (st.is_flagged ||
+        st.ever_flagged_on_mint ||
+        (flaggedSellers[w] &&
+          (flaggedSellers[w].ever_flagged ||
+            String(flaggedSellers[w].phase) === "swing")))
     );
 
     const row = {
@@ -1980,11 +1991,19 @@ function ruggersBuckets(rec) {
       ...st,
       origin_lane: lane,
       in_similar: !!(st.in_similar || keepSimilar || lane === "similar"),
-      is_flagged: !!(flaggedSold || flaggedSwing || (st.is_flagged && !keepSimilar)),
+      // Never strip purple flagged label once set on this mint
+      is_flagged: !!(
+        !keepSimilar &&
+        (flaggedSold ||
+          flaggedSwing ||
+          st.is_flagged ||
+          st.ever_flagged_on_mint ||
+          !!flaggedSellers[w])
+      ),
       permanent_similar: keepSimilar,
     };
 
-    // ── Swing (buy-back). Flagged lineage keeps purple label. ─────────
+    // ── Swing (buy-back). Flagged lineage keeps purple "flagged · swing". ─
     if (st.tag === "swing") {
       if (!swingSeen.has(w)) {
         swingSeen.add(w);
@@ -1992,6 +2011,8 @@ function ruggersBuckets(rec) {
           ...row,
           tag: "swing",
           is_flagged: flaggedSwing || !!row.is_flagged,
+          ever_flagged_on_mint:
+            !!(row.ever_flagged_on_mint || flaggedSwing || row.is_flagged),
         });
       }
       // Permanent Similar-Upload also stays listed under Similar on this mint
@@ -2849,10 +2870,10 @@ function refreshRuggersPanel(focusKey) {
   if (flaggedRows.length) {
     html += renderRuggersSection(
       "Flagged wallets",
-      "On RugWatch and sold ≥99% on this mint (purple). " +
-        "Buy-back → Swing still labeled flagged (purple). " +
+      "Sold ≥99% while on RugWatch (purple). Label never removed. " +
+        "Buy-back → Swing as “flagged · swing” (same purple). " +
         "Sell ≥99% again after concurrent lookup → back here. " +
-        "Other mints keep their own Flagged/Similar/Single/Swing lanes.",
+        "Other mints keep their own lanes.",
       flaggedRows
     );
   } else {
@@ -2863,16 +2884,16 @@ function refreshRuggersPanel(focusKey) {
       "</div>" +
       '<p class="rug-section-hint">' +
       "Empty until a RugWatch wallet sells ≥99% on this mint. " +
-      "Loop: Flagged ↔ Swing (purple). Lanes on other mints stay independent." +
+      "Loop: Flagged ↔ Swing — purple label never drops once flagged." +
       "</p>" +
       '<div class="rug-section-body"><p class="rug-empty">None yet.</p></div>' +
       "</section>";
   }
   html += renderRuggersSection(
     "Swing traders",
-    "Buy-back after ≥99% sell. Similar/Single/Creator return to their seller list if they dump again. " +
-      "Flagged buy-backs stay purple (flagged · swing) and re-enter Flagged on the next ≥99% sell. " +
-      "Permanent Similar Uploads can also appear under Similar.",
+    "Buy-back after ≥99% sell. Similar/Single stay purple-free. " +
+      "Flagged buy-backs keep purple “flagged · swing” (label never removed) " +
+      "and re-enter Flagged on the next ≥99% sell after concurrent lookup.",
     buckets.swings
   );
 
