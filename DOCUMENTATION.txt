@@ -344,12 +344,35 @@ What people often ask
 6.3c Launch-window slots and same-slot multi-buys (reference)
 
   ---------------------------------------------------------------------------
-  PURPOSE
+  PURPOSE (plain summary)
+  ---------------------------------------------------------------------------
+  Launch-window ≈ early mint history (toward the beginning of the token’s
+  on-chain life in the scan window) — NOT “the start of each buy cluster”
+  as a separate concept, and NOT a guaranteed “block 0 / first second of
+  launch” clock. ATC paginates mint signatures toward older activity and
+  finds multi-wallet same-slot buy bursts in that early range.
+
+  Same-slot multi-buys = several DIFFERENT wallets bought this mint in the
+  SAME Solana slot (~400 ms). Multiple slot rows = multiple early moments
+  (a short history of co-timed buy bursts), not one owner repeated.
+
+  Percents on those wallets (holds X%) = CURRENT bag size from the holders
+  snapshot when the address matches — NOT “% bought at launch.” Remaining
+  holders who still appear in holders get a current % tied to that wallet;
+  holds n/a means current % unknown (not proof of a sell).
+
+  ---------------------------------------------------------------------------
+  PURPOSE (technical)
   ---------------------------------------------------------------------------
   Launch-window answers: “In early mint history, which multi-wallet buy
   bursts landed in the same Solana slot?” It is a TIME-sliced BUY history
   reconstructed from Helius-enhanced transaction data — not a live holders
   table and not a Jito archive dump.
+
+  UI also shows timestamps:
+    - Each slot group: block time (UTC) when known from getTransaction
+    - Each wallet line under a slot: same slot time (and first-buy time when
+      available from the early-buyer map)
 
   UI location
     Bundles tab → ── LAUNCH-WINDOW ──
@@ -437,19 +460,20 @@ What people often ask
     │     N  = unique wallet count across all listed groups
     │     (not sum of per-slot totals; repeats do not double-count T% / N)
     │
-    ├─ • slot <SLOT_ID>: <U> wallets / <Tx> txs  ·  total G%
+    ├─ • slot <SLOT_ID> @ <UTC time>: <U> wallets / <Tx> txs  ·  total G%
     │  │    SLOT_ID = Solana slot integer
-    │  │    U       = unique buyers in THIS slot only
+    │  │    UTC     = blockTime for that slot when available
+    │  │    U       = unique non-LP buyers in THIS slot only
     │  │    Tx      = transactions ATC attributed to this slot bucket
     │  │    G%      = sum of unique wallets’ CURRENT % inside this slot
     │  │              (n/a if no % known for any member)
     │  │
-    │  ├─ <wallet_A>  holds 22.00%     ← CURRENT bag % if in holders map
-    │  ├─ <wallet_B>  holds n/a        ← CURRENT % unknown (see below)
+    │  ├─ <wallet_A>  holds 22.00%  · @ <UTC>   ← CURRENT bag % + slot time
+    │  ├─ <wallet_B>  holds n/a     · @ <UTC>   ← CURRENT % unknown (see below)
     │  └─ …
     │
-    ├─ • slot <SLOT_ID_2>: …
-    │  └─ <wallet_A>  holds 22.00%     ← SAME address, DIFFERENT time bucket
+    ├─ • slot <SLOT_ID_2> @ <UTC>: …
+    │  └─ <wallet_A>  holds 22.00%  · @ <UTC>   ← SAME address, DIFFERENT slot
     │                                   (same CURRENT % reprinted)
     │
     └─ (empty placeholder if no multi-wallet slot groups)
@@ -962,6 +986,9 @@ What Ruggers is for
   - Sticky: if they never buy back, they stay in that section permanently
     (this browser). Buy-back → Swing (label kept) → sell again → same section.
   - Upload / Export seller wallets into YOUR RugWatch list (see §12).
+  - Each wallet row shows timestamps when known:
+      first seen · sold at (entered seller) · swing at (buy-back) · last update
+    (browser-local tracking times, UTC-style display).
 
 How tracking starts (first lookup)
   After a successful full Analyze (Quick OFF) with holders:

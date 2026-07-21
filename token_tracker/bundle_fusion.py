@@ -262,6 +262,20 @@ def comprehensive_bundle_check(
             s0["suspect_total_pct"] = spct
             s0["suspect_wallet_count"] = sn
             base["summary"] = s0
+        # first_buy_ts from early_buyers map (unix) for per-wallet timestamps
+        first_buy_by_w: dict[str, int] = {}
+        for eb in list(jito_style.get("early_buyers") or []):
+            if not isinstance(eb, dict):
+                continue
+            ew = (eb.get("wallet") or "").strip()
+            if not ew:
+                continue
+            try:
+                if eb.get("first_buy_ts") is not None:
+                    first_buy_by_w[ew] = int(eb["first_buy_ts"])
+            except (TypeError, ValueError):
+                pass
+
         # Attach per-wallet %; DROP Pump.fun / known LP wallets entirely
         # (they must not appear in same-slot multi-buys)
         enriched_groups = []
@@ -293,9 +307,12 @@ def comprehensive_bundle_check(
                 row: dict[str, Any] = {
                     "wallet": ws,
                     "pct_supply": pct_by_w.get(ws),
+                    "block_time": g.get("block_time"),
                 }
                 if lab:
                     row["label"] = lab
+                if ws in first_buy_by_w:
+                    row["first_buy_ts"] = first_buy_by_w[ws]
                 wrows.append(row)
             # Need ≥2 non-LP wallets to keep a multi-buy slot group
             if len(kept_wallets) < 2:

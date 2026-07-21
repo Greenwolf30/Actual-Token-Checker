@@ -559,12 +559,22 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             for g, rows in shown_groups[:5]:
                 g_total, g_n = _sum_wallets_pct(rows)
                 total_s = _pct(g_total) if g_total is not None else "n/a"
+                slot_when = _fmt_unix_utc(g.get("block_time"))
+                slot_head = f"    • slot {g.get('slot')}"
+                if slot_when:
+                    slot_head += f" @ {slot_when}"
                 lines.append(
-                    f"    • slot {g.get('slot')}: {g.get('unique_buyers') or g_n} wallets / "
+                    f"{slot_head}: {g.get('unique_buyers') or g_n} wallets / "
                     f"{g.get('tx_count')} txs  ·  total {total_s}"
                 )
                 for row in rows[:10]:
                     w = (row.get("wallet") or "").strip()
+                    # Prefer wallet first-buy ts; fall back to slot block_time
+                    when = (
+                        row.get("first_buy_ts")
+                        or row.get("block_time")
+                        or g.get("block_time")
+                    )
                     lines.append(
                         _fmt_wallet_hold_line(
                             w,
@@ -573,6 +583,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
                             else pct_map.get(w),
                             label=row.get("label") or label_map.get(w),
                             is_lp=False,
+                            when=when,
                         )
                     )
                 if len(rows) > 10:
@@ -717,18 +728,50 @@ def _wallet_label_map(data: dict[str, Any]) -> dict[str, str]:
     return out
 
 
+def _fmt_unix_utc(ts: Any) -> str | None:
+    """Unix seconds → 'YYYY-MM-DD HH:MM:SS UTC' or None."""
+    if ts is None or ts == "":
+        return None
+    try:
+        from datetime import datetime, timezone
+
+        n = int(float(ts))
+        if n > 1_000_000_000_000:  # ms
+            n = n // 1000
+        if n < 1_000_000_000:
+            return None
+        return (
+            datetime.fromtimestamp(n, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            + " UTC"
+        )
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+
 def _fmt_wallet_hold_line(
     wallet: str,
     pct: Any,
     *,
     label: str | None = None,
     is_lp: bool = False,
+    when: Any = None,
 ) -> str:
-    """Single Bundles line: wallet holds X% [optional LP label]."""
+    """Single Bundles line: wallet holds X% [optional LP label] · @ time."""
     lab = (label or "").strip()
     if is_lp and not lab:
         lab = "Known liquidity / program"
-    suffix = f"  [{lab}]" if lab else ""
+    parts: list[str] = []
+    if lab:
+        parts.append(f"[{lab}]")
+    ts = None
+    if isinstance(when, str) and when.strip():
+        # already formatted or raw string
+        ts = _fmt_unix_utc(when) or when.strip()
+    else:
+        ts = _fmt_unix_utc(when)
+    if ts:
+        parts.append(f"@ {ts}")
+    suffix = ("  " + "  ·  ".join(parts)) if parts else ""
     return f"         {wallet}  holds {_pct(pct)}{suffix}"
 
 

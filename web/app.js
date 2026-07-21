@@ -1479,6 +1479,7 @@ function processRuggersFromAnalyze(data) {
         in_funding: !!info.in_funding,
         in_launch: !!info.in_launch,
         exclude_from_single: !!info.exclude_from_single,
+        first_seen_at: now,
       };
     }
     if (snap.creator && !rec.first_wallets[snap.creator]) {
@@ -1997,6 +1998,23 @@ function processRuggersFromAnalyze(data) {
       };
     }
 
+    // Timestamps (ISO) — preserve first time seen / sold / swing
+    const firstSeenAt = prev.first_seen_at || first.first_seen_at || now;
+    let soldAt = prev.sold_at || null;
+    if (tag === "seller" && soldState.sold) {
+      soldAt = soldAt || now;
+    } else if (
+      stickyLane[w] &&
+      stickyLane[w].entered_at &&
+      !soldAt
+    ) {
+      soldAt = stickyLane[w].entered_at;
+    }
+    let swingAt = prev.swing_at || null;
+    if (tag === "swing") {
+      swingAt = swingAt || (buyBack ? now : prev.swing_at) || now;
+    }
+
     status[w] = {
       tag,
       ever_sold: everSold,
@@ -2005,6 +2023,9 @@ function processRuggersFromAnalyze(data) {
       current_pct: cur.listed ? cur.pct_supply : 0,
       current_balance: cur.listed ? cur.balance : 0,
       listed: !!cur.listed,
+      first_seen_at: firstSeenAt,
+      sold_at: soldAt,
+      swing_at: swingAt,
       in_multi: !!(first.in_multi || prev.in_multi || (cur && cur.in_multi)),
       in_insider: !!(first.in_insider || prev.in_insider || (cur && cur.in_insider)),
       in_suspect: !!(first.in_suspect || prev.in_suspect || (cur && cur.in_suspect)),
@@ -2081,6 +2102,9 @@ function processRuggersFromAnalyze(data) {
         ever_sold: true,
         first_pct: meta.first_pct != null ? meta.first_pct : null,
         first_balance: meta.first_balance != null ? meta.first_balance : null,
+        first_seen_at: meta.entered_at || meta.first_seen_at || now,
+        sold_at: meta.entered_at || meta.sold_at || now,
+        last_update: meta.last_update || now,
         current_pct: 0,
         current_balance: 0,
         listed: false,
@@ -3024,6 +3048,27 @@ function renderRuggersWalletRow(row) {
     tagLabel = laneName + " · seller";
   }
   const lane = laneName;
+  // Timestamps for every Ruggers wallet row (ISO → short UTC display)
+  const tsParts = [];
+  if (row.first_seen_at) {
+    tsParts.push("seen " + shortWhen(row.first_seen_at));
+  }
+  if (row.sold_at) {
+    tsParts.push("sold " + shortWhen(row.sold_at));
+  }
+  if (isSwing && row.swing_at) {
+    tsParts.push("swing " + shortWhen(row.swing_at));
+  }
+  if (row.last_update) {
+    tsParts.push("last " + shortWhen(row.last_update));
+  } else if (row.entered_at) {
+    tsParts.push("entered " + shortWhen(row.entered_at));
+  }
+  // Fallback: sticky meta / flagged meta entered_at
+  if (!tsParts.length && row.flagged_meta && row.flagged_meta.entered_at) {
+    tsParts.push("entered " + shortWhen(row.flagged_meta.entered_at));
+  }
+  const tsLine = tsParts.length ? " · " + tsParts.join(" · ") : "";
   return (
     '<div class="rug-wallet-row' +
     (isFlagged ? " rug-wallet-flagged" : "") +
@@ -3049,6 +3094,7 @@ function renderRuggersWalletRow(row) {
     (now ? " → " + escHtml(now) : "") +
     (lane ? " · lane " + escHtml(lane) : "") +
     (reason ? " · " + escHtml(reason) : "") +
+    escHtml(tsLine) +
     "</div>" +
     "</div>"
   );
