@@ -1153,10 +1153,43 @@ function isRuggersBuyBack(prev, soldState, cur) {
 }
 
 /**
+ * True if this wallet is the mint creator — label is permanent once known.
+ * Treated like Similar/Single for sell↔swing sticky loop; label never drops.
+ */
+function isRuggersCreatorWallet(rec, w, first, prev) {
+  if (!w) return false;
+  const wl = String(w).toLowerCase();
+  if (prev && prev.is_creator) return true;
+  if (first && (first.label === "creator" || first.origin_lane === "creator")) {
+    return true;
+  }
+  if (prev && prev.origin_lane === "creator") return true;
+  if (
+    rec &&
+    rec.creator &&
+    String(rec.creator).toLowerCase() === wl
+  ) {
+    return true;
+  }
+  if (rec && rec.first_wallets && rec.first_wallets[w]) {
+    const fw = rec.first_wallets[w];
+    if (fw.label === "creator" || fw.origin_lane === "creator" || fw.is_creator) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Freeze lane at first discovery on THIS mint (never follows other-mint Flagged).
  * similar | single | creator
+ * Creator is permanent: once creator, always origin_lane "creator".
  */
 function resolveRuggersOriginLane(rec, w, first, prev, cur, uploadedSimilar) {
+  // Creator never loses its lane / label
+  if (isRuggersCreatorWallet(rec, w, first, prev)) {
+    return "creator";
+  }
   const prevLane = prev && prev.origin_lane;
   if (prevLane === "similar" || prevLane === "single" || prevLane === "creator") {
     return prevLane;
@@ -1166,15 +1199,6 @@ function resolveRuggersOriginLane(rec, w, first, prev, cur, uploadedSimilar) {
     return "similar";
   }
   if (cur && cur.in_similar) return "similar";
-  if (
-    rec.creator &&
-    w &&
-    String(w).toLowerCase() === String(rec.creator).toLowerCase()
-  ) {
-    return "creator";
-  }
-  if (prev && prev.is_creator) return "creator";
-  if (first && first.label === "creator") return "creator";
   return "single";
 }
 
@@ -1424,7 +1448,9 @@ function processRuggersFromAnalyze(data) {
     }
 
     // Freeze origin lane on THIS mint (similar / single / creator)
-    const originLane = resolveRuggersOriginLane(
+    // Creator uses the same sticky sell↔swing rules as Similar/Single.
+    const isCreator = isRuggersCreatorWallet(rec, w, first, prev);
+    let originLane = resolveRuggersOriginLane(
       rec,
       w,
       first,
@@ -1432,10 +1458,17 @@ function processRuggersFromAnalyze(data) {
       cur,
       uploadedSimilar
     );
-    if (rec.first_wallets[w] && !rec.first_wallets[w].origin_lane) {
-      rec.first_wallets[w].origin_lane = originLane;
+    if (isCreator) originLane = "creator";
+    if (rec.first_wallets[w]) {
+      if (!rec.first_wallets[w].origin_lane || isCreator) {
+        rec.first_wallets[w].origin_lane = originLane;
+      }
+      if (isCreator) {
+        rec.first_wallets[w].label = "creator";
+        rec.first_wallets[w].is_creator = true;
+      }
     }
-    if (inSimilar && originLane === "similar" && rec.first_wallets[w]) {
+    if (inSimilar && originLane === "similar" && rec.first_wallets[w] && !isCreator) {
       rec.first_wallets[w].in_similar = true;
       rec.first_wallets[w].origin_lane = "similar";
     }
@@ -1460,12 +1493,16 @@ function processRuggersFromAnalyze(data) {
     // Enter / re-enter Flagged when sold ≥99% while on RugWatch lineage.
     // Includes swing → seller again after concurrent lookups (buy-back then dump).
     // Similar lane on THIS mint stays Similar↔Swing even if flagged on another mint.
+    // Creator is treated like Similar/Single for the loop; stays out of Flagged on
+    // this mint too (keeps permanent "creator" label in Creator ↔ Swing).
     // Permanent Similar-Upload never Flagged here either.
     const soldWhileFlaggedPath =
       !isFirstLookup &&
       tag === "seller" &&
       !uploadedSimilar &&
       originLane !== "similar" &&
+      originLane !== "creator" &&
+      !isCreator &&
       (onRugWatch || everFlaggedOnMint);
 
     if (soldWhileFlaggedPath) {
@@ -1650,7 +1687,8 @@ function processRuggersFromAnalyze(data) {
       in_similar: inSimilar || uploadedSimilar || originLane === "similar",
       uploaded_similar: uploadedSimilar,
       origin_lane: originLane,
-      is_creator: originLane === "creator",
+      // Creator label never removed once known
+      is_creator: !!(isCreator || originLane === "creator"),
       sticky_lane_seller: !!stickyLane[w],
       // Purple forever once flagged on this mint (seller or swing)
       is_flagged: !!(isFlaggedLineage && !uploadedSimilar),
@@ -2066,20 +2104,18 @@ function ruggersBuckets(rec) {
       : {};
 
   function laneOf(w, st) {
+    // Creator always wins (permanent label / lane)
+    if (isRuggersCreatorWallet(rec, w, rec.first_wallets && rec.first_wallets[w], st)) {
+      return "creator";
+    }
     if (isUploadedSimilarOnThisMint(rec, w)) return "similar";
+    if (st && st.origin_lane === "creator") return "creator";
     if (st && st.origin_lane) return st.origin_lane;
     if (st && st.in_similar) return "similar";
     if (st && st.is_creator) return "creator";
     const fw = rec.first_wallets && rec.first_wallets[w];
     if (fw && fw.origin_lane) return fw.origin_lane;
     if (fw && fw.in_similar) return "similar";
-    if (
-      rec.creator &&
-      w &&
-      String(w).toLowerCase() === String(rec.creator).toLowerCase()
-    ) {
-      return "creator";
-    }
     return "single";
   }
 
@@ -2128,13 +2164,21 @@ function ruggersBuckets(rec) {
     };
 
     // ── Swing (buy-back). Flagged lineage keeps purple "flagged · swing". ─
+    // Creator keeps permanent creator label on Swing (same loop as Similar/Single).
     if (st.tag === "swing") {
+      const creatorSwing = !!(
+        row.is_creator ||
+        lane === "creator" ||
+        isRuggersCreatorWallet(rec, w, rec.first_wallets && rec.first_wallets[w], st)
+      );
       if (!swingSeen.has(w)) {
         swingSeen.add(w);
         swings.push({
           ...row,
           tag: "swing",
           is_flagged: flaggedSwing || !!row.is_flagged,
+          is_creator: creatorSwing || !!row.is_creator,
+          origin_lane: creatorSwing ? "creator" : row.origin_lane || lane,
           ever_flagged_on_mint:
             !!(row.ever_flagged_on_mint || flaggedSwing || row.is_flagged),
         });
@@ -2171,9 +2215,14 @@ function ruggersBuckets(rec) {
       continue;
     }
 
-    // ── Origin lanes: Similar / Creator / Single (incl. re-sell from Swing) ─
-    if (lane === "creator") {
-      creatorSold.push(row);
+    // ── Origin lanes: Similar / Creator / Single (same sticky sell rules) ─
+    // Creator always keeps is_creator; listed under Creator when seller.
+    if (lane === "creator" || row.is_creator) {
+      creatorSold.push({
+        ...row,
+        is_creator: true,
+        origin_lane: "creator",
+      });
       continue;
     }
     if (lane === "similar" || keepSimilar) {
@@ -2414,23 +2463,40 @@ function renderRuggersWalletRow(row) {
                   : isSwing
                     ? "buy-back after dump"
                     : row.reason || "";
+  const isCreator = !!(
+    row.is_creator ||
+    row.origin_lane === "creator" ||
+    row.label === "creator"
+  );
   let tagCls = "rug-tag-seller";
   let tagLabel = "seller";
-  if (flaggedSwing) {
+  if (flaggedSwing && isCreator) {
+    tagCls = "rug-tag-flagged rug-tag-flagged-swing rug-tag-creator";
+    tagLabel = "creator · flagged · swing";
+  } else if (flaggedSwing) {
     tagCls = "rug-tag-flagged rug-tag-flagged-swing";
     tagLabel = "flagged · swing";
+  } else if (isSwing && isCreator) {
+    tagCls = "rug-tag-swing rug-tag-creator";
+    tagLabel = "creator · swing";
   } else if (isSwing) {
     tagCls = "rug-tag-swing";
     tagLabel = "swing";
+  } else if (isFlagged && isCreator) {
+    tagCls = "rug-tag-flagged rug-tag-creator";
+    tagLabel = "creator · flagged";
   } else if (isFlagged) {
     tagCls = "rug-tag-flagged";
     tagLabel = "flagged";
+  } else if (isCreator) {
+    tagCls = "rug-tag-creator";
+    tagLabel = "creator";
   }
   const lane =
-    row.origin_lane === "similar"
-      ? "similar"
-      : row.origin_lane === "creator"
-        ? "creator"
+    isCreator
+      ? "creator"
+      : row.origin_lane === "similar"
+        ? "similar"
         : row.origin_lane === "single"
           ? "single"
           : "";
@@ -2438,6 +2504,7 @@ function renderRuggersWalletRow(row) {
     '<div class="rug-wallet-row' +
     (isFlagged ? " rug-wallet-flagged" : "") +
     (flaggedSwing ? " rug-wallet-flagged-swing" : "") +
+    (isCreator ? " rug-wallet-creator" : "") +
     '">' +
     '<div class="rug-wallet-main">' +
     '<span class="rug-tag ' +
@@ -3029,7 +3096,9 @@ function refreshRuggersPanel(focusKey) {
 
   html += renderRuggersSection(
     "Creator (sold ≥99%)",
-    "Creator only — sold ≥99% / left list, and not already on RugWatch. Yellow Upload → flag + cloud.",
+    "Creator wallet — same rules as Similar/Single: sell ≥99% → stay here indefinitely if they never return; " +
+      "buy-back → Swing (still labeled creator); sell again → back here. " +
+      "Creator label is never removed. Yellow Upload → cloud.",
     buckets.creatorSold,
     "creator"
   );
@@ -3078,9 +3147,9 @@ function refreshRuggersPanel(focusKey) {
   }
   html += renderRuggersSection(
     "Swing traders",
-    "Buy-back after ≥99% sell. Similar/Single stay purple-free. " +
-      "Flagged buy-backs keep purple “flagged · swing” (label never removed) " +
-      "and re-enter Flagged on the next ≥99% sell after concurrent lookup.",
+    "Buy-back after ≥99% sell. Creator / Similar / Single use the same loop " +
+      "(creator keeps “creator · swing” label forever). " +
+      "Flagged buy-backs keep purple “flagged · swing” and re-enter Flagged on the next ≥99% sell.",
     buckets.swings
   );
 

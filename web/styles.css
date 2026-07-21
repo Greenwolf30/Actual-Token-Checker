@@ -901,6 +901,15 @@ a.copy-mint:hover,
   color: #c4a84a;
   border: 1px solid rgba(180, 140, 50, 0.28);
 }
+/* Creator — permanent label (same sell/swing loop as Similar/Single) */
+.rug-tag-creator {
+  background: rgba(70, 140, 160, 0.14);
+  color: #7eb8c4;
+  border: 1px solid rgba(70, 140, 160, 0.35);
+}
+.rug-wallet-creator .rug-wallet-meta {
+  color: #8aa8b0;
+}
 /* Already on RugWatch — separate from new similar sellers */
 .rug-tag-flagged {
   background: rgba(140, 100, 180, 0.14);
