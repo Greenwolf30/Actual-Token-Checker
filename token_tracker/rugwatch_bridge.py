@@ -269,45 +269,209 @@ def fetch_cloud_wallets() -> dict[str, Any]:
         return result
 
 
+def rugwatch_site_url() -> str | None:
+    """
+    Live RugWatch website base URL (no trailing slash).
+    Used so hosted ATC can reflect RugWatch's *site* local DB when this
+    host has no rugwatch.db file.
+    """
+    load_dotenv()
+    raw = (
+        os.environ.get("RUGWATCH_URL")
+        or os.environ.get("RUGWATCH_SITE_URL")
+        or ""
+    ).strip()
+    if not raw:
+        # Same default as web/config.js rugwatchUrl
+        raw = "https://rugwatch.onrender.com"
+    if raw.lower() in {"0", "false", "off", "none", "disabled"}:
+        return None
+    return raw.rstrip("/")
+
+
+def fetch_remote_rugwatch_local_count() -> dict[str, Any]:
+    """
+    GET {RUGWATCH_URL}/api/stats → stats.wallets (RugWatch site local SQLite).
+    """
+    base = rugwatch_site_url()
+    out: dict[str, Any] = {
+        "ok": False,
+        "url_set": bool(base),
+        "count": 0,
+        "shards": 0,
+        "error": None,
+        "source": "rugwatch_site",
+        "site_url": base,
+    }
+    if not base:
+        out["error"] = "RUGWATCH_URL disabled"
+        return out
+    try:
+        payload = _http_get_json(f"{base}/api/stats", timeout=15.0)
+        stats = payload.get("stats") if isinstance(payload, dict) else None
+        if not isinstance(stats, dict):
+            out["error"] = "RugWatch /api/stats missing stats object"
+            return out
+        n = stats.get("wallets")
+        if n is None:
+            n = stats.get("wallets_logged")
+        out["count"] = int(n or 0)
+        out["shards"] = int(stats.get("local_shards") or 0)
+        out["ok"] = True
+        return out
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = str(exc)
+        return out
+
+
+def fetch_remote_rugwatch_wallets(
+    *,
+    min_score: int = 0,
+    limit: int = 50_000,
+) -> dict[str, Any]:
+    """
+    GET {RUGWATCH_URL}/api/wallets — wallets from RugWatch site local DB.
+    Used for Analyze matching when ATC has no on-disk rugwatch.db.
+    """
+    base = rugwatch_site_url()
+    out: dict[str, Any] = {
+        "ok": False,
+        "url_set": bool(base),
+        "wallets": [],
+        "count": 0,
+        "error": None,
+        "source": "rugwatch_site",
+        "site_url": base,
+    }
+    if not base:
+        out["error"] = "RUGWATCH_URL disabled"
+        return out
+    try:
+        lim = max(1, min(int(limit), 100_000))
+        url = f"{base}/api/wallets?min_score={int(min_score)}&limit={lim}"
+        payload = _http_get_json(url, timeout=45.0)
+        rows = payload.get("wallets") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            out["error"] = "RugWatch /api/wallets missing wallets list"
+            return out
+        wallets: list[dict[str, Any]] = []
+        for it in rows:
+            if not isinstance(it, dict):
+                continue
+            addr = (it.get("address") or it.get("wallet") or "").strip()
+            if not addr or len(addr) < 32:
+                continue
+            try:
+                score = int(
+                    it.get("risk_score")
+                    if it.get("risk_score") is not None
+                    else it.get("score")
+                    or 0
+                )
+            except (TypeError, ValueError):
+                score = 0
+            if score < min_score:
+                continue
+            notes = it.get("notes") or ""
+            from_m = mints_from_notes(notes)
+            fm = (it.get("flagged_from_mint") or "").strip()
+            if fm and fm not in from_m:
+                from_m.insert(0, fm)
+            for mm in list(it.get("flagged_from_mints") or []):
+                s = str(mm or "").strip()
+                if s and s not in from_m:
+                    from_m.append(s)
+            initial = from_m[0] if from_m else None
+            try:
+                times_flagged = int(
+                    it.get("times_flagged")
+                    if it.get("times_flagged") is not None
+                    else it.get("times_seen")
+                    or 0
+                )
+            except (TypeError, ValueError):
+                times_flagged = 0
+            wallets.append(
+                {
+                    "address": addr,
+                    "label": it.get("label") or "remote_local",
+                    "risk_score": score,
+                    "times_seen": int(it.get("times_seen") or times_flagged or 0),
+                    "times_flagged": times_flagged,
+                    "notes": notes,
+                    "source": it.get("source") or "rugwatch_site",
+                    "last_seen_at": it.get("last_seen_at"),
+                    "origin": "local",
+                    "flagged_from_mints": [initial] if initial else [],
+                    "flagged_from_mint": initial,
+                }
+            )
+        out["wallets"] = wallets
+        out["count"] = len(wallets)
+        out["ok"] = True
+        return out
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = str(exc)
+        return out
+
+
 def count_local_wallets() -> dict[str, Any]:
     """
-    Fast COUNT(*) across local RugWatch SQLite shards (no full row load).
-    Returns unique-address estimate as sum of per-shard counts (shards are
-    overflow partitions — addresses are not expected to repeat across files).
+    Local wallet count for ATC:
+
+    1) On-disk rugwatch*.db if present (desktop / same host as RugWatch data)
+    2) Else live RugWatch site /api/stats (so hosted ATC mirrors RugWatch local)
+
+    Does not copy files — remote is a live read of RugWatch's local DB count.
     """
     paths = rugwatch_db_paths()
     out: dict[str, Any] = {
-        "ok": bool(paths),
+        "ok": False,
         "db_found": bool(paths),
         "local_shards": len(paths),
         "count": 0,
         "error": None,
         # Never expose absolute paths to the website
         "shard_names": [p.name for p in paths],
+        "source": None,
+        "site_url": None,
     }
-    if not paths:
-        out["error"] = (
-            "RugWatch DB not found on this server. Local counts only work when "
-            "rugwatch.db is present (desktop / self-host) or RUGWATCH_DB is set."
-        )
-        return out
-    total = 0
-    errs: list[str] = []
-    for path in paths:
-        try:
-            conn = sqlite3.connect(str(path), timeout=5.0)
+    if paths:
+        total = 0
+        errs: list[str] = []
+        for path in paths:
             try:
-                total += int(conn.execute("SELECT COUNT(*) FROM wallets").fetchone()[0])
-            finally:
-                conn.close()
-        except sqlite3.Error as exc:
-            errs.append(f"{path.name}: {exc}")
-        except OSError as exc:
-            errs.append(f"{path.name}: {exc}")
-    out["count"] = total
-    out["ok"] = True
-    if errs:
-        out["error"] = "; ".join(errs)
+                conn = sqlite3.connect(str(path), timeout=5.0)
+                try:
+                    total += int(
+                        conn.execute("SELECT COUNT(*) FROM wallets").fetchone()[0]
+                    )
+                finally:
+                    conn.close()
+            except sqlite3.Error as exc:
+                errs.append(f"{path.name}: {exc}")
+            except OSError as exc:
+                errs.append(f"{path.name}: {exc}")
+        out["count"] = total
+        out["ok"] = True
+        out["source"] = "sqlite"
+        if errs:
+            out["error"] = "; ".join(errs)
+        return out
+
+    # No disk DB — mirror RugWatch website local count
+    remote = fetch_remote_rugwatch_local_count()
+    out["source"] = "rugwatch_site"
+    out["site_url"] = remote.get("site_url")
+    out["count"] = int(remote.get("count") or 0)
+    out["local_shards"] = int(remote.get("shards") or 0)
+    out["db_found"] = bool(remote.get("ok"))  # treat remote local as available
+    out["ok"] = bool(remote.get("ok"))
+    out["error"] = remote.get("error") or (
+        None
+        if remote.get("ok")
+        else "No on-disk rugwatch.db and RugWatch site stats unavailable"
+    )
     return out
 
 
@@ -377,17 +541,18 @@ def count_cloud_wallets(*, full_parse: bool = False) -> dict[str, Any]:
 def rugwatch_wallet_counts(*, full_cloud: bool = False) -> dict[str, Any]:
     """
     Local DB + cloud wallet counts for the ATC website status strip.
+    Local = on-disk SQLite, or live RugWatch site local count as fallback.
     Does not return wallet addresses or filesystem paths.
     """
     local = count_local_wallets()
     cloud = count_cloud_wallets(full_parse=full_cloud)
     sources: list[str] = []
-    if local.get("db_found") and local.get("ok"):
+    if local.get("ok"):
         sources.append("local")
     if cloud.get("url_set") and cloud.get("ok"):
         sources.append("cloud")
     errs: list[str] = []
-    if local.get("error"):
+    if local.get("error") and not local.get("ok"):
         errs.append(str(local["error"]))
     if cloud.get("error"):
         errs.append(f"cloud: {cloud['error']}")
@@ -400,6 +565,8 @@ def rugwatch_wallet_counts(*, full_cloud: bool = False) -> dict[str, Any]:
             "shard_names": list(local.get("shard_names") or []),
             "ok": bool(local.get("ok")),
             "error": local.get("error"),
+            "source": local.get("source"),
+            "site_url": local.get("site_url"),
         },
         "cloud": {
             "count": int(cloud.get("count") or 0),
@@ -432,12 +599,41 @@ def _load_local_wallets(
         "all_flagged": [],
         "by_address": {},  # address -> row with origin local
         "error": None,
+        "source": "sqlite" if paths else None,
     }
     if not paths:
-        out["error"] = (
-            "RugWatch DB not found. Install/run RugWatch or set RUGWATCH_DB "
-            "to your rugwatch.db location in .env"
+        # Mirror RugWatch site local DB for hosted ATC (no shared disk)
+        remote = fetch_remote_rugwatch_wallets(
+            min_score=min_score, limit=max(limit, 50_000)
         )
+        out["source"] = "rugwatch_site"
+        out["db_found"] = bool(remote.get("ok"))
+        if not remote.get("ok"):
+            out["error"] = (
+                remote.get("error")
+                or "RugWatch DB not found and RugWatch site wallets unavailable. "
+                "Set RUGWATCH_DB or RUGWATCH_URL."
+            )
+            return out
+        by_addr: dict[str, dict[str, Any]] = {}
+        all_flagged: list[dict[str, Any]] = []
+        in_top: list[dict[str, Any]] = []
+        holder_set = holder_set or set()
+        for w in remote.get("wallets") or []:
+            a = (w.get("address") or "").strip()
+            if not a:
+                continue
+            by_addr[a] = w
+            all_flagged.append(w)
+            if a in holder_set:
+                in_top.append(w)
+        out["db_wallet_count"] = int(remote.get("count") or len(by_addr))
+        out["by_address"] = by_addr
+        out["all_flagged"] = all_flagged[: max(limit, 200)]
+        out["in_top_holders"] = in_top
+        out["linked_to_mint"] = []
+        out["ok"] = True
+        out["error"] = None
         return out
 
     holder_set = holder_set or set()

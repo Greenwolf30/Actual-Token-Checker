@@ -13,6 +13,9 @@ services:
       # RugWatch cloud list (flagged wallets in Holders + Alerts)
       - key: RUGWATCH_WALLETS_URL
         value: "https://raw.githubusercontent.com/Greenwolf30/RugWatch/main/data/wallets_index.json"
+      # Live RugWatch site — Local DB count/match when ATC has no on-disk SQLite
+      - key: RUGWATCH_URL
+        value: "https://rugwatch.onrender.com"
       - key: HELIUS_API_KEY
         sync: false
       - key: BIRDEYE_API_KEY

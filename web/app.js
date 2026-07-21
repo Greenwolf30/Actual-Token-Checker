@@ -5512,27 +5512,33 @@ function renderRugwatchCounts(data) {
   let cloudLabel = "—";
 
   if (localPill) {
-    if (local.db_found && local.ok) {
+    if (local.ok) {
       localLabel = fmtRwCount(local.count);
       localPill.textContent = "Local DB " + localLabel;
       localPill.className = "pill pill-wallets ok";
       const shards = local.shards != null ? local.shards + " shard(s)" : "";
       const names = (local.shard_names || []).join(", ");
+      const src =
+        local.source === "rugwatch_site"
+          ? "via RugWatch site (mirrors its local DB)"
+          : "on-disk SQLite on this ATC host";
       localPill.title =
-        "Local RugWatch SQLite on this ATC server: " +
+        "Local DB " +
         localLabel +
-        " wallet(s)" +
+        " wallet(s) · " +
+        src +
+        (local.site_url ? " · " + local.site_url : "") +
         (shards ? " · " + shards : "") +
         (names ? " · " + names : "") +
         " · click to refresh" +
         (local.error ? " · " + local.error : "");
     } else {
-      localLabel = local.db_found ? fmtRwCount(local.count) : "n/a";
-      localPill.textContent = "Local DB " + localLabel;
+      localLabel = "n/a";
+      localPill.textContent = "Local DB n/a";
       localPill.className = "pill pill-wallets warn";
       localPill.title =
         (local.error ||
-          "No rugwatch.db on this host (normal on Render). Cloud still works. Desktop ATC + RugWatch shows a real Local DB count.") +
+          "Local DB unavailable (no SQLite on this host and RugWatch site stats failed).") +
         " · click to refresh";
     }
   }
@@ -5567,10 +5573,16 @@ function renderRugwatchCounts(data) {
   }
 
   if (statsBar) {
-    // Same style as RugWatch statsBar line
+    const srcNote =
+      local.source === "rugwatch_site"
+        ? " (from RugWatch site)"
+        : local.source === "sqlite"
+          ? " (this host)"
+          : "";
     statsBar.textContent =
       "Local DB: " +
       localLabel +
+      srcNote +
       " · Cloud: " +
       cloudLabel +
       (cloud.ok && cloud.count != null ? " wallets" : "");
@@ -5578,7 +5590,7 @@ function renderRugwatchCounts(data) {
       statsBar.title = String(data.error);
     } else {
       statsBar.title =
-        "Flagged wallets used when RugWatch checkbox is on. Hosted site: Local DB often n/a; Cloud is the shared GitHub list.";
+        "Local DB = on-disk rugwatch.db, or live count from RugWatch site when ATC has no file. Cloud = GitHub index.";
     }
   }
 }

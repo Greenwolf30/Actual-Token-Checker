@@ -1316,21 +1316,26 @@ Sources ATC merges
 
 Tags on matches: [local] · [cloud] · [both]
 
-Wallet counts on the Token Checker site (header pills — same idea as RugWatch)
-  Top-right next to views / server:
-    local N   — COUNT(*) in rugwatch*.db on this ATC host (click to refresh)
-    cloud N   — public GitHub index total (click to refresh)
+Wallet counts on the Token Checker site (RugWatch wallets bar)
+  Full-width bar under the title:
+    Local DB N · Cloud M · Refresh
 
-  Same pattern as RugWatch’s “wallets / cloud” pills; ATC labels the first
-  pill “local” so it is clear this is the SQLite read on the ATC server.
+  Local DB (how ATC fills the number)
+    1) On-disk rugwatch*.db if present on the ATC host (desktop / self-host)
+    2) Else live RugWatch site GET {RUGWATCH_URL}/api/stats → stats.wallets
+       so hosted ATC (Render) mirrors RugWatch’s *site* local DB count.
+       Default RUGWATCH_URL=https://rugwatch.onrender.com
+       Set RUGWATCH_URL=off to disable remote local.
 
-  Local  — desktop/self-host with RugWatch data. Hosted ATC often “local n/a”.
-  Cloud  — wallets_index.json (same list Analyze merges when RugWatch is on).
+  Cloud — wallets_index.json (GitHub). Same list Analyze merges when on.
+
+  Analyze matching when RugWatch checkbox is ON:
+    local wallets = disk SQLite OR (if missing) GET RugWatch /api/wallets
+    + cloud shards. Tags [local] / [cloud] / [both].
 
   API: GET /api/rugwatch-counts
-       JSON: { local: {count, db_found, shards, …}, cloud: {count, shards, …} }
-       Does not return wallet addresses. Optional ?full=1 re-parses every shard
-       for a de-duped unique cloud count (slower).
+       JSON: { local: {count, source: sqlite|rugwatch_site, …}, cloud: {…} }
+       Does not return wallet addresses.
 
 Live Token Checker site (e.g. Render): almost always CLOUD only.
 Local ATC + RugWatch on the same PC: local and/or cloud.
