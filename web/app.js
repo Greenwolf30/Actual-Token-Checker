@@ -751,12 +751,23 @@ function migrateRuggersStore(store) {
             metaW.entered_via === "sold_while_flagged" &&
             Number(metaW.rules_v) >= RUGGERS_RULES_VERSION
           ) {
-            cleaned[w] = metaW;
+            // Collapse to a single initial mint (no consecutive mint lists)
+            const sealed = withSingleFlaggedFromMint(metaW);
+            if (
+              JSON.stringify(metaW.flagged_from_mints || []) !==
+              JSON.stringify(sealed.flagged_from_mints || [])
+            ) {
+              changed = true;
+            }
+            cleaned[w] = sealed;
           } else {
             changed = true;
           }
         }
-        if (Object.keys(cleaned).length !== Object.keys(fs).length) {
+        if (
+          Object.keys(cleaned).length !== Object.keys(fs).length ||
+          changed
+        ) {
           copy.flagged_sellers = cleaned;
           copy.flagged_known = { ...cleaned };
           changed = true;
@@ -910,27 +921,16 @@ function extractRuggersSnapshot(data) {
     for (const f of track.flagged_addresses || []) {
       const fw = ((f && (f.wallet || f.address)) || "").trim();
       if (!fw) continue;
-      const fromMints = Array.isArray(f.flagged_from_mints)
-        ? f.flagged_from_mints.map((x) => String(x || "").trim()).filter(Boolean)
-        : [];
-      if (f.flagged_from_mint) {
-        const one = String(f.flagged_from_mint).trim();
-        if (one && !fromMints.includes(one)) fromMints.unshift(one);
-      }
-      // Parse mint from RugWatch notes ("mint <CA>") if missing
+      // Only the first mint ever — ignore extra mints from notes / API lists
       const notes = String(f.notes || "");
-      const noteMints = notes.match(/\bmint\s+([1-9A-HJ-NP-Za-km-z]{32,44})\b/gi) || [];
-      for (const raw of noteMints) {
-        const m = raw.replace(/^mint\s+/i, "").trim();
-        if (m && !fromMints.includes(m)) fromMints.push(m);
-      }
+      const initial = pickInitialFlaggedFromMint(f, { notes });
       flagged_known[fw] = {
         risk_score: f.risk_score != null ? Number(f.risk_score) : null,
         label: f.label || null,
         origin: f.origin || null,
         notes: notes || null,
-        flagged_from_mints: fromMints,
-        flagged_from_mint: fromMints[0] || null,
+        flagged_from_mint: initial || null,
+        flagged_from_mints: initial ? [initial] : [],
         on_this_mint: !!f.on_this_mint,
         in_top_holders: !!f.in_top_holders,
       };
@@ -1864,15 +1864,16 @@ function processRuggersFromAnalyze(data) {
     if (soldWhileFlaggedPath) {
       const prior = flaggedSellers[w] || prev.flagged_meta || {};
       // Only the first mint they were flagged on — never append later mints
-      const initialMint = pickInitialFlaggedFromMint(
+      // Keep first mint only — do not add this mint if already flagged elsewhere
+      const sealed = withSingleFlaggedFromMint(
+        { ...(rwKnown[w] || {}), ...prior },
         prior,
         rwKnown[w],
         prev,
         rec.address
       );
       flaggedSellers[w] = {
-        ...(rwKnown[w] || {}),
-        ...prior,
+        ...sealed,
         entered_at: prior.entered_at || now,
         last_update: now,
         phase: "sold",
@@ -1887,8 +1888,6 @@ function processRuggersFromAnalyze(data) {
         reason: soldState.reason || prior.reason || "sold_99",
         entered_via: prior.entered_via || "sold_while_flagged",
         origin_lane: originLane,
-        flagged_from_mint: initialMint || null,
-        flagged_from_mints: initialMint ? [initialMint] : [],
         rules_v: RUGGERS_RULES_VERSION,
       };
     }
@@ -1898,15 +1897,15 @@ function processRuggersFromAnalyze(data) {
     // Sell ≥99% again → phase=sold → Flagged section again (still purple).
     if (tag === "swing" && everFlaggedOnMint && !uploadedSimilar) {
       const prior = flaggedSellers[w] || prev.flagged_meta || {};
-      const initialMint = pickInitialFlaggedFromMint(
+      const sealed = withSingleFlaggedFromMint(
+        { ...prior, ...(rwKnown[w] || {}) },
         prior,
         rwKnown[w],
         prev,
         rec.address
       );
       flaggedSellers[w] = {
-        ...prior,
-        ...(rwKnown[w] || {}),
+        ...sealed,
         entered_at: prior.entered_at || now,
         last_update: now,
         phase: "swing",
@@ -1915,8 +1914,6 @@ function processRuggersFromAnalyze(data) {
         first_pct: first.pct_supply,
         reason: "buy_back_flagged_swing",
         origin_lane: originLane,
-        flagged_from_mint: initialMint || null,
-        flagged_from_mints: initialMint ? [initialMint] : [],
         rules_v: RUGGERS_RULES_VERSION,
       };
       // Never cloud-unflag: keep flagged label/identity for this mint loop
@@ -2682,9 +2679,8 @@ function ruggersBuckets(rec) {
       if (!swingSeen.has(w)) {
         swingSeen.add(w);
         // Flagged · swing: only the initial source mint (not every later mint)
-        const metaF = flaggedSellers[w] || st.flagged_meta || {};
-        const initialMint = pickInitialFlaggedFromMint(
-          metaF,
+        const metaF = withSingleFlaggedFromMint(
+          flaggedSellers[w] || st.flagged_meta || {},
           st,
           rwKnown[w],
           rec.address
@@ -2699,9 +2695,9 @@ function ruggersBuckets(rec) {
             RUGGERS_LANE_LABEL[originLaneSwing] || originLaneSwing,
           ever_flagged_on_mint:
             !!(row.ever_flagged_on_mint || flaggedSwing || row.is_flagged),
-          flagged_from_mint: initialMint || null,
-          flagged_from_mints: initialMint ? [initialMint] : [],
-          flagged_meta: metaF && Object.keys(metaF).length ? { ...metaF } : row.flagged_meta,
+          flagged_from_mint: metaF.flagged_from_mint || null,
+          flagged_from_mints: metaF.flagged_from_mints || [],
+          flagged_meta: metaF,
         });
       }
       // Permanent Similar-Upload also stays listed under Similar on this mint
@@ -2726,9 +2722,8 @@ function ruggersBuckets(rec) {
     if (flaggedSold) {
       if (!flaggedSeen.has(w)) {
         flaggedSeen.add(w);
-        const metaF = flaggedSellers[w] || st.flagged_meta || {};
-        const initialMint = pickInitialFlaggedFromMint(
-          metaF,
+        const metaF = withSingleFlaggedFromMint(
+          flaggedSellers[w] || st.flagged_meta || {},
           st,
           rwKnown[w],
           rec.address
@@ -2739,8 +2734,8 @@ function ruggersBuckets(rec) {
           is_flagged: true,
           risk_score: metaF.risk_score || st.risk_score,
           label: metaF.label || st.label,
-          flagged_from_mint: initialMint || null,
-          flagged_from_mints: initialMint ? [initialMint] : [],
+          flagged_from_mint: metaF.flagged_from_mint || null,
+          flagged_from_mints: metaF.flagged_from_mints || [],
         });
       }
       continue;
@@ -2819,24 +2814,12 @@ function ruggersBuckets(rec) {
     const st = (rec.status && rec.status[fw]) || {};
     if (st.tag === "swing") continue;
     flaggedSeen.add(fw);
-    const fromMints = [];
-    const pushFm = (m) => {
-      const s = (m || "").trim();
-      if (s && !fromMints.includes(s)) fromMints.push(s);
-    };
-    for (const m of meta.flagged_from_mints || []) pushFm(m);
-    pushFm(meta.flagged_from_mint);
-    for (const m of (rec.rugwatch_known &&
-      rec.rugwatch_known[fw] &&
-      rec.rugwatch_known[fw].flagged_from_mints) ||
-      [])
-      pushFm(m);
-    pushFm(
-      rec.rugwatch_known &&
-        rec.rugwatch_known[fw] &&
-        rec.rugwatch_known[fw].flagged_from_mint
+    const sealed = withSingleFlaggedFromMint(
+      meta,
+      rec.rugwatch_known && rec.rugwatch_known[fw],
+      st,
+      rec.address
     );
-    pushFm(rec.address);
     flaggedWallets.push({
       wallet: fw,
       tag: "seller",
@@ -2857,8 +2840,8 @@ function ruggersBuckets(rec) {
       reason: meta.reason || "sold_99",
       risk_score: meta.risk_score,
       label: meta.label,
-      flagged_from_mints: fromMints,
-      flagged_from_mint: fromMints[0] || null,
+      flagged_from_mint: sealed.flagged_from_mint || null,
+      flagged_from_mints: sealed.flagged_from_mints || [],
       first_seen_at: meta.entered_at || st.first_seen_at,
       sold_at: meta.entered_at || st.sold_at,
       last_update: meta.last_update || st.last_update,
@@ -3007,8 +2990,9 @@ function shortWhen(iso) {
 }
 
 /**
- * Single initial mint a wallet was flagged from (never grow to consecutive mints).
- * Prefers already-stored value, then RugWatch notes/links, then current mint.
+ * Single initial mint a wallet was flagged from.
+ * Never returns more than one; never grows a list of consecutive mints.
+ * Prefers stored flagged_from_mint, else first entry of flagged_from_mints, else fallbacks.
  */
 function pickInitialFlaggedFromMint(...sources) {
   for (const src of sources) {
@@ -3019,18 +3003,29 @@ function pickInitialFlaggedFromMint(...sources) {
       continue;
     }
     if (typeof src === "object") {
-      const one = (src.flagged_from_mint || "").trim();
+      const one = String(src.flagged_from_mint || "").trim();
       if (one) return one;
       const arr = src.flagged_from_mints;
-      if (Array.isArray(arr)) {
-        for (const m of arr) {
-          const s = String(m || "").trim();
-          if (s) return s;
-        }
+      if (Array.isArray(arr) && arr.length) {
+        const s = String(arr[0] || "").trim();
+        if (s) return s;
       }
+      // At most first mint mentioned in notes (ignore later mint lines)
+      const notes = String(src.notes || "");
+      const nm = notes.match(/\bmint\s+([1-9A-HJ-NP-Za-km-z]{32,44})\b/i);
+      if (nm && nm[1]) return nm[1].trim();
     }
   }
   return "";
+}
+
+/** Force a flagged meta object to carry only the initial mint. */
+function withSingleFlaggedFromMint(meta, ...fallbacks) {
+  const base = meta && typeof meta === "object" ? { ...meta } : {};
+  const initial = pickInitialFlaggedFromMint(base, ...fallbacks);
+  base.flagged_from_mint = initial || null;
+  base.flagged_from_mints = initial ? [initial] : [];
+  return base;
 }
 
 /**
@@ -3208,28 +3203,16 @@ function renderRuggersWalletRow(row) {
   if (!tsParts.length && row.flagged_meta && row.flagged_meta.entered_at) {
     tsParts.push("sold " + shortWhen(row.flagged_meta.entered_at));
   }
-  // Flagged (RugWatch) + flagged · swing: ticker + full mint address
+  // Flagged (RugWatch) + flagged · swing: ONLY the first initial mint
   let flaggedFromLine = "";
   if (isFlagged || flaggedSwing || row.tag === "flagged" || row.ever_flagged_on_mint) {
-    const mints = [];
-    const addM = (m) => {
-      const s = (m || "").trim();
-      if (s && !mints.includes(s)) mints.push(s);
-    };
-    for (const m of row.flagged_from_mints || []) addM(m);
-    addM(row.flagged_from_mint);
-    if (row.flagged_meta) {
-      for (const m of row.flagged_meta.flagged_from_mints || []) addM(m);
-      addM(row.flagged_meta.flagged_from_mint);
-    }
-    if (mints.length) {
-      const labels = mints.slice(0, 3).map(formatFlaggedFromMint).filter(Boolean);
-      if (labels.length) {
-        flaggedFromLine = " · flagged from " + labels.join(" · ");
-        if (mints.length > 3) {
-          flaggedFromLine += " · +" + (mints.length - 3) + " more";
-        }
-      }
+    const initial =
+      pickInitialFlaggedFromMint(row, row.flagged_meta) ||
+      String(row.flagged_from_mint || "").trim();
+    if (initial) {
+      const label = formatFlaggedFromMint(initial);
+      // One mint only — never join multiple
+      if (label) flaggedFromLine = " · flagged from " + label;
     }
   }
   const tsLine =
