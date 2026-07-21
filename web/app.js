@@ -1073,6 +1073,8 @@ function processRuggersFromAnalyze(data) {
       flagged_sellers: {},
       // Similar section Upload on this mint — stay under Similar (not Flagged here)
       uploaded_similar: {},
+      // Wallets successfully Uploaded via Ruggers (any section) on this mint
+      ruggers_uploaded: {},
     };
     for (const [w, info] of Object.entries(snap.wallets || {})) {
       rec.first_wallets[w] = {
@@ -1106,6 +1108,18 @@ function processRuggersFromAnalyze(data) {
     }
     if (!rec.uploaded_similar || typeof rec.uploaded_similar !== "object") {
       rec.uploaded_similar = {};
+    }
+    if (!rec.ruggers_uploaded || typeof rec.ruggers_uploaded !== "object") {
+      rec.ruggers_uploaded = {};
+    }
+    // Backfill upload marks from similar pins / legacy uploaded flags
+    for (const w of Object.keys(rec.uploaded_similar || {})) {
+      markRuggersWalletUploaded(rec, w, "similar");
+    }
+    for (const [w, meta] of Object.entries(rec.flagged_sellers || {})) {
+      if (meta && String(meta.origin || "") === "uploaded") {
+        markRuggersWalletUploaded(rec, w, "creator");
+      }
     }
     // Repair: older builds moved Similar-Uploads into Flagged — pin permanently
     if (rec.flagged_sellers && typeof rec.flagged_sellers === "object") {
@@ -1467,6 +1481,47 @@ function isUploadedSimilarOnThisMint(rec, wallet) {
   return false;
 }
 
+/**
+ * True if this wallet was successfully Uploaded from Ruggers on THIS mint
+ * (any section). Used so Upload (N) only counts not-yet-uploaded wallets.
+ */
+function isRuggersAlreadyUploaded(rec, wallet) {
+  if (!rec || !wallet) return false;
+  const w = String(wallet).trim();
+  if (!w) return false;
+  const up = rec.ruggers_uploaded;
+  if (up && typeof up === "object") {
+    if (up[w]) return true;
+    const wl = w.toLowerCase();
+    for (const k of Object.keys(up)) {
+      if (String(k).toLowerCase() === wl) return true;
+    }
+  }
+  // Legacy pins / marks from older uploads
+  if (isUploadedSimilarOnThisMint(rec, w)) return true;
+  const fs = rec.flagged_sellers && rec.flagged_sellers[w];
+  if (fs && String(fs.origin || "") === "uploaded") return true;
+  const rk = rec.rugwatch_known && rec.rugwatch_known[w];
+  if (rk && String(rk.origin || "") === "uploaded") return true;
+  return false;
+}
+
+function markRuggersWalletUploaded(rec, wallet, section) {
+  if (!rec || !wallet) return;
+  const w = String(wallet).trim();
+  if (!w) return;
+  if (!rec.ruggers_uploaded || typeof rec.ruggers_uploaded !== "object") {
+    rec.ruggers_uploaded = {};
+  }
+  const now = new Date().toISOString();
+  rec.ruggers_uploaded[w] = {
+    ...(rec.ruggers_uploaded[w] || {}),
+    uploaded_at: (rec.ruggers_uploaded[w] && rec.ruggers_uploaded[w].uploaded_at) || now,
+    last_update: now,
+    section: section || (rec.ruggers_uploaded[w] && rec.ruggers_uploaded[w].section) || "unknown",
+  };
+}
+
 /** Permanently pin wallet as Similar on this mint (never expires). */
 function pinUploadedSimilarOnMint(rec, wallet, extra) {
   if (!rec || !wallet) return;
@@ -1476,6 +1531,7 @@ function pinUploadedSimilarOnMint(rec, wallet, extra) {
     rec.uploaded_similar = {};
   }
   const now = new Date().toISOString();
+  markRuggersWalletUploaded(rec, w, "similar");
   rec.uploaded_similar[w] = {
     permanent: true,
     ...(rec.uploaded_similar[w] || {}),
@@ -1529,12 +1585,16 @@ function markRuggersUploadedAsFlagged(exportKey, rows) {
   if (!rec.uploaded_similar || typeof rec.uploaded_similar !== "object") {
     rec.uploaded_similar = {};
   }
+  if (!rec.ruggers_uploaded || typeof rec.ruggers_uploaded !== "object") {
+    rec.ruggers_uploaded = {};
+  }
   const now = new Date().toISOString();
   const fromSimilar = exportKey === "similar";
 
   for (const row of rows) {
     const w = (row && row.wallet) || "";
     if (!w) continue;
+    markRuggersWalletUploaded(rec, w, exportKey || "unknown");
     rec.rugwatch_known[w] = {
       ...(rec.rugwatch_known[w] || {}),
       origin: "uploaded",
@@ -1821,6 +1881,11 @@ function renderRuggersSection(title, hint, rows, exportKey, opts) {
     body = rows.map(renderRuggersWalletRow).join("");
   }
   const n = rows ? rows.length : 0;
+  // Upload count = not yet uploaded on this mint (ignores already-uploaded)
+  const rec = _lastRuggersRec;
+  const nUpload = (rows || []).filter(
+    (r) => r && r.wallet && !isRuggersAlreadyUploaded(rec, r.wallet)
+  ).length;
   const exportOnly = !!(opts && opts.exportOnly);
   let actions = "";
   if (exportKey) {
@@ -1828,7 +1893,7 @@ function renderRuggersSection(title, hint, rows, exportKey, opts) {
       '<div class="rug-section-actions">' +
       '<button type="button" class="ghost history-btn rug-export-btn" data-rug-export="' +
       escHtml(exportKey) +
-      '" title="Download wallets as JSON/txt for RugWatch">' +
+      '" title="Download all wallets in this section (JSON/txt for RugWatch)">' +
       "Export" +
       (n ? " (" + n + ")" : "") +
       "</button>";
@@ -1836,9 +1901,9 @@ function renderRuggersSection(title, hint, rows, exportKey, opts) {
       actions +=
         '<button type="button" class="rug-upload-btn" data-rug-upload="' +
         escHtml(exportKey) +
-        '" title="Import into local RugWatch DB and Push cloud (GitHub wallet list)">' +
+        '" title="Upload only wallets not yet uploaded from this mint to RugWatch/cloud">' +
         "Upload" +
-        (n ? " (" + n + ")" : "") +
+        (nUpload ? " (" + nUpload + ")" : " (0)") +
         "</button>";
     }
     actions += "</div>";
@@ -1867,6 +1932,15 @@ function ruggersRowsForExportKey(key) {
   if (key === "similar") return b.similarSellers || [];
   if (key === "single") return b.singleSellers || [];
   return [];
+}
+
+/** Section rows that have not been Uploaded yet on this mint. */
+function ruggersRowsNotYetUploaded(key) {
+  const rows = ruggersRowsForExportKey(key);
+  const rec = _lastRuggersRec;
+  return (rows || []).filter(
+    (r) => r && r.wallet && !isRuggersAlreadyUploaded(rec, r.wallet)
+  );
 }
 
 function ruggersExportLabel(key) {
@@ -2004,11 +2078,21 @@ function rugwatchApiBase() {
  * Default: https://rugwatch.onrender.com (override with config.js rugwatchUrl).
  */
 async function uploadRuggersSectionToCloud(exportKey) {
-  const rows = ruggersRowsForExportKey(exportKey);
-  if (!rows.length) {
+  const allRows = ruggersRowsForExportKey(exportKey);
+  const rows = ruggersRowsNotYetUploaded(exportKey);
+  if (!allRows.length) {
     alert(
       "No wallets in this section to upload.\n\n" +
         "Re-analyze the mint after sellers appear, then try Upload again."
+    );
+    return;
+  }
+  if (!rows.length) {
+    alert(
+      "All " +
+        allRows.length +
+        " wallet(s) in this section were already uploaded from this mint.\n\n" +
+        "Upload count only includes not-yet-uploaded wallets."
     );
     return;
   }
@@ -2018,12 +2102,16 @@ async function uploadRuggersSectionToCloud(exportKey) {
   const ok = window.confirm(
     "Upload " +
       rows.length +
-      " wallet(s) from “" +
+      " new wallet(s) from “" +
       section +
       "” to RugWatch?\n\n" +
+      "(Section has " +
+      allRows.length +
+      " total; " +
+      (allRows.length - rows.length) +
+      " already uploaded from this mint are skipped.)\n\n" +
       "1) Import NEW wallets only (already in cloud/local are skipped)\n" +
       "2) Push cloud → GitHub if anything new was added\n\n" +
-      "Duplicates are never saved twice.\n\n" +
       "RugWatch:\n" +
       base +
       "\n\nContinue?"
