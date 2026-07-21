@@ -3792,7 +3792,6 @@ function refreshRuggersPanel(focusKey) {
         "<strong>Possibly</strong> bots, snipers, MEV/bundle-style entry, and/or " +
         "team multi-wallet buys — co-timed activity is a heuristic, not proof of " +
         "identity or automation. " +
-        "Pump.fun / known liquidity vaults are excluded from this list and from Upload. " +
         "Tagged at first full Analyze · Sell ≥99% → stay here · buy-back → Swing " +
         "(label kept as same-slot multi-buys (bots)) · " +
         "sell again → back here. Export + Upload.",
