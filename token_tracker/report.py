@@ -840,12 +840,71 @@ def format_about_section(report: dict[str, Any]) -> str:
     lines.append("── LINKS ──")
     lines.append("  (click blue URLs to open)")
     link_lines = _collect_about_links(report, story, socials, x)
-    if link_lines:
-        for lab, url in link_lines:
+    # LinkedIn lives in its own section below — keep general LINKS clean
+    other_links = [
+        (lab, url)
+        for lab, url in link_lines
+        if "linkedin" not in str(lab).lower()
+        and "linkedin.com" not in str(url).lower()
+    ]
+    linkedin_links = [
+        (lab, url)
+        for lab, url in link_lines
+        if "linkedin" in str(lab).lower() or "linkedin.com" in str(url).lower()
+    ]
+    # Also pull LinkedIn-only finds that might not have been labeled
+    linkedin_links.extend(_collect_about_linkedin(report, story, socials, x))
+    # Dedupe LinkedIn by URL
+    seen_li: set[str] = set()
+    li_unique: list[tuple[str, str]] = []
+    for lab, url in linkedin_links:
+        key = str(url).rstrip("/").lower()
+        if key in seen_li:
+            continue
+        seen_li.add(key)
+        li_unique.append((lab, url))
+    linkedin_links = li_unique
+
+    if other_links:
+        for lab, url in other_links:
             lines.append(f"  {lab}:")
             lines.append(f"    {url}")
     else:
         lines.append(_will_show_placeholder("Website / social links"))
+
+    # ── LINKEDIN (own section) ────────────────────────────────────────
+    lines.append("")
+    lines.append("-" * 72)
+    lines.append("")
+    lines.append("── LINKEDIN ──")
+    lines.append("  (company / profile links + public search snippets)")
+    if linkedin_links:
+        for lab, url in linkedin_links:
+            lines.append(f"  {lab}:")
+            lines.append(f"    {url}")
+    else:
+        lines.append(_will_show_placeholder("LinkedIn profile / company page"))
+        # Surface any LinkedIn narrative snippets (text-only) when no URL
+        social_pack = report.get("social_narrative_sources") or {}
+        li_snips = [
+            s
+            for s in (social_pack.get("snippets") or [])
+            if isinstance(s, dict)
+            and (s.get("platform") or "").lower() == "linkedin"
+            and (s.get("text") or "").strip()
+        ]
+        if li_snips:
+            lines.append("  Public snippets:")
+            for s in li_snips[:6]:
+                text = re.sub(r"\s+", " ", str(s.get("text") or "")).strip()
+                if len(text) > 160:
+                    text = text[:157] + "…"
+                lines.append(f"    • {text}")
+                u = (s.get("url") or "").strip()
+                if u:
+                    if not u.startswith("http"):
+                        u = "https://" + u.lstrip("/")
+                    lines.append(f"      {u}")
 
     lines.append("")
     lines.append("-" * 72)
@@ -952,30 +1011,87 @@ def _collect_about_links(
         else:
             add("Website", w)
 
-    # Coin facts / narrative links
+    # Coin facts / narrative links (LinkedIn excluded here → own About section)
     cf = story.get("coin_facts") if isinstance(story.get("coin_facts"), dict) else {}
     links = (cf or {}).get("links") if isinstance((cf or {}).get("links"), dict) else {}
     if not links:
         facts = report.get("coin_facts") or {}
         links = facts.get("links") if isinstance(facts.get("links"), dict) else {}
     for k, v in (links or {}).items():
+        kl = str(k).lower()
+        if "linkedin" in kl:
+            continue
+        if isinstance(v, str) and "linkedin.com" in v.lower():
+            continue
         add(str(k).replace("_", " ").title(), v)
 
-    # LinkedIn from coin links or narrative social snippets
+    # Official source if it's a URL (skip LinkedIn — own section)
+    off = story.get("official_source")
+    if not (isinstance(off, str) and "linkedin.com" in off.lower()):
+        add("Official source", off)
+
+    # Bubblemaps if present
+    maps = report.get("maps") or {}
+    add("Bubblemaps", maps.get("iframe_url") or maps.get("url") or maps.get("public_url"))
+
+    return out
+
+
+def _collect_about_linkedin(
+    report: dict[str, Any],
+    story: dict[str, Any],
+    socials: dict[str, Any],
+    x: dict[str, Any],
+) -> list[tuple[str, str]]:
+    """LinkedIn URLs only — for the About ── LINKEDIN ── section."""
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def add(label: str, raw: Any) -> None:
+        if not raw:
+            return
+        if isinstance(raw, dict):
+            raw = raw.get("url") or raw.get("link") or raw.get("handle") or ""
+        url = _normalize_url(str(raw))
+        if not url:
+            return
+        lab = (label or "LinkedIn").strip() or "LinkedIn"
+        if "linkedin.com" not in url.lower() and "linkedin" not in lab.lower():
+            return
+        key = url.rstrip("/").lower()
+        if key in seen:
+            return
+        seen.add(key)
+        out.append((lab if "linkedin" in lab.lower() else "LinkedIn", url))
+
+    cf = story.get("coin_facts") if isinstance(story.get("coin_facts"), dict) else {}
+    links = (cf or {}).get("links") if isinstance((cf or {}).get("links"), dict) else {}
+    if not links:
+        facts = report.get("coin_facts") or {}
+        links = facts.get("links") if isinstance(facts.get("links"), dict) else {}
     add("LinkedIn", (links or {}).get("linkedin"))
+    for k, v in (links or {}).items():
+        if "linkedin" in str(k).lower() or (
+            isinstance(v, str) and "linkedin.com" in v.lower()
+        ):
+            add(str(k).replace("_", " ").title() if k else "LinkedIn", v)
+
+    for s in socials.get("socials") or []:
+        if not isinstance(s, dict):
+            continue
+        plat = (s.get("platform") or s.get("type") or "").lower()
+        url = s.get("url") or s.get("handle") or ""
+        if "linkedin" in plat or (isinstance(url, str) and "linkedin.com" in url.lower()):
+            add("LinkedIn", url)
+
     social_pack = report.get("social_narrative_sources") or {}
     for s in social_pack.get("snippets") or []:
         if not isinstance(s, dict):
             continue
         if (s.get("platform") or "").lower() == "linkedin" and s.get("url"):
             add("LinkedIn", s.get("url"))
-
-    # Official source if it's a URL
-    add("Official source", story.get("official_source"))
-
-    # Bubblemaps if present
-    maps = report.get("maps") or {}
-    add("Bubblemaps", maps.get("iframe_url") or maps.get("url") or maps.get("public_url"))
+        elif isinstance(s.get("url"), str) and "linkedin.com" in s["url"].lower():
+            add("LinkedIn", s.get("url"))
 
     return out
 
