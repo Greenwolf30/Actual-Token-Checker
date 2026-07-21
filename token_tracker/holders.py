@@ -2189,6 +2189,20 @@ def collect_flagged_holder_pcts(
         if still_holds and bal is not None and bal <= 0 and (owns_f or 0) <= 0:
             still_holds = False
 
+        try:
+            times_flagged = int(
+                w.get("times_flagged")
+                if w.get("times_flagged") is not None
+                else w.get("times_seen") or 0
+            )
+        except (TypeError, ValueError):
+            times_flagged = 0
+        try:
+            times_seen = int(w.get("times_seen") or 0)
+        except (TypeError, ValueError):
+            times_seen = 0
+        if times_flagged <= 0 and times_seen > 0:
+            times_flagged = times_seen
         row = {
             "wallet": addr,
             "pct": owns_f,
@@ -2196,7 +2210,9 @@ def collect_flagged_holder_pcts(
             "rank": rank_by.get(addr),
             "label": w.get("label") or w.get("role") or label_by.get(addr),
             "risk_score": w.get("risk_score"),
-            "times_seen": w.get("times_seen"),
+            "times_seen": times_seen,
+            "times_flagged": times_flagged,
+            "flagged_from_mint": w.get("flagged_from_mint"),
             "on_this_mint": bool(w.get("on_this_mint")),
             "in_top_holders": bool(w.get("in_top_holders")),
             "origin": (w.get("tag") or w.get("origin") or w.get("location") or ""),
@@ -2371,13 +2387,22 @@ def _format_rugwatch_flagged_section(
             tags.append(f"{hold_pri} priority")
         tag_s = f"  [{', '.join(tags)}]" if tags else ""
         score = row.get("risk_score")
-        seen_n = row.get("times_seen")
+        try:
+            flagged_n = int(
+                row.get("times_flagged")
+                if row.get("times_flagged") is not None
+                else row.get("times_seen") or 0
+            )
+        except (TypeError, ValueError):
+            flagged_n = 0
         if owns_num is not None:
             owns_s = f"{owns_num:.2f}%"
         else:
             owns_s = "n/a (not in top snapshot)"
+        # Same idea as Ruggers Flagged: how many times RugWatch has flagged this address
+        flagged_s = f"  ·  flagged {flagged_n}×" if flagged_n > 0 else ""
         lines.append(
-            f"    #{i}  holds {owns_s}  ·  score={score}  seen×{seen_n}{tag_s}"
+            f"    #{i}  holds {owns_s}  ·  score={score}{flagged_s}{tag_s}"
         )
         # Address alone on its line so desktop link-tagger makes it clickable
         lines.append(f"         {addr}")
