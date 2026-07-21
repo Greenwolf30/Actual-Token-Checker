@@ -50,7 +50,14 @@ def comprehensive_bundle_check(
 
     # Build synthetic holders_data for heuristic layer from Helius (primary)
     # enriched with Rugcheck insiders + Birdeye tags; aggregate by owner (not ATA)
-    holders_data = _merge_holder_layers(helius, rug, bird)
+    # Apply same known-LP / program tags as Holders tab (pair + Pump PDAs + map)
+    holders_data = _merge_holder_layers(
+        helius,
+        rug,
+        bird,
+        mint=mint,
+        pair_address=pair_address,
+    )
     base = bun.analyze_bundles(holders_data)
     # Keep holders on payload so format_bundles can attach % to launch/funding wallets
     if base.get("ok") and holders_data.get("holders"):
@@ -61,8 +68,10 @@ def comprehensive_bundle_check(
     extra_score = 0
     funding_report: dict[str, Any] = {"ok": False, "clusters": []}
 
-    # wallet → pct for enriching launch/funding lists
+    # wallet → pct / LP label for enriching launch/funding lists
     pct_by_w: dict[str, float] = {}
+    label_by_w: dict[str, str] = {}
+    lp_wallets: set[str] = set()
     for h in holders_data.get("holders") or []:
         if not isinstance(h, dict):
             continue
@@ -74,6 +83,26 @@ def comprehensive_bundle_check(
                 pct_by_w[w] = max(pct_by_w.get(w, 0.0), float(h["pct_supply"]))
         except (TypeError, ValueError):
             pass
+        lab = (h.get("label") or "").strip()
+        if lab:
+            label_by_w[w] = lab
+        if h.get("is_known_program") or (
+            lab
+            and any(
+                k in lab.lower()
+                for k in (
+                    "liquidity",
+                    "raydium",
+                    "orca",
+                    "meteora",
+                    "pool",
+                    "vault",
+                    "pump",
+                    "amm",
+                )
+            )
+        ):
+            lp_wallets.add(w)
 
     # Rugcheck-specific
     if rug.get("ok"):
@@ -196,25 +225,29 @@ def comprehensive_bundle_check(
             }
         )
         extra_score += min(30, 10 + int(best.get("unique_buyers") or 0) * 3)
-        # Add wallets to suspects
+        # Add wallets to suspects (skip known LP / program vaults)
         if base.get("ok"):
             suspects = list(base.get("suspect_wallets") or [])
             existing = {s.get("wallet") for s in suspects}
             for g in groups[:5]:
                 for w in g.get("wallets") or []:
-                    if w not in existing:
+                    ws = (str(w) if w is not None else "").strip()
+                    if not ws or ws in lp_wallets:
+                        continue
+                    if ws not in existing:
                         suspects.append(
                             {
-                                "wallet": w,
+                                "wallet": ws,
                                 "reasons": ["same-slot multi-buy (launch window)"],
-                                "pct_supply": pct_by_w.get(w),
+                                "pct_supply": pct_by_w.get(ws),
+                                "label": label_by_w.get(ws),
                             }
                         )
-                        existing.add(w)
+                        existing.add(ws)
                     else:
                         for s in suspects:
-                            if s.get("wallet") == w and s.get("pct_supply") is None:
-                                s["pct_supply"] = pct_by_w.get(w)
+                            if s.get("wallet") == ws and s.get("pct_supply") is None:
+                                s["pct_supply"] = pct_by_w.get(ws)
             base = dict(base)
             base["suspect_wallets"] = suspects[:40]
             spct, sn = bun._suspect_total_percent(suspects[:40])  # type: ignore[attr-defined]
@@ -222,15 +255,32 @@ def comprehensive_bundle_check(
             s0["suspect_total_pct"] = spct
             s0["suspect_wallet_count"] = sn
             base["summary"] = s0
-        # Attach per-wallet % onto same-slot groups for UI
+        # Attach per-wallet % + LP labels onto same-slot groups for UI
         enriched_groups = []
         for g in groups[:12]:
             gg = dict(g)
             wrows = []
             for w in g.get("wallets") or []:
-                wrows.append({"wallet": w, "pct_supply": pct_by_w.get(w)})
+                ws = (str(w) if w is not None else "").strip()
+                if not ws:
+                    continue
+                row: dict[str, Any] = {
+                    "wallet": ws,
+                    "pct_supply": pct_by_w.get(ws),
+                }
+                if ws in label_by_w:
+                    row["label"] = label_by_w[ws]
+                if ws in lp_wallets:
+                    row["is_known_program"] = True
+                    if not row.get("label"):
+                        row["label"] = "Known liquidity / program"
+                wrows.append(row)
             gg["wallet_rows"] = wrows
-            tot, n = bun._sum_wallets_pct(wrows)  # type: ignore[attr-defined]
+            # Category totals exclude known LP bags (same as Holders risk lists)
+            non_lp_rows = [r for r in wrows if not r.get("is_known_program")]
+            tot, n = bun._sum_wallets_pct(
+                non_lp_rows if non_lp_rows else wrows
+            )  # type: ignore[attr-defined]
             gg["total_pct"] = tot
             gg["wallets_with_pct"] = n
             enriched_groups.append(gg)
@@ -477,14 +527,14 @@ def comprehensive_bundle_check(
 
 
 def _aggregate_holders_by_owner(holders: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Merge rows so wallet = owner (sum multi-ATA bags)."""
+    """Merge rows so wallet = owner (sum multi Associated Token Account bags)."""
     by_w: dict[str, dict[str, Any]] = {}
     for h in holders:
         if not isinstance(h, dict):
             continue
         w = (h.get("wallet") or h.get("owner") or "").strip()
         ata = (h.get("token_account") or "").strip()
-        # If wallet equals ATA and we only have address, keep but tag
+        # If wallet equals Associated Token Account and we only have address, keep but tag
         if not w:
             continue
         cur = by_w.get(w)
@@ -510,6 +560,11 @@ def _aggregate_holders_by_owner(holders: list[dict[str, Any]]) -> list[dict[str,
             pass
         if h.get("insider"):
             cur["insider"] = True
+        # Preserve LP / program tags across multi-account merge
+        if h.get("is_known_program"):
+            cur["is_known_program"] = True
+        if h.get("label") and not cur.get("label"):
+            cur["label"] = h.get("label")
         if ata and ata != w:
             atas = list(cur.get("token_accounts") or [])
             if cur.get("token_account") and cur["token_account"] not in atas:
@@ -531,11 +586,20 @@ def _merge_holder_layers(
     helius: dict[str, Any],
     rug: dict[str, Any],
     bird: dict[str, Any],
+    *,
+    mint: str | None = None,
+    pair_address: str | None = None,
 ) -> dict[str, Any]:
-    """Prefer Helius holders; stamp Rugcheck insider flags by wallet; owner-aggregate."""
+    """Prefer Helius holders; stamp Rugcheck insiders + known LP (same as Holders)."""
+    from . import holders as hold
+
     if helius.get("ok") and helius.get("holders"):
         holders = _aggregate_holders_by_owner(
             [dict(h) for h in helius.get("holders") or []]
+        )
+        # Re-apply LP/program tags after owner merge (Holders-tab parity)
+        hold.apply_known_lp_tags(
+            holders, mint=mint, pair_address=pair_address
         )
         insider_w = {
             h.get("wallet")
@@ -565,12 +629,29 @@ def _merge_holder_layers(
             if h.get("pct_supply") is None and h.get("wallet") in bird_pct:
                 h["pct_supply"] = bird_pct[h["wallet"]]
 
+        # Refresh non-LP top10 after LP tags (Helius summary may predate pump tags)
+        summary = dict(helius.get("summary") or {})
+        non_lp_pct = [
+            float(h["pct_supply"])
+            for h in holders
+            if h.get("pct_supply") is not None
+            and not hold.is_known_lp_or_program(
+                h.get("wallet"),
+                label=h.get("label"),
+                is_known_program=bool(h.get("is_known_program")),
+            )
+        ]
+        if non_lp_pct:
+            summary["top10_pct_excluding_known_programs"] = round(
+                sum(non_lp_pct[:10]), 4
+            )
+
         return {
             "ok": True,
             "source": "helius+enrich",
             "holders": holders,
             "owner_clusters": helius.get("owner_clusters") or [],
-            "summary": helius.get("summary") or {},
+            "summary": summary,
             "meta": {
                 **(helius.get("meta") or {}),
                 "rugged": rug.get("rugged"),
@@ -591,12 +672,24 @@ def _merge_holder_layers(
                     "pct_supply": h.get("pct_supply"),
                     "balance": None,
                     "label": h.get("label"),
-                    "is_known_program": False,
+                    "is_known_program": bool(h.get("is_known_program")),
                     "insider": bool(h.get("insider")),
                     "token_account": h.get("token_account") or "",
                 }
             )
         holders = _aggregate_holders_by_owner(holders)
+        hold.apply_known_lp_tags(
+            holders, mint=mint, pair_address=pair_address
+        )
+        non_lp = [
+            h
+            for h in holders
+            if not hold.is_known_lp_or_program(
+                h.get("wallet"),
+                label=h.get("label"),
+                is_known_program=bool(h.get("is_known_program")),
+            )
+        ]
         return {
             "ok": True,
             "source": "rugcheck_fallback",
@@ -604,11 +697,14 @@ def _merge_holder_layers(
             "owner_clusters": [],
             "summary": {
                 "accounts_returned": len(holders),
-                "unique_wallets_in_top": len({h["wallet"] for h in holders}),
+                "unique_wallets_in_top": len(
+                    {h["wallet"] for h in holders if h.get("wallet")}
+                ),
                 "top1_pct": holders[0].get("pct_supply") if holders else None,
-                "top10_pct": sum(float(h.get("pct_supply") or 0) for h in holders[:10]) or None,
+                "top10_pct": sum(float(h.get("pct_supply") or 0) for h in holders[:10])
+                or None,
                 "top10_pct_excluding_known_programs": sum(
-                    float(h.get("pct_supply") or 0) for h in holders[:10]
+                    float(h.get("pct_supply") or 0) for h in non_lp[:10]
                 )
                 or None,
                 "concentration_risk": "elevated",

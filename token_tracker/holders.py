@@ -105,6 +105,64 @@ def is_known_lp_or_program(
     return False
 
 
+def apply_known_lp_tags(
+    holders: list[dict[str, Any]],
+    *,
+    mint: str | None = None,
+    pair_address: str | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Stamp is_known_program + human labels on holder rows.
+
+    Same rules as the Holders tab: hardcoded program map, Dex pair address,
+    per-mint Pump.fun bonding curve / pool PDAs, and label heuristics.
+    Mutates rows in place; returns the same list for chaining.
+    """
+    pump_lp: dict[str, str] = {}
+    m = (mint or "").strip()
+    if m:
+        try:
+            from .pumpfun import fetch_pump_lp_accounts, is_pump_mint
+
+            if is_pump_mint(m):
+                pump_lp = fetch_pump_lp_accounts(m) or {}
+        except Exception:  # noqa: BLE001
+            pump_lp = {}
+
+    pair = (pair_address or "").strip()
+    for h in holders:
+        if not isinstance(h, dict):
+            continue
+        w = (h.get("wallet") or h.get("owner") or "").strip()
+        if not w:
+            continue
+        if w in _KNOWN_OWNERS:
+            h["is_known_program"] = True
+            h["label"] = h.get("label") or _KNOWN_OWNERS[w]
+        if pair and w == pair:
+            h["is_known_program"] = True
+            h["label"] = h.get("label") or "Liquidity pair"
+        if w in pump_lp:
+            h["is_known_program"] = True
+            cur = (h.get("label") or "").strip()
+            plab = pump_lp[w]
+            if not cur or cur.lower() in {"liquidity pair", "unknown"}:
+                h["label"] = plab
+            elif plab.lower() not in cur.lower():
+                h["label"] = cur + " · " + plab
+        if is_known_lp_or_program(
+            w,
+            label=h.get("label"),
+            is_known_program=bool(h.get("is_known_program")),
+        ):
+            h["is_known_program"] = True
+            if not h.get("label") and w in _KNOWN_OWNERS:
+                h["label"] = _KNOWN_OWNERS[w]
+            elif not h.get("label"):
+                h["label"] = "Known liquidity / program"
+    return holders
+
+
 def holding_priority_label(pct: float | None) -> str:
     """
     Priority by holding size (non-LP).
@@ -486,32 +544,13 @@ def _fuse_holder_sources(
     if not by_wallet:
         return _empty("No holders from Helius/RPC, Rugcheck, Solscan, or Birdeye.")
 
-    # Per-mint Pump.fun bonding curve / PumpSwap pool (not global program IDs)
-    pump_lp: dict[str, str] = {}
-    try:
-        from .pumpfun import fetch_pump_lp_accounts, is_pump_mint
-
-        if is_pump_mint(mint):
-            pump_lp = fetch_pump_lp_accounts(mint) or {}
-    except Exception:  # noqa: BLE001
-        pump_lp = {}
-
-    # Known program / LP labels
+    # Known program / LP labels (shared with Bundles path)
+    apply_known_lp_tags(
+        list(by_wallet.values()),
+        mint=mint,
+        pair_address=pair_address,
+    )
     for w, row in by_wallet.items():
-        if w in _KNOWN_OWNERS:
-            row["is_known_program"] = True
-            row["label"] = row.get("label") or _KNOWN_OWNERS[w]
-        if pair_address and w == pair_address:
-            row["is_known_program"] = True
-            row["label"] = row.get("label") or "Liquidity pair"
-        if w in pump_lp:
-            row["is_known_program"] = True
-            # Prefer specific pump LP label when unlabeled or generic
-            cur = (row.get("label") or "").strip()
-            if not cur or cur.lower() in {"liquidity pair", "unknown"}:
-                row["label"] = pump_lp[w]
-            elif pump_lp[w].lower() not in cur.lower():
-                row["label"] = cur + " · " + pump_lp[w]
         if row.get("insider"):
             lab = row.get("label") or ""
             if "insider" not in lab.lower():
@@ -1168,6 +1207,7 @@ def _holders_from_largest(
         supply_raw=supply_raw,
         decimals=decimals,
         source=_source_label(used_url),
+        pair_address=pair_address,
         extra={"rpc_endpoint_host": _host_only(used_url)},
     )
 
@@ -1237,6 +1277,7 @@ def _build_result(
     supply_raw: int | None,
     decimals: int,
     source: str,
+    pair_address: str | None = None,
     extra_flags: list[str] | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -1255,15 +1296,8 @@ def _build_result(
         return sum(float(h.get("balance") or 0) for h in items[:n]) / supply_ui * 100.0
 
     # Tag LP/program wallets so concentration flags ignore them
-    for h in holders:
-        if is_known_lp_or_program(
-            h.get("wallet"),
-            label=h.get("label"),
-            is_known_program=bool(h.get("is_known_program")),
-        ):
-            h["is_known_program"] = True
-            if not h.get("label") and (h.get("wallet") or "") in _KNOWN_OWNERS:
-                h["label"] = _KNOWN_OWNERS[h["wallet"]]
+    # (same map as Holders tab: programs + pair + Pump PDAs)
+    apply_known_lp_tags(holders, mint=mint, pair_address=pair_address)
 
     non_lp = [
         h

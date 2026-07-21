@@ -397,6 +397,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
 
     # Wallet → supply % map for sections that only had addresses
     pct_map = _wallet_pct_map(data)
+    label_map = _wallet_label_map(data)
 
     insiders = data.get("insider_wallets") or []
     lines.append("")
@@ -510,15 +511,21 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             f"  Same-slot multi-buys — total {_pct(launch_total)} across {launch_n} wallet(s):"
         )
         for g in slots[:5]:
-            wallets = list(g.get("wallets") or [])
-            rows = [
-                {
-                    "wallet": w,
-                    "pct_supply": pct_map.get((w or "").strip()),
-                }
-                for w in wallets
-            ]
-            g_total, g_n = _sum_wallets_pct(rows)
+            # Prefer enriched wallet_rows (labels + LP flags) when fusion attached them
+            if g.get("wallet_rows"):
+                rows = list(g.get("wallet_rows") or [])
+            else:
+                wallets = list(g.get("wallets") or [])
+                rows = [
+                    {
+                        "wallet": w,
+                        "pct_supply": pct_map.get((w or "").strip()),
+                        "label": label_map.get((w or "").strip()),
+                    }
+                    for w in wallets
+                ]
+            non_lp = [r for r in rows if not r.get("is_known_program")]
+            g_total, g_n = _sum_wallets_pct(non_lp if non_lp else rows)
             total_s = _pct(g_total) if g_total is not None else "n/a"
             # Subgroup (slot) total only — no per-wallet total
             lines.append(
@@ -526,8 +533,34 @@ def format_bundles_text(data: dict[str, Any]) -> str:
                 f"{g.get('tx_count')} txs  ·  total {total_s}"
             )
             for row in rows[:10]:
-                w = row.get("wallet") or ""
-                lines.append(f"         {w}  holds {_pct(row.get('pct_supply'))}")
+                w = (row.get("wallet") or "").strip()
+                lab = row.get("label") or label_map.get(w)
+                is_lp = bool(row.get("is_known_program")) or (
+                    bool(lab)
+                    and any(
+                        k in str(lab).lower()
+                        for k in (
+                            "liquidity",
+                            "raydium",
+                            "orca",
+                            "meteora",
+                            "pool",
+                            "vault",
+                            "pump",
+                            "amm",
+                        )
+                    )
+                )
+                lines.append(
+                    _fmt_wallet_hold_line(
+                        w,
+                        row.get("pct_supply")
+                        if row.get("pct_supply") is not None
+                        else pct_map.get(w),
+                        label=lab,
+                        is_lp=is_lp,
+                    )
+                )
             if len(rows) > 10:
                 lines.append(f"         … +{len(rows) - 10} more")
     else:
@@ -550,9 +583,12 @@ def format_bundles_text(data: dict[str, Any]) -> str:
         )
         for sw in suspects[:12]:
             reasons = ", ".join(sw.get("reasons") or [])
+            w = (sw.get("wallet") or "").strip()
+            lab = sw.get("label") or label_map.get(w)
             # Wallet + percent holdings; reasons on next line
             lines.append(
-                f"    • {sw.get('wallet')}  holds {_pct(sw.get('pct_supply'))}"
+                f"    • {w}  holds {_pct(sw.get('pct_supply'))}"
+                + (f"  [{lab}]" if lab else "")
             )
             if reasons:
                 lines.append(f"      {reasons}")
@@ -636,6 +672,46 @@ def _wallet_pct_map(data: dict[str, Any]) -> dict[str, float]:
         if isinstance(h, dict):
             _put(h.get("wallet"), h.get("pct_supply"))
     return out
+
+
+def _wallet_label_map(data: dict[str, Any]) -> dict[str, str]:
+    """wallet → label (e.g. Liquidity pair) from holders / enriched rows."""
+    out: dict[str, str] = {}
+
+    def _put(w: Any, lab: Any) -> None:
+        ws = (str(w) if w is not None else "").strip()
+        s = (str(lab) if lab is not None else "").strip()
+        if ws and s and ws not in out:
+            out[ws] = s
+
+    for h in data.get("holders") or []:
+        if isinstance(h, dict):
+            _put(h.get("wallet"), h.get("label"))
+    for g in data.get("same_slot_groups") or []:
+        if not isinstance(g, dict):
+            continue
+        for row in g.get("wallet_rows") or []:
+            if isinstance(row, dict):
+                _put(row.get("wallet"), row.get("label"))
+    for s in data.get("suspect_wallets") or []:
+        if isinstance(s, dict):
+            _put(s.get("wallet"), s.get("label"))
+    return out
+
+
+def _fmt_wallet_hold_line(
+    wallet: str,
+    pct: Any,
+    *,
+    label: str | None = None,
+    is_lp: bool = False,
+) -> str:
+    """Single Bundles line: wallet holds X% [optional LP label]."""
+    lab = (label or "").strip()
+    if is_lp and not lab:
+        lab = "Known liquidity / program"
+    suffix = f"  [{lab}]" if lab else ""
+    return f"         {wallet}  holds {_pct(pct)}{suffix}"
 
 
 def _sum_wallets_pct(

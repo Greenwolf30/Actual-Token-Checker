@@ -192,6 +192,10 @@ Solana
     Helius / Solana RPC, Rugcheck top holders, Solscan, Birdeye, Pump.fun
   Known LP / AMM / program wallets are labeled and usually treated as
   “not a random human bag” for risk lists.
+  Bundles uses the same LP tagging as Holders (program map + pair address +
+  Pump.fun curve/pool PDAs). When a wallet is known LP it shows
+  [label] on Bundles lines and is excluded from bundle-risk / suspect
+  scoring (it can still appear in launch-window history with the label).
 
 Other chains (Ethereum, Base, Robinhood, …)
   Market works via DexScreener.
