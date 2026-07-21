@@ -455,7 +455,10 @@ def format_bundles_section(report: dict[str, Any]) -> str:
         return format_bundles_text(bundles)
     except Exception:  # noqa: BLE001
         if not bundles.get("ok"):
-            return f"BUNDLES\n  {bundles.get('error') or bundles.get('notes') or 'Run Analyze first.'}\n"
+            return (
+                "── BUNDLES ──\n"
+                f"  {bundles.get('error') or bundles.get('notes') or 'Run Analyze first.'}\n"
+            )
         return json.dumps(bundles, indent=2, default=str)
 
 

@@ -198,7 +198,10 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
 
 def format_bundles_text(data: dict[str, Any]) -> str:
     if not data.get("ok"):
-        return f"BUNDLES\n  {data.get('error') or data.get('notes') or 'unavailable'}\n"
+        return (
+            "── BUNDLES ──\n"
+            f"  {data.get('error') or data.get('notes') or 'unavailable'}\n"
+        )
 
     s = data.get("summary") or {}
     total_bp = s.get("total_bundle_pct")
@@ -214,8 +217,9 @@ def format_bundles_text(data: dict[str, Any]) -> str:
     else:
         total_line = "  Total % bundles will show here if value returns True"
     src_list = s.get("sources_used") or []
+    # Section markers (── TITLE ──) are colored dim-green in the UI (titles only).
     lines = [
-        "BUNDLES / COORDINATED WALLETS",
+        "── BUNDLES / COORDINATED WALLETS ──",
         f"  Method:          {data.get('method')}",
         f"  Sources:         {', '.join(src_list) if src_list else (data.get('source') or 'n/a')}",
         f"  Bundle risk:     {s.get('bundle_risk')}  (score {s.get('bundle_risk_score')}/100)",
@@ -300,8 +304,9 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             if isinstance(c, dict)
         ]
         cl_total, cl_wn = _sum_wallets_pct(cl_rows)
+        lines.append("── MULTI-ACCOUNT CLUSTERS ──")
         lines.append(
-            "  Multi-account clusters (same wallet → several large ATAs) — "
+            f"  Same wallet → several large ATAs — "
             f"total {_pct(cl_total)} across {cl_wn} wallet(s):"
         )
         for c in clusters[:10]:
@@ -323,6 +328,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             if len(accts) > 4:
                 lines.append(f"         … +{len(accts) - 4} more")
     else:
+        lines.append("── MULTI-ACCOUNT CLUSTERS ──")
         lines.append(
             "  Multi-account clusters will show here if value returns True"
         )
@@ -347,9 +353,9 @@ def format_bundles_text(data: dict[str, Any]) -> str:
                         {"wallet": m, "pct_supply": g.get("avg_pct")}
                     )
         sim_cat_total, sim_cat_n = _sum_wallets_pct(all_sim_rows)
+        lines.append("── SIMILAR-SIZE GROUPS ──")
         lines.append(
-            "  Similar-size wallet groups — "
-            f"total {_pct(sim_cat_total)} across {sim_cat_n} wallet(s):"
+            f"  total {_pct(sim_cat_total)} across {sim_cat_n} wallet(s):"
         )
         for g in groups[:6]:
             # Prefer members (wallet + pct); fall back to address-only list
@@ -382,6 +388,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
                 lines.append(f"         … +{n_show - 6} more")
     else:
         lines.append("")
+        lines.append("── SIMILAR-SIZE GROUPS ──")
         lines.append(
             "  Similar-size wallet groups will show here if value returns True"
         )
@@ -391,6 +398,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
 
     insiders = data.get("insider_wallets") or []
     lines.append("")
+    lines.append("── INSIDER-FLAGGED ──")
     if insiders:
         ins_total, ins_n = _sum_wallets_pct(
             [
@@ -405,7 +413,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
         )
         total_s = _pct(ins_total) if ins_total is not None else "n/a"
         lines.append(
-            f"  Insider-flagged (Rugcheck) — total {total_s} across {ins_n} wallet(s):"
+            f"  Rugcheck — total {total_s} across {ins_n} wallet(s):"
         )
         for h in insiders[:12]:
             w = (h.get("wallet") or "").strip()
@@ -422,8 +430,9 @@ def format_bundles_text(data: dict[str, Any]) -> str:
 
     # Funding clusters (shared SOL funder — comprehensive check)
     funding = data.get("funding_clusters") or []
+    lines.append("")
+    lines.append("── SHARED SOL FUNDER ──")
     if funding:
-        lines.append("")
         # Category total across all funders + children (unique wallets)
         fund_all_rows: list[dict[str, Any]] = []
         for fc in funding:
@@ -441,8 +450,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
                     )
         fund_cat_total, fund_cat_n = _sum_wallets_pct(fund_all_rows)
         lines.append(
-            "  Shared SOL funder clusters (1-hop) — "
-            f"total {_pct(fund_cat_total)} across {fund_cat_n} wallet(s):"
+            f"  1-hop clusters — total {_pct(fund_cat_total)} across {fund_cat_n} wallet(s):"
         )
         for fc in funding[:6]:
             kids = list(fc.get("children") or [])
@@ -473,15 +481,15 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             if len(child_rows) > 8:
                 lines.append(f"         … +{len(child_rows) - 8} more")
     else:
-        lines.append("")
         lines.append(
             "  Shared SOL funder clusters will show here if value returns True"
         )
 
     # Launch-window same-slot groups
     slots = data.get("same_slot_groups") or []
+    lines.append("")
+    lines.append("── LAUNCH-WINDOW ──")
     if slots:
-        lines.append("")
         # Category total across all slots (unique wallets)
         launch_rows: list[dict[str, Any]] = []
         for g in slots:
@@ -493,8 +501,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
                     )
         launch_total, launch_n = _sum_wallets_pct(launch_rows)
         lines.append(
-            "  Launch-window same-slot multi-buys — "
-            f"total {_pct(launch_total)} across {launch_n} wallet(s):"
+            f"  Same-slot multi-buys — total {_pct(launch_total)} across {launch_n} wallet(s):"
         )
         for g in slots[:5]:
             wallets = list(g.get("wallets") or [])
@@ -518,22 +525,22 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             if len(rows) > 10:
                 lines.append(f"         … +{len(rows) - 10} more")
     else:
-        lines.append("")
         lines.append(
             "  Launch-window same-slot multi-buys will show here if value returns True"
         )
 
     suspects = data.get("suspect_wallets") or []
+    lines.append("")
+    lines.append("── SUSPECT WALLETS ──")
     if suspects:
         # Prefer summary field; recompute if missing
         suspect_total = s.get("suspect_total_pct")
         suspect_n = s.get("suspect_wallet_count")
         if suspect_total is None:
             suspect_total, suspect_n = _suspect_total_percent(suspects)
-        lines.append("")
         lines.append(
-            "  Suspect wallets (union of signals) — "
-            f"total {_pct(suspect_total)} across {suspect_n or len(suspects)} wallet(s):"
+            f"  Union of signals — total {_pct(suspect_total)} across "
+            f"{suspect_n or len(suspects)} wallet(s):"
         )
         for sw in suspects[:12]:
             reasons = ", ".join(sw.get("reasons") or [])
@@ -546,7 +553,6 @@ def format_bundles_text(data: dict[str, Any]) -> str:
         if len(suspects) > 12:
             lines.append(f"    … +{len(suspects) - 12} more")
     else:
-        lines.append("")
         lines.append(
             "  Suspect wallets will show here if value returns True"
         )
