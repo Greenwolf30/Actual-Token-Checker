@@ -2591,6 +2591,11 @@ function ruggersBuckets(rec) {
     rec.flagged_sellers && typeof rec.flagged_sellers === "object"
       ? rec.flagged_sellers
       : {};
+  // RugWatch knowledge on this mint (must be local — never rely on outer scope)
+  const rwKnown =
+    rec.rugwatch_known && typeof rec.rugwatch_known === "object"
+      ? rec.rugwatch_known
+      : {};
 
   function laneOf(w, st) {
     // Creator always wins (permanent label / lane)
