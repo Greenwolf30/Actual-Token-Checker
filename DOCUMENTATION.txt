@@ -2,8 +2,7 @@
   ACTUAL DATA TOKEN CHECKER — USER GUIDE
 ================================================================================
   Live site:   https://actual-token-checker.onrender.com
-  Local site:  python run_web.py  →  http://127.0.0.1:8080/
-  Desktop app: python desktop_app.py
+  Self-host:   python run_web.py  →  http://127.0.0.1:8080/
 
   This guide explains what each part of the app does, in plain language —
   including Quick mode, social scores, news, wallets, Rugcheck / creators,
@@ -1286,8 +1285,8 @@ Ways to grow YOUR RugWatch list from Actual Data Token Checker Ruggers
   C) Copy address → RugWatch Add wallet (you set score)
 
 What Actual Data Token Checker does after wallets are in cloud
-  - Live site: almost always CLOUD only via RUGWATCH_WALLETS_URL
-  - Local PC: may merge Local database + cloud → tags [local] / [cloud] / [both]
+  - Live site: merges RugWatch **server** local (via RUGWATCH_URL) + **cloud**
+    (RUGWATCH_WALLETS_URL) → tags [local] / [cloud] / [both]
   - Shows hold % on the mint; does NOT invent a token-level RugWatch rating
 
 What Actual Data Token Checker will NOT do
@@ -1311,9 +1310,8 @@ Ruggers title: Flagged wallets (RugWatch) — “RugWatch” in dim yellow.
 Holders: FLAGGED WALLETS (RugWatch) when the checkbox is ON.
 
 Sources Actual Data Token Checker merges
-  1) Local  — rugwatch*.db shards if present on the machine running Actual Data Token Checker,
-              OR (if missing) live RugWatch site local list via RUGWATCH_URL
-              (/api/wallets) so hosted Actual Data Token Checker can mirror RugWatch Local database
+  1) Local  — live RugWatch **server** list via RUGWATCH_URL
+              (/api/stats count, /api/wallets match) — not a file on the user’s machine
   2) Cloud  — RUGWATCH_WALLETS_URL (prefer wallets_index.json multi-shard)
 
 Tags on matches: [local] · [cloud] · [both]
@@ -1323,25 +1321,24 @@ Wallet counts on the Actual Data Token Checker site (RugWatch wallets bar)
     Local database N · Cloud M · Refresh
 
   Local database (how Actual Data Token Checker fills the number)
-    1) On-disk rugwatch*.db if present on the Actual Data Token Checker host (desktop / self-host)
-    2) Else live RugWatch site GET {RUGWATCH_URL}/api/stats → stats.wallets
-       so hosted Actual Data Token Checker (Render) mirrors RugWatch’s *site* Local database count.
-       Default RUGWATCH_URL=https://rugwatch.onrender.com
-       Set RUGWATCH_URL=off to disable remote local.
+    Live RugWatch site GET {RUGWATCH_URL}/api/stats → stats.wallets
+    (mirrors RugWatch’s **server** Local database — not anything on a user’s machine).
+    Default RUGWATCH_URL=https://rugwatch.onrender.com
+    Set RUGWATCH_URL=off to disable remote local.
 
   Cloud — wallets_index.json (GitHub). Same list Analyze merges when on.
 
   Analyze matching when RugWatch checkbox is ON:
-    local wallets = disk SQLite OR (if missing) GET RugWatch /api/wallets
+    local wallets = GET RugWatch /api/wallets (server list)
     + cloud shards. Tags [local] / [cloud] / [both].
 
   API: GET /api/rugwatch-counts
-       JSON: { local: {count, source: sqlite|rugwatch_site, …}, cloud: {…} }
+       JSON: { local: {count, source: rugwatch_site|…, …}, cloud: {…} }
        Does not return wallet addresses.
 
-Live Actual Data Token Checker site (e.g. Render): local via RugWatch site mirror
-and/or cloud; often both when RugWatch is awake.
-Local Actual Data Token Checker + RugWatch on the same PC: local disk and/or cloud.
+Live Actual Data Token Checker site: Local via RugWatch **server** mirror
+and/or Cloud (GitHub); often both when RugWatch is awake.
+Nothing for the flagged-wallet warehouse is stored on the visitor’s machine.
 
 Checkbox OFF → no RugWatch merge for that Analyze.
 
@@ -1362,37 +1359,36 @@ Do not confuse with
 Subtitle: How many wallets can you store and still serve flags well?
 
 Actual Data Token Checker does not own a separate flagged-wallet warehouse.
-Capacity is driven by **RugWatch Local database** and **GitHub cloud**.
+Capacity is driven by **RugWatch server Local database** and **GitHub cloud**.
 Full charts: RugWatch **EXTERNAL_STORAGE.md** and **RugCheck Documentation.md**
 → “How many wallets? (capacity scheme)”.
 
 Designed limits (RugWatch — no hard total ceiling)
-  | Store                    | Per file (default) | When full                         |
-  |--------------------------|--------------------|-----------------------------------|
-  | Local database (SQLite)  | 100,000 wallets    | rugwatch_002.db, _003, …          |
-  | Cloud JSON (GitHub)      | 100,000 wallets    | wallets_cloud_002.json, … + index |
+  | Store                         | Per file (default) | When full                         |
+  |-------------------------------|--------------------|-----------------------------------|
+  | Local database (server SQLite)| 100,000 wallets    | rugwatch_002.db, _003, …          |
+  | Cloud JSON (GitHub)           | 100,000 wallets    | wallets_cloud_002.json, … + index |
 
   Totals scale with shards: 1 file ≈ 100k · 2 ≈ 200k · 10 ≈ 1M · …
 
-Where data lives (important)
-  | How you run                         | Local database location              |
-  |-------------------------------------|--------------------------------------|
-  | Hosted RugWatch website (Render)    | On the **server** disk — NOT the     |
-  |                                     | visitor’s desktop or browser         |
-  | RugWatch desktop / run_web on a PC  | That PC’s data/rugwatch.db           |
-  | Hosted Actual Data Token Checker    | No own wallet SQLite; reads cloud +  |
-  |                                     | optional live RugWatch local mirror  |
-  | Browser (either site)               | Never stores the wallet warehouse    |
+Where data lives (server and cloud only)
+  | Store                                      | Location                              |
+  |--------------------------------------------|---------------------------------------|
+  | RugWatch Local database                    | **Hosting server** disk only          |
+  | Cloud wallet list                          | **GitHub** (index + shards)           |
+  | Actual Data Token Checker flagged warehouse| None — reads server local + cloud     |
+  | Browser (either site)                      | Never holds the wallet warehouse      |
+  | User machine / desktop                     | **Not used** for the wallet warehouse |
 
   Cloud always lives on **your GitHub** (wallets_index.json + shards).
 
 Effective ranges (speed / free hosting — not code hard caps)
-  | Total wallets        | Desktop PC     | Free hosted server   | Flags on this site      |
-  |----------------------|----------------|----------------------|-------------------------|
-  | Hundreds – few k     | Ideal          | Ideal                | Ideal                   |
-  | ~10k – 100k          | Strong         | OK                   | OK                      |
-  | ~100k – few hundred k| Multi-shard OK | Heavy; may OOM       | Slower Analyze flags    |
-  | ~1M+                 | Careful        | Not recommended free | Risky on free hosts     |
+  | Total wallets         | Hosted server (e.g. free Render) | Cloud (GitHub) | Flags on this site   |
+  |-----------------------|----------------------------------|----------------|----------------------|
+  | Hundreds – few k      | Ideal                            | Ideal          | Ideal                |
+  | ~10k – 100k           | OK                               | Strong         | OK                   |
+  | ~100k – few hundred k | Heavy; may OOM                   | Multi-shard OK | Slower Analyze flags |
+  | ~1M+                  | Not recommended free             | Possible       | Risky on free hosts  |
 
   Practical sweet spot for free Render + free Actual Data Token Checker:
   **tens of thousands to about 100k**; stretch toward **low hundreds of k** only
@@ -1400,8 +1396,7 @@ Effective ranges (speed / free hosting — not code hard caps)
 
 Rough cloud size
   10k ≈ 2–5 MB · 100k ≈ 20–50 MB · 200k ≈ 40–100 MB (longer notes = larger).
-  Disk is rarely the first limit; **RAM**, **Push/Pull time**, and **Analyze
-  load** of all shards hit first.
+  Server RAM, Push/Pull time, and Analyze load of all shards hit first.
 
 What bottlenecks first
   - Free server RAM / ephemeral disk (large Pull or load)
@@ -1414,7 +1409,7 @@ Guidance for users of this site
   1. Prefer the **index** URL for RUGWATCH_WALLETS_URL (every cloud shard).
   2. Keep cloud curated (serial-suspects only); do not dump millions.
   3. Always **Push cloud** after Upload so hosted flags stay current.
-  4. For very large lists, use desktop RugWatch / always-on hosting, not free only.
+  4. For very large lists, use always-on hosting (not free-tier only).
 
 This site’s Logs / Ruggers track
   Browser localStorage only (max 200 Logs). Not counted toward RugWatch local
@@ -1429,11 +1424,11 @@ Subtitle: Logs
 
 The Logs tab is a private log of tokens you have already searched.
 It sits next to Overview, Holders, Bundles, Alerts, Maps, About, and Ruggers
-on the desktop app and the website. Use it to look back at recent analyzes
-without typing every mint again.
+on the website. Use it to look back at recent analyzes without typing every
+mint again.
 
-  Desktop: saved in history_log.json next to the app.
-  Website: saved in this browser only (localStorage).
+  Website: saved in this browser only (localStorage). Nothing is written
+  to a desktop wallet warehouse or to the server for Logs.
 
 What Logs is for
   - See a list of your last token searches in one place.
@@ -1484,28 +1479,23 @@ Search previous lookup by CA (website)
   Same idea as Ruggers CA search, separate storage from Ruggers.
 
 Where it lives
-  Desktop
-  - Saved as history_log.json next to the app.
-  Website
+  Website only for Logs storage:
   - Saved in your browser only (not on the server, not shared with others).
   - Clearing site data / another browser / private mode starts empty.
-  - Different from the small search-bar dropdown (desktop only).
+  - Not written to a desktop app file or to RugWatch local/cloud.
 
 Buttons
   Refresh
-    Reloads the Logs list from storage (desktop: history_log.json on
-    disk; website: this browser’s saved data). Use if the tab looks
-    stale after Analyze, or after you reopened the app. Does not
-    re-scan tokens and does not call APIs.
+    Reloads the Logs list from this browser’s saved data. Use if the tab
+    looks stale after Analyze. Does not re-scan tokens and does not call APIs.
 
   Clear
-    After you confirm, deletes ALL Logs entries for this app/browser.
-    Cannot be undone. Desktop empties history_log.json; website clears
-    localStorage. Does not affect Overview/Holders for the token you
-    currently have open.
+    After you confirm, deletes ALL Logs entries for this browser.
+    Cannot be undone. Clears localStorage only. Does not affect
+    Overview/Holders for the token you currently have open.
 
   Download
-    Saves the current Logs list to a FILE ON YOUR COMPUTER only.
+    Saves the current Logs list to a download file on your device only.
     · .txt — readable text (same layout as the tab, including
       holders/bundles snapshots)
     · .json — full structured data for backup or tools
@@ -1527,7 +1517,7 @@ Upload vs Logs (important)
   rugwatchUrl in web/config.js pointing at that site.
 
   Summary
-    Logs Download     = save search history to your PC (not cloud)
+    Logs Download     = save search history as a download file (not cloud)
     Ruggers Upload    = send seller wallets to RugWatch cloud server
                         (GitHub via your RugWatch instance)
 
@@ -1549,7 +1539,7 @@ What Logs is not
   - Not a camera image — “snapshot” means a frozen text copy of the
     Holders / Bundles report at Analyze time.
   - Not a full export of every report field beyond what was stored
-    (use Export JSON on desktop for the full current report).
+    (use Export on Ruggers for wallet lists; Logs Download for history).
   - Not a safety rating or “safe list.” Past results are for your
     reference only.
 
@@ -1583,8 +1573,8 @@ Why you get 429s and slowness
   | Large RugWatch cloud               | Pull / Actual Data Token Checker flags load big JSON → slow or OOM      |
   | Immediate retries after 429        | Makes the limit worse                             |
 
-  429 is usually the API provider refusing more traffic — not your laptop
-  and not “the app permanently broken.”
+  429 is usually the API provider refusing more traffic — not
+  “the app permanently broken.”
 
 Practical prevention (do these first)
   1. One full Analyze at a time.
@@ -1700,24 +1690,22 @@ A: Total views do not reset daily. “Unique today” does. Free hosting may
 
 Q: Why is LP unlocked on a Pump.fun coin?
 A: LP-lock check is classic pool lock %, not a full bonding-curve model.
-   On desktop Alerts, that LP-unlock warning is skipped for Pump.fun /
-   PumpSwap pools (and classic “…pump” mints) because those venues do
-   not map cleanly to locked LP pools.
+   That LP-unlock warning is skipped for Pump.fun / PumpSwap pools (and
+   classic “…pump” mints) because those venues do not map cleanly to
+   locked LP pools.
 
 Q: Does a clean Alerts tab mean safe?
 A: No. Absence of flags ≠ safety.
 
-Q: Where did my Logs go after reinstall or moving the app?
-A: Desktop Logs are saved in history_log.json next to the app. Website
-   Logs live in the browser only. If you move the app folder or clear
-   site data, the list may be gone. Use Download to keep a backup.
+Q: Where did my Logs go after clearing the browser or private mode?
+A: Logs live in this browser only (localStorage). Clearing site data or
+   using another browser starts empty. Use Download to keep a backup.
 
 Q: Is there a serial-rugger database? Who creates it?
-A: Yes — RugWatch on your desktop is that database (local SQLite, wallets
-   you flag). The website Ruggers tab does not create or update it. Copy
-   seller addresses from Ruggers and add them in RugWatch yourself (§12).
-   The live website host does not keep a shared serial-rugger database for all
-   users.
+A: Yes — **your RugWatch** list (server Local database + optional GitHub
+   cloud), wallets **you** flag or Upload. The Ruggers tab only tracks
+   sellers in this browser until you Upload. The live Actual Data Token
+   Checker host does not keep a shared police database for all users.
 
 Q: If a wallet sells on my 10th lookup, do they still count as a seller?
 A: Yes. Lookup count does not matter. Sales are always measured against
