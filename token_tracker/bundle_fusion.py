@@ -504,7 +504,7 @@ def comprehensive_bundle_check(
     if fresh_report.get("ok"):
         if "fresh_wallets" not in sources_used:
             sources_used.append("fresh_wallets")
-        for fw in list(fresh_report.get("wallets") or [])[:20]:
+        for fw in list(fresh_report.get("wallets") or [])[:24]:
             if not isinstance(fw, dict):
                 continue
             w = (fw.get("wallet") or "").strip()
@@ -512,7 +512,19 @@ def comprehensive_bundle_check(
                 continue
             row = dict(fw)
             row["pct_supply"] = pct_by_w.get(w)
+            row["wallet"] = w
             fresh_rows.append(row)
+        # Largest current supply bag first
+        fresh_rows.sort(
+            key=lambda r: (
+                -(
+                    float(r["pct_supply"])
+                    if r.get("pct_supply") is not None
+                    else -1.0
+                ),
+                str(r.get("wallet") or ""),
+            )
+        )
         if fresh_rows:
             fusion_signals.append(
                 {
@@ -541,7 +553,13 @@ def comprehensive_bundle_check(
             child_rows = [
                 {"wallet": r, "pct_supply": pct_by_w.get(r)} for r in recs if r
             ]
-            tot, n = bun._sum_wallets_pct(child_rows)  # type: ignore[attr-defined]
+            # Cluster total = sender + receivers (unique), sorted by bag later
+            sum_rows = list(child_rows)
+            if sender:
+                sum_rows.append(
+                    {"wallet": sender, "pct_supply": pct_by_w.get(sender)}
+                )
+            tot, n = bun._sum_wallets_pct(sum_rows)  # type: ignore[attr-defined]
             multi_clusters.append(
                 {
                     "kind": "token_multi_send",
@@ -556,6 +574,13 @@ def comprehensive_bundle_check(
                     "severity": mc.get("severity") or "high",
                 }
             )
+        # Largest combined supply cluster first
+        multi_clusters.sort(
+            key=lambda c: (
+                -(float(c["total_pct"]) if c.get("total_pct") is not None else -1.0),
+                -int(c.get("receiver_count") or 0),
+            )
+        )
         if multi_clusters:
             best_m = multi_clusters[0]
             fusion_signals.append(
@@ -597,23 +622,51 @@ def comprehensive_bundle_check(
 
     if base.get("ok") or fresh_rows or multi_clusters or sol_multi:
         if not base.get("ok"):
-            # Ensure we have a base shell if heuristics failed earlier
-            pass
+            # Heuristics failed but fresh/multi-send still useful — minimal shell
+            base = {
+                "ok": True,
+                "method": "fresh_multi_send_only",
+                "source": "helius",
+                "summary": {
+                    "bundle_risk_score": min(100, extra_score),
+                    "bundle_risk": _risk_label(min(100, extra_score)),
+                    "sources_used": list(sources_used),
+                },
+                "signals": list(fusion_signals),
+                "holders": [],
+                "clusters": [],
+                "similar_size_groups": [],
+                "suspect_wallets": [],
+            }
         else:
             base = dict(base)
-            base["fresh_wallets"] = fresh_rows
-            base["multi_send_clusters"] = multi_clusters
-            base["sol_multi_send_clusters"] = sol_multi
-            s0 = dict(base.get("summary") or {})
-            s0["fresh_wallet_count"] = len(fresh_rows)
-            s0["token_multi_send_clusters"] = len(multi_clusters)
-            s0["sol_multi_send_clusters"] = len(sol_multi)
-            ft, fn = bun._sum_wallets_pct(  # type: ignore[attr-defined]
-                [{"wallet": r.get("wallet"), "pct_supply": r.get("pct_supply")} for r in fresh_rows]
-            )
-            s0["fresh_total_pct"] = ft
-            s0["fresh_wallet_with_pct"] = fn
-            base["summary"] = s0
+        base["fresh_wallets"] = fresh_rows
+        base["multi_send_clusters"] = multi_clusters
+        base["sol_multi_send_clusters"] = sol_multi
+        s0 = dict(base.get("summary") or {})
+        s0["fresh_wallet_count"] = len(fresh_rows)
+        s0["token_multi_send_clusters"] = len(multi_clusters)
+        s0["sol_multi_send_clusters"] = len(sol_multi)
+        ft, fn = bun._sum_wallets_pct(  # type: ignore[attr-defined]
+            [
+                {"wallet": r.get("wallet"), "pct_supply": r.get("pct_supply")}
+                for r in fresh_rows
+            ]
+        )
+        s0["fresh_total_pct"] = ft
+        s0["fresh_wallet_with_pct"] = fn
+        # Unique multi-send wallets (token + SOL) total supply %
+        ms_shell = {
+            "multi_send_clusters": multi_clusters,
+            "sol_multi_send_clusters": sol_multi,
+        }
+        try:
+            mt, mn = bun._multi_send_total_percent(ms_shell, pct_by_w)  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            mt, mn = None, 0
+        s0["multi_send_total_pct"] = mt
+        s0["multi_send_wallet_with_pct"] = mn
+        base["summary"] = s0
 
     if jito_eng.get("ok"):
         fusion_signals.append(

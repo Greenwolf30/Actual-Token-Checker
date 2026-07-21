@@ -5511,10 +5511,13 @@ function formatHoldersRichHtml(text) {
 
 /**
  * Bundles tab % color scheme (same priority bands as Holders):
- *  - Summary: Total % bundles, Similar-size total, Suspect total
+ *  - Summary: Total % bundles, Similar-size total, Fresh total, Multi-send total,
+ *    Suspect total
  *  - Each wallet percent holdings in groups: "holds X%" on clusters,
- *    similar-size members, insiders, suspects (+ group avg/range headers)
+ *    similar-size members, insiders, suspects, fresh, multi-send
+ *    (+ group avg/range headers)
  *  - Similar-size group header right side: "sum X%" (combined group holdings)
+ *  - Fresh / Multi-send: “total X% across N wallet(s)” + flat lists by hold %
  *  - Top10 ex-LP stays uncolored (summary concentration, not a wallet bag)
  * Also yellows cluster "bal …" amounts.
  */
@@ -5871,11 +5874,471 @@ function renderSummary(data) {
   if (data.generated_at) $("generatedAt").textContent = "Generated: " + data.generated_at;
 }
 
+function bunWalletLink(addr) {
+  const w = String(addr || "").trim();
+  if (!w) return "—";
+  return (
+    '<a class="wallet-link bun-wallet" href="https://solscan.io/account/' +
+    encodeURIComponent(w) +
+    '" target="_blank" rel="noopener noreferrer" title="' +
+    escHtml(w) +
+    '">' +
+    escHtml(w) +
+    "</a>"
+  );
+}
+
+function bunPctHtml(n) {
+  const x = Number(n);
+  const cls = Number.isFinite(x) ? pctPriorityClass(x) : "";
+  const label = fmtSupplyPct(n) || "—";
+  return cls
+    ? '<span class="' + cls + '">' + escHtml(label) + "</span>"
+    : escHtml(label);
+}
+
+function bunEmptySection(title, hint) {
+  return (
+    '<section class="bun-section">' +
+    '<div class="bun-section-head">' +
+    '<span class="bun-section-title">' +
+    escHtml(title) +
+    "</span></div>" +
+    '<p class="bun-empty">' +
+    escHtml(hint || "None found this scan.") +
+    "</p></section>"
+  );
+}
+
+function bunWalletTable(rows, cols) {
+  // cols: [{key, label, render?}]
+  if (!rows || !rows.length) return "";
+  let h =
+    '<table class="bun-table"><thead><tr>' +
+    cols.map((c) => "<th>" + escHtml(c.label) + "</th>").join("") +
+    "</tr></thead><tbody>";
+  for (const row of rows) {
+    h += "<tr>";
+    for (const c of cols) {
+      const raw = row[c.key];
+      const cell =
+        typeof c.render === "function"
+          ? c.render(raw, row)
+          : escHtml(raw == null ? "—" : String(raw));
+      h += "<td>" + cell + "</td>";
+    }
+    h += "</tr>";
+  }
+  h += "</tbody></table>";
+  return h;
+}
+
+/**
+ * Card UI for Bundles tab from structured bundles_view.
+ * Never dumps raw JSON / monospaced report into the main panel.
+ */
+function renderBundlesUi(data) {
+  const root = $("bundlesUi");
+  if (!root) return;
+
+  const view = (data && data.bundles_view) || null;
+  const textFallback =
+    (data && data.sections && data.sections.bundles) || "";
+
+  // Always keep hidden text for Logs snapshot path
+  const textEl = $("text-bundles");
+  if (textEl && textFallback) {
+    // Keep plain text in hidden pre (not shown as UI)
+    textEl.textContent = String(textFallback);
+  }
+
+  if (!view) {
+    root.innerHTML =
+      '<p class="logs-empty">Run a <strong>full Analyze</strong> (not Quick) on a Solana mint to load Bundles cards.</p>';
+    return;
+  }
+
+  if (!view.ok) {
+    root.innerHTML =
+      '<div class="bun-hint"><strong>Bundles unavailable</strong><br />' +
+      escHtml(view.error || "No data") +
+      "<br /><br />Tips: full Analyze · Solana mint · holders must succeed · Helius for funding / fresh / multi-send / launch-window.</div>";
+    return;
+  }
+
+  const s = view.summary || {};
+  const risk = String(s.bundle_risk || "—").toLowerCase();
+  const riskCls =
+    risk === "high" || risk === "elevated"
+      ? "risk-" + risk
+      : risk === "moderate"
+        ? "risk-moderate"
+        : risk === "lower"
+          ? "risk-lower"
+          : "";
+
+  function stat(label, valueHtml) {
+    return (
+      '<div class="bun-stat"><span class="bun-stat-label">' +
+      escHtml(label) +
+      '</span><span class="bun-stat-value">' +
+      valueHtml +
+      "</span></div>"
+    );
+  }
+
+  let html = "";
+  html += '<div class="bun-stats">';
+  html += stat(
+    "Risk",
+    '<span class="' +
+      riskCls +
+      '">' +
+      escHtml(s.bundle_risk || "—") +
+      "</span>" +
+      (s.bundle_risk_score != null
+        ? ' <span style="font-size:0.75rem;color:var(--text-muted)">(' +
+          escHtml(String(s.bundle_risk_score)) +
+          "/100)</span>"
+        : "")
+  );
+  html += stat("Total bundle", bunPctHtml(s.total_bundle_pct));
+  html += stat("Similar-size", bunPctHtml(s.similar_size_total_pct));
+  html += stat("Fresh total", bunPctHtml(s.fresh_total_pct));
+  html += stat("Multi-send total", bunPctHtml(s.multi_send_total_pct));
+  html += stat("Top10 ex-LP", bunPctHtml(s.top10_pct_excluding_known_programs));
+  html += "</div>";
+
+  const src = (s.sources_used || []).join(", ") || view.method || view.source || "—";
+  html +=
+    '<p class="bun-meta">Sources: ' +
+    escHtml(src) +
+    " · Heuristic only — not proof of identity</p>";
+
+  // Signals chips
+  const sigs = view.signals || [];
+  if (sigs.length) {
+    html += '<div class="bun-signals">';
+    for (const sig of sigs) {
+      const sev = String(sig.severity || "info").toLowerCase();
+      html +=
+        '<span class="bun-chip sev-' +
+        escHtml(sev) +
+        '" title="' +
+        escHtml(sig.detail || "") +
+        '"><strong>' +
+        escHtml(sig.title || sig.id || "signal") +
+        "</strong></span>";
+    }
+    html += "</div>";
+  }
+
+  // Multi-account
+  const clusters = view.clusters || [];
+  if (clusters.length) {
+    html +=
+      '<section class="bun-section"><div class="bun-section-head">' +
+      '<span class="bun-section-title">Multi-account clusters</span>' +
+      '<span class="bun-section-total">' +
+      escHtml(String(clusters.length)) +
+      " owner(s) · several ATAs each</span></div><div class=\"bun-section-body\">";
+    html += bunWalletTable(clusters, [
+      {
+        key: "wallet",
+        label: "Owner",
+        render: (v) => bunWalletLink(v),
+      },
+      {
+        key: "accounts",
+        label: "ATAs",
+        render: (v) => escHtml(v != null ? String(v) : "—"),
+      },
+      {
+        key: "pct_supply",
+        label: "Total hold",
+        render: (v) => bunPctHtml(v),
+      },
+    ]);
+    html += "</div></section>";
+  } else {
+    html += bunEmptySection(
+      "Multi-account clusters",
+      "None found — one owner with several large Associated Token Accounts."
+    );
+  }
+
+  // Similar-size
+  const sims = view.similar_size_groups || [];
+  if (sims.length) {
+    html +=
+      '<section class="bun-section"><div class="bun-section-head">' +
+      '<span class="bun-section-title">Similar-size groups</span>' +
+      '<span class="bun-section-total">' +
+      bunPctHtml(s.similar_size_total_pct) +
+      " combined</span></div><div class=\"bun-section-body\">";
+    for (const g of sims) {
+      html +=
+        '<div class="bun-cluster"><div class="bun-cluster-head">' +
+        escHtml(String(g.count || (g.wallets || []).length || 0)) +
+        " wallets ≈ " +
+        bunPctHtml(g.avg_pct) +
+        " each" +
+        (g.total_pct != null ? " · sum " + bunPctHtml(g.total_pct) : "") +
+        "</div>";
+      html += bunWalletTable(g.wallets || [], [
+        { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
+        { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
+      ]);
+      html += "</div>";
+    }
+    html += "</div></section>";
+  } else {
+    html += bunEmptySection(
+      "Similar-size groups",
+      "None found — top wallets with nearly the same bag size."
+    );
+  }
+
+  // Insiders
+  const ins = view.insider_wallets || [];
+  if (ins.length) {
+    html +=
+      '<section class="bun-section"><div class="bun-section-head">' +
+      '<span class="bun-section-title">Insider-flagged (Rugcheck)</span>' +
+      '<span class="bun-section-total">' +
+      escHtml(String(ins.length)) +
+      " wallet(s)</span></div><div class=\"bun-section-body\">";
+    html += bunWalletTable(ins, [
+      { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
+      { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
+    ]);
+    html += "</div></section>";
+  } else {
+    html += bunEmptySection("Insider-flagged (Rugcheck)", "None found this scan.");
+  }
+
+  // Shared SOL funder
+  const fund = view.funding_clusters || [];
+  if (fund.length) {
+    html +=
+      '<section class="bun-section"><div class="bun-section-head">' +
+      '<span class="bun-section-title">Shared SOL funder</span>' +
+      '<span class="bun-section-total">' +
+      escHtml(String(fund.length)) +
+      " cluster(s)</span></div><div class=\"bun-section-body\">";
+    for (const fc of fund) {
+      html +=
+        '<div class="bun-cluster"><div class="bun-cluster-head">Funder ' +
+        bunWalletLink(fc.funder) +
+        " holds " +
+        bunPctHtml(fc.funder_pct) +
+        " → " +
+        escHtml(String(fc.child_count || (fc.children || []).length || 0)) +
+        " wallets" +
+        (fc.total_pct != null ? " · sum " + bunPctHtml(fc.total_pct) : "") +
+        "</div>";
+      html += bunWalletTable(fc.children || [], [
+        { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
+        { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
+      ]);
+      html += "</div>";
+    }
+    html += "</div></section>";
+  } else {
+    html += bunEmptySection(
+      "Shared SOL funder",
+      "None found — needs Helius for 1-hop funding clusters."
+    );
+  }
+
+  // Fresh
+  const fresh = view.fresh_wallets || [];
+  if (fresh.length) {
+    html +=
+      '<section class="bun-section"><div class="bun-section-head">' +
+      '<span class="bun-section-title">Fresh / sole-token wallets</span>' +
+      '<span class="bun-section-total">total ' +
+      bunPctHtml(s.fresh_total_pct) +
+      " · " +
+      escHtml(String(fresh.length)) +
+      " wallet(s)</span></div><div class=\"bun-section-body\">";
+    html += bunWalletTable(fresh, [
+      { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
+      { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
+      {
+        key: "sol",
+        label: "SOL",
+        render: (v) =>
+          v != null && Number.isFinite(Number(v))
+            ? escHtml(Number(v).toFixed(3))
+            : "—",
+      },
+      {
+        key: "other_tokens",
+        label: "Other SPL",
+        render: (v) => escHtml(v != null ? String(v) : "—"),
+      },
+      {
+        key: "tag",
+        label: "Tag",
+        render: (v) => escHtml(v || "sole-token"),
+      },
+    ]);
+    html += "</div></section>";
+  } else {
+    html += bunEmptySection(
+      "Fresh / sole-token wallets",
+      "None found — wallets holding almost only this mint (needs Helius + full Analyze)."
+    );
+  }
+
+  // Multi-send
+  const msWallets = view.multi_send_wallets || [];
+  const tokenMs = view.multi_send_clusters || [];
+  const solMs = view.sol_multi_send_clusters || [];
+  if (msWallets.length || tokenMs.length || solMs.length) {
+    html +=
+      '<section class="bun-section"><div class="bun-section-head">' +
+      '<span class="bun-section-title">Multi-send (one → many)</span>' +
+      '<span class="bun-section-total">total ' +
+      bunPctHtml(s.multi_send_total_pct) +
+      " · " +
+      escHtml(String(msWallets.length || 0)) +
+      " wallet(s)</span></div><div class=\"bun-section-body\">";
+    if (msWallets.length) {
+      html += '<p class="bun-sub">All wallets involved (by current supply %)</p>';
+      html += bunWalletTable(msWallets, [
+        { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
+        { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
+        {
+          key: "roles",
+          label: "Role",
+          render: (v) =>
+            escHtml(Array.isArray(v) ? v.join(", ") : v || "multi-send"),
+        },
+      ]);
+    }
+    for (const mc of tokenMs) {
+      html +=
+        '<div class="bun-cluster"><div class="bun-cluster-head">Token sender ' +
+        bunWalletLink(mc.sender) +
+        " holds " +
+        bunPctHtml(mc.sender_pct) +
+        " → " +
+        escHtml(String(mc.receiver_count || (mc.receivers || []).length || 0)) +
+        " receivers · cluster " +
+        bunPctHtml(mc.total_pct) +
+        "</div>";
+      html += bunWalletTable(mc.receivers || [], [
+        { key: "wallet", label: "Receiver", render: (v) => bunWalletLink(v) },
+        { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
+      ]);
+      html += "</div>";
+    }
+    for (const mc of solMs) {
+      html +=
+        '<div class="bun-cluster"><div class="bun-cluster-head">SOL funder ' +
+        bunWalletLink(mc.sender) +
+        " holds " +
+        bunPctHtml(mc.sender_pct) +
+        " → " +
+        escHtml(String(mc.receiver_count || (mc.receivers || []).length || 0)) +
+        " wallets · cluster " +
+        bunPctHtml(mc.total_pct) +
+        "</div>";
+      html += bunWalletTable(mc.receivers || [], [
+        { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
+        { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
+      ]);
+      html += "</div>";
+    }
+    html += "</div></section>";
+  } else {
+    html += bunEmptySection(
+      "Multi-send (one → many)",
+      "None found — one wallet sending this mint or SOL to many others (not multi-account)."
+    );
+  }
+
+  // Launch-window
+  const slots = view.same_slot_groups || [];
+  if (slots.length) {
+    html +=
+      '<section class="bun-section"><div class="bun-section-head">' +
+      '<span class="bun-section-title">Launch-window (same-slot multi-buys)</span>' +
+      '<span class="bun-section-total">' +
+      escHtml(String(slots.length)) +
+      " slot group(s)</span></div><div class=\"bun-section-body\">";
+    for (const g of slots) {
+      html +=
+        '<div class="bun-cluster"><div class="bun-cluster-head">Slot ' +
+        escHtml(g.slot != null ? String(g.slot) : "—") +
+        (g.block_time ? " · " + escHtml(String(g.block_time)) : "") +
+        " · " +
+        escHtml(String(g.wallet_count || (g.wallets || []).length || 0)) +
+        " wallets · sum " +
+        bunPctHtml(g.total_pct) +
+        "</div>";
+      html += bunWalletTable(g.wallets || [], [
+        { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
+        { key: "pct_supply", label: "Holds now", render: (v) => bunPctHtml(v) },
+      ]);
+      html += "</div>";
+    }
+    html += "</div></section>";
+  } else {
+    html += bunEmptySection(
+      "Launch-window (same-slot multi-buys)",
+      "None found in early mint scan (needs Helius + full Analyze)."
+    );
+  }
+
+  // Suspects
+  const sus = view.suspect_wallets || [];
+  if (sus.length) {
+    html +=
+      '<section class="bun-section"><div class="bun-section-head">' +
+      '<span class="bun-section-title">Suspect wallets</span>' +
+      '<span class="bun-section-total">' +
+      escHtml(String(sus.length)) +
+      " wallet(s)</span></div><div class=\"bun-section-body\">";
+    html += bunWalletTable(sus, [
+      { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
+      { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
+      {
+        key: "reasons",
+        label: "Why",
+        render: (v) =>
+          escHtml(Array.isArray(v) ? v.join("; ") : v || "—"),
+      },
+    ]);
+    html += "</div></section>";
+  } else {
+    html += bunEmptySection("Suspect wallets", "None tagged this scan.");
+  }
+
+  root.innerHTML = html;
+}
+
 function renderSections(data, query) {
   const sections = (data && data.sections) || {};
   for (const tab of TABS) {
-    if (tab === "history" || tab === "ruggers") continue;
+    if (tab === "history" || tab === "ruggers" || tab === "bundles") continue;
     if (sections[tab]) setPanelText(tab, sections[tab]);
+  }
+  // Bundles: card UI (structured), not monospaced text dump
+  try {
+    renderBundlesUi(data);
+  } catch (err) {
+    console.error("[bundles ui]", err);
+    const root = $("bundlesUi");
+    if (root) {
+      root.innerHTML =
+        '<div class="bun-hint"><strong>Bundles UI error</strong><br />' +
+        escHtml(String(err && err.message ? err.message : err)) +
+        "</div>";
+    }
+    if (sections.bundles) setPanelText("bundles", sections.bundles);
   }
   // Log successful Analyze into browser History (max HISTORY_MAX; drop oldest)
   try {

@@ -446,7 +446,7 @@ def format_holders_section(report: dict[str, Any]) -> str:
 
 
 def format_bundles_section(report: dict[str, Any]) -> str:
-    """Bundles tab body."""
+    """Bundles tab body — always human text, never raw JSON."""
     if report.get("_raw_bundles_text"):
         return str(report["_raw_bundles_text"])
     bundles = report.get("bundles") or {}
@@ -454,13 +454,23 @@ def format_bundles_section(report: dict[str, Any]) -> str:
         from .bundles import format_bundles_text
 
         return format_bundles_text(bundles)
-    except Exception:  # noqa: BLE001
-        if not bundles.get("ok"):
-            return (
-                "── BUNDLES ──\n"
-                f"  {bundles.get('error') or bundles.get('notes') or 'Run Analyze first.'}\n"
-            )
-        return json.dumps(bundles, indent=2, default=str)
+    except Exception as exc:  # noqa: BLE001
+        # Do not dump JSON into the UI (looks like "code"). Keep a short error.
+        err = (
+            bundles.get("error")
+            or bundles.get("notes")
+            or "Bundles could not be formatted."
+        )
+        return (
+            "── BUNDLES ──\n"
+            f"  {err}\n"
+            f"  (formatter note: {exc})\n"
+            "\n"
+            "  Tips:\n"
+            "  · Use full Analyze (not Quick) on a Solana mint\n"
+            "  · Holders must succeed first\n"
+            "  · Helius needed for funding / fresh / multi-send / launch-window\n"
+        )
 
 
 def format_maps_section(report: dict[str, Any]) -> str:

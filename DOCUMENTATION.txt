@@ -272,41 +272,51 @@ What people often ask
 
   - Summary: estimated total bundle % of supply (when available)
   - Similar-size total %: combined supply of unique wallets in similar-size groups
+  - Fresh total %: combined supply of unique fresh / sole-token wallets
+  - Multi-send total %: combined supply of unique multi-send wallets (token + SOL)
   - ── MULTI-ACCOUNT CLUSTERS ──  one owner, several large Associated Token
-                                  Accounts (see §6.3b)
+                                  Accounts — NOT multi-send (see §6.3b, §6.3e)
   - ── SIMILAR-SIZE GROUPS ──     nearly same bag size among top wallets
   - ── INSIDER-FLAGGED ──         Rugcheck insider tags (not RugWatch)
   - ── SHARED SOL FUNDER ──       1-hop common SOL funder (Helius when available)
   - ── FRESH / SOLE-TOKEN ──      Hold this mint with almost no other SPL tokens
-                                  (Helius getTokenAccountsByOwner; full Analyze)
-  - ── MULTI-SEND (ONE → MANY) ── Token multi-send (one owner distributed this
-                                  mint) + SOL multi-send (same as shared funder
-                                  fan-out). Helius history; heuristic.
+                                  (see §6.3f). Summary “Fresh total” + section
+                                  total %; flat list by hold %. Helius; full Analyze.
+  - ── MULTI-SEND (ONE → MANY) ── One wallet sent this mint or SOL to many others
+                                  — NOT multi-account clusters (see §6.3e).
+                                  Summary “Multi-send total” + flat list by hold %;
+                                  per-cluster total % + receivers by %.
   - ── LAUNCH-WINDOW ──           same-slot multi-buys; full slot pipeline,
                                   UI layout map, % / n/a (§6.3c)
   - ── SUSPECT WALLETS ──         union of signals (heuristic)
   - Signals: multi Associated Token Account clusters, similar-size, insiders,
-    funder, launch-window, Birdeye tags, rugged
+    funder, fresh/sole-token, multi-send, launch-window, Birdeye tags, rugged
   - Top10 ex-LP (see §6.3a)
   - Notes that methods are partial
 
   Display (website) — % color bands (same as Holders priority scheme)
-  - Total % bundles, Similar-size total, Suspect total: colored by %
+  - Total % bundles, Similar-size total, Fresh total, Multi-send total,
+    Suspect total: colored by %
   - Each wallet’s percent holdings in every group is colored the same way
       (lines look like “wallet  holds X%”)
   - Similar-size group header (right side): “sum X%” = combined group holdings
+  - Fresh / Multi-send section headers: “total X% across N wallet(s)”
   - Group headers (≈ avg % / range) also use the bands
   - Cluster balances ("bal …") shown in yellow
   - Top10 ex-LP stays uncolored (summary only — see §6.3a)
 
-  Launch-window vs other signals
+  Bundles signals compared (not interchangeable)
     | Section              | What it tracks                              |
     |----------------------|---------------------------------------------|
     | Launch-window        | Many buys in the same slot / short launch   |
     |                      | time window (not “same bag size”) — §6.3c   |
     | Similar-size         | Same holding size, not necessarily same time|
     | Multi-account        | Same owner, multiple large Associated Token |
-    |                      | Accounts (token accounts) — §6.3b           |
+    |                      | Accounts under that one owner — §6.3b       |
+    | Multi-send           | One wallet sent this mint (or SOL) to many  |
+    |                      | different wallets — §6.3e  (NOT multi-acct) |
+    | Fresh / sole-token   | Holder whose bag is almost only this mint   |
+    |                      | (few/no other SPL tokens) — §6.3f           |
     | Shared SOL funder    | Same funding parent (1-hop SOL), not slot   |
     | Insider (Rugcheck)   | Rugcheck insider flag on top holders        |
 
@@ -351,6 +361,12 @@ What people often ask
 
   This is a heuristic (“looks like one operator with several bags”), not
   proof of identity.
+
+  Multi-account is NOT multi-send
+    - Multi-account = one owner, several of their own token accounts (structure
+      of how they hold).
+    - Multi-send = one wallet transferred tokens/SOL out to many other wallets
+      (distribution / fan-out). See §6.3e for the full contrast.
 
 6.3c Launch-window slots and same-slot multi-buys (reference)
 
@@ -418,6 +434,8 @@ What people often ask
 
   Related (not the same signal)
     Multi-account     → same owner, multiple Associated Token Accounts (§6.3b)
+    Multi-send        → one sender → many receivers (token or SOL) (§6.3e)
+    Fresh / sole-token → wallet holds almost only this mint (§6.3f)
     Similar-size      → similar current bag size (not time)
     Shared SOL funder → common 1-hop SOL parent (not slot)
     Holders tab       → current concentration snapshot
@@ -699,6 +717,118 @@ What people often ask
   | Ruggers swing      | Browser tracking    | When buy-back was detected     |
 
 
+6.3e Multi-send vs multi-account (NOT the same)
+
+  Multi-send is NOT multi-account clusters. They answer different questions
+  and appear in different Bundles sections.
+
+  ---------------------------------------------------------------------------
+  MULTI-ACCOUNT CLUSTERS  (── MULTI-ACCOUNT CLUSTERS ──)  — see also §6.3b
+  ---------------------------------------------------------------------------
+  What
+    One wallet owner holds this mint across several large Associated Token
+    Accounts (ATAs). Structure of how they hold — still one owner.
+
+  Question it answers
+    “Is this one operator’s bag split across multiple token accounts?”
+
+  What you see
+    Owner address · how many Associated Token Accounts · total % for that
+    owner (combined bag).
+
+  Source
+    Holder snapshot / owner-cluster heuristics (roll token accounts up by
+    owner when possible).
+
+  What it is NOT
+    Not “this wallet sent tokens to other people.”
+    Not proof of multiple people.
+
+  ---------------------------------------------------------------------------
+  MULTI-SEND (ONE → MANY)  (── MULTI-SEND (ONE → MANY) ──)
+  ---------------------------------------------------------------------------
+  What
+    One wallet transferred this mint (token multi-send) or SOL (SOL multi-
+    send / shared-funder style fan-out) to many different receiver wallets.
+
+  Question it answers
+    “Did someone seed or distribute tokens/SOL out to many wallets?”
+
+  What you see
+    - Summary “Multi-send total” = combined current supply % of unique
+      wallets involved (senders + receivers when % known)
+    - Flat list of those wallets by current hold % (largest first)
+    - Cluster breakdown: sender → N receivers, cluster total %, receivers
+      listed by hold %
+
+  Flavors
+    Token multi-send  — one owner sent THIS mint to many wallets
+                        (Helius recent mint tx history; full Analyze)
+    SOL multi-send    — one funder sent SOL to many children
+                        (same idea as ── SHARED SOL FUNDER ── fan-out)
+
+  What it is NOT
+    Not multi-account clusters (those stay under one owner’s ATAs).
+    Not proof the receivers are the same person as the sender.
+    Best-effort from capped history — not a full archive.
+
+  ---------------------------------------------------------------------------
+  SIDE-BY-SIDE
+  ---------------------------------------------------------------------------
+  |                     | Multi-account              | Multi-send              |
+  |---------------------|----------------------------|-------------------------|
+  | Who                 | One owner                  | One sender → many       |
+  |                     |                            | receivers               |
+  | What happens        | Holds via several ATAs     | Sends out to others     |
+  | Wallets involved    | One owner (many accounts)  | Many distinct wallets   |
+  | Bundles section     | MULTI-ACCOUNT CLUSTERS     | MULTI-SEND (ONE → MANY) |
+  | Typical story       | One bag, split accounts    | Distribution / seeding  |
+
+  Both can appear on the same mint. Treat them as separate heuristics.
+
+
+6.3f Fresh / sole-token wallets (notation)
+
+  Section in Bundles: ── FRESH / SOLE-TOKEN WALLETS ──
+  Summary line:       Fresh total: X%  (N wallet(s))
+
+  What “fresh / sole-token” means here
+    A holder of THIS mint whose wallet has almost no other SPL tokens with
+    balance — typically only this mint (tag sole-token) or near-sole
+    (very few other tokens). Heuristic via Helius
+    getTokenAccountsByOwner + getBalance; full Analyze; Solana-focused.
+
+  Question it answers
+    “Which current holders look like new or single-purpose bags for this
+    coin (not diversified portfolios)?”
+
+  What you see (same layout style as multi-send)
+    - Summary “Fresh total” = combined current supply % of unique fresh
+      wallets (when % known)
+    - Section header: total X% across N wallet(s)
+    - Flat list sorted by current hold % (largest first):
+        #N  wallet  holds X%  ·  SOL bal  ·  other tokens=N  ·  tag
+
+  Tags
+    sole-token       — only this mint with balance (0 other SPL tokens)
+    near-sole-token  — at most a tiny number of other tokens (scan cap)
+
+  Limits / notation
+    - Fresh ≠ “brand-new wallet on chain” as a birth date; it means
+      “almost only this mint in token inventory right now.”
+    - Closed ATAs / zero balances / other chains are not counted as
+      “other tokens.”
+    - Seeded from non-LP top holders / suspects / similar / early buyers
+      (capped RPC scan) — not every holder on the mint.
+    - Not the same as multi-account, multi-send, similar-size, or
+      launch-window (see comparison table in §6.3).
+    - Heuristic only — not KYC or identity proof.
+
+  UI location
+    Bundles tab → summary “Fresh total” + ── FRESH / SOLE-TOKEN WALLETS ──
+    Bundles Signals → “Fresh / sole-token wallets” when any are found
+
+
 6.4 Bundle % alert scheme (Alerts tab)
   Alerts use ONE number: estimated bundle % of supply
   (summary.total_bundle_pct; if missing, a fallback from the largest
@@ -759,7 +889,9 @@ What people often ask
 
 6.7 Extra signals that feed risk (not the same as the % bands)
   - Multi Associated Token Account clusters (one owner, several token
-    accounts — §6.3b)
+    accounts — §6.3b) — not multi-send
+  - Multi-send one → many (token and/or SOL fan-out — §6.3e) — not multi-account
+  - Fresh / sole-token wallets (almost only this mint — §6.3f)
   - Similar-sized top wallets
   - Launch-window same-slot multi-buys (Jito-style / Helius — §6.3c)
   - Rugcheck insider_count, rugged=true, risk names (bundle/sniper/insider/…)

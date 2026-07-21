@@ -264,16 +264,37 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _num(v: Any) -> float | None:
+    """Safe float for summary % checks (never raises)."""
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _empty_line(label: str) -> str:
+    """Human empty state — not a code/template placeholder."""
+    return f"  {label}: none found this scan"
+
+
 def format_bundles_text(data: dict[str, Any]) -> str:
     if not data.get("ok"):
+        err = data.get("error") or data.get("notes") or "unavailable"
         return (
             "── BUNDLES ──\n"
-            f"  {data.get('error') or data.get('notes') or 'unavailable'}\n"
+            f"  {err}\n"
+            "\n"
+            "  Tips:\n"
+            "  · Use full Analyze (not Quick) on a Solana mint\n"
+            "  · Holders must succeed first (bundles builds from holders)\n"
+            "  · Helius is needed for funding / fresh / multi-send / launch-window\n"
         )
 
     s = data.get("summary") or {}
-    total_bp = s.get("total_bundle_pct")
-    if total_bp is not None and float(total_bp or 0) > 0:
+    total_bp = _num(s.get("total_bundle_pct"))
+    if total_bp is not None and total_bp > 0:
         total_line = (
             f"  Total % bundles: {_pct(total_bp)}"
             + (
@@ -283,7 +304,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             )
         )
     else:
-        total_line = "  Total % bundles will show here if value returns True"
+        total_line = _empty_line("Total % bundles")
     src_list = s.get("sources_used") or []
     # Section markers (── TITLE ──) are colored dim-green in the UI (titles only).
     lines = [
@@ -293,18 +314,24 @@ def format_bundles_text(data: dict[str, Any]) -> str:
         f"  Bundle risk:     {s.get('bundle_risk')}  (score {s.get('bundle_risk_score')}/100)",
         total_line,
     ]
-    cl_n = int(s.get("multi_account_clusters") or 0)
-    sg_n = int(s.get("similar_size_groups") or 0)
+    try:
+        cl_n = int(s.get("multi_account_clusters") or 0)
+    except (TypeError, ValueError):
+        cl_n = 0
+    try:
+        sg_n = int(s.get("similar_size_groups") or 0)
+    except (TypeError, ValueError):
+        sg_n = 0
     if cl_n > 0:
         lines.append(
             f"  Clusters:        {cl_n} multi Associated Token Account wallet(s)"
         )
     else:
-        lines.append("  Clusters will show here if value returns True")
+        lines.append(_empty_line("Clusters"))
     if sg_n > 0:
         lines.append(f"  Similar groups:  {sg_n}")
     else:
-        lines.append("  Similar groups will show here if value returns True")
+        lines.append(_empty_line("Similar groups"))
     # Total % of unique wallets that sit in similar-size groups (combined supply)
     sim_pct = s.get("similar_size_total_pct")
     sim_n = s.get("similar_size_wallet_count")
@@ -312,37 +339,79 @@ def format_bundles_text(data: dict[str, Any]) -> str:
         sim_pct, sim_n = _similar_size_total_percent(
             list(data.get("similar_size_groups") or [])
         )
-    if sim_pct is not None and float(sim_pct or 0) > 0:
+    sim_f = _num(sim_pct)
+    if sim_f is not None and sim_f > 0:
         lines.append(
             f"  Similar-size total: {_pct(sim_pct)}"
             + (f"  ({sim_n} wallet(s))" if sim_n else "")
         )
     else:
-        lines.append(
-            "  Similar-size total will show here if value returns True"
-        )
-    ins_n = int(s.get("insider_accounts") or 0)
+        lines.append(_empty_line("Similar-size total"))
+    try:
+        ins_n = int(s.get("insider_accounts") or 0)
+    except (TypeError, ValueError):
+        ins_n = 0
     if ins_n > 0:
         lines.append(f"  Insider accts:   {ins_n}")
     else:
-        lines.append(
-            "  Insider accounts will show here if value returns True"
-        )
-    top10 = s.get("top10_pct_excluding_known_programs")
-    if top10 is not None and float(top10 or 0) > 0:
+        lines.append(_empty_line("Insider accounts"))
+    top10 = _num(s.get("top10_pct_excluding_known_programs"))
+    if top10 is not None and top10 > 0:
         lines.append(f"  Top10 ex-LP:     {_pct(top10)}")
     else:
-        lines.append("  Top10 ex-LP will show here if value returns True")
+        lines.append(_empty_line("Top10 ex-LP"))
+
+    # Fresh total % (category sum of unique sole-token wallets)
+    fresh_pct = s.get("fresh_total_pct")
+    fresh_n = s.get("fresh_wallet_with_pct")
+    if fresh_pct is None and (data.get("fresh_wallets") or []):
+        fresh_pct, fresh_n = _sum_wallets_pct(
+            [
+                {"wallet": r.get("wallet"), "pct_supply": r.get("pct_supply")}
+                for r in (data.get("fresh_wallets") or [])
+                if isinstance(r, dict)
+            ]
+        )
+    fresh_f = _num(fresh_pct)
+    if fresh_f is not None and fresh_f > 0:
+        lines.append(
+            f"  Fresh total:     {_pct(fresh_pct)}"
+            + (f"  ({fresh_n} wallet(s))" if fresh_n else "")
+        )
+    else:
+        lines.append(_empty_line("Fresh total"))
+
+    # Multi-send total % (unique senders + receivers across token + SOL clusters)
+    ms_pct = s.get("multi_send_total_pct")
+    ms_n = s.get("multi_send_wallet_with_pct")
+    if ms_pct is None and (
+        data.get("multi_send_clusters") or data.get("sol_multi_send_clusters")
+    ):
+        try:
+            ms_pct, ms_n = _multi_send_total_percent(data, {})
+        except Exception:  # noqa: BLE001
+            ms_pct, ms_n = None, 0
+    ms_f = _num(ms_pct)
+    if ms_f is not None and ms_f > 0:
+        lines.append(
+            f"  Multi-send total: {_pct(ms_pct)}"
+            + (f"  ({ms_n} wallet(s))" if ms_n else "")
+        )
+    else:
+        lines.append(_empty_line("Multi-send total"))
+
     lines.append("")
     lines.append("  Signals:")
-    sigs = list(data.get("signals") or [])
+    sigs = list(data.get("signals") or []) if isinstance(data.get("signals"), list) else []
     if sigs:
         for sig in sigs:
+            if not isinstance(sig, dict):
+                continue
             sev = (sig.get("severity") or "info").upper()
             lines.append(f"    [{sev}] {sig.get('title')}")
             lines.append(f"           {sig.get('detail')}")
     else:
-        lines.append("    Signals will show here if value returns True")
+        lines.append("    (no signals this scan)")
 
     reports = data.get("source_reports") or {}
     if reports:
@@ -400,7 +469,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
     else:
         lines.append("── MULTI-ACCOUNT CLUSTERS ──")
         lines.append(
-            "  Multi-account clusters will show here if value returns True"
+            "  (none — no multi Associated Token Account clusters this scan)"
         )
 
     groups = data.get("similar_size_groups") or []
@@ -460,7 +529,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
         lines.append("")
         lines.append("── SIMILAR-SIZE GROUPS ──")
         lines.append(
-            "  Similar-size wallet groups will show here if value returns True"
+            "  (none — no similar-size groups this scan)"
         )
 
     # Wallet → supply % map for sections that only had addresses
@@ -496,7 +565,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             )
     else:
         lines.append(
-            "  Insider-flagged wallets will show here if value returns True"
+            "  (none — no Rugcheck insider-flagged wallets this scan)"
         )
 
     # Funding clusters (shared SOL funder — comprehensive check)
@@ -553,115 +622,253 @@ def format_bundles_text(data: dict[str, Any]) -> str:
                 lines.append(f"         … +{len(child_rows) - 8} more")
     else:
         lines.append(
-            "  Shared SOL funder clusters will show here if value returns True"
+            "  (none — no shared SOL funder clusters this scan; needs Helius)"
         )
 
-    # Fresh / sole-token wallets (hold this mint, almost no other SPL tokens)
+    # Fresh / sole-token wallets — total supply % + list sorted by hold %
+    # (same layout as multi-send: category total → flat list by current %)
     lines.append("")
     lines.append("── FRESH / SOLE-TOKEN WALLETS ──")
     fresh = list(data.get("fresh_wallets") or [])
-    if fresh:
+    # Enrich missing % from holders map; sort largest bag first
+    fresh_enriched: list[dict[str, Any]] = []
+    for r in fresh:
+        if not isinstance(r, dict):
+            continue
+        w = (r.get("wallet") or "").strip()
+        if not w:
+            continue
+        row = dict(r)
+        pct = row.get("pct_supply")
+        if pct is None and w in pct_map:
+            pct = pct_map[w]
+        row["pct_supply"] = pct
+        row["wallet"] = w
+        fresh_enriched.append(row)
+    fresh_enriched.sort(
+        key=lambda r: (
+            -(float(r["pct_supply"]) if r.get("pct_supply") is not None else -1.0),
+            str(r.get("wallet") or ""),
+        )
+    )
+    if fresh_enriched:
         f_rows = [
-            {"wallet": (r.get("wallet") or "").strip(), "pct_supply": r.get("pct_supply")}
-            for r in fresh
-            if (r.get("wallet") or "").strip()
+            {"wallet": r["wallet"], "pct_supply": r.get("pct_supply")}
+            for r in fresh_enriched
         ]
         f_tot, f_n = _sum_wallets_pct(f_rows)
         lines.append(
-            f"  Sole-token holders — total {_pct(f_tot)} across {f_n} wallet(s) "
-            f"(this mint only / almost no other SPL tokens):"
+            f"  Fresh / sole-token wallets — total {_pct(f_tot)} across {f_n} wallet(s):"
         )
-        for r in fresh[:14]:
-            w = (r.get("wallet") or "").strip()
-            if not w:
-                continue
+        lines.append("  All wallets (by current supply %):")
+        for i, r in enumerate(fresh_enriched[:24], start=1):
+            w = r["wallet"]
             sol = r.get("sol")
             sol_s = f"{float(sol):.3f} SOL" if sol is not None else "SOL n/a"
             other = r.get("other_tokens")
             tag = r.get("tag") or "sole-token"
             lines.append(
-                f"    • {w}  holds {_pct(r.get('pct_supply'))}  ·  {sol_s}  ·  "
+                f"    #{i} {w}  holds {_pct(r.get('pct_supply'))}  ·  {sol_s}  ·  "
                 f"other tokens={other if other is not None else '?'}  ·  {tag}"
             )
-        if len(fresh) > 14:
-            lines.append(f"    … +{len(fresh) - 14} more")
+        if len(fresh_enriched) > 24:
+            lines.append(f"    … +{len(fresh_enriched) - 24} more")
     else:
         lines.append(
-            "  Fresh / sole-token wallets will show here if value returns True"
+            "  (none — no fresh / sole-token wallets this scan; needs Helius + full Analyze)"
         )
 
-    # Multi-send: one owner sent SOL or this token to many wallets
+    # Multi-send: total supply % of all unique wallets involved + cluster lists
     lines.append("")
     lines.append("── MULTI-SEND (ONE OWNER → MANY) ──")
     token_ms = list(data.get("multi_send_clusters") or [])
     sol_ms = list(data.get("sol_multi_send_clusters") or [])
     if token_ms or sol_ms:
-        # Category total: unique receivers + senders with known %
-        ms_rows: list[dict[str, Any]] = []
-        for mc in token_ms + sol_ms:
-            s = (mc.get("sender") or "").strip()
-            if s:
-                ms_rows.append(
-                    {
-                        "wallet": s,
-                        "pct_supply": mc.get("sender_pct")
-                        if mc.get("sender_pct") is not None
-                        else pct_map.get(s),
-                    }
-                )
-            for row in mc.get("child_rows") or []:
-                if isinstance(row, dict) and row.get("wallet"):
-                    ms_rows.append(row)
-                elif isinstance(row, str):
-                    ms_rows.append(
-                        {"wallet": row, "pct_supply": pct_map.get(row)}
-                    )
-            for r in mc.get("receivers") or []:
-                rs = r if isinstance(r, str) else (r or {}).get("wallet")
-                ws = (str(rs) if rs is not None else "").strip()
-                if ws:
-                    ms_rows.append(
-                        {"wallet": ws, "pct_supply": pct_map.get(ws)}
-                    )
-        ms_tot, ms_n = _sum_wallets_pct(ms_rows)
-        lines.append(
-            f"  Multi-send clusters — total {_pct(ms_tot)} across {ms_n} wallet(s):"
-        )
-        if token_ms:
-            lines.append("  Token multi-send (this mint distributed by one sender):")
-            for mc in token_ms[:6]:
-                sender = (mc.get("sender") or "").strip()
-                n_rec = mc.get("receiver_count") or len(mc.get("receivers") or [])
-                sub_s = (
-                    _pct(mc.get("total_pct"))
-                    if mc.get("total_pct") is not None
-                    else "n/a"
-                )
-                lines.append(
-                    f"    • sender {sender}  holds {_pct(mc.get('sender_pct'))} → "
-                    f"{n_rec} receivers  ·  sum {sub_s}"
-                )
-                for row in list(mc.get("child_rows") or [])[:8]:
-                    w = (row.get("wallet") if isinstance(row, dict) else row) or ""
-                    w = str(w).strip()
-                    if not w:
-                        continue
-                    pct = (
+        # Flat unique wallet list (senders + receivers) with supply %
+        by_wallet: dict[str, dict[str, Any]] = {}
+
+        def _add_ms_wallet(
+            addr: Any,
+            pct: Any = None,
+            *,
+            roles: list[str] | None = None,
+        ) -> None:
+            w = (str(addr) if addr is not None else "").strip()
+            if not w or len(w) < 32:
+                return
+            cur = by_wallet.get(w) or {
+                "wallet": w,
+                "pct_supply": None,
+                "roles": set(),
+            }
+            if pct is None and w in pct_map:
+                pct = pct_map[w]
+            if pct is not None:
+                try:
+                    pf = float(pct)
+                    if cur["pct_supply"] is None or pf > float(cur["pct_supply"] or 0):
+                        cur["pct_supply"] = pf
+                except (TypeError, ValueError):
+                    pass
+            for role in roles or []:
+                if role:
+                    cur["roles"].add(str(role))
+            by_wallet[w] = cur
+
+        for mc in token_ms:
+            sender = (mc.get("sender") or "").strip()
+            sp = mc.get("sender_pct")
+            if sp is None and sender:
+                sp = pct_map.get(sender)
+            _add_ms_wallet(sender, sp, roles=["token-sender"])
+            child_rows = list(mc.get("child_rows") or [])
+            if not child_rows:
+                for r in mc.get("receivers") or []:
+                    rs = r if isinstance(r, str) else (r or {}).get("wallet")
+                    _add_ms_wallet(rs, pct_map.get(str(rs or "").strip()), roles=["token-receiver"])
+            for row in child_rows:
+                if isinstance(row, dict):
+                    _add_ms_wallet(
+                        row.get("wallet"),
                         row.get("pct_supply")
-                        if isinstance(row, dict)
-                        else pct_map.get(w)
+                        if row.get("pct_supply") is not None
+                        else pct_map.get(str(row.get("wallet") or "").strip()),
+                        roles=["token-receiver"],
                     )
-                    lines.append(f"         {w}  holds {_pct(pct)}")
-                more = n_rec - min(8, len(mc.get("child_rows") or []))
-                if more > 0:
-                    lines.append(f"         … +{more} more")
-        if sol_ms:
-            lines.append("  SOL multi-send (one funder → many wallets, 1-hop):")
-            for mc in sol_ms[:6]:
+                else:
+                    _add_ms_wallet(row, pct_map.get(str(row or "").strip()), roles=["token-receiver"])
+
+        for mc in sol_ms:
+            sender = (mc.get("sender") or "").strip()
+            sp = mc.get("sender_pct")
+            if sp is None and sender:
+                sp = pct_map.get(sender)
+            _add_ms_wallet(sender, sp, roles=["sol-sender"])
+            child_rows = list(mc.get("child_rows") or [])
+            kids = list(mc.get("receivers") or mc.get("children") or [])
+            if not child_rows:
+                for c in kids:
+                    ws = c if isinstance(c, str) else (c or {}).get("wallet")
+                    _add_ms_wallet(ws, pct_map.get(str(ws or "").strip()), roles=["sol-receiver"])
+            for row in child_rows:
+                if isinstance(row, dict):
+                    _add_ms_wallet(
+                        row.get("wallet"),
+                        row.get("pct_supply")
+                        if row.get("pct_supply") is not None
+                        else pct_map.get(str(row.get("wallet") or "").strip()),
+                        roles=["sol-receiver"],
+                    )
+                else:
+                    _add_ms_wallet(row, pct_map.get(str(row or "").strip()), roles=["sol-receiver"])
+
+        ms_list = list(by_wallet.values())
+        for r in ms_list:
+            if isinstance(r.get("roles"), set):
+                r["roles"] = sorted(r["roles"])
+        ms_list.sort(
+            key=lambda r: (
+                -(float(r["pct_supply"]) if r.get("pct_supply") is not None else -1.0),
+                str(r.get("wallet") or ""),
+            )
+        )
+        ms_tot, ms_n = _sum_wallets_pct(ms_list)
+        lines.append(
+            f"  Multi-send wallets — total {_pct(ms_tot)} across {ms_n} wallet(s):"
+        )
+        # Flat list by supply % (all senders + receivers)
+        lines.append("  All wallets involved (by current supply %):")
+        for i, r in enumerate(ms_list[:24], start=1):
+            w = (r.get("wallet") or "").strip()
+            roles = r.get("roles") or []
+            role_s = ", ".join(roles) if roles else "multi-send"
+            lines.append(
+                f"    #{i} {w}  holds {_pct(r.get('pct_supply'))}  ·  {role_s}"
+            )
+        if len(ms_list) > 24:
+            lines.append(f"    … +{len(ms_list) - 24} more")
+
+        # Cluster breakdown with per-cluster total %
+        if token_ms:
+            lines.append("  Token multi-send clusters (one sender → many receivers):")
+            # Sort clusters by receiver supply sum
+            def _mc_sort_key(mc: dict[str, Any]) -> float:
+                try:
+                    return -float(mc.get("total_pct") or 0)
+                except (TypeError, ValueError):
+                    return 0.0
+
+            for mc in sorted(token_ms, key=_mc_sort_key)[:8]:
                 sender = (mc.get("sender") or "").strip()
-                kids = list(mc.get("receivers") or mc.get("children") or [])
-                n_rec = mc.get("receiver_count") or len(kids)
                 child_rows = list(mc.get("child_rows") or [])
+                if not child_rows:
+                    child_rows = [
+                        {
+                            "wallet": (r if isinstance(r, str) else (r or {}).get("wallet")),
+                            "pct_supply": pct_map.get(
+                                str(
+                                    r if isinstance(r, str) else (r or {}).get("wallet") or ""
+                                ).strip()
+                            ),
+                        }
+                        for r in (mc.get("receivers") or [])
+                    ]
+                # Normalize + sort receivers by %
+                norm: list[dict[str, Any]] = []
+                for row in child_rows:
+                    if isinstance(row, dict):
+                        w = (row.get("wallet") or "").strip()
+                        pct = row.get("pct_supply")
+                        if pct is None and w:
+                            pct = pct_map.get(w)
+                    else:
+                        w = str(row or "").strip()
+                        pct = pct_map.get(w)
+                    if w:
+                        norm.append({"wallet": w, "pct_supply": pct})
+                norm.sort(
+                    key=lambda r: (
+                        -(
+                            float(r["pct_supply"])
+                            if r.get("pct_supply") is not None
+                            else -1.0
+                        ),
+                        r["wallet"],
+                    )
+                )
+                sub_rows = list(norm)
+                sp = mc.get("sender_pct")
+                if sp is None and sender:
+                    sp = pct_map.get(sender)
+                if sender:
+                    sub_rows.append({"wallet": sender, "pct_supply": sp})
+                c_tot, c_n = _sum_wallets_pct(sub_rows)
+                n_rec = mc.get("receiver_count") or len(norm)
+                lines.append(
+                    f"    • sender {sender}  holds {_pct(sp)} → "
+                    f"{n_rec} receivers  ·  cluster total {_pct(c_tot)} "
+                    f"({c_n} with %)"
+                )
+                for j, row in enumerate(norm[:12], start=1):
+                    lines.append(
+                        f"         #{j} {row['wallet']}  holds {_pct(row.get('pct_supply'))}"
+                    )
+                if len(norm) > 12:
+                    lines.append(f"         … +{len(norm) - 12} more")
+
+        if sol_ms:
+            lines.append("  SOL multi-send clusters (one funder → many wallets):")
+
+            def _sol_sort_key(mc: dict[str, Any]) -> float:
+                try:
+                    return -float(mc.get("total_pct") or 0)
+                except (TypeError, ValueError):
+                    return 0.0
+
+            for mc in sorted(sol_ms, key=_sol_sort_key)[:8]:
+                sender = (mc.get("sender") or "").strip()
+                child_rows = list(mc.get("child_rows") or [])
+                kids = list(mc.get("receivers") or mc.get("children") or [])
                 if not child_rows:
                     child_rows = [
                         {
@@ -677,39 +884,50 @@ def format_bundles_text(data: dict[str, Any]) -> str:
                         }
                         for c in kids
                     ]
-                sub_rows = list(child_rows)
-                if sender:
-                    sub_rows.append(
-                        {
-                            "wallet": sender,
-                            "pct_supply": mc.get("sender_pct")
-                            if mc.get("sender_pct") is not None
-                            else pct_map.get(sender),
-                        }
+                norm = []
+                for row in child_rows:
+                    if isinstance(row, dict):
+                        w = (row.get("wallet") or "").strip()
+                        pct = row.get("pct_supply")
+                        if pct is None and w:
+                            pct = pct_map.get(w)
+                    else:
+                        w = str(row or "").strip()
+                        pct = pct_map.get(w)
+                    if w:
+                        norm.append({"wallet": w, "pct_supply": pct})
+                norm.sort(
+                    key=lambda r: (
+                        -(
+                            float(r["pct_supply"])
+                            if r.get("pct_supply") is not None
+                            else -1.0
+                        ),
+                        r["wallet"],
                     )
-                c_total, _c_n = _sum_wallets_pct(sub_rows)
-                sub_s = _pct(c_total) if c_total is not None else "n/a"
-                lines.append(
-                    f"    • sender {sender}  holds "
-                    f"{_pct(mc.get('sender_pct') if mc.get('sender_pct') is not None else pct_map.get(sender))} → "
-                    f"{n_rec} wallets  ·  sum {sub_s}"
                 )
-                for row in child_rows[:8]:
-                    w = (row.get("wallet") if isinstance(row, dict) else row) or ""
-                    w = str(w).strip()
-                    if not w:
-                        continue
-                    pct = (
-                        row.get("pct_supply")
-                        if isinstance(row, dict)
-                        else pct_map.get(w)
+                sub_rows = list(norm)
+                sp = mc.get("sender_pct")
+                if sp is None and sender:
+                    sp = pct_map.get(sender)
+                if sender:
+                    sub_rows.append({"wallet": sender, "pct_supply": sp})
+                c_tot, c_n = _sum_wallets_pct(sub_rows)
+                n_rec = mc.get("receiver_count") or len(norm)
+                lines.append(
+                    f"    • sender {sender}  holds {_pct(sp)} → "
+                    f"{n_rec} wallets  ·  cluster total {_pct(c_tot)} "
+                    f"({c_n} with %)"
+                )
+                for j, row in enumerate(norm[:12], start=1):
+                    lines.append(
+                        f"         #{j} {row['wallet']}  holds {_pct(row.get('pct_supply'))}"
                     )
-                    lines.append(f"         {w}  holds {_pct(pct)}")
-                if len(child_rows) > 8:
-                    lines.append(f"         … +{len(child_rows) - 8} more")
+                if len(norm) > 12:
+                    lines.append(f"         … +{len(norm) - 12} more")
     else:
         lines.append(
-            "  Multi-send clusters will show here if value returns True"
+            "  (none — no multi-send clusters this scan; needs Helius + full Analyze)"
         )
 
     # Launch-window same-slot groups
@@ -812,11 +1030,11 @@ def format_bundles_text(data: dict[str, Any]) -> str:
                     lines.append(f"         … +{len(rows) - 10} more")
         else:
             lines.append(
-                "  Launch-window same-slot multi-buys will show here if value returns True"
+                "  (none — no same-slot multi-buys in launch window this scan)"
             )
     else:
         lines.append(
-            "  Launch-window same-slot multi-buys will show here if value returns True"
+            "  (none — no same-slot multi-buys in launch window this scan)"
         )
 
     suspects = data.get("suspect_wallets") or []
@@ -847,7 +1065,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             lines.append(f"    … +{len(suspects) - 12} more")
     else:
         lines.append(
-            "  Suspect wallets will show here if value returns True"
+            "  (none — no suspect wallets tagged this scan)"
         )
 
     if data.get("notes"):
@@ -1023,6 +1241,60 @@ def _sum_wallets_pct(
         total = 100.0
     has_any = any(v > 0 for v in by_w.values())
     return (round(total, 4) if has_any else 0.0), len(by_w)
+
+
+def _multi_send_total_percent(
+    data: dict[str, Any],
+    pct_map: dict[str, float] | None = None,
+) -> tuple[float | None, int]:
+    """
+    Unique-wallet total % across token multi-send + SOL multi-send clusters.
+    Uses embedded sender_pct / child_rows.pct_supply, then pct_map fallback.
+    """
+    pct_map = pct_map or {}
+    rows: list[dict[str, Any]] = []
+
+    def _add(addr: Any, pct: Any = None) -> None:
+        w = (str(addr) if addr is not None else "").strip()
+        if not w or len(w) < 32:
+            return
+        if pct is None:
+            pct = pct_map.get(w)
+        rows.append({"wallet": w, "pct_supply": pct})
+
+    for mc in list(data.get("multi_send_clusters") or []) + list(
+        data.get("sol_multi_send_clusters") or []
+    ):
+        if not isinstance(mc, dict):
+            continue
+        sender = mc.get("sender")
+        sp = mc.get("sender_pct")
+        if sp is None and sender:
+            sp = pct_map.get(str(sender).strip())
+        _add(sender, sp)
+        child_rows = list(mc.get("child_rows") or [])
+        if child_rows:
+            for row in child_rows:
+                if isinstance(row, dict):
+                    w = row.get("wallet")
+                    p = row.get("pct_supply")
+                    if p is None and w:
+                        p = pct_map.get(str(w).strip())
+                    _add(w, p)
+                else:
+                    _add(row, pct_map.get(str(row or "").strip()))
+        else:
+            for r in mc.get("receivers") or mc.get("children") or []:
+                if isinstance(r, dict):
+                    w = r.get("wallet")
+                    p = r.get("pct_supply")
+                    if p is None and w:
+                        p = pct_map.get(str(w).strip())
+                    _add(w, p)
+                else:
+                    _add(r, pct_map.get(str(r or "").strip()))
+
+    return _sum_wallets_pct(rows)
 
 
 def _total_bundle_percent(
@@ -1317,3 +1589,359 @@ def _suspect_wallets(
         bag.values(),
         key=lambda x: (-len(x.get("reasons") or []), -(float(x["pct_supply"]) if x.get("pct_supply") is not None else 0)),
     )
+
+
+def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
+    """
+    Trimmed structured payload for the website Bundles card UI.
+    No raw JSON dump in the tab — frontend renders cards/tables from this.
+    """
+    data = data if isinstance(data, dict) else {}
+    if not data.get("ok"):
+        return {
+            "ok": False,
+            "error": data.get("error")
+            or data.get("notes")
+            or "Bundles unavailable — run full Analyze on a Solana mint.",
+        }
+
+    s = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+
+    def _wallet_row(w: Any, pct: Any = None, **extra: Any) -> dict[str, Any] | None:
+        addr = (str(w) if w is not None else "").strip()
+        if not addr or len(addr) < 20:
+            return None
+        row: dict[str, Any] = {"wallet": addr}
+        if pct is not None:
+            try:
+                row["pct_supply"] = float(pct)
+            except (TypeError, ValueError):
+                pass
+        for k, v in extra.items():
+            if v is not None and v != "":
+                row[k] = v
+        return row
+
+    # Multi-account clusters
+    clusters_out: list[dict[str, Any]] = []
+    for c in list(data.get("clusters") or [])[:12]:
+        if not isinstance(c, dict):
+            continue
+        pct = c.get("pct_supply")
+        if pct is None:
+            pct = c.get("combined_pct")
+        clusters_out.append(
+            {
+                "wallet": c.get("wallet") or c.get("owner"),
+                "pct_supply": pct,
+                "accounts": c.get("accounts"),
+                "token_accounts": list(c.get("token_accounts") or [])[:6],
+            }
+        )
+
+    # Similar-size groups
+    similar_out: list[dict[str, Any]] = []
+    for g in list(data.get("similar_size_groups") or [])[:8]:
+        if not isinstance(g, dict):
+            continue
+        members: list[dict[str, Any]] = []
+        member_rows = list(g.get("members") or [])
+        if not member_rows:
+            for w in g.get("wallets") or []:
+                member_rows.append({"wallet": w, "pct_supply": g.get("avg_pct")})
+        for m in member_rows[:10]:
+            if isinstance(m, dict):
+                r = _wallet_row(m.get("wallet"), m.get("pct_supply"))
+            else:
+                r = _wallet_row(m, g.get("avg_pct"))
+            if r:
+                members.append(r)
+        similar_out.append(
+            {
+                "avg_pct": g.get("avg_pct"),
+                "min_pct": g.get("min_pct"),
+                "max_pct": g.get("max_pct"),
+                "total_pct": g.get("total_pct"),
+                "wallets": members,
+                "count": len(members)
+                or len(g.get("wallets") or [])
+                or len(member_rows),
+            }
+        )
+
+    # Insiders
+    insiders_out: list[dict[str, Any]] = []
+    for h in list(data.get("insider_wallets") or [])[:16]:
+        if not isinstance(h, dict):
+            continue
+        r = _wallet_row(h.get("wallet"), h.get("pct_supply"), rank=h.get("rank"))
+        if r:
+            insiders_out.append(r)
+
+    # Funding / shared SOL funder
+    funding_out: list[dict[str, Any]] = []
+    for fc in list(data.get("funding_clusters") or [])[:8]:
+        if not isinstance(fc, dict):
+            continue
+        kids: list[dict[str, Any]] = []
+        for row in list(fc.get("child_rows") or [])[:12]:
+            if isinstance(row, dict):
+                r = _wallet_row(row.get("wallet"), row.get("pct_supply"))
+                if r:
+                    kids.append(r)
+        if not kids:
+            for c in list(fc.get("children") or [])[:12]:
+                if isinstance(c, dict):
+                    r = _wallet_row(c.get("wallet"), c.get("pct_supply"))
+                else:
+                    r = _wallet_row(c)
+                if r:
+                    kids.append(r)
+        funding_out.append(
+            {
+                "funder": fc.get("funder") or fc.get("sender"),
+                "funder_pct": fc.get("funder_pct") or fc.get("sender_pct"),
+                "child_count": fc.get("child_count") or len(kids),
+                "total_pct": fc.get("total_pct"),
+                "children": kids,
+            }
+        )
+
+    # Fresh wallets
+    fresh_out: list[dict[str, Any]] = []
+    for fw in list(data.get("fresh_wallets") or [])[:24]:
+        if not isinstance(fw, dict):
+            continue
+        r = _wallet_row(
+            fw.get("wallet"),
+            fw.get("pct_supply"),
+            sol=fw.get("sol"),
+            other_tokens=fw.get("other_tokens"),
+            tag=fw.get("tag") or "sole-token",
+        )
+        if r:
+            fresh_out.append(r)
+    fresh_out.sort(
+        key=lambda r: (
+            -(float(r["pct_supply"]) if r.get("pct_supply") is not None else -1.0),
+            str(r.get("wallet") or ""),
+        )
+    )
+    fresh_tot, fresh_n = _sum_wallets_pct(fresh_out)
+
+    # Multi-send (token + SOL)
+    def _ms_cluster(mc: dict[str, Any], kind: str) -> dict[str, Any]:
+        kids: list[dict[str, Any]] = []
+        for row in list(mc.get("child_rows") or [])[:16]:
+            if isinstance(row, dict):
+                r = _wallet_row(row.get("wallet"), row.get("pct_supply"))
+                if r:
+                    kids.append(r)
+        if not kids:
+            for c in list(mc.get("receivers") or mc.get("children") or [])[:16]:
+                if isinstance(c, dict):
+                    r = _wallet_row(c.get("wallet"), c.get("pct_supply"))
+                else:
+                    r = _wallet_row(c)
+                if r:
+                    kids.append(r)
+        kids.sort(
+            key=lambda r: (
+                -(
+                    float(r["pct_supply"])
+                    if r.get("pct_supply") is not None
+                    else -1.0
+                ),
+                str(r.get("wallet") or ""),
+            )
+        )
+        sender = mc.get("sender") or mc.get("funder")
+        sp = mc.get("sender_pct") if mc.get("sender_pct") is not None else mc.get("funder_pct")
+        sum_rows = list(kids)
+        if sender:
+            sum_rows.append({"wallet": sender, "pct_supply": sp})
+        tot, n = _sum_wallets_pct(sum_rows)
+        return {
+            "kind": kind,
+            "sender": sender,
+            "sender_pct": sp,
+            "receiver_count": mc.get("receiver_count")
+            or mc.get("child_count")
+            or len(kids),
+            "total_pct": mc.get("total_pct") if mc.get("total_pct") is not None else tot,
+            "wallets_with_pct": n,
+            "receivers": kids,
+        }
+
+    token_ms = [
+        _ms_cluster(mc, "token")
+        for mc in list(data.get("multi_send_clusters") or [])[:10]
+        if isinstance(mc, dict)
+    ]
+    sol_ms = [
+        _ms_cluster(mc, "sol")
+        for mc in list(data.get("sol_multi_send_clusters") or [])[:8]
+        if isinstance(mc, dict)
+    ]
+    # Flat unique multi-send wallets for list UI
+    ms_by: dict[str, dict[str, Any]] = {}
+    for mc in token_ms + sol_ms:
+        role_s = "token-sender" if mc.get("kind") == "token" else "sol-sender"
+        role_r = "token-receiver" if mc.get("kind") == "token" else "sol-receiver"
+        if mc.get("sender"):
+            cur = ms_by.get(mc["sender"]) or {
+                "wallet": mc["sender"],
+                "pct_supply": mc.get("sender_pct"),
+                "roles": [],
+            }
+            if mc.get("sender_pct") is not None:
+                try:
+                    pf = float(mc["sender_pct"])
+                    if cur.get("pct_supply") is None or pf > float(cur.get("pct_supply") or 0):
+                        cur["pct_supply"] = pf
+                except (TypeError, ValueError):
+                    pass
+            if role_s not in cur["roles"]:
+                cur["roles"].append(role_s)
+            ms_by[mc["sender"]] = cur
+        for r in mc.get("receivers") or []:
+            w = (r.get("wallet") or "").strip()
+            if not w:
+                continue
+            cur = ms_by.get(w) or {"wallet": w, "pct_supply": r.get("pct_supply"), "roles": []}
+            if r.get("pct_supply") is not None:
+                try:
+                    pf = float(r["pct_supply"])
+                    if cur.get("pct_supply") is None or pf > float(cur.get("pct_supply") or 0):
+                        cur["pct_supply"] = pf
+                except (TypeError, ValueError):
+                    pass
+            if role_r not in cur["roles"]:
+                cur["roles"].append(role_r)
+            ms_by[w] = cur
+    ms_list = list(ms_by.values())
+    ms_list.sort(
+        key=lambda r: (
+            -(float(r["pct_supply"]) if r.get("pct_supply") is not None else -1.0),
+            str(r.get("wallet") or ""),
+        )
+    )
+    ms_tot, ms_n = _sum_wallets_pct(ms_list)
+
+    # Launch-window same-slot groups
+    slots_out: list[dict[str, Any]] = []
+    for g in list(data.get("same_slot_groups") or [])[:12]:
+        if not isinstance(g, dict):
+            continue
+        rows: list[dict[str, Any]] = []
+        for row in list(g.get("wallet_rows") or [])[:16]:
+            if isinstance(row, dict):
+                r = _wallet_row(
+                    row.get("wallet"),
+                    row.get("pct_supply"),
+                    label=row.get("label"),
+                )
+                if r:
+                    rows.append(r)
+        if not rows:
+            for w in list(g.get("wallets") or [])[:16]:
+                r = _wallet_row(w)
+                if r:
+                    rows.append(r)
+        if len(rows) < 2:
+            continue
+        tot, n = _sum_wallets_pct(rows)
+        slots_out.append(
+            {
+                "slot": g.get("slot"),
+                "block_time": g.get("block_time") or g.get("time_utc"),
+                "wallet_count": len(rows),
+                "total_pct": tot,
+                "wallets_with_pct": n,
+                "wallets": rows,
+            }
+        )
+
+    # Suspects
+    suspects_out: list[dict[str, Any]] = []
+    for srow in list(data.get("suspect_wallets") or [])[:24]:
+        if not isinstance(srow, dict):
+            continue
+        reasons = srow.get("reasons") or srow.get("reason")
+        if isinstance(reasons, str):
+            reasons = [reasons]
+        r = _wallet_row(
+            srow.get("wallet"),
+            srow.get("pct_supply"),
+            reasons=list(reasons or [])[:6],
+        )
+        if r:
+            suspects_out.append(r)
+
+    # Signals
+    signals_out: list[dict[str, Any]] = []
+    for sig in list(data.get("signals") or [])[:20]:
+        if not isinstance(sig, dict):
+            continue
+        signals_out.append(
+            {
+                "id": sig.get("id"),
+                "severity": sig.get("severity") or "info",
+                "title": sig.get("title"),
+                "detail": sig.get("detail"),
+            }
+        )
+
+    reports = data.get("source_reports") if isinstance(data.get("source_reports"), dict) else {}
+    providers = {
+        "helius": reports.get("helius_ok"),
+        "rugcheck": reports.get("rugcheck_ok"),
+        "birdeye": reports.get("birdeye_ok"),
+        "jito_style": reports.get("jito_style_ok"),
+        "jito_engine": reports.get("jito_engine_ok"),
+    }
+
+    return {
+        "ok": True,
+        "method": data.get("method"),
+        "source": data.get("source"),
+        "summary": {
+            "bundle_risk": s.get("bundle_risk"),
+            "bundle_risk_score": s.get("bundle_risk_score"),
+            "total_bundle_pct": s.get("total_bundle_pct"),
+            "flagged_wallets": s.get("flagged_wallets"),
+            "multi_account_clusters": s.get("multi_account_clusters") or len(clusters_out),
+            "similar_size_groups": s.get("similar_size_groups") or len(similar_out),
+            "similar_size_total_pct": s.get("similar_size_total_pct"),
+            "similar_size_wallet_count": s.get("similar_size_wallet_count"),
+            "insider_accounts": s.get("insider_accounts") or len(insiders_out),
+            "top10_pct_excluding_known_programs": s.get(
+                "top10_pct_excluding_known_programs"
+            ),
+            "fresh_total_pct": s.get("fresh_total_pct")
+            if s.get("fresh_total_pct") is not None
+            else fresh_tot,
+            "fresh_wallet_count": s.get("fresh_wallet_count") or len(fresh_out),
+            "fresh_wallet_with_pct": s.get("fresh_wallet_with_pct") or fresh_n,
+            "multi_send_total_pct": s.get("multi_send_total_pct")
+            if s.get("multi_send_total_pct") is not None
+            else ms_tot,
+            "multi_send_wallet_with_pct": s.get("multi_send_wallet_with_pct") or ms_n,
+            "token_multi_send_clusters": s.get("token_multi_send_clusters")
+            or len(token_ms),
+            "sol_multi_send_clusters": s.get("sol_multi_send_clusters") or len(sol_ms),
+            "sources_used": list(s.get("sources_used") or [])[:16],
+        },
+        "providers": providers,
+        "signals": signals_out,
+        "clusters": clusters_out,
+        "similar_size_groups": similar_out,
+        "insider_wallets": insiders_out,
+        "funding_clusters": funding_out,
+        "fresh_wallets": fresh_out,
+        "multi_send_wallets": ms_list[:32],
+        "multi_send_clusters": token_ms,
+        "sol_multi_send_clusters": sol_ms,
+        "same_slot_groups": slots_out,
+        "suspect_wallets": suspects_out,
+    }

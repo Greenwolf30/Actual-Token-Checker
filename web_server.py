@@ -37,6 +37,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from token_tracker.env_config import load_dotenv  # noqa: E402
+from token_tracker.bundles import build_bundles_ui_payload  # noqa: E402
 from token_tracker.report import (  # noqa: E402
     format_about_section,
     format_alerts_section,
@@ -770,6 +771,15 @@ def build_public_payload(report: dict[str, Any]) -> dict[str, Any]:
     market = report.get("market") or {}
     pair = market.get("pair") if isinstance(market.get("pair"), dict) else {}
 
+    # Structured card UI for Bundles tab (not raw text / not full JSON dump)
+    try:
+        bundles_view = sanitize_public(build_bundles_ui_payload(bundles))
+    except Exception:  # noqa: BLE001
+        bundles_view = {
+            "ok": False,
+            "error": "Bundles UI payload failed — use full Analyze on Solana.",
+        }
+
     return {
         "ok": True,
         "query": report.get("query"),
@@ -778,6 +788,7 @@ def build_public_payload(report: dict[str, Any]) -> dict[str, Any]:
         "market": _safe_market_summary(report),
         "links": _safe_links(report),
         "sections": sections,
+        "bundles_view": bundles_view,
         "alerts_meta": {
             "priority_count": alerts.get("priority_count") or 0,
             "summary": redact_text(str(alerts.get("summary") or "")),

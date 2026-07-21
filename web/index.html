@@ -195,8 +195,18 @@
         <section class="panel" id="panel-holders" data-panel="holders" role="tabpanel">
           <pre class="report" id="text-holders">Holders appear after a full Analyze.</pre>
         </section>
-        <section class="panel" id="panel-bundles" data-panel="bundles" role="tabpanel">
-          <pre class="report" id="text-bundles">Bundles appear after a full Analyze.</pre>
+        <section class="panel panel-bundles" id="panel-bundles" data-panel="bundles" role="tabpanel">
+          <div class="history-bar">
+            <span class="history-bar-label">Bundles · coordinated wallets (heuristic)</span>
+          </div>
+          <div id="bundlesUi" class="bundles-ui" aria-live="polite">
+            <p class="logs-empty">
+              Run a <strong>full Analyze</strong> (not Quick) on a Solana mint.<br />
+              Cards appear here for multi-account, similar-size, fresh, multi-send, launch-window, and more.
+            </p>
+          </div>
+          <!-- Hidden text dump kept for Logs snapshots / accessibility -->
+          <pre class="report" id="text-bundles" hidden></pre>
         </section>
         <section class="panel" id="panel-alerts" data-panel="alerts" role="tabpanel">
           <pre class="report" id="text-alerts">Alerts appear after Analyze.</pre>
