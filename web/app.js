@@ -2391,6 +2391,16 @@ function markRuggersUploadedAsFlagged(exportKey, rows) {
   }
   const now = new Date().toISOString();
   const fromSimilar = exportKey === "similar";
+  // Lane sections keep their category after Upload (like Similar). Creator → Flagged.
+  const keepOriginLane = new Set([
+    "similar",
+    "multi",
+    "funding",
+    "insider",
+    "launch",
+    "suspect",
+    "single",
+  ]);
 
   for (const row of rows) {
     const w = (row && row.wallet) || "";
@@ -2416,7 +2426,39 @@ function markRuggersUploadedAsFlagged(exportKey, rows) {
       continue;
     }
 
-    // Creator (and any non-similar) upload → Flagged on this mint
+    if (keepOriginLane.has(exportKey)) {
+      // Stay under multi / funder / insider / launch / suspect / single on this mint
+      if (rec.status && rec.status[w]) {
+        rec.status[w].origin_lane = exportKey;
+        rec.status[w].ruggers_uploaded = true;
+        rec.status[w].is_flagged = false;
+      }
+      if (rec.first_wallets && rec.first_wallets[w]) {
+        rec.first_wallets[w].origin_lane = exportKey;
+      }
+      // Ensure sticky pin so section stays populated after refresh
+      if (!rec.sticky_lane_sellers || typeof rec.sticky_lane_sellers !== "object") {
+        rec.sticky_lane_sellers = {};
+      }
+      if (tag === "seller" || row.sold_pct != null || row.ever_sold) {
+        rec.sticky_lane_sellers[w] = {
+          ...(rec.sticky_lane_sellers[w] || {}),
+          origin_lane: exportKey,
+          entered_at: (rec.sticky_lane_sellers[w] && rec.sticky_lane_sellers[w].entered_at) || now,
+          last_update: now,
+          sold_pct: st.sold_pct != null ? st.sold_pct : row.sold_pct,
+          sold_supply_pct:
+            st.sold_supply_pct != null ? st.sold_supply_pct : row.sold_supply_pct,
+          first_pct: st.first_pct != null ? st.first_pct : row.first_pct,
+          reason: st.reason || row.reason || "sold_99",
+          uploaded: true,
+          indefinite: true,
+        };
+      }
+      continue;
+    }
+
+    // Creator upload → Flagged on this mint
     if (tag === "seller" || tag === "swing" || row.sold_pct != null) {
       if (tag !== "swing") {
         rec.flagged_sellers[w] = {
@@ -3015,7 +3057,7 @@ function renderRuggersWalletRow(row) {
  * @param {string} title
  * @param {string} hint
  * @param {object[]} rows
- * @param {string} [exportKey]  "creator" | "similar" | "single" — Export; Upload unless exportOnly
+ * @param {string} [exportKey]  lane key — Export + Upload (unless exportOnly)
  * @param {{ exportOnly?: boolean }} [opts]
  */
 function renderRuggersSection(title, hint, rows, exportKey, opts) {
@@ -3395,8 +3437,11 @@ async function uploadRuggersSectionToCloud(exportKey) {
         (exportKey === "similar"
           ? "\n\nSimilar sellers stay under Similar wallets on this mint (also on cloud). " +
             "On other mints they go to Flagged when they sell ≥99%."
-          : "\n\nUploaded sellers sit under Flagged wallets for this mint. " +
-            "If they buy back later, they move to Swing and are unflagged/removed from cloud.")
+          : exportKey === "creator"
+            ? "\n\nUploaded Creator sellers sit under Flagged wallets for this mint. " +
+              "If they buy back later, they move to Swing and are unflagged/removed from cloud."
+            : "\n\nUploaded sellers stay under their Ruggers category on this mint (also on cloud). " +
+              "Buy-back → Swing (label kept) · sell again → back to that category.")
     );
   } catch (e) {
     alert(
@@ -3637,54 +3682,48 @@ function refreshRuggersPanel(focusKey) {
     "Multi-account clusters (1 Owner)",
     "Same owner, several large ATAs at first lookup. " +
       "Sell ≥99% of first bag → stay here · buy-back → Swing (multi-account label kept) · " +
-      "sell again → back here. Export only.",
+      "sell again → back here. Export + Upload (same metrics as Creator/Similar).",
     buckets.multiSellers || [],
-    "multi",
-    { exportOnly: true }
+    "multi"
   );
   html += renderRuggersSection(
     "Shared SOL funder clusters (1-Owner)",
     "Wallets that shared a common SOL funder (1-hop) at first lookup. " +
       "Sell ≥99% → stay here · buy-back → Swing (shared funder label kept) · " +
-      "sell again → back here. Export only.",
+      "sell again → back here. Export + Upload.",
     buckets.fundingSellers || [],
-    "funding",
-    { exportOnly: true }
+    "funding"
   );
   html += renderRuggersSection(
     "Insider-flagged wallets (Rugcheck)",
     "Rugcheck insider-tagged holders at first lookup. " +
       "Sell ≥99% → stay here · buy-back → Swing (insider label kept) · " +
-      "sell again → back here. Export only.",
+      "sell again → back here. Export + Upload.",
     buckets.insiderSellers || [],
-    "insider",
-    { exportOnly: true }
+    "insider"
   );
   html += renderRuggersSection(
     "Same-slot multi-buys (Launch-window)",
     "Launch-window same-slot multi-buy wallets at first lookup. " +
       "Sell ≥99% → stay here · buy-back → Swing (launch-window label kept) · " +
-      "sell again → back here. Export only.",
+      "sell again → back here. Export + Upload.",
     buckets.launchSellers || [],
-    "launch",
-    { exportOnly: true }
+    "launch"
   );
   html += renderRuggersSection(
     "Suspect wallets",
     "Bundles suspect-union wallets (not already in a more specific lane above). " +
       "Sell ≥99% → stay here · buy-back → Swing (suspect label kept) · " +
-      "sell again → back here. Export only.",
+      "sell again → back here. Export + Upload.",
     buckets.suspectSellers || [],
-    "suspect",
-    { exportOnly: true }
+    "suspect"
   );
   html += renderRuggersSection(
     "Single wallets (sellers)",
     "Plain top holders ≥0.01% (not multi / funder / insider / launch / suspect / similar). " +
-      "Sell ≥99% → stay here · buy-back → Swing · sell again → back here. Export only.",
+      "Sell ≥99% → stay here · buy-back → Swing · sell again → back here. Export + Upload.",
     buckets.singleSellers,
-    "single",
-    { exportOnly: true }
+    "single"
   );
   // Flagged = sold ≥99% while on RugWatch; buy-back → purple Swing; sell again → Flagged
   const flaggedRows = buckets.flaggedWallets || [];
@@ -3738,7 +3777,7 @@ function refreshRuggersPanel(focusKey) {
     buckets.swings.length +
     " · Tracked mints: " +
     keys.length +
-    " · Upload: Creator / Similar · Export: all seller sections" +
+    " · Upload + Export on every seller section" +
     " · Swing keeps origin labels." +
     "</p>";
 
