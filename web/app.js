@@ -1345,24 +1345,28 @@ function isRuggersBuyBack(prev, soldState, cur) {
 }
 
 /**
- * True if this wallet is the mint creator — label is permanent once known.
- * Treated like Similar/Single for sell↔swing sticky loop; label never drops.
+ * True if this wallet is the mint creator — only the known mint creator address.
+ * Treated like Similar/Single for sell↔swing sticky loop.
+ *
+ * IMPORTANT: never treat multiple wallets as creator. Older builds wrongly
+ * marked many Upload rows as section "creator"; only rec.creator counts.
  */
 function isRuggersCreatorWallet(rec, w, first, prev) {
   if (!w) return false;
   const wl = String(w).toLowerCase();
+  const known =
+    rec && rec.creator ? String(rec.creator).trim().toLowerCase() : "";
+  if (known) {
+    // Authoritative: only the mint creator address
+    return known === wl;
+  }
+  // Creator address not known yet — allow sticky flags only for this wallet
+  // (still at most one identity once rec.creator is filled)
   if (prev && prev.is_creator) return true;
   if (first && (first.label === "creator" || first.origin_lane === "creator")) {
     return true;
   }
   if (prev && prev.origin_lane === "creator") return true;
-  if (
-    rec &&
-    rec.creator &&
-    String(rec.creator).toLowerCase() === wl
-  ) {
-    return true;
-  }
   if (rec && rec.first_wallets && rec.first_wallets[w]) {
     const fw = rec.first_wallets[w];
     if (fw.label === "creator" || fw.origin_lane === "creator" || fw.is_creator) {
@@ -1551,9 +1555,38 @@ function processRuggersFromAnalyze(data) {
     for (const w of Object.keys(rec.uploaded_similar || {})) {
       markRuggersWalletUploaded(rec, w, "similar");
     }
+    // Legacy: origin "uploaded" was wrongly re-marked as section "creator"
+    // (made many wallets look like Creator). Prefer real section / origin_lane.
     for (const [w, meta] of Object.entries(rec.flagged_sellers || {})) {
-      if (meta && String(meta.origin || "") === "uploaded") {
-        markRuggersWalletUploaded(rec, w, "creator");
+      if (!meta || String(meta.origin || "") !== "uploaded") continue;
+      const sec =
+        (meta.uploaded_section && String(meta.uploaded_section)) ||
+        (meta.origin_lane &&
+        RUGGERS_STICKY_LANES.has(String(meta.origin_lane)) &&
+        String(meta.origin_lane) !== "creator"
+          ? String(meta.origin_lane)
+          : null) ||
+        (rec.ruggers_uploaded &&
+          rec.ruggers_uploaded[w] &&
+          rec.ruggers_uploaded[w].section) ||
+        "single";
+      // Only real mint creator may keep section "creator"
+      const secFinal =
+        sec === "creator" &&
+        rec.creator &&
+        String(w).toLowerCase() !== String(rec.creator).toLowerCase()
+          ? "single"
+          : sec;
+      markRuggersWalletUploaded(rec, w, secFinal);
+    }
+    // Repair: ruggers_uploaded.section "creator" for non-creator addresses
+    if (rec.ruggers_uploaded && typeof rec.ruggers_uploaded === "object") {
+      const cKnown = rec.creator ? String(rec.creator).toLowerCase() : "";
+      for (const [w, meta] of Object.entries(rec.ruggers_uploaded)) {
+        if (!meta || String(meta.section || "") !== "creator") continue;
+        if (cKnown && String(w).toLowerCase() === cKnown) continue;
+        meta.section = "single";
+        meta.repaired_from_false_creator = true;
       }
     }
     // Repair: older builds moved Similar-Uploads into Flagged — pin permanently
@@ -1872,12 +1905,24 @@ function processRuggersFromAnalyze(data) {
     // Stay in that origin section ↔ Swing — never Ruggers Flagged on this mint.
     // (Cloud still has them; OTHER mints can still Flag them when they sell.)
     const uploadedOnThisMint = isRuggersAlreadyUploaded(rec, w);
-    const uploadedSection =
+    let uploadedSection =
       (rec.ruggers_uploaded &&
         rec.ruggers_uploaded[w] &&
         rec.ruggers_uploaded[w].section) ||
       (prev && prev.ruggers_uploaded_section) ||
       null;
+    // Never force non-creator wallets into Creator via a bad upload section tag
+    if (
+      uploadedSection === "creator" &&
+      !isCreator &&
+      rec.creator &&
+      String(w).toLowerCase() !== String(rec.creator).toLowerCase()
+    ) {
+      uploadedSection = "single";
+      if (rec.ruggers_uploaded && rec.ruggers_uploaded[w]) {
+        rec.ruggers_uploaded[w].section = "single";
+      }
+    }
     if (
       uploadedOnThisMint &&
       uploadedSection &&
@@ -1888,6 +1933,34 @@ function processRuggersFromAnalyze(data) {
       originLane = String(uploadedSection);
       if (rec.first_wallets[w]) {
         rec.first_wallets[w].origin_lane = originLane;
+        if (originLane !== "creator") {
+          rec.first_wallets[w].is_creator = false;
+          if (rec.first_wallets[w].label === "creator") {
+            rec.first_wallets[w].label = null;
+          }
+        }
+      }
+    }
+    // Only the real mint creator keeps creator origin / is_creator
+    if (!isCreator && (originLane === "creator" || (first && first.is_creator))) {
+      originLane =
+        similarLineageOnMint
+          ? "similar"
+          : uploadedSection &&
+              RUGGERS_STICKY_LANES.has(String(uploadedSection)) &&
+              uploadedSection !== "creator"
+            ? String(uploadedSection)
+            : first && first.in_multi
+              ? "multi"
+              : isRuggersSingleEligible(first, cur)
+                ? "single"
+                : "single";
+      if (rec.first_wallets[w]) {
+        rec.first_wallets[w].origin_lane = originLane;
+        rec.first_wallets[w].is_creator = false;
+        if (rec.first_wallets[w].label === "creator") {
+          rec.first_wallets[w].label = null;
+        }
       }
     }
     if (uploadedOnThisMint && flaggedSellers[w]) {
@@ -2176,8 +2249,8 @@ function processRuggersFromAnalyze(data) {
       in_similar: inSimilar || uploadedSimilar || originLane === "similar",
       uploaded_similar: uploadedSimilar,
       origin_lane: originLane,
-      // Creator label never removed once known
-      is_creator: !!(isCreator || originLane === "creator"),
+      // Creator label only for the real mint creator address
+      is_creator: !!isCreator,
       sticky_lane_seller: !!stickyLane[w],
       // Purple forever once flagged on this mint (seller or swing)
       is_flagged: !!(isFlaggedLineage && !uploadedSimilar),
@@ -2627,28 +2700,46 @@ function markRuggersUploadedAsFlagged(exportKey, rows) {
 
     if (keepOriginLane.has(exportKey)) {
       // Stay under Creator / multi / funder / insider / launch / suspect / single
-      // (Single Upload must not reappear under Flagged after re-Analyze)
+      // Creator section Upload: only the real mint creator gets is_creator.
+      const realCreator =
+        rec.creator &&
+        String(w).toLowerCase() === String(rec.creator).toLowerCase();
+      const laneKey =
+        exportKey === "creator" && !realCreator ? "single" : exportKey;
       if (rec.status && rec.status[w]) {
-        rec.status[w].origin_lane = exportKey;
+        rec.status[w].origin_lane = laneKey;
         rec.status[w].ruggers_uploaded = true;
-        rec.status[w].ruggers_uploaded_section = exportKey;
+        rec.status[w].ruggers_uploaded_section = laneKey;
         rec.status[w].is_flagged = false;
         rec.status[w].ever_flagged_on_mint = false;
-        if (exportKey === "creator") {
-          rec.status[w].is_creator = true;
+        rec.status[w].is_creator = !!realCreator;
+        if (realCreator) {
           rec.status[w].origin_lane = "creator";
         }
-        if (exportKey === "single") {
+        if (laneKey === "single") {
           rec.status[w].origin_lane = "single";
         }
       }
-      if (rec.first_wallets && rec.first_wallets[w]) {
-        rec.first_wallets[w].origin_lane = exportKey;
-        if (exportKey === "creator") {
-          rec.first_wallets[w].label = "creator";
-          rec.first_wallets[w].origin_lane = "creator";
+      if (rec.ruggers_uploaded && rec.ruggers_uploaded[w]) {
+        rec.ruggers_uploaded[w].section = laneKey === "creator" || realCreator ? (realCreator ? "creator" : laneKey) : laneKey;
+        if (realCreator) rec.ruggers_uploaded[w].section = "creator";
+        else if (exportKey === "creator" && !realCreator) {
+          rec.ruggers_uploaded[w].section = "single";
         }
-        if (exportKey === "single") {
+      }
+      if (rec.first_wallets && rec.first_wallets[w]) {
+        rec.first_wallets[w].origin_lane = realCreator ? "creator" : laneKey;
+        if (realCreator) {
+          rec.first_wallets[w].label = "creator";
+          rec.first_wallets[w].is_creator = true;
+          rec.first_wallets[w].origin_lane = "creator";
+        } else {
+          rec.first_wallets[w].is_creator = false;
+          if (rec.first_wallets[w].label === "creator") {
+            rec.first_wallets[w].label = null;
+          }
+        }
+        if (laneKey === "single") {
           rec.first_wallets[w].origin_lane = "single";
         }
       } else if (rec.first_wallets && exportKey === "single") {
@@ -2742,17 +2833,24 @@ function ruggersBuckets(rec) {
       : {};
 
   function laneOf(w, st) {
-    // Creator always wins (permanent label / lane)
+    // Creator: only the mint creator address (never a crowd of "creator" uploads)
     if (isRuggersCreatorWallet(rec, w, rec.first_wallets && rec.first_wallets[w], st)) {
       return "creator";
     }
     if (isUploadedSimilarOnThisMint(rec, w)) return "similar";
     // Upload section on this mint wins over re-derived single → Flagged
-    const upSec =
+    let upSec =
       rec.ruggers_uploaded &&
       rec.ruggers_uploaded[w] &&
       rec.ruggers_uploaded[w].section;
-    if (upSec && RUGGERS_STICKY_LANES.has(String(upSec))) {
+    if (
+      upSec === "creator" &&
+      rec.creator &&
+      String(w).toLowerCase() !== String(rec.creator).toLowerCase()
+    ) {
+      upSec = "single";
+    }
+    if (upSec && RUGGERS_STICKY_LANES.has(String(upSec)) && upSec !== "creator") {
       return String(upSec);
     }
     if (st && st.origin_lane === "creator") return "creator";
@@ -2942,6 +3040,36 @@ function ruggersBuckets(rec) {
 
     // ── Origin lanes (same sticky sell ↔ swing rules as Flagged/Similar) ─
     if (lane === "creator" || row.is_creator) {
+      // At most one creator row — only the known mint creator (or first if unknown)
+      const cAddr = rec.creator ? String(rec.creator).trim() : "";
+      if (cAddr && String(w).toLowerCase() !== cAddr.toLowerCase()) {
+        // Mis-tagged non-creator → fall through to single
+        pushLaneSeller(
+          "single",
+          { ...row, is_creator: false, origin_lane: "single", lane_label: "single" },
+          singleSeen,
+          singleSellers
+        );
+        continue;
+      }
+      if (creatorSold.length && cAddr) {
+        // Already have the real creator listed
+        continue;
+      }
+      if (
+        creatorSold.length &&
+        !cAddr &&
+        creatorSold.some((r) => r && r.wallet)
+      ) {
+        // Unknown creator: keep first only; rest → single
+        pushLaneSeller(
+          "single",
+          { ...row, is_creator: false, origin_lane: "single", lane_label: "single" },
+          singleSeen,
+          singleSellers
+        );
+        continue;
+      }
       creatorSold.push({
         ...row,
         is_creator: true,
@@ -3138,8 +3266,35 @@ function ruggersBuckets(rec) {
       reason: st.reason || meta.reason || "sold_99_sticky",
     };
     if (lane === "creator") {
-      if (!creatorSold.some((r) => r.wallet === w)) {
-        creatorSold.push({ ...row, is_creator: true });
+      const cAddr = rec.creator ? String(rec.creator).trim() : "";
+      if (cAddr && String(w).toLowerCase() !== cAddr.toLowerCase()) {
+        pushLaneSeller(
+          "single",
+          { ...row, is_creator: false, origin_lane: "single" },
+          singleSeen,
+          singleSellers
+        );
+      } else if (!creatorSold.some((r) => r.wallet === w)) {
+        if (cAddr) {
+          // Keep only the real mint creator
+          for (let i = creatorSold.length - 1; i >= 0; i--) {
+            if (
+              String(creatorSold[i].wallet || "").toLowerCase() !==
+              cAddr.toLowerCase()
+            ) {
+              creatorSold.splice(i, 1);
+            }
+          }
+        }
+        if (!creatorSold.length || (cAddr && String(w).toLowerCase() === cAddr.toLowerCase())) {
+          if (!creatorSold.some((r) => r.wallet === w)) {
+            creatorSold.push({
+              ...row,
+              is_creator: true,
+              origin_lane: "creator",
+            });
+          }
+        }
       }
     } else if (lane === "similar") {
       pushLaneSeller("similar", row, similarSeen, similarSellers);

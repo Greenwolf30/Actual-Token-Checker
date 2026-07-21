@@ -1091,7 +1091,8 @@ Where each Ruggers section comes from (Holders / Bundles)
 
   | Ruggers section                         | Tied to (at first full Analyze)           |
   |-----------------------------------------|-------------------------------------------|
-  | Creator (sold ≥99%)                     | Mint creator (Holders meta / Rugcheck)    |
+  | Creator (sold ≥99%)                     | The one mint creator wallet only          |
+  |                                         | (never a list of many “creators”)         |
   | Similar wallets (sellers)               | Bundles similar-size groups               |
   | Multi-account clusters (1 Owner)        | Holders/Bundles owner clusters (multiple  |
   |                                         | Associated Token Accounts — §6.3b)        |
