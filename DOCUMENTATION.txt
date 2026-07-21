@@ -1311,7 +1311,9 @@ Ruggers title: Flagged wallets (RugWatch) — “RugWatch” in dim yellow.
 Holders: FLAGGED WALLETS (RugWatch) when the checkbox is ON.
 
 Sources ATC merges
-  1) Local  — rugwatch*.db shards if present on the machine running ATC
+  1) Local  — rugwatch*.db shards if present on the machine running ATC,
+              OR (if missing) live RugWatch site local list via RUGWATCH_URL
+              (/api/wallets) so hosted ATC can mirror RugWatch local DB
   2) Cloud  — RUGWATCH_WALLETS_URL (prefer wallets_index.json multi-shard)
 
 Tags on matches: [local] · [cloud] · [both]
