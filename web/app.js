@@ -3747,7 +3747,7 @@ function refreshRuggersPanel(focusKey) {
         "team multi-wallet buys — co-timed activity is a heuristic, not proof of " +
         "identity or automation. " +
         "Tagged at first full Analyze · Sell ≥99% → stay here · buy-back → Swing " +
-        '(label kept as <span class="rug-label-launch-bots">same-slot multi-buys (bots)</span>) · ' +
+        "(label kept as same-slot multi-buys (bots)) · " +
         "sell again → back here. Export + Upload.",
     }
   );
