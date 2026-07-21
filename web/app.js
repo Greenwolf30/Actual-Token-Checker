@@ -9,7 +9,7 @@ const HISTORY_KEY = "adtc_history_log";
 const HISTORY_MAX = 200;
 const RUGGERS_KEY = "adtc_ruggers_track";
 /** Bump when Flagged-wallet rules change so sticky junk is wiped once. */
-const RUGGERS_RULES_VERSION = 5;
+const RUGGERS_RULES_VERSION = 6;
 /** Sold ≥ this fraction of first-lookup bag → list as seller (99%). */
 const RUGGERS_SOLD_FRAC = 0.99;
 /** Remaining bag must be ≤ (1 - RUGGERS_SOLD_FRAC) of first_pct to count as sold. */
@@ -995,11 +995,29 @@ function ruggersBoughtBackSupplyPct(currentPct, listed) {
   return roundSupplyPct(c);
 }
 
+/** True if first-lookup bag is measurable (required to prove a ≥99% sell). */
+function hasRuggersFirstBag(first) {
+  if (!first || typeof first !== "object") return false;
+  const fp =
+    first.pct_supply != null && Number.isFinite(Number(first.pct_supply))
+      ? Number(first.pct_supply)
+      : null;
+  const fb =
+    first.balance != null && Number.isFinite(Number(first.balance))
+      ? Number(first.balance)
+      : null;
+  return (fp != null && fp > 0) || (fb != null && fb > 0);
+}
+
 /**
  * Sold ≥99% of first bag when:
+ *  - we *know* first bag, AND
  *  - not listed anymore (dropped off top holders), or
  *  - current_pct <= first_pct * 1%, or
  *  - current_balance <= first_balance * 1% (when both known)
+ *
+ * IMPORTANT: unknown first bag + off the top-holder list is NOT a sell.
+ * (Creator often holds but sits outside top-N → was false “100% sold”.)
  *
  * sold_pct = % of *first bag* dumped (0–100).
  * sold_supply_pct = % of *mint supply* dumped (first − now).
@@ -1024,24 +1042,42 @@ function computeSoldState(first, current) {
       ? Number(cur.balance)
       : null;
 
+  const hasPositiveHold =
+    listed &&
+    ((curPct != null && curPct > 0) || (curBal != null && curBal > 0));
+
+  // No measurable first bag → cannot claim they sold (common for creator
+  // tracked with null pct, or wallets never seen in top holders).
+  if (!hasRuggersFirstBag(first)) {
+    return {
+      sold: false,
+      sold_pct: null,
+      sold_supply_pct: null,
+      remaining_pct: listed ? curPct : null,
+      remaining_of_first: null,
+      listed,
+      has_positive_hold: hasPositiveHold,
+      reason: "unknown_baseline",
+      baseline_ok: false,
+    };
+  }
+
   const soldSupply = ruggersSoldSupplyPct(firstPct, listed ? curPct : 0, listed);
 
   if (!listed) {
-    // Dropped off list → fully sold their bag; supply sold ≈ first bag
+    // Known first bag, dropped off list → fully sold that bag
     return {
       sold: true,
-      sold_pct: 100, // of first bag (rule threshold helper)
+      sold_pct: 100,
       sold_supply_pct: soldSupply != null ? soldSupply : firstPct,
       remaining_pct: 0,
       remaining_of_first: 0,
       listed: false,
       has_positive_hold: false,
       reason: "not_listed",
+      baseline_ok: true,
     };
   }
-
-  const hasPositiveHold =
-    (curPct != null && curPct > 0) || (curBal != null && curBal > 0);
 
   let remainingOfFirst = null;
   if (firstPct != null && firstPct > 0 && curPct != null) {
@@ -1062,6 +1098,7 @@ function computeSoldState(first, current) {
       listed: true,
       has_positive_hold: hasPositiveHold,
       reason: "unknown",
+      baseline_ok: true,
     };
   }
 
@@ -1076,6 +1113,7 @@ function computeSoldState(first, current) {
     listed: true,
     has_positive_hold: hasPositiveHold,
     reason: sold ? (remainingOfFirst <= 0 ? "sold_100" : "sold_99") : "holding",
+    baseline_ok: true,
   };
 }
 
@@ -1396,32 +1434,63 @@ function processRuggersFromAnalyze(data) {
       cur.pct_supply = 0;
       cur.balance = 0;
     }
+
+    // Fill first bag on first *observed* hold (creator often missing from top-N
+    // on first lookup with null pct — don't invent a dump later).
+    if (rec.first_wallets[w] && cur.listed) {
+      const fw = rec.first_wallets[w];
+      if (
+        (fw.pct_supply == null || !Number.isFinite(Number(fw.pct_supply))) &&
+        cur.pct_supply != null &&
+        Number(cur.pct_supply) > 0
+      ) {
+        fw.pct_supply = Number(cur.pct_supply);
+        first.pct_supply = fw.pct_supply;
+      }
+      if (
+        (fw.balance == null || !Number.isFinite(Number(fw.balance))) &&
+        cur.balance != null &&
+        Number(cur.balance) > 0
+      ) {
+        fw.balance = Number(cur.balance);
+        first.balance = fw.balance;
+      }
+    }
+
     const soldState = computeSoldState(first, cur);
     const prev = status[w] || {};
     let tag = "holding";
     let everSold = !!prev.ever_sold;
     const buyBack = isRuggersBuyBack(prev, soldState, cur);
     const prevTag = String(prev.tag || "holding");
+    const baselineOk = hasRuggersFirstBag(first);
+
+    // Drop false sticky sellers that never had a measurable first bag
+    // (classic creator false-positive: null first → off list → "100% sold").
+    if (!baselineOk && stickyLane[w]) {
+      delete stickyLane[w];
+    }
+    if (!baselineOk && (prev.ever_sold || prevTag === "seller") && !soldState.sold) {
+      everSold = false;
+    }
 
     // ── Phase loop: seller ↔ swing on each concurrent lookup ──────────
-    // sold ≥99%  → seller (Similar / Single / Creator / Flagged by origin)
+    // sold ≥99% only with known first bag
     // never return → stay seller indefinitely (sticky_lane_sellers)
-    // buy-back only → swing (only then leave Similar/Single)
-    // sell again → seller again (same origin_lane / flagged lineage)
-    const wasStickySeller = !!stickyLane[w];
-    if (buyBack) {
-      // Confirmed re-accumulation after a dump
+    // buy-back only → swing
+    const wasStickySeller = !!(stickyLane[w] && baselineOk);
+    if (!baselineOk) {
+      // Cannot prove a dump without a first bag
+      tag = "holding";
+      everSold = false;
+    } else if (buyBack) {
       everSold = true;
       tag = "swing";
-    } else if (soldState.sold || wasStickySeller || prevTag === "seller") {
-      // Still dumped / never returned — remain seller forever until buyBack
+    } else if (soldState.sold || wasStickySeller || (prevTag === "seller" && baselineOk)) {
       everSold = true;
       tag = "seller";
     } else if (everSold || prevTag === "swing") {
       everSold = true;
-      // Ever sold, not buyBack, not clearly still-sold metric:
-      // if they have a bag but didn't trip buyBack, keep seller sticky
-      // (avoid false Swing from noise). Real buy-backs use isRuggersBuyBack.
       tag = "seller";
     } else {
       tag = "holding";
@@ -1602,6 +1671,8 @@ function processRuggersFromAnalyze(data) {
     if (
       tag === "seller" &&
       everSold &&
+      baselineOk &&
+      soldState.sold &&
       !isFlaggedLineage &&
       (originLane === "similar" ||
         originLane === "single" ||

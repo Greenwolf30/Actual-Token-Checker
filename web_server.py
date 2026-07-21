@@ -462,34 +462,40 @@ def _ruggers_track_snapshot(
         )
 
     if creator and creator not in seen:
-        wallet_rows.append(
-            {
-                "wallet": creator,
-                "pct_supply": None,
-                "balance": None,
-                "rank": None,
-                "label": "creator",
-                "in_similar": creator in similar_wallets,
-            }
-        )
-        # try fill creator pct from holders list if present earlier
+        # Include creator for labeling, but only with a real bag when found.
+        # Null pct/balance must NOT be treated as a sellable baseline client-side
+        # (was false “creator sold 100%” when creator holds outside top-N).
+        c_pct = None
+        c_bal = None
+        c_rank = None
         for h in list(holders.get("holders") or []):
             if not isinstance(h, dict):
                 continue
             if (h.get("wallet") or "").strip() == creator:
                 try:
-                    wallet_rows[-1]["pct_supply"] = (
+                    c_pct = (
                         float(h["pct_supply"]) if h.get("pct_supply") is not None else None
                     )
                 except (TypeError, ValueError):
-                    pass
+                    c_pct = None
                 try:
-                    wallet_rows[-1]["balance"] = (
-                        float(h["balance"]) if h.get("balance") is not None else None
-                    )
+                    c_bal = float(h["balance"]) if h.get("balance") is not None else None
                 except (TypeError, ValueError):
-                    pass
+                    c_bal = None
+                c_rank = h.get("rank")
                 break
+        wallet_rows.append(
+            {
+                "wallet": creator,
+                "pct_supply": c_pct,
+                "balance": c_bal,
+                "rank": c_rank,
+                "label": "creator",
+                "in_similar": creator in similar_wallets,
+                # Client: do not pin sell baseline until a positive bag is observed
+                "baseline_pending": c_pct is None and c_bal is None,
+            }
+        )
 
     # RugWatch-flagged addresses that actually touch THIS mint only.
     # Never dump global high_risk_db / all_flagged — those are unrelated wallets.
