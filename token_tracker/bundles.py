@@ -289,12 +289,26 @@ def format_bundles_text(data: dict[str, Any]) -> str:
     clusters = data.get("clusters") or []
     lines.append("")
     if clusters:
-        lines.append("  Multi-account clusters (same wallet → several large ATAs):")
+        cl_rows = [
+            {
+                "wallet": c.get("wallet") or c.get("owner"),
+                "pct_supply": c.get("pct_supply")
+                if c.get("pct_supply") is not None
+                else c.get("combined_pct"),
+            }
+            for c in clusters
+            if isinstance(c, dict)
+        ]
+        cl_total, cl_wn = _sum_wallets_pct(cl_rows)
+        lines.append(
+            "  Multi-account clusters (same wallet → several large ATAs) — "
+            f"total {_pct(cl_total)} across {cl_wn} wallet(s):"
+        )
         for c in clusters[:10]:
             w = c.get("wallet") or ""
             # Wallet + percent holdings on one line (site colors the %)
             lines.append(
-                f"    • {w}  holds {_pct(c.get('pct_supply'))}"
+                f"    • {w}  holds {_pct(c.get('pct_supply') if c.get('pct_supply') is not None else c.get('combined_pct'))}"
             )
             lines.append(
                 f"      {c.get('accounts')} accounts · bal {c.get('combined_balance')}"
@@ -312,7 +326,27 @@ def format_bundles_text(data: dict[str, Any]) -> str:
     groups = data.get("similar_size_groups") or []
     if groups:
         lines.append("")
-        lines.append("  Similar-size wallet groups:")
+        # Category total across all similar-size wallets (unique)
+        all_sim_rows: list[dict[str, Any]] = []
+        for g in groups:
+            member_rows = list(g.get("members") or [])
+            if not member_rows:
+                member_rows = [
+                    {"wallet": w, "pct_supply": g.get("avg_pct")}
+                    for w in (g.get("wallets") or [])
+                ]
+            for m in member_rows:
+                if isinstance(m, dict):
+                    all_sim_rows.append(m)
+                else:
+                    all_sim_rows.append(
+                        {"wallet": m, "pct_supply": g.get("avg_pct")}
+                    )
+        sim_cat_total, sim_cat_n = _sum_wallets_pct(all_sim_rows)
+        lines.append(
+            "  Similar-size wallet groups — "
+            f"total {_pct(sim_cat_total)} across {sim_cat_n} wallet(s):"
+        )
         for g in groups[:6]:
             # Prefer members (wallet + pct); fall back to address-only list
             member_rows = list(g.get("members") or [])
@@ -321,7 +355,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
                     {"wallet": w, "pct_supply": g.get("avg_pct")}
                     for w in (g.get("wallets") or [])
                 ]
-            # Sum of holdings for this group (right side of header)
+            # Sum of holdings for this subgroup
             group_sum = g.get("total_pct")
             if group_sum is None:
                 group_sum = _similar_group_sum_pct(g, member_rows)
@@ -331,7 +365,6 @@ def format_bundles_text(data: dict[str, Any]) -> str:
                 f"(range {_pct(g.get('min_pct'))}–{_pct(g.get('max_pct'))})"
             )
             if group_sum is not None:
-                # Right side: combined % of all wallets in this similar-size group
                 header += f"  ·  sum {_pct(group_sum)}"
             lines.append(header)
             for m in member_rows[:6]:
@@ -375,9 +408,8 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             pct = h.get("pct_supply")
             if pct is None and w in pct_map:
                 pct = pct_map[w]
-            # holds X% · total Y% (category total of all wallets in this section)
             lines.append(
-                f"    #{h.get('rank') or '—'} {w}  holds {_pct(pct)} · total {total_s}"
+                f"    #{h.get('rank') or '—'} {w}  holds {_pct(pct)}"
             )
     else:
         lines.append(
@@ -388,7 +420,26 @@ def format_bundles_text(data: dict[str, Any]) -> str:
     funding = data.get("funding_clusters") or []
     if funding:
         lines.append("")
-        lines.append("  Shared SOL funder clusters (1-hop):")
+        # Category total across all funders + children (unique wallets)
+        fund_all_rows: list[dict[str, Any]] = []
+        for fc in funding:
+            funder = (fc.get("funder") or "").strip()
+            if funder:
+                fund_all_rows.append(
+                    {"wallet": funder, "pct_supply": pct_map.get(funder)}
+                )
+            for c in fc.get("children") or []:
+                w = c if isinstance(c, str) else (c or {}).get("wallet")
+                ws = (str(w) if w is not None else "").strip()
+                if ws:
+                    fund_all_rows.append(
+                        {"wallet": ws, "pct_supply": pct_map.get(ws)}
+                    )
+        fund_cat_total, fund_cat_n = _sum_wallets_pct(fund_all_rows)
+        lines.append(
+            "  Shared SOL funder clusters (1-hop) — "
+            f"total {_pct(fund_cat_total)} across {fund_cat_n} wallet(s):"
+        )
         for fc in funding[:6]:
             kids = list(fc.get("children") or [])
             child_rows = [
@@ -402,21 +453,19 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             ]
             funder = (fc.get("funder") or "").strip()
             funder_pct = pct_map.get(funder)
-            # Category total = funder (if holds) + all children in this cluster
-            all_rows = list(child_rows)
+            # Subgroup total for this funder cluster only
+            sub_rows = list(child_rows)
             if funder:
-                all_rows.append({"wallet": funder, "pct_supply": funder_pct})
-            c_total, c_n = _sum_wallets_pct(all_rows)
-            total_s = _pct(c_total) if c_total is not None else "n/a"
+                sub_rows.append({"wallet": funder, "pct_supply": funder_pct})
+            c_total, c_n = _sum_wallets_pct(sub_rows)
+            sub_s = _pct(c_total) if c_total is not None else "n/a"
             lines.append(
-                f"    • funder {funder}  holds {_pct(funder_pct)} · total {total_s} → "
-                f"{fc.get('child_count') or len(child_rows)} wallets"
+                f"    • funder {funder}  holds {_pct(funder_pct)} → "
+                f"{fc.get('child_count') or len(child_rows)} wallets  ·  sum {sub_s}"
             )
             for row in child_rows[:8]:
                 w = row.get("wallet") or ""
-                lines.append(
-                    f"         {w}  holds {_pct(row.get('pct_supply'))} · total {total_s}"
-                )
+                lines.append(f"         {w}  holds {_pct(row.get('pct_supply'))}")
             if len(child_rows) > 8:
                 lines.append(f"         … +{len(child_rows) - 8} more")
     else:
@@ -429,7 +478,20 @@ def format_bundles_text(data: dict[str, Any]) -> str:
     slots = data.get("same_slot_groups") or []
     if slots:
         lines.append("")
-        lines.append("  Launch-window same-slot multi-buys:")
+        # Category total across all slots (unique wallets)
+        launch_rows: list[dict[str, Any]] = []
+        for g in slots:
+            for w in g.get("wallets") or []:
+                ws = (str(w) if w is not None else "").strip()
+                if ws:
+                    launch_rows.append(
+                        {"wallet": ws, "pct_supply": pct_map.get(ws)}
+                    )
+        launch_total, launch_n = _sum_wallets_pct(launch_rows)
+        lines.append(
+            "  Launch-window same-slot multi-buys — "
+            f"total {_pct(launch_total)} across {launch_n} wallet(s):"
+        )
         for g in slots[:5]:
             wallets = list(g.get("wallets") or [])
             rows = [
@@ -441,15 +503,14 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             ]
             g_total, g_n = _sum_wallets_pct(rows)
             total_s = _pct(g_total) if g_total is not None else "n/a"
+            # Subgroup (slot) total only — no per-wallet total
             lines.append(
                 f"    • slot {g.get('slot')}: {g.get('unique_buyers') or g_n} wallets / "
                 f"{g.get('tx_count')} txs  ·  total {total_s}"
             )
             for row in rows[:10]:
                 w = row.get("wallet") or ""
-                lines.append(
-                    f"         {w}  holds {_pct(row.get('pct_supply'))} · total {total_s}"
-                )
+                lines.append(f"         {w}  holds {_pct(row.get('pct_supply'))}")
             if len(rows) > 10:
                 lines.append(f"         … +{len(rows) - 10} more")
     else:
