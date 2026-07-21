@@ -3540,19 +3540,6 @@ function refreshRuggersPanel(focusKey) {
   const titleLeft =
     (rec.symbol ? "$" + rec.symbol + " · " : "") +
     (rec.name ? rec.name + " · " : "");
-  const nBase = rec.first_wallets ? Object.keys(rec.first_wallets).length : 0;
-  const nLook = Number(rec.lookup_count) || 0;
-  const nSellers =
-    (buckets.similarSellers || []).length +
-    (buckets.multiSellers || []).length +
-    (buckets.fundingSellers || []).length +
-    (buckets.insiderSellers || []).length +
-    (buckets.launchSellers || []).length +
-    (buckets.suspectSellers || []).length +
-    (buckets.singleSellers || []).length +
-    (buckets.creatorSold || []).length +
-    (buckets.flaggedWallets || []).length +
-    (buckets.swings || []).length;
 
   let html = "";
   html += '<div class="rug-header">';
@@ -3588,26 +3575,6 @@ function refreshRuggersPanel(focusKey) {
     "Insider · Launch-window · Suspect · Single · Flagged (RugWatch). " +
     "Buy-back → <span class=\"rug-tag rug-tag-swing\">swing</span> (label kept) · " +
     "sell again → back to the same category. Loop continues.</p>";
-  if (nLook < 2) {
-    html +=
-      '<p class="rug-rules rug-rules-warn"><strong>Baseline only (lookups: ' +
-      nLook +
-      " · tracked: " +
-      nBase +
-      ").</strong> " +
-      "No sellers yet — run Analyze again after wallets dump, or when the holder list changes. " +
-      "Ruggers does not live-fetch sellers; it compares this Analyze to the first lookup.</p>";
-  } else if (nSellers === 0) {
-    html +=
-      '<p class="rug-rules rug-rules-warn"><strong>No ≥99% sellers yet</strong> ' +
-      "(lookups: " +
-      nLook +
-      " · tracked: " +
-      nBase +
-      "). " +
-      "Baseline wallets still hold ≥1% of their first bag. " +
-      "Check Multi-account / Funder / Insider / Launch / Suspect / Similar / Creator / Flagged.</p>";
-  }
 
   // Tracked mint (left) + CA search bar (right)
   const prevSearch =
