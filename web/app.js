@@ -5662,6 +5662,26 @@ function colorBundlesCategoryNames(html) {
   return colorAllSectionTitles(html);
 }
 
+/**
+ * Color "Same-slot multi-buys" title phrase dim green in Bundles text.
+ * Matches the line header from bundles.py launch-window section.
+ */
+function colorBundlesSameSlotTitle(html) {
+  if (!html) return html;
+  return html
+    .split("\n")
+    .map((line) => {
+      if (/bundle-same-slot-title|section-title-green/.test(line)) return line;
+      // Plain or already-linkified line starting with optional spaces + Same-slot multi-buys
+      if (!/Same-slot multi-buys/i.test(line)) return line;
+      return line.replace(
+        /(Same-slot multi-buys)/i,
+        '<span class="section-title-green bundle-cat-name bundle-same-slot-title">$1</span>'
+      );
+    })
+    .join("\n");
+}
+
 function formatBundlesRichHtml(text) {
   if (!text) return "";
   // Same address hold colors as Holders/Alerts (>5% yellow · >10% red · skip LP)
@@ -5669,6 +5689,7 @@ function formatBundlesRichHtml(text) {
   html = colorBundlesSelectivePcts(html);
   html = colorHoldingAmounts(html);
   html = colorAllSectionTitles(html);
+  html = colorBundlesSameSlotTitle(html);
   return html;
 }
 

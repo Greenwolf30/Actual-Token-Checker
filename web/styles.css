@@ -1383,6 +1383,14 @@ a.copy-mint:hover,
   opacity: 0.88;
   letter-spacing: 0.02em;
 }
+/* Bundles: "Same-slot multi-buys" line title — dim green */
+.report .bundle-same-slot-title,
+.logs-col-body .bundle-same-slot-title {
+  color: #7aab88;
+  font-weight: 600;
+  opacity: 0.9;
+  letter-spacing: 0.02em;
+}
 /* Major category headers (── NARRATIVE ──, ── ALERT SLOTS ──, ALL-CAPS blocks) */
 .report .section-title-major,
 .logs-col-body .section-title-major {
