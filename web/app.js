@@ -1903,6 +1903,17 @@ function processRuggersFromAnalyze(data) {
     // Sell ≥99% again → phase=sold → Flagged section again (still purple).
     if (tag === "swing" && everFlaggedOnMint && !uploadedSimilar) {
       const prior = flaggedSellers[w] || prev.flagged_meta || {};
+      const fromMints = [];
+      const pushMint = (m) => {
+        const s = (m || "").trim();
+        if (s && !fromMints.includes(s)) fromMints.push(s);
+      };
+      for (const m of prior.flagged_from_mints || []) pushMint(m);
+      for (const m of (rwKnown[w] && rwKnown[w].flagged_from_mints) || [])
+        pushMint(m);
+      pushMint(prior.flagged_from_mint);
+      pushMint(rwKnown[w] && rwKnown[w].flagged_from_mint);
+      pushMint(rec.address);
       flaggedSellers[w] = {
         ...prior,
         ...(rwKnown[w] || {}),
@@ -1914,6 +1925,8 @@ function processRuggersFromAnalyze(data) {
         first_pct: first.pct_supply,
         reason: "buy_back_flagged_swing",
         origin_lane: originLane,
+        flagged_from_mints: fromMints,
+        flagged_from_mint: fromMints[0] || rec.address || null,
         rules_v: RUGGERS_RULES_VERSION,
       };
       // Never cloud-unflag: keep flagged label/identity for this mint loop
@@ -2673,6 +2686,21 @@ function ruggersBuckets(rec) {
           : row.origin_lane || lane || "single";
       if (!swingSeen.has(w)) {
         swingSeen.add(w);
+        // Flagged · swing: carry source mint(s) like Flagged wallets section
+        const fromM = [];
+        const addFrom = (m) => {
+          const s = (m || "").trim();
+          if (s && !fromM.includes(s)) fromM.push(s);
+        };
+        const metaF = flaggedSellers[w] || st.flagged_meta || {};
+        for (const m of metaF.flagged_from_mints || []) addFrom(m);
+        addFrom(metaF.flagged_from_mint);
+        for (const m of (rwKnown[w] && rwKnown[w].flagged_from_mints) || [])
+          addFrom(m);
+        addFrom(rwKnown[w] && rwKnown[w].flagged_from_mint);
+        for (const m of st.flagged_from_mints || []) addFrom(m);
+        addFrom(st.flagged_from_mint);
+        addFrom(rec.address);
         swings.push({
           ...row,
           tag: "swing",
@@ -2683,6 +2711,9 @@ function ruggersBuckets(rec) {
             RUGGERS_LANE_LABEL[originLaneSwing] || originLaneSwing,
           ever_flagged_on_mint:
             !!(row.ever_flagged_on_mint || flaggedSwing || row.is_flagged),
+          flagged_from_mints: fromM,
+          flagged_from_mint: fromM[0] || null,
+          flagged_meta: metaF && Object.keys(metaF).length ? { ...metaF } : row.flagged_meta,
         });
       }
       // Permanent Similar-Upload also stays listed under Similar on this mint
@@ -3133,9 +3164,9 @@ function renderRuggersWalletRow(row) {
   if (!tsParts.length && row.flagged_meta && row.flagged_meta.entered_at) {
     tsParts.push("sold " + shortWhen(row.flagged_meta.entered_at));
   }
-  // Flagged (RugWatch): which mint(s) they were flagged / sold from
+  // Flagged (RugWatch) + flagged · swing: which mint(s) they were flagged from
   let flaggedFromLine = "";
-  if (isFlagged || row.tag === "flagged") {
+  if (isFlagged || flaggedSwing || row.tag === "flagged" || row.ever_flagged_on_mint) {
     const mints = [];
     const addM = (m) => {
       const s = (m || "").trim();
