@@ -474,6 +474,340 @@ def _extract_sol_funders(tx: dict[str, Any], recipient: str) -> list[str]:
     return list(funders)
 
 
+# SPL Token + Token-2022 program IDs (for getTokenAccountsByOwner)
+_TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+_TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+
+
+def analyze_fresh_wallets(
+    mint: str,
+    wallets: list[str],
+    *,
+    max_wallets: int = 18,
+    max_other_tokens: int = 0,
+) -> dict[str, Any]:
+    """
+    Detect "fresh / sole-token" wallets: hold this mint and almost no other SPL tokens.
+
+    Heuristic via Helius getTokenAccountsByOwner + getBalance.
+    max_other_tokens=0 → only this mint (plus empty accounts ignored).
+    """
+    url = helius_url()
+    mint = (mint or "").strip()
+    if not url or not mint:
+        return {
+            "ok": False,
+            "error": "Helius + mint required for fresh-wallet scan",
+            "method": "helius_token_accounts_by_owner",
+            "wallets": [],
+        }
+
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for w in wallets:
+        a = (w or "").strip()
+        if not a or a in seen or len(a) < 32:
+            continue
+        seen.add(a)
+        cleaned.append(a)
+        if len(cleaned) >= max_wallets:
+            break
+
+    fresh: list[dict[str, Any]] = []
+    scanned = 0
+    for w in cleaned:
+        try:
+            other = 0
+            this_amt = 0.0
+            for program in (_TOKEN_PROGRAM, _TOKEN_2022_PROGRAM):
+                try:
+                    res = _rpc(
+                        url,
+                        "getTokenAccountsByOwner",
+                        [
+                            w,
+                            {"programId": program},
+                            {"encoding": "jsonParsed"},
+                        ],
+                    )
+                except Exception:  # noqa: BLE001
+                    continue
+                value = (res or {}).get("value") if isinstance(res, dict) else None
+                if not isinstance(value, list):
+                    continue
+                for acc in value:
+                    try:
+                        info = (
+                            ((acc or {}).get("account") or {})
+                            .get("data", {})
+                            .get("parsed", {})
+                            .get("info", {})
+                        )
+                        m = str(info.get("mint") or "").strip()
+                        ta = (info.get("tokenAmount") or {})
+                        ui = ta.get("uiAmount")
+                        if ui is None:
+                            try:
+                                amt = float(ta.get("amount") or 0)
+                                dec = int(ta.get("decimals") or 0)
+                                ui = amt / (10**dec) if dec >= 0 else amt
+                            except (TypeError, ValueError):
+                                ui = 0
+                        try:
+                            uif = float(ui or 0)
+                        except (TypeError, ValueError):
+                            uif = 0.0
+                        if uif <= 0:
+                            continue
+                        if m == mint:
+                            this_amt += uif
+                        else:
+                            other += 1
+                    except Exception:  # noqa: BLE001
+                        continue
+            scanned += 1
+            if this_amt <= 0:
+                continue
+            if other > max_other_tokens:
+                continue
+            sol_ui = None
+            try:
+                lamports = _rpc(url, "getBalance", [w])
+                if isinstance(lamports, dict):
+                    lamports = lamports.get("value")
+                sol_ui = float(lamports or 0) / 1e9
+            except Exception:  # noqa: BLE001
+                sol_ui = None
+            fresh.append(
+                {
+                    "wallet": w,
+                    "other_tokens": other,
+                    "this_token_ui": this_amt,
+                    "sol": sol_ui,
+                    "tag": "sole-token" if other == 0 else "near-sole-token",
+                }
+            )
+        except Exception:  # noqa: BLE001
+            continue
+
+    fresh.sort(key=lambda r: -float(r.get("this_token_ui") or 0))
+    return {
+        "ok": True,
+        "method": "helius_token_accounts_by_owner",
+        "wallets": fresh[:30],
+        "wallets_scanned": scanned,
+        "notes": (
+            "Hold this mint and ≤"
+            f"{max_other_tokens} other SPL token(s) with balance. "
+            "Heuristic; closed ATAs / other chains not counted."
+        ),
+    }
+
+
+def analyze_token_multi_sends(
+    mint: str,
+    holder_wallets: list[str] | None = None,
+    *,
+    max_sigs: int = 36,
+    max_tx_fetch: int = 28,
+    min_receivers: int = 2,
+) -> dict[str, Any]:
+    """
+    Detect multi-sends of THIS mint: one owner sent the token to many wallets.
+
+    Scans recent mint signatures (Helius getTransaction), builds
+    sender_owner → receivers from pre/post token balances for this mint.
+    Prefers clusters that hit current holders when holder_wallets is set.
+    """
+    url = helius_url()
+    mint = (mint or "").strip()
+    if not url or not mint:
+        return {
+            "ok": False,
+            "error": "Helius + mint required for multi-send scan",
+            "method": "helius_mint_token_multi_send",
+            "clusters": [],
+        }
+
+    holder_set = {
+        (w or "").strip()
+        for w in (holder_wallets or [])
+        if w and len(str(w).strip()) >= 32
+    }
+
+    try:
+        sigs = _rpc(
+            url,
+            "getSignaturesForAddress",
+            [mint, {"limit": max_sigs}],
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "ok": False,
+            "error": str(exc),
+            "method": "helius_mint_token_multi_send",
+            "clusters": [],
+        }
+    if not isinstance(sigs, list):
+        sigs = []
+
+    # sender -> set of receivers (owners)
+    edges: dict[str, set[str]] = {}
+    txs_ok = 0
+    for row in sigs[:max_sigs]:
+        if txs_ok >= max_tx_fetch:
+            break
+        sig = (row or {}).get("signature")
+        if not sig:
+            continue
+        try:
+            tx = _rpc(
+                url,
+                "getTransaction",
+                [
+                    sig,
+                    {
+                        "encoding": "jsonParsed",
+                        "maxSupportedTransactionVersion": 0,
+                    },
+                ],
+            )
+        except Exception:  # noqa: BLE001
+            continue
+        if not tx:
+            continue
+        txs_ok += 1
+        for sender, receivers in _extract_mint_send_edges(tx, mint).items():
+            if not sender:
+                continue
+            edges.setdefault(sender, set()).update(receivers)
+
+    clusters: list[dict[str, Any]] = []
+    for sender, recs in edges.items():
+        uniq = sorted({r for r in recs if r and r != sender})
+        if len(uniq) < min_receivers:
+            continue
+        in_holders = [r for r in uniq if r in holder_set] if holder_set else list(uniq)
+        # Prefer clusters that touch current holders; still keep pure fan-outs
+        focus = in_holders if len(in_holders) >= min_receivers else uniq
+        if len(focus) < min_receivers:
+            continue
+        clusters.append(
+            {
+                "sender": sender,
+                "receivers": focus[:24],
+                "receiver_count": len(focus),
+                "receiver_count_all": len(uniq),
+                "holders_hit": len(in_holders),
+                "kind": "token_multi_send",
+                "severity": "critical" if len(focus) >= 5 else "high",
+            }
+        )
+    clusters.sort(
+        key=lambda c: (
+            -int(c.get("holders_hit") or 0),
+            -int(c.get("receiver_count") or 0),
+        )
+    )
+    return {
+        "ok": True,
+        "method": "helius_mint_token_multi_send",
+        "clusters": clusters[:12],
+        "txs_scanned": txs_ok,
+        "notes": (
+            "One wallet sent this mint to multiple receivers (token multi-send). "
+            "Best-effort from recent mint history; not full chain archive."
+        ),
+    }
+
+
+def _extract_mint_send_edges(tx: dict[str, Any], mint: str) -> dict[str, set[str]]:
+    """
+    sender_owner → receivers for this mint from pre/post token balances.
+    """
+    meta = tx.get("meta") or {}
+    pre = meta.get("preTokenBalances") or []
+    post = meta.get("postTokenBalances") or []
+    if not isinstance(pre, list) or not isinstance(post, list):
+        return {}
+
+    def _key(b: dict[str, Any]) -> tuple[str, str]:
+        owner = str(b.get("owner") or "").strip()
+        acct = str(b.get("accountIndex") if b.get("accountIndex") is not None else "")
+        return owner, acct
+
+    pre_map: dict[tuple[str, str], float] = {}
+    post_map: dict[tuple[str, str], float] = {}
+    owners_by_idx: dict[str, str] = {}
+
+    for b in pre:
+        if not isinstance(b, dict):
+            continue
+        if str(b.get("mint") or "").strip() != mint:
+            continue
+        owner = str(b.get("owner") or "").strip()
+        idx = str(b.get("accountIndex") if b.get("accountIndex") is not None else "")
+        if owner:
+            owners_by_idx[idx] = owner
+        try:
+            ui = (b.get("uiTokenAmount") or {}).get("uiAmount")
+            pre_map[(owner, idx)] = float(ui) if ui is not None else float(
+                (b.get("uiTokenAmount") or {}).get("amount") or 0
+            )
+        except (TypeError, ValueError):
+            pre_map[(owner, idx)] = 0.0
+
+    for b in post:
+        if not isinstance(b, dict):
+            continue
+        if str(b.get("mint") or "").strip() != mint:
+            continue
+        owner = str(b.get("owner") or "").strip()
+        idx = str(b.get("accountIndex") if b.get("accountIndex") is not None else "")
+        if owner:
+            owners_by_idx[idx] = owner
+        try:
+            ui = (b.get("uiTokenAmount") or {}).get("uiAmount")
+            post_map[(owner, idx)] = float(ui) if ui is not None else float(
+                (b.get("uiTokenAmount") or {}).get("amount") or 0
+            )
+        except (TypeError, ValueError):
+            post_map[(owner, idx)] = 0.0
+
+    # Aggregate by owner
+    pre_own: dict[str, float] = {}
+    post_own: dict[str, float] = {}
+    for (owner, _idx), v in pre_map.items():
+        o = owner or owners_by_idx.get(_idx) or ""
+        if not o:
+            continue
+        pre_own[o] = pre_own.get(o, 0.0) + float(v or 0)
+    for (owner, _idx), v in post_map.items():
+        o = owner or owners_by_idx.get(_idx) or ""
+        if not o:
+            continue
+        post_own[o] = post_own.get(o, 0.0) + float(v or 0)
+
+    all_owners = set(pre_own) | set(post_own)
+    senders: list[str] = []
+    receivers: list[str] = []
+    for o in all_owners:
+        delta = float(post_own.get(o, 0) or 0) - float(pre_own.get(o, 0) or 0)
+        if delta < -1e-9:
+            senders.append(o)
+        elif delta > 1e-9:
+            receivers.append(o)
+
+    out: dict[str, set[str]] = {}
+    # Attribute multi-receive to each sender that lost tokens in the same tx
+    # (common batch distribute pattern).
+    if not senders or not receivers:
+        return out
+    for s in senders:
+        out[s] = {r for r in receivers if r != s}
+    return out
+
+
 def _extract_buyers_from_tx(tx: dict[str, Any], mint: str) -> list[str]:
     """Best-effort: fee payer + token balance increases for mint."""
     buyers: set[str] = set()

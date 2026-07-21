@@ -259,6 +259,8 @@ What people often ask
         * Concentration of top wallets excluding known LP / programs
         * Same-slot multi-buy style signals when available (Jito-style / Helius;
           see §6.3c)
+        * Fresh / sole-token wallets (almost only this mint on the wallet)
+        * Multi-send: one owner sent this mint (or SOL) to many wallets
 
   If holders fail, bundles usually cannot run.
 
@@ -275,6 +277,11 @@ What people often ask
   - ── SIMILAR-SIZE GROUPS ──     nearly same bag size among top wallets
   - ── INSIDER-FLAGGED ──         Rugcheck insider tags (not RugWatch)
   - ── SHARED SOL FUNDER ──       1-hop common SOL funder (Helius when available)
+  - ── FRESH / SOLE-TOKEN ──      Hold this mint with almost no other SPL tokens
+                                  (Helius getTokenAccountsByOwner; full Analyze)
+  - ── MULTI-SEND (ONE → MANY) ── Token multi-send (one owner distributed this
+                                  mint) + SOL multi-send (same as shared funder
+                                  fan-out). Helius history; heuristic.
   - ── LAUNCH-WINDOW ──           same-slot multi-buys; full slot pipeline,
                                   UI layout map, % / n/a (§6.3c)
   - ── SUSPECT WALLETS ──         union of signals (heuristic)

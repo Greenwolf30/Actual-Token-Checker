@@ -446,6 +446,175 @@ def comprehensive_bundle_check(
             s0["funding_clusters"] = len(f_clusters)
             base["summary"] = s0
 
+    # ── Fresh / sole-token wallets + token multi-send (one sender → many) ──
+    # Seed from non-LP top holders (cap for RPC cost).
+    holder_seed: list[str] = []
+    try:
+        from .holders import is_known_lp_or_program as _is_lp_wallet
+    except Exception:  # noqa: BLE001
+        def _is_lp_wallet(addr: str, label: str | None = None) -> bool:  # type: ignore[misc]
+            return False
+
+    if base.get("ok"):
+        for h in (base.get("holders") or helius.get("holders") or [])[:40]:
+            if not isinstance(h, dict):
+                continue
+            hw = (h.get("wallet") or "").strip()
+            if not hw or hw in lp_wallets:
+                continue
+            if _is_lp_wallet(hw, label=str(h.get("label") or "")):
+                continue
+            holder_seed.append(hw)
+    # Also seed from suspects / similar / early buyers
+    for s in (base.get("suspect_wallets") or [])[:15]:
+        if isinstance(s, dict) and s.get("wallet"):
+            holder_seed.append(str(s["wallet"]))
+    for g in (base.get("similar_size_groups") or [])[:4]:
+        for w in g.get("wallets") or []:
+            holder_seed.append(str(w))
+    for eb in (base.get("early_buyers") or jito_style.get("early_buyers") or [])[:12]:
+        if isinstance(eb, dict) and eb.get("wallet"):
+            holder_seed.append(str(eb["wallet"]))
+
+    # Dedupe seed
+    _seen_seed: set[str] = set()
+    holder_seed_u: list[str] = []
+    for w in holder_seed:
+        a = (w or "").strip()
+        if not a or a in _seen_seed:
+            continue
+        _seen_seed.add(a)
+        holder_seed_u.append(a)
+
+    fresh_report: dict[str, Any] = {"ok": False, "wallets": []}
+    multi_send_report: dict[str, Any] = {"ok": False, "clusters": []}
+    try:
+        fresh_report = src.analyze_fresh_wallets(mint, holder_seed_u, max_wallets=16)
+    except Exception as exc:  # noqa: BLE001
+        fresh_report = {"ok": False, "error": str(exc), "wallets": []}
+    try:
+        multi_send_report = src.analyze_token_multi_sends(
+            mint, holder_seed_u, max_sigs=32, max_tx_fetch=24
+        )
+    except Exception as exc:  # noqa: BLE001
+        multi_send_report = {"ok": False, "error": str(exc), "clusters": []}
+
+    # Attach supply % to fresh wallets
+    fresh_rows: list[dict[str, Any]] = []
+    if fresh_report.get("ok"):
+        if "fresh_wallets" not in sources_used:
+            sources_used.append("fresh_wallets")
+        for fw in list(fresh_report.get("wallets") or [])[:20]:
+            if not isinstance(fw, dict):
+                continue
+            w = (fw.get("wallet") or "").strip()
+            if not w or w in lp_wallets:
+                continue
+            row = dict(fw)
+            row["pct_supply"] = pct_by_w.get(w)
+            fresh_rows.append(row)
+        if fresh_rows:
+            fusion_signals.append(
+                {
+                    "id": "fresh_sole_token",
+                    "provider": "helius",
+                    "severity": "medium" if len(fresh_rows) < 4 else "high",
+                    "title": "Fresh / sole-token wallets",
+                    "detail": (
+                        f"{len(fresh_rows)} holder(s) hold this mint with almost no "
+                        f"other SPL tokens (scanned {fresh_report.get('wallets_scanned') or 0})."
+                    ),
+                }
+            )
+            extra_score += min(18, 6 + len(fresh_rows) * 2)
+
+    # Token multi-send clusters + SOL multi-send (from funding clusters)
+    multi_clusters: list[dict[str, Any]] = []
+    if multi_send_report.get("ok"):
+        if "token_multi_send" not in sources_used:
+            sources_used.append("token_multi_send")
+        for mc in list(multi_send_report.get("clusters") or [])[:10]:
+            if not isinstance(mc, dict):
+                continue
+            sender = (mc.get("sender") or "").strip()
+            recs = list(mc.get("receivers") or [])
+            child_rows = [
+                {"wallet": r, "pct_supply": pct_by_w.get(r)} for r in recs if r
+            ]
+            tot, n = bun._sum_wallets_pct(child_rows)  # type: ignore[attr-defined]
+            multi_clusters.append(
+                {
+                    "kind": "token_multi_send",
+                    "sender": sender,
+                    "sender_pct": pct_by_w.get(sender),
+                    "receivers": recs,
+                    "receiver_count": mc.get("receiver_count") or len(recs),
+                    "holders_hit": mc.get("holders_hit"),
+                    "child_rows": child_rows,
+                    "total_pct": tot,
+                    "wallets_with_pct": n,
+                    "severity": mc.get("severity") or "high",
+                }
+            )
+        if multi_clusters:
+            best_m = multi_clusters[0]
+            fusion_signals.append(
+                {
+                    "id": "token_multi_send",
+                    "provider": "helius",
+                    "severity": best_m.get("severity") or "high",
+                    "title": "Token multi-send (one owner → many)",
+                    "detail": (
+                        f"Sender {best_m.get('sender')} distributed this mint to "
+                        f"{best_m.get('receiver_count')} wallet(s); "
+                        f"{len(multi_clusters)} multi-send cluster(s) "
+                        f"(scanned {multi_send_report.get('txs_scanned') or 0} txs)."
+                    ),
+                }
+            )
+            extra_score += min(
+                24, 10 + int(best_m.get("receiver_count") or 0) * 2
+            )
+
+    # Also surface SOL multi-send = funding clusters (one funder → many children)
+    sol_multi: list[dict[str, Any]] = []
+    for fc in list((base.get("funding_clusters") if base.get("ok") else None) or [])[:8]:
+        if not isinstance(fc, dict):
+            continue
+        sol_multi.append(
+            {
+                "kind": "sol_multi_send",
+                "sender": fc.get("funder"),
+                "sender_pct": fc.get("funder_pct"),
+                "receivers": list(fc.get("children") or [])[:24],
+                "receiver_count": fc.get("child_count")
+                or len(fc.get("children") or []),
+                "child_rows": list(fc.get("child_rows") or []),
+                "total_pct": fc.get("total_pct"),
+                "severity": fc.get("severity") or "high",
+            }
+        )
+
+    if base.get("ok") or fresh_rows or multi_clusters or sol_multi:
+        if not base.get("ok"):
+            # Ensure we have a base shell if heuristics failed earlier
+            pass
+        else:
+            base = dict(base)
+            base["fresh_wallets"] = fresh_rows
+            base["multi_send_clusters"] = multi_clusters
+            base["sol_multi_send_clusters"] = sol_multi
+            s0 = dict(base.get("summary") or {})
+            s0["fresh_wallet_count"] = len(fresh_rows)
+            s0["token_multi_send_clusters"] = len(multi_clusters)
+            s0["sol_multi_send_clusters"] = len(sol_multi)
+            ft, fn = bun._sum_wallets_pct(  # type: ignore[attr-defined]
+                [{"wallet": r.get("wallet"), "pct_supply": r.get("pct_supply")} for r in fresh_rows]
+            )
+            s0["fresh_total_pct"] = ft
+            s0["fresh_wallet_with_pct"] = fn
+            base["summary"] = s0
+
     if jito_eng.get("ok"):
         fusion_signals.append(
             {
@@ -504,7 +673,8 @@ def comprehensive_bundle_check(
         base["notes"] = (
             "Comprehensive bundle check: Helius top holders (owner-resolved) + "
             "Rugcheck insiders/risks + Birdeye (if key) + launch-window same-slot "
-            "multi-buys + 1-hop SOL funding clusters (Helius). "
+            "multi-buys + 1-hop SOL funding + fresh/sole-token wallets + "
+            "token multi-send (one sender → many). "
             "Not a full commercial sniper graph. "
             + (base.get("notes") or "")
         ).strip()
