@@ -1537,11 +1537,60 @@ def format_holders_text(data: dict[str, Any]) -> str:
     clusters = data.get("owner_clusters") or []
     lines.append("")
     if clusters:
-        lines.append("  Multi-account clusters (same wallet, several large ATAs):")
+        # Same pattern as Bundles launch-window: category total + subgroup totals
+        cl_rows: list[dict[str, Any]] = []
+        for c in clusters:
+            if not isinstance(c, dict):
+                continue
+            w = (c.get("wallet") or "").strip()
+            pct = None
+            if w and w in pct_by_wallet:
+                pct = pct_by_wallet[w]
+            elif c.get("combined_balance") is not None and summary.get("total_wallets"):
+                # best-effort from balance if supply known later — leave None
+                pct = None
+            # Try pct from holders map only
+            cl_rows.append({"wallet": w, "pct_supply": pct})
+        # Prefer combined_balance-derived share if we can match holder rows
+        for row in cl_rows:
+            w = row.get("wallet") or ""
+            if row.get("pct_supply") is None and w:
+                row["pct_supply"] = pct_by_wallet.get(w)
+        cl_total = 0.0
+        cl_n = 0
+        has_pct = False
+        for row in cl_rows:
+            try:
+                p = float(row["pct_supply"]) if row.get("pct_supply") is not None else None
+            except (TypeError, ValueError):
+                p = None
+            if p is not None:
+                cl_total += p
+                has_pct = True
+            if row.get("wallet"):
+                cl_n += 1
+        if cl_total > 100:
+            cl_total = 100.0
+        total_s = f"{cl_total:.2f}%" if has_pct else "n/a"
+        lines.append(
+            f"  Multi-account clusters (same wallet, several large ATAs) — "
+            f"total {total_s} across {cl_n} wallet(s):"
+        )
         for c in clusters[:8]:
+            w = (c.get("wallet") or "").strip()
+            pct = pct_by_wallet.get(w)
+            pct_s = _pct(pct)
             lines.append(
-                f"    {c.get('wallet')} · {c.get('accounts')} accounts · bal {c.get('combined_balance')}"
+                f"    • {w}  ·  {c.get('accounts') or '?'} ATAs"
+                f"  ·  total {pct_s}"
             )
+            lines.append(f"         {w}  holds {pct_s}")
+            bal = c.get("combined_balance")
+            if bal is not None:
+                try:
+                    lines.append(f"         bal {float(bal):,.4f}")
+                except (TypeError, ValueError):
+                    lines.append(f"         bal {bal}")
     else:
         lines.append(
             "  Multi-account clusters will show here if value returns True"
@@ -1840,11 +1889,13 @@ def _format_rugwatch_flagged_section(
         )
         return lines
 
+    # Category header like Bundles suspects / launch-window
     lines.append(
-        f"  Flagged wallets (still holding) · combined {total_s}{total_pri_s} "
-        f"({len(wallets)} shown · previously holding {prev_n}"
-        + (f", {skipped_lp} LP excluded" if skipped_lp else "")
-        + "):"
+        f"  Flagged wallets (still holding) — total {total_s}{total_pri_s} "
+        f"across {len(wallets)} wallet(s)"
+        + (f" · previously holding {prev_n}" if prev_n else "")
+        + (f" · {skipped_lp} LP excluded" if skipped_lp else "")
+        + ":"
     )
     lines.append("")
 

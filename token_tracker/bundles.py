@@ -306,13 +306,17 @@ def format_bundles_text(data: dict[str, Any]) -> str:
         )
         for c in clusters[:10]:
             w = c.get("wallet") or ""
-            # Wallet + percent holdings on one line (site colors the %)
-            lines.append(
-                f"    • {w}  holds {_pct(c.get('pct_supply') if c.get('pct_supply') is not None else c.get('combined_pct'))}"
+            pct = (
+                c.get("pct_supply")
+                if c.get("pct_supply") is not None
+                else c.get("combined_pct")
             )
+            # Subgroup total = this owner's combined bag (like slot total)
             lines.append(
-                f"      {c.get('accounts')} accounts · bal {c.get('combined_balance')}"
+                f"    • {w}  ·  {c.get('accounts') or '?'} ATAs"
+                f"  ·  total {_pct(pct)}"
             )
+            lines.append(f"         {w}  holds {_pct(pct)}")
             accts = c.get("token_accounts") or []
             for a in accts[:4]:
                 lines.append(f"         ATA {a}")

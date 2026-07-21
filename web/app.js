@@ -4136,6 +4136,7 @@ function formatHoldersRichHtml(text) {
   if (!text) return "";
   // Wallet addresses: >5% yellow · >10% red · skip known LP (inline style)
   let html = linkify(text, true);
+  html = colorBundlesCategoryNames(html);
   html = colorWalletHolderPcts(html);
   html = colorHoldingAmounts(html);
   return html;
@@ -4161,11 +4162,13 @@ function colorBundlesSelectivePcts(html) {
     .join("\n");
 }
 
-/** Green dim highlight for Bundles category / section titles */
+/** Green dim highlight for Bundles / Holders category section titles */
 function colorBundlesCategoryNames(html) {
   if (!html) return html;
-  // Match section headers (indented titles ending with : or starting a section)
+  // Match section headers (indented titles)
   const categories = [
+    "Multi-account clusters \\(same wallet → several large ATAs\\)",
+    "Multi-account clusters \\(same wallet, several large ATAs\\)",
     "Multi-account clusters",
     "Similar-size wallet groups",
     "Insider-flagged \\(Rugcheck\\)",
@@ -4175,12 +4178,16 @@ function colorBundlesCategoryNames(html) {
     "Launch-window same-slot multi-buys",
     "Suspect wallets \\(union of signals\\)",
     "Suspect wallets",
+    "Flagged wallets \\(still holding\\)",
+    "Flagged wallets",
+    "── FLAGGED WALLETS \\(RugWatch\\) ──",
+    "Top holders",
+    "Creator wallet",
     "Signals",
     "BUNDLES / COORDINATED WALLETS",
   ];
   let out = html;
   for (const cat of categories) {
-    // Line starts with optional spaces, then category name
     const re = new RegExp(
       "(^|\\n)([ \\t]*)(" + cat + ")(?=\\s*[—:\\-–]|$)",
       "gim"
