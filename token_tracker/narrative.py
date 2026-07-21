@@ -1102,11 +1102,15 @@ def _text_redundant(candidate: str, existing: list[str]) -> bool:
         if c == p:
             return True
         # Same blurb repeated with different source labels / truncation
-        if c[:80] == p[:80]:
+        n = min(80, len(c), len(p))
+        if n >= 24 and c[:n] == p[:n]:
             return True
-        if len(c) >= 40 and c[:100] in p:
+        if len(c) >= 24 and c in p:
             return True
-        if len(p) >= 40 and p[:100] in c:
+        if len(p) >= 24 and p in c:
+            return True
+        # High overlap of leading content
+        if len(c) >= 30 and len(p) >= 30 and c[:50] == p[:50]:
             return True
     return False
 
