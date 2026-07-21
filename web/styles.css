@@ -889,6 +889,13 @@ a.copy-mint:hover,
   color: var(--text-secondary);
   line-height: 1.45;
 }
+/* RugWatch label in Ruggers section titles — dim yellow */
+.rug-section-title .rug-label-rugwatch,
+.rug-label-rugwatch {
+  color: #b8a85c;
+  font-weight: 600;
+  opacity: 0.92;
+}
 .rug-section {
   margin: 14px 0;
   border: 1px solid var(--border);

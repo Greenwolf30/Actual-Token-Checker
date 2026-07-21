@@ -3095,11 +3095,15 @@ function renderRuggersSection(title, hint, rows, exportKey, opts) {
     }
     actions += "</div>";
   }
+  const titleHtml =
+    opts && opts.titleHtml
+      ? opts.titleHtml
+      : escHtml(title || "");
   return (
     '<section class="rug-section">' +
     '<div class="rug-section-head">' +
     '<h3 class="rug-section-title">' +
-    escHtml(title) +
+    titleHtml +
     ' <span class="rug-count">' +
     n +
     "</span></h3>" +
@@ -3109,6 +3113,14 @@ function renderRuggersSection(title, hint, rows, exportKey, opts) {
     '<div class="rug-section-body">' +
     body +
     "</div></section>"
+  );
+}
+
+/** “Flagged wallets (RugWatch)” with dim-yellow RugWatch label */
+function ruggersFlaggedTitleHtml() {
+  return (
+    "Flagged wallets " +
+    '(<span class="rug-label-rugwatch">RugWatch</span>)'
   );
 }
 
@@ -3572,7 +3584,7 @@ function refreshRuggersPanel(focusKey) {
     "seller lists start <strong>empty</strong>. " +
     "<strong>Re-Analyze later</strong> — wallets that sold <strong>≥99%</strong> of that first bag " +
     "appear under their baseline category: Creator · Similar · Multi-account · Shared funder · " +
-    "Insider · Launch-window · Suspect · Single · Flagged (RugWatch). " +
+    "Insider · Launch-window · Suspect · Single · Flagged wallets (RugWatch). " +
     "Buy-back → <span class=\"rug-tag rug-tag-swing\">swing</span> (label kept) · " +
     "sell again → back to the same category. Loop continues.</p>";
 
@@ -3723,22 +3735,27 @@ function refreshRuggersPanel(focusKey) {
   const flaggedRows = buckets.flaggedWallets || [];
   if (flaggedRows.length) {
     html += renderRuggersSection(
-      "Flagged wallets",
-      "Sold ≥99% while on RugWatch (purple). Label never removed. " +
+      "Flagged wallets (RugWatch)",
+      "Sold ≥99% while on RugWatch cloud/local list (purple). Label never removed. " +
         "Buy-back → Swing as “flagged · swing” (same purple). " +
         "Sell ≥99% again after concurrent lookup → back here. " +
-        "Other mints keep their own lanes.",
-      flaggedRows
+        "Not the same as Insider-flagged (Rugcheck).",
+      flaggedRows,
+      null,
+      { titleHtml: ruggersFlaggedTitleHtml() }
     );
   } else {
     html +=
       '<section class="rug-section">' +
       '<div class="rug-section-head">' +
-      '<h3 class="rug-section-title">Flagged wallets <span class="rug-count">0</span></h3>' +
+      '<h3 class="rug-section-title">' +
+      ruggersFlaggedTitleHtml() +
+      ' <span class="rug-count">0</span></h3>' +
       "</div>" +
       '<p class="rug-section-hint">' +
       "Empty until a RugWatch wallet sells ≥99% on this mint. " +
-      "Loop: Flagged ↔ Swing — purple label never drops once flagged." +
+      "Loop: Flagged ↔ Swing — purple label never drops once flagged. " +
+      "Not the same as Insider-flagged (Rugcheck)." +
       "</p>" +
       '<div class="rug-section-body"><p class="rug-empty">None yet.</p></div>' +
       "</section>";
@@ -4154,7 +4171,7 @@ function formatRuggersPlain(rec, buckets, key) {
   dump("Launch-window same-slot", buckets.launchSellers || []);
   dump("Suspect sellers", buckets.suspectSellers || []);
   dump("Single sellers", buckets.singleSellers);
-  dump("Flagged wallets (no upload)", buckets.flaggedWallets || []);
+  dump("Flagged wallets (RugWatch)", buckets.flaggedWallets || []);
   dump("Swing traders", buckets.swings);
   return lines.join("\n");
 }
