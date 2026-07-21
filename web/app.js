@@ -3862,10 +3862,13 @@ function renderRuggersSection(title, hint, rows, exportKey, opts) {
     supplyMode === "bought"
       ? sumRuggersCategoryBoughtSupplyPct(rows)
       : sumRuggersCategorySoldSupplyPct(rows);
-  const supplyLabel =
-    supplyMode === "bought"
+  // Hide the pill when total is 0% (empty or no measurable supply %)
+  const showSupply = Number.isFinite(supplyTot) && Number(supplyTot) > 0;
+  const supplyLabel = showSupply
+    ? supplyMode === "bought"
       ? formatRuggersBoughtSupplyTotal(supplyTot)
-      : formatRuggersSoldSupplyTotal(supplyTot);
+      : formatRuggersSoldSupplyTotal(supplyTot)
+    : "";
   const supplyTitle =
     supplyMode === "bought"
       ? "Sum of mint-supply % currently held (bought back) across Swing wallets (capped at 100%)"
@@ -3920,13 +3923,16 @@ function renderRuggersSection(title, hint, rows, exportKey, opts) {
     ' <span class="rug-count">' +
     n +
     "</span>" +
-    ' <span class="' +
-    (supplyMode === "bought" ? "rug-supply-bought" : "rug-supply-sold") +
-    '" title="' +
-    escHtml(supplyTitle) +
-    '">' +
-    escHtml(supplyLabel) +
-    "</span></h3>" +
+    (showSupply
+      ? ' <span class="' +
+        (supplyMode === "bought" ? "rug-supply-bought" : "rug-supply-sold") +
+        '" title="' +
+        escHtml(supplyTitle) +
+        '">' +
+        escHtml(supplyLabel) +
+        "</span>"
+      : "") +
+    "</h3>" +
     actions +
     "</div>" +
     (hintHtml
@@ -4652,7 +4658,6 @@ function refreshRuggersPanel(focusKey) {
       '<h3 class="rug-section-title">' +
       ruggersFlaggedTitleHtml() +
       ' <span class="rug-count">0</span>' +
-      ' <span class="rug-supply-sold" title="Sum of mint-supply % sold across wallets in this section (capped at 100%)">0% supply sold</span>' +
       "</h3>" +
       "</div>" +
       '<p class="rug-section-hint">' +
