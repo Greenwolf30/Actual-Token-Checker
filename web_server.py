@@ -254,10 +254,21 @@ def _safe_links(report: dict[str, Any]) -> dict[str, str]:
         plat = (s.get("type") or s.get("platform") or "").lower()
         if url and plat in {"telegram", "discord", "website"}:
             links.setdefault(plat, str(url))
-    # narrative / coin fact links
+    # narrative / coin fact links (skip raw metadata JSON URI — not a user-facing page)
+    _skip_link_keys = {
+        "metadata_uri",
+        "metadataUri",
+        "metadata",
+        "uri",
+        "image",
+        "image_uri",
+        "imageUri",
+    }
     story = report.get("narrative") or {}
     cf = story.get("coin_facts") if isinstance(story.get("coin_facts"), dict) else {}
     for k, v in (cf.get("links") or {}).items():
+        if str(k).lower() in {s.lower() for s in _skip_link_keys}:
+            continue
         if isinstance(v, str) and v.startswith("http") and k not in links:
             if "api-key" in v.lower():
                 continue

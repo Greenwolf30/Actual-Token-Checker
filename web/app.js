@@ -4873,6 +4873,16 @@ function renderSummary(data) {
   const linkBar = $("linkBar");
   linkBar.innerHTML = "";
   const links = data.links || {};
+  // Hide raw metadata JSON URI (and similar) from the summary link bar
+  const hideLinkKeys = new Set([
+    "metadata_uri",
+    "metadatauri",
+    "metadata",
+    "uri",
+    "image",
+    "image_uri",
+    "imageuri",
+  ]);
   const order = [
     "dexscreener",
     "dexscreener_chain",
@@ -4889,7 +4899,7 @@ function renderSummary(data) {
   ];
   const seen = new Set();
   for (const k of order) {
-    if (!links[k]) continue;
+    if (!links[k] || hideLinkKeys.has(String(k).toLowerCase())) continue;
     seen.add(k);
     const a = document.createElement("a");
     a.href = links[k];
@@ -4900,6 +4910,7 @@ function renderSummary(data) {
   }
   for (const [k, url] of Object.entries(links)) {
     if (seen.has(k) || !url) continue;
+    if (hideLinkKeys.has(String(k).toLowerCase())) continue;
     const a = document.createElement("a");
     a.href = url;
     a.target = "_blank";
