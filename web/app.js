@@ -4123,16 +4123,94 @@ function isMajorSectionTitleLine(plain) {
 }
 
 /**
+ * True when a line is decorative/meta only (not real data under a section).
+ */
+function isSectionBodyMetaLine(plain) {
+  const t = String(plain || "").trim();
+  if (!t) return true;
+  if (/^[=─\-–—]{6,}$/.test(t)) return true;
+  if (/^[-]{12,}$/.test(t)) return true;
+  if (/^\(/.test(t)) return true; // hints like "(click blue…)"
+  if (/^click /i.test(t)) return true;
+  if (/^or click /i.test(t)) return true;
+  if (/^use tabs:/i.test(t)) return true;
+  if (/^generated:/i.test(t)) return true;
+  if (/^things to watch out for\b/i.test(t)) return true;
+  if (/^wallet clusters\b/i.test(t)) return true;
+  if (/^what this token is about$/i.test(t)) return true;
+  if (/^public news events$/i.test(t)) return true;
+  if (/^note:\s*$/i.test(t)) return true;
+  if (/^heuristic only\b/i.test(t)) return true;
+  if (/not financial advice/i.test(t)) return true;
+  return false;
+}
+
+/**
+ * True when a body line means the check/value is false / empty (no real-time hit).
+ * Section titles above such-only bodies should NOT be dim-green.
+ */
+function isSectionBodyFalseOrEmptyLine(plain) {
+  const t = String(plain || "").trim();
+  if (!t) return true;
+  if (isSectionBodyMetaLine(t)) return true;
+  // Placeholder copy used across Alerts / Holders / Bundles / About
+  if (/\bwill show here if value returns True\b/i.test(t)) return true;
+  if (/\bwill show here after a full Analyze\b/i.test(t)) return true;
+  if (/\bwill show here if\b/i.test(t)) return true;
+  if (/\bwill show when\b/i.test(t)) return true;
+  if (/\bwill show if\b/i.test(t)) return true;
+  if (/^run analyze\b/i.test(t)) return true;
+  if (/^unavailable\b/i.test(t)) return true;
+  if (/^skipped\b/i.test(t)) return true;
+  if (/\bcould not build\b/i.test(t)) return true;
+  if (/\bno data\b/i.test(t)) return true;
+  // Whole-line false / empty values (not mixed True/False status rows)
+  if (/^(false|False|FALSE|n\/a|none|null|—|-)$/.test(t)) return true;
+  if (/:\s*(false|False|FALSE|n\/a|none|null|—|-)\s*$/.test(t)) return true;
+  // Pure "returns False" status (no accompanying real hit)
+  if (/^[^:]*\breturns?\s+False\b\s*$/i.test(t)) return true;
+  return false;
+}
+
+/**
+ * Does this section have any real-time / real data (not all false placeholders)?
+ * Scans body lines after titleIdx until the next major section title.
+ */
+function sectionHasRealData(plainLines, titleIdx) {
+  const n = plainLines.length;
+  let sawAny = false;
+  let sawReal = false;
+  for (let i = titleIdx + 1; i < n; i++) {
+    const t = String(plainLines[i] || "").trim();
+    if (!t) continue;
+    if (isMajorSectionTitleLine(t)) break;
+    if (isSectionBodyMetaLine(t)) continue;
+    sawAny = true;
+    if (!isSectionBodyFalseOrEmptyLine(t)) {
+      sawReal = true;
+      break;
+    }
+  }
+  // No body at all → treat as empty/false (don't green)
+  if (!sawAny) return false;
+  return sawReal;
+}
+
+/**
  * Color major section titles only (dim green) — not field labels / subcategories.
- * Matches ── TITLE ── markers and short ALL-CAPS block headers.
+ * Skip green when the section body is all false / empty / "will show if True"
+ * (no real-time market / check data for that title).
  */
 function colorAllSectionTitles(html) {
   if (!html) return html;
-  return html
-    .split("\n")
-    .map((line) => {
-      const plain = plainTextFromHtmlLine(line);
+  const lines = html.split("\n");
+  const plainLines = lines.map((line) => plainTextFromHtmlLine(line));
+  return lines
+    .map((line, idx) => {
+      const plain = plainLines[idx];
       if (!isMajorSectionTitleLine(plain)) return line;
+      // No real data under this title → leave default color (not green)
+      if (!sectionHasRealData(plainLines, idx)) return line;
       // Preserve leading whitespace; wrap the rest
       const m = line.match(/^([ \t]*)([\s\S]*)$/);
       if (!m) return line;
