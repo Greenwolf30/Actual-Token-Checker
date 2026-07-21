@@ -29,6 +29,16 @@ pulls public market and risk data and shows it in tabs:
 
 It does NOT trade for you, custody funds, or guarantee a token is safe.
 
+What this guide covers vs RugWatch
+  THIS DOC (Token Checker / ATC)
+    - Analyze UI, tabs, Quick mode, Ruggers lanes, Logs, Alerts, Maps, About
+    - How ATC *reads* Flagged (RugWatch) and shows hold %
+    - How Ruggers Upload/Export *sends* wallets into YOUR RugWatch
+  RUGWATCH DOC (separate app — RugCheck Documentation.md)
+    - Building the wallet list, risk_score 0–100, Monitor, Push/Pull cloud
+    - Scan mint, Add/Upload wallets, local DB shards, capacity
+  Do not paste full RugWatch manuals into ATC docs (and vice versa).
+
 
 --------------------------------------------------------------------------------
 2. HOW TO USE THE SITE
@@ -84,8 +94,38 @@ Quick OFF (full Analyze)
 
 
 --------------------------------------------------------------------------------
+3b. UI CHROME (WEBSITE — NOT A REPORT TAB)
+--------------------------------------------------------------------------------
+
+Top nav
+  Logo · RugWatch (yellow — opens RugWatch site) · Docs · GitHub · Stats API · Badge
+  views pill — public profile views for this site
+  server status pill — API health
+  Gear / ? — optional site passcode (WEB_API_TOKEN); keys never go in the browser
+
+Search row
+  Query box · chain filter · Quick · RugWatch checkbox · Analyze
+
+Summary bar (after Analyze)
+  Logo · name/symbol · mint (click yellow to copy / open Solscan)
+  Price · MC · Liq · Vol 24h · 24h change
+  Link bar: dexscreener · solscan · twitter · website · telegram · discord · …
+  Hidden by design: metadata_uri / raw image JSON (still used inside About)
+
+Report tabs
+  Section titles use dim-green ── TITLE ── markers (major sections only).
+  Empty/false-only blocks stay default color (not greened).
+
+Footer
+  Disclaimer · profile views / analyzes · public stats · badge · generated time
+
+
+--------------------------------------------------------------------------------
 4. OVERVIEW TAB
 --------------------------------------------------------------------------------
+
+Section titles (website): ── MARKET ── · ── PUMP.FUN ── · ── INITIAL MARKET CAP ──
+  · ── ALL-TIME HIGH ── · ── SOCIALS ──
 
 Shows market structure from DexScreener (and Pump.fun when useful):
 
@@ -93,6 +133,7 @@ Shows market structure from DexScreener (and Pump.fun when useful):
   Pair / DEX (e.g. Raydium, Pump.fun, Uniswap)
   Social links from the pair profile (X, Telegram, website)
   Pump.fun status when relevant: still on bonding curve vs graduated
+  Initial MC estimate and ATH MC estimate when history is available
 
 Pump.fun fallback
   - If DexScreener is rate-limited (HTTP 429) and the mint looks like a
@@ -122,6 +163,16 @@ DexScreener / Analyze cache (server, in-memory)
 --------------------------------------------------------------------------------
 5. HOLDERS TAB & WALLET SCHEME
 --------------------------------------------------------------------------------
+
+Website section markers (dim green):
+  ── HOLDERS / WALLETS ── · ── TOTAL WALLETS ── · ── CONCENTRATION ──
+  · ── FLAGS ── · ── TOP HOLDERS ── · ── MULTI-ACCOUNT CLUSTERS ──
+  · ── FLAGGED WALLETS (RugWatch) ──
+
+  Total wallets by source when available (Pump.fun / Birdeye / DexScreener /
+  Solscan). Top holders with supply % priority colors. Creator, mint/freeze
+  authority when known. RugWatch flagged still-holding / previously-holding
+  when checkbox ON (see §12b).
 
 Purpose
   Show who holds the token (top wallets) and how concentrated supply is.
@@ -401,6 +452,10 @@ alerts you can read.
 --------------------------------------------------------------------------------
 9. MAPS TAB
 --------------------------------------------------------------------------------
+
+Website section markers: ── MAPS — Bubblemaps ── · ── TOKEN ── · ── HOW TO VIEW ──
+  · ── MAP LINKS ── · ── DATA API ── (when Pro API is attempted)
+
 
 Links to Bubblemaps (and similar) wallet-cluster visualizations when the
 chain is supported. Click through to explore holders visually.
@@ -898,6 +953,11 @@ How many entries
   - Newest is at the top.
   - When you go past 200, the oldest entry is deleted automatically on each consecutive lookup.
 
+Search previous lookup by CA (website)
+  Paste a mint / CA into the Logs search box → Search (or Enter).
+  Finds a prior Logs entry saved in this browser only (no network).
+  Same idea as Ruggers CA search, separate storage from Ruggers.
+
 Where it lives
   Desktop
   - Saved as history_log.json next to the app.
@@ -1136,6 +1196,26 @@ A: Yes — RugWatch on your desktop is that database (local SQLite, wallets
 Q: If a wallet sells on my 10th lookup, do they still count as a seller?
 A: Yes. Lookup count does not matter. Sales are always measured against
    the first full Analyze bag (see §11).
+
+
+--------------------------------------------------------------------------------
+16b. FEATURE CHECKLIST (ATC — vs what is documented)
+--------------------------------------------------------------------------------
+
+| Area | Documented? |
+|------|-------------|
+| Analyze, Quick, chain filter, RugWatch checkbox | §2–3 |
+| UI chrome (nav, views, passcode, link bar) | §3b |
+| Overview / Holders / Bundles / Alerts / Maps | §4–9 |
+| About (Narrative, X, News, Links, LinkedIn) | §10 |
+| Ruggers all lanes + sticky sell↔swing + Upload | §11 |
+| Flagged (RugWatch) local/cloud on Analyze | §12b |
+| Logs (200 entries, snapshots, CA search) | §13 |
+| Robinhood / 429 / deploy tips | §14–15 |
+| RugWatch **wallet scoring 0–100** | RugWatch docs only (pointer in §12) |
+| RugWatch Monitor / Scan mint UI | RugWatch docs only |
+
+If a button exists on the RugWatch site only, it belongs in RugWatch docs.
 
 
 --------------------------------------------------------------------------------
