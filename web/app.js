@@ -1845,16 +1845,41 @@ function processRuggersFromAnalyze(data) {
       rec.first_wallets[w].origin_lane = "similar";
     }
 
+    // Similar lineage on THIS mint (upload pin, frozen lane, or baseline tag).
+    // These wallets never enter Ruggers Flagged on this mint — stay Similar ↔ Swing.
+    const similarLineageOnMint = !!(
+      uploadedSimilar ||
+      originLane === "similar" ||
+      inSimilar ||
+      (first && first.in_similar) ||
+      (prev && (prev.in_similar || prev.origin_lane === "similar" || prev.permanent_similar || prev.uploaded_similar)) ||
+      (rec.first_wallets &&
+        rec.first_wallets[w] &&
+        (rec.first_wallets[w].in_similar ||
+          rec.first_wallets[w].origin_lane === "similar"))
+    );
+    if (similarLineageOnMint) {
+      // Force sticky similar origin so later Analyzes cannot re-lane to single → Flagged
+      originLane = "similar";
+      if (rec.first_wallets[w]) {
+        rec.first_wallets[w].in_similar = true;
+        rec.first_wallets[w].origin_lane = "similar";
+      }
+      if (flaggedSellers[w]) delete flaggedSellers[w];
+    }
+
     const wasFlaggedSeller = !!flaggedSellers[w];
     // Once flagged on THIS mint, never drop the label (buy-back / swing / re-sell)
+    // Similar lineage is never "flagged" on this mint even if on RugWatch cloud.
     const everFlaggedOnMint = !!(
-      prev.ever_flagged_on_mint ||
-      wasFlaggedSeller ||
-      (flaggedSellers[w] &&
-        (flaggedSellers[w].ever_flagged || flaggedSellers[w].phase)) ||
-      (prev.flagged_meta &&
-        (prev.flagged_meta.ever_flagged || prev.flagged_meta.phase)) ||
-      (prev.is_flagged && prev.ever_sold)
+      !similarLineageOnMint &&
+      (prev.ever_flagged_on_mint ||
+        wasFlaggedSeller ||
+        (flaggedSellers[w] &&
+          (flaggedSellers[w].ever_flagged || flaggedSellers[w].phase)) ||
+        (prev.flagged_meta &&
+          (prev.flagged_meta.ever_flagged || prev.flagged_meta.phase)) ||
+        (prev.is_flagged && prev.ever_sold))
     );
     const onRugWatch =
       wasFlaggedSeller ||
@@ -1864,13 +1889,12 @@ function processRuggersFromAnalyze(data) {
 
     // Enter / re-enter Flagged when sold ≥99% while on RugWatch lineage.
     // Includes swing → seller again after concurrent lookups (buy-back then dump).
-    // Similar lane on THIS mint stays Similar↔Swing even if flagged on another mint.
-    // Creator is treated like Similar/Single for the loop; stays out of Flagged on
-    // this mint too (keeps permanent "creator" label in Creator ↔ Swing).
-    // Permanent Similar-Upload never Flagged here either.
+    // Similar lane on THIS mint stays Similar↔Swing even if on RugWatch / uploaded.
+    // Creator stays Creator ↔ Swing (never Flagged on this mint).
     const soldWhileFlaggedPath =
       !isFirstLookup &&
       tag === "seller" &&
+      !similarLineageOnMint &&
       !uploadedSimilar &&
       originLane !== "similar" &&
       originLane !== "creator" &&
@@ -1911,7 +1935,8 @@ function processRuggersFromAnalyze(data) {
     // Buy-back: stay Flagged identity forever — only move section to Swing.
     // phase=swing → Swing list with purple "flagged · swing"; never remove label.
     // Sell ≥99% again → phase=sold → Flagged section again (still purple).
-    if (tag === "swing" && everFlaggedOnMint && !uploadedSimilar) {
+    // Similar lineage never uses Flagged identity on this mint.
+    if (tag === "swing" && everFlaggedOnMint && !similarLineageOnMint && !uploadedSimilar) {
       const prior = flaggedSellers[w] || prev.flagged_meta || {};
       const sealed = withSingleFlaggedFromMint(
         { ...prior, ...(rwKnown[w] || {}) },
@@ -2211,7 +2236,7 @@ function processRuggersFromAnalyze(data) {
     }
   }
 
-  // Final scrub: permanent similar-uploads never remain in flagged_sellers
+  // Final scrub: Similar lineage (upload pin OR frozen similar origin) never Flagged here
   if (rec.uploaded_similar && typeof rec.uploaded_similar === "object") {
     for (const uw of Object.keys(rec.uploaded_similar)) {
       if (flaggedSellers[uw]) delete flaggedSellers[uw];
@@ -2219,8 +2244,28 @@ function processRuggersFromAnalyze(data) {
         status[uw].in_similar = true;
         status[uw].is_flagged = false;
         status[uw].uploaded_similar = true;
+        status[uw].origin_lane = "similar";
+        status[uw].ever_flagged_on_mint = false;
       }
     }
+  }
+  for (const [sw, st] of Object.entries(status)) {
+    if (!st) continue;
+    const fw0 = rec.first_wallets && rec.first_wallets[sw];
+    const isSim =
+      isUploadedSimilarOnThisMint(rec, sw) ||
+      st.origin_lane === "similar" ||
+      st.in_similar ||
+      st.permanent_similar ||
+      st.uploaded_similar ||
+      (fw0 && (fw0.in_similar || fw0.origin_lane === "similar"));
+    if (!isSim) continue;
+    if (flaggedSellers[sw]) delete flaggedSellers[sw];
+    st.in_similar = true;
+    st.origin_lane = "similar";
+    st.is_flagged = false;
+    st.ever_flagged_on_mint = false;
+    if (st.flagged_meta) delete st.flagged_meta;
   }
 
   // Sticky flagged sellers not in first_wallets — keep by phase
@@ -2439,9 +2484,10 @@ function pinUploadedSimilarOnMint(rec, wallet, extra) {
 /**
  * After successful Upload → mark wallets as RugWatch-known on cloud.
  *
- * Similar section: stay in Similar for THIS mint (do not move to Flagged).
- * On other mints, the same wallets go straight to Flagged when they sell ≥99%.
- * Creator section: still enter Flagged on this mint (already on cloud).
+ * Similar section: permanent pin on THIS mint (never Flagged here).
+ * Creator / Single / multi / …: stay in their origin section on THIS mint.
+ * On OTHER mints, cloud-listed wallets can enter Flagged when they sell ≥99%
+ * (unless that mint also freezes them as creator/similar).
  */
 function markRuggersUploadedAsFlagged(exportKey, rows) {
   if (!_lastRuggersKey || !rows || !rows.length) return;
@@ -2490,13 +2536,24 @@ function markRuggersUploadedAsFlagged(exportKey, rows) {
     const st = (rec.status && rec.status[w]) || row;
     const tag = st.tag || row.tag;
 
-    if (exportKey === "similar") {
+    // If this row was Similar (section upload OR tags), pin permanently on this mint
+    const rowWasSimilar =
+      exportKey === "similar" ||
+      !!(st.in_similar || row.in_similar || st.origin_lane === "similar" || row.origin_lane === "similar") ||
+      !!(
+        rec.first_wallets &&
+        rec.first_wallets[w] &&
+        (rec.first_wallets[w].in_similar ||
+          rec.first_wallets[w].origin_lane === "similar")
+      );
+
+    if (rowWasSimilar || exportKey === "similar") {
       // Permanent Similar pin on this mint — never Flagged here, ever
       pinUploadedSimilarOnMint(rec, w, {
         uploaded_at: now,
         sold_pct: st.sold_pct != null ? st.sold_pct : row.sold_pct,
         first_pct: st.first_pct != null ? st.first_pct : row.first_pct,
-        source: "similar_upload",
+        source: exportKey === "similar" ? "similar_upload" : "similar_lineage_upload",
       });
       continue;
     }
@@ -2507,6 +2564,7 @@ function markRuggersUploadedAsFlagged(exportKey, rows) {
         rec.status[w].origin_lane = exportKey;
         rec.status[w].ruggers_uploaded = true;
         rec.status[w].is_flagged = false;
+        rec.status[w].ever_flagged_on_mint = false;
         if (exportKey === "creator") {
           rec.status[w].is_creator = true;
           rec.status[w].origin_lane = "creator";
@@ -2518,6 +2576,9 @@ function markRuggersUploadedAsFlagged(exportKey, rows) {
           rec.first_wallets[w].label = "creator";
           rec.first_wallets[w].origin_lane = "creator";
         }
+      }
+      if (rec.flagged_sellers && rec.flagged_sellers[w]) {
+        delete rec.flagged_sellers[w];
       }
       // Ensure sticky pin so section stays populated after refresh
       if (!rec.sticky_lane_sellers || typeof rec.sticky_lane_sellers !== "object") {
@@ -2631,10 +2692,23 @@ function ruggersBuckets(rec) {
     });
   }
 
+  function isSimilarLineageRow(w, st) {
+    if (isUploadedSimilarOnThisMint(rec, w)) return true;
+    if (st && (st.origin_lane === "similar" || st.in_similar || st.permanent_similar || st.uploaded_similar)) {
+      return true;
+    }
+    const fw = rec.first_wallets && rec.first_wallets[w];
+    if (fw && (fw.in_similar || fw.origin_lane === "similar")) return true;
+    return false;
+  }
+
   function isFlaggedSold(w, st) {
-    if (isUploadedSimilarOnThisMint(rec, w)) return false;
+    // Similar (including when they were similar at upload) never list under Flagged
+    if (isSimilarLineageRow(w, st)) return false;
     const meta = flaggedSellers[w];
     if (meta && String(meta.phase || "sold") === "sold" && st.tag === "seller") {
+      // Defense: meta may be stale if they were re-tagged similar later
+      if (meta.origin_lane === "similar") return false;
       return true;
     }
     if (st.is_flagged && st.tag === "seller" && st.ever_flagged_on_mint) {
@@ -2838,6 +2912,9 @@ function ruggersBuckets(rec) {
   for (const [fw, meta] of Object.entries(flaggedSellers)) {
     if (!fw || flaggedSeen.has(fw) || swingSeen.has(fw)) continue;
     if (isUploadedSimilarOnThisMint(rec, fw)) continue;
+    if (meta && meta.origin_lane === "similar") continue;
+    const fw0 = rec.first_wallets && rec.first_wallets[fw];
+    if (fw0 && (fw0.in_similar || fw0.origin_lane === "similar")) continue;
     if (String(meta.phase || "sold") === "swing") continue;
     const st = (rec.status && rec.status[fw]) || {};
     if (st.tag === "swing") continue;

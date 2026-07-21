@@ -1229,12 +1229,16 @@ Per-section actions (every seller section — not Swing)
                    Requires RugWatch running (default http://127.0.0.1:8790)
                    with GITHUB_TOKEN. Configure rugwatchUrl in config.js.
 
-  After Upload
-    - Creator → treated as Flagged (RugWatch) path on this mint
-    - Similar / multi / funder / insider / launch / suspect / single
-      → stay under their Ruggers category on this mint (also on cloud)
-    - On other mints, cloud-listed wallets can enter Flagged (RugWatch)
-      when they sell ≥99% (checkbox ON)
+  After Upload (same mint)
+    - Creator → stay Creator ↔ Swing (never Ruggers Flagged on this mint)
+    - Similar → permanent Similar pin ↔ Swing (never Ruggers Flagged on this mint)
+      including wallets that were similar when uploaded
+    - multi / funder / insider / launch / suspect / single
+      → stay under that category on this mint (also on cloud)
+    - Holders “Flagged wallets (RugWatch)” can still list them if they match
+      the RugWatch list — that is Holders matching, not the Ruggers Flagged section
+    - On OTHER mints, cloud-listed wallets can enter Ruggers Flagged when they
+      sell ≥99% (unless that mint freezes them as creator/similar)
 
 Where it lives
   Website only: browser localStorage key adtc_ruggers_track
