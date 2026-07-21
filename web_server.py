@@ -657,6 +657,11 @@ def _ruggers_track_snapshot(
                         "risk_score": w.get("risk_score"),
                         "label": w.get("label") or w.get("role"),
                         "origin": w.get("origin") or w.get("tag") or w.get("location"),
+                        "notes": w.get("notes"),
+                        "flagged_from_mints": list(
+                            w.get("flagged_from_mints") or []
+                        ),
+                        "flagged_from_mint": w.get("flagged_from_mint"),
                         "on_this_mint": bool(
                             w.get("on_this_mint") or group_key == "linked_to_mint"
                         ),
@@ -691,6 +696,11 @@ def _ruggers_track_snapshot(
                         "risk_score": w.get("risk_score"),
                         "label": w.get("label") or w.get("role"),
                         "origin": w.get("origin") or w.get("tag") or w.get("location"),
+                        "notes": w.get("notes"),
+                        "flagged_from_mints": list(
+                            w.get("flagged_from_mints") or []
+                        ),
+                        "flagged_from_mint": w.get("flagged_from_mint"),
                         "on_this_mint": bool(w.get("on_this_mint")),
                         "in_top_holders": True,
                     }

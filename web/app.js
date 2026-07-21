@@ -910,10 +910,27 @@ function extractRuggersSnapshot(data) {
     for (const f of track.flagged_addresses || []) {
       const fw = ((f && (f.wallet || f.address)) || "").trim();
       if (!fw) continue;
+      const fromMints = Array.isArray(f.flagged_from_mints)
+        ? f.flagged_from_mints.map((x) => String(x || "").trim()).filter(Boolean)
+        : [];
+      if (f.flagged_from_mint) {
+        const one = String(f.flagged_from_mint).trim();
+        if (one && !fromMints.includes(one)) fromMints.unshift(one);
+      }
+      // Parse mint from RugWatch notes ("mint <CA>") if missing
+      const notes = String(f.notes || "");
+      const noteMints = notes.match(/\bmint\s+([1-9A-HJ-NP-Za-km-z]{32,44})\b/gi) || [];
+      for (const raw of noteMints) {
+        const m = raw.replace(/^mint\s+/i, "").trim();
+        if (m && !fromMints.includes(m)) fromMints.push(m);
+      }
       flagged_known[fw] = {
         risk_score: f.risk_score != null ? Number(f.risk_score) : null,
         label: f.label || null,
         origin: f.origin || null,
+        notes: notes || null,
+        flagged_from_mints: fromMints,
+        flagged_from_mint: fromMints[0] || null,
         on_this_mint: !!f.on_this_mint,
         in_top_holders: !!f.in_top_holders,
       };
@@ -1846,6 +1863,18 @@ function processRuggersFromAnalyze(data) {
 
     if (soldWhileFlaggedPath) {
       const prior = flaggedSellers[w] || prev.flagged_meta || {};
+      const fromMints = [];
+      const pushMint = (m) => {
+        const s = (m || "").trim();
+        if (s && !fromMints.includes(s)) fromMints.push(s);
+      };
+      for (const m of prior.flagged_from_mints || []) pushMint(m);
+      for (const m of (rwKnown[w] && rwKnown[w].flagged_from_mints) || [])
+        pushMint(m);
+      pushMint(prior.flagged_from_mint);
+      pushMint(rwKnown[w] && rwKnown[w].flagged_from_mint);
+      // This mint is where they sold while flagged
+      pushMint(rec.address);
       flaggedSellers[w] = {
         ...(rwKnown[w] || {}),
         ...prior,
@@ -1863,6 +1892,8 @@ function processRuggersFromAnalyze(data) {
         reason: soldState.reason || prior.reason || "sold_99",
         entered_via: prior.entered_via || "sold_while_flagged",
         origin_lane: originLane,
+        flagged_from_mints: fromMints,
+        flagged_from_mint: fromMints[0] || rec.address || null,
         rules_v: RUGGERS_RULES_VERSION,
       };
     }
@@ -2761,6 +2792,24 @@ function ruggersBuckets(rec) {
     const st = (rec.status && rec.status[fw]) || {};
     if (st.tag === "swing") continue;
     flaggedSeen.add(fw);
+    const fromMints = [];
+    const pushFm = (m) => {
+      const s = (m || "").trim();
+      if (s && !fromMints.includes(s)) fromMints.push(s);
+    };
+    for (const m of meta.flagged_from_mints || []) pushFm(m);
+    pushFm(meta.flagged_from_mint);
+    for (const m of (rec.rugwatch_known &&
+      rec.rugwatch_known[fw] &&
+      rec.rugwatch_known[fw].flagged_from_mints) ||
+      [])
+      pushFm(m);
+    pushFm(
+      rec.rugwatch_known &&
+        rec.rugwatch_known[fw] &&
+        rec.rugwatch_known[fw].flagged_from_mint
+    );
+    pushFm(rec.address);
     flaggedWallets.push({
       wallet: fw,
       tag: "seller",
@@ -2781,6 +2830,11 @@ function ruggersBuckets(rec) {
       reason: meta.reason || "sold_99",
       risk_score: meta.risk_score,
       label: meta.label,
+      flagged_from_mints: fromMints,
+      flagged_from_mint: fromMints[0] || null,
+      first_seen_at: meta.entered_at || st.first_seen_at,
+      sold_at: meta.entered_at || st.sold_at,
+      last_update: meta.last_update || st.last_update,
     });
   }
 
@@ -3066,7 +3120,32 @@ function renderRuggersWalletRow(row) {
   if (!tsParts.length && row.flagged_meta && row.flagged_meta.entered_at) {
     tsParts.push("sold " + shortWhen(row.flagged_meta.entered_at));
   }
-  const tsLine = tsParts.length ? " · " + tsParts.join(" · ") : "";
+  // Flagged (RugWatch): which mint(s) they were flagged / sold from
+  let flaggedFromLine = "";
+  if (isFlagged || row.tag === "flagged") {
+    const mints = [];
+    const addM = (m) => {
+      const s = (m || "").trim();
+      if (s && !mints.includes(s)) mints.push(s);
+    };
+    for (const m of row.flagged_from_mints || []) addM(m);
+    addM(row.flagged_from_mint);
+    if (row.flagged_meta) {
+      for (const m of row.flagged_meta.flagged_from_mints || []) addM(m);
+      addM(row.flagged_meta.flagged_from_mint);
+    }
+    if (mints.length) {
+      const shortM = (m) =>
+        m.length > 12 ? m.slice(0, 6) + "…" + m.slice(-6) : m;
+      flaggedFromLine =
+        " · flagged from " + mints.slice(0, 3).map(shortM).join(", ");
+      if (mints.length > 3) {
+        flaggedFromLine += " +" + (mints.length - 3);
+      }
+    }
+  }
+  const tsLine =
+    (tsParts.length ? " · " + tsParts.join(" · ") : "") + flaggedFromLine;
   return (
     '<div class="rug-wallet-row' +
     (isFlagged ? " rug-wallet-flagged" : "") +

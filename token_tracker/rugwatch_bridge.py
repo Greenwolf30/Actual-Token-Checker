@@ -149,16 +149,28 @@ def _parse_wallet_items(payload: Any) -> list[dict[str, Any]]:
             score = int(it.get("risk_score") if it.get("risk_score") is not None else 70)
         except (TypeError, ValueError):
             score = 70
+        notes = it.get("notes") or ""
+        from_m = mints_from_notes(notes)
+        # also accept explicit fields if present
+        for mm in list(it.get("flagged_from_mints") or []):
+            s = str(mm or "").strip()
+            if s and s not in from_m:
+                from_m.append(s)
+        fm = (it.get("flagged_from_mint") or "").strip()
+        if fm and fm not in from_m:
+            from_m.insert(0, fm)
         out.append(
             {
                 "address": addr,
                 "label": it.get("label") or "cloud",
                 "risk_score": score,
                 "times_seen": int(it.get("times_seen") or 0),
-                "notes": it.get("notes") or "",
+                "notes": notes,
                 "source": it.get("source") or "cloud",
                 "last_seen_at": it.get("last_seen_at"),
                 "origin": "cloud",
+                "flagged_from_mints": from_m,
+                "flagged_from_mint": from_m[0] if from_m else None,
             }
         )
     return out
@@ -332,7 +344,12 @@ def _load_local_wallets(
                         ).fetchall()
                         for r in rows:
                             linked.append(
-                                _wallet_row(r, role=r["role"], evidence=r["evidence"])
+                                _wallet_row(
+                                    r,
+                                    role=r["role"],
+                                    evidence=r["evidence"],
+                                    linked_mints=[mint],
+                                )
                             )
                     except sqlite3.Error:
                         # overflow shards may lack links table
@@ -359,6 +376,56 @@ def _load_local_wallets(
                                 in_top.append(_wallet_row(r))
                         except sqlite3.Error:
                             continue
+
+                # Map wallet → mints from wallet_mint_links (source mints for flags)
+                try:
+                    link_rows = conn.execute(
+                        """
+                        SELECT wallet, mint FROM wallet_mint_links
+                        LIMIT 200000
+                        """
+                    ).fetchall()
+                    mints_by_wallet: dict[str, list[str]] = {}
+                    for lr in link_rows:
+                        try:
+                            ww = (
+                                lr["wallet"] if isinstance(lr, sqlite3.Row) else lr[0]
+                            ) or ""
+                            mm = (
+                                lr["mint"] if isinstance(lr, sqlite3.Row) else lr[1]
+                            ) or ""
+                        except (KeyError, IndexError, TypeError):
+                            continue
+                        ww = str(ww).strip()
+                        mm = str(mm).strip()
+                        if not ww or not mm:
+                            continue
+                        mints_by_wallet.setdefault(ww, [])
+                        if mm not in mints_by_wallet[ww]:
+                            mints_by_wallet[ww].append(mm)
+
+                    def _enrich_from_links(w: dict[str, Any]) -> None:
+                        a = (w.get("address") or "").strip()
+                        if not a:
+                            return
+                        extra = mints_by_wallet.get(a) or []
+                        if not extra:
+                            return
+                        cur = list(w.get("flagged_from_mints") or [])
+                        for mm in extra:
+                            if mm not in cur:
+                                cur.append(mm)
+                        w["flagged_from_mints"] = cur
+                        if cur:
+                            w["flagged_from_mint"] = cur[0]
+
+                    for bucket in (all_flagged, in_top, linked):
+                        for w in bucket:
+                            _enrich_from_links(w)
+                    for w in by_addr.values():
+                        _enrich_from_links(w)
+                except sqlite3.Error:
+                    pass
             finally:
                 conn.close()
         except Exception as exc:  # noqa: BLE001
@@ -480,6 +547,25 @@ def fetch_rugwatch_flagged(
                 int(local_map[a].get("risk_score") or 0),
                 int(cloud_map[a].get("risk_score") or 0),
             )
+            # union flagged-from mints
+            mset: list[str] = []
+            for src in (local_map[a], cloud_map[a]):
+                for mm in list(src.get("flagged_from_mints") or []):
+                    if mm and mm not in mset:
+                        mset.append(mm)
+            for mm in mints_from_notes(cloud_map[a].get("notes")) + mints_from_notes(
+                local_map[a].get("notes")
+            ):
+                if mm not in mset:
+                    mset.append(mm)
+            base["flagged_from_mints"] = mset
+            base["flagged_from_mint"] = mset[0] if mset else None
+        else:
+            # ensure cloud-only notes mint parse
+            if not base.get("flagged_from_mints"):
+                mset = mints_from_notes(base.get("notes"))
+                base["flagged_from_mints"] = mset
+                base["flagged_from_mint"] = mset[0] if mset else None
         merged_all.append(_tag(a, base))
 
     merged_all.sort(
@@ -526,15 +612,45 @@ def fetch_rugwatch_flagged(
     return out
 
 
+_MINT_IN_TEXT_RE = re.compile(
+    r"\bmint\s+([1-9A-HJ-NP-Za-km-z]{32,44})\b",
+    re.I,
+)
+
+
+def mints_from_notes(notes: str | None) -> list[str]:
+    """Pull mint addresses from Ruggers/ATC upload notes ('mint <CA>')."""
+    t = str(notes or "")
+    if not t.strip():
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in _MINT_IN_TEXT_RE.findall(t):
+        a = (m or "").strip()
+        if a and a not in seen:
+            seen.add(a)
+            out.append(a)
+    return out
+
+
 def _wallet_row(
     r: sqlite3.Row | dict[str, Any],
     *,
     role: str | None = None,
     evidence: str | None = None,
+    linked_mints: list[str] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(r, dict):
         r = dict(r)
     addr = r.get("address") or ""
+    from_notes = mints_from_notes(r.get("notes"))
+    from_links = [str(x).strip() for x in (linked_mints or []) if str(x).strip()]
+    flagged_from: list[str] = []
+    seen_m: set[str] = set()
+    for m in from_links + from_notes:
+        if m and m not in seen_m:
+            seen_m.add(m)
+            flagged_from.append(m)
     return {
         "address": addr,
         "label": r.get("label"),
@@ -545,5 +661,7 @@ def _wallet_row(
         "last_seen_at": r.get("last_seen_at"),
         "role": role,
         "evidence": evidence,
+        "flagged_from_mints": flagged_from,
+        "flagged_from_mint": flagged_from[0] if flagged_from else None,
         "solscan_url": f"https://solscan.io/account/{addr}" if addr else None,
     }
