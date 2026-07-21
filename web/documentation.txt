@@ -776,86 +776,68 @@ What Ruggers is not
 12. SAVING SELLER WALLETS TO RUGWATCH (LOCAL + CLOUD)
 --------------------------------------------------------------------------------
 
-Subtitle: RugWatch (local DB + GitHub cloud)
+Subtitle: ATC side only — full RugWatch product guide is separate
 
-Read this even if you only use the website.
-
-Two different things (do not mix them up)
-  Ruggers (this site’s tab)
-    - Temporary dump spotting for mints you analyze in THIS browser.
-    - Stored only in browser localStorage (not on the ATC host by default).
-    - Does NOT by itself host a global serial-rugger DB for all users.
+Two different tools (do not mix them up)
+  Ruggers (this site)
+    - Dump spotting for mints you analyze in THIS browser (localStorage).
+    - Seller / swing = ≥99% of first bag (see §11). Not a RugWatch score.
 
   RugWatch (separate app / website)
-    - YOUR serial-rugger / flagged-wallet warehouse.
-    - Local: SQLite data/rugwatch.db (+ auto-shards rugwatch_002.db… at
-      100k wallets per file).
-    - Cloud: GitHub files data/wallets_cloud.json (+ _002…) and
-      data/wallets_index.json after Push cloud.
-    - ATC reads local and/or cloud when flagging Holders (see §12b).
+    - YOUR wallet warehouse (local SQLite + optional GitHub cloud).
+    - Owns risk_score 0–100, times_seen, labels, Monitor, Push/Pull cloud.
+    - Full how-to: RugWatch “RugCheck Documentation.md” (How wallets are rated,
+      Add/Upload, Monitor, cloud). Do not duplicate that manual here.
 
-Ways to grow YOUR RugWatch list from Ruggers
-  A) Yellow Upload (recommended when RugWatch website is running)
-     Ruggers → any seller section (Creator / Similar / Multi / Funder /
-     Insider / Launch / Suspect / Single) → Upload
-     → RugWatch imports wallets → Push cloud
-     → blue cloud pill / GitHub index total increases
-  B) Export → file → RugWatch “Upload manual wallets” → Push cloud
-  C) Copy addresses by hand → RugWatch Add wallet → Push cloud
+Ways to grow YOUR RugWatch list from ATC Ruggers
+  A) Yellow Upload on any seller section → RugWatch /api/upload + Push cloud
+  B) Export file → RugWatch “Upload manual wallets” → Push cloud
+  C) Copy address → RugWatch Add wallet (you set score)
 
-What the ATC host (e.g. Render) will NOT do for everyone
-  - Will NOT store one shared public “serial rugger police” DB for all users
-  - Will NOT replace your private RugWatch cloud/repo
-  - Will NOT sync your browser Ruggers list to other users or devices
+What ATC does after wallets are in cloud
+  - Live site: almost always CLOUD only via RUGWATCH_WALLETS_URL
+  - Local PC: may merge local DB + cloud → tags [local] / [cloud] / [both]
+  - Shows hold % on the mint; does NOT invent a token-level RugWatch rating
 
-Why this matters
-  - Ruggers “seller” is a heuristic (≥99% of first bag / left list) — not a
-    court verdict. YOU decide what enters long-term RugWatch.
-  - After wallets are in cloud (and ATC has RUGWATCH_WALLETS_URL), later
-    Analyzes can flag them on Holders (with RugWatch checkbox ON).
+What ATC will NOT do
+  - Shared public “serial rugger police” DB for all users
+  - Host your private RugWatch scores (you curate scores in RugWatch)
+  - Sync browser Ruggers lists across devices
 
 Summary
-  Ruggers  = temporary browser tool to spot dumps on a mint.
-  RugWatch = YOUR flagged-wallet DB (local + optional GitHub cloud).
-  Yellow Upload / Export / Add wallet = how YOUR list grows.
-  ATC flags = read-only merge of local + cloud (see next section).
+  Ruggers  = temporary dump tracker (this browser).
+  RugWatch = your scored wallet list + cloud (see RugWatch docs for scoring).
+  ATC flags = match list → Holders / Ruggers Flagged (RugWatch) / Alerts.
 
 
 --------------------------------------------------------------------------------
 12b. WHERE ATC GETS FLAGGED WALLETS (LOCAL, CLOUD, OR BOTH)
 --------------------------------------------------------------------------------
 
-Subtitle: Flagged wallets (RugWatch) — not Rugcheck insiders
+Subtitle: Flagged wallets (RugWatch) on ATC — not Rugcheck insiders
 
-Ruggers section title: Flagged wallets (RugWatch) — “RugWatch” in dim yellow.
-Holders can show FLAGGED WALLETS (RugWatch) the same way.
+Ruggers title: Flagged wallets (RugWatch) — “RugWatch” in dim yellow.
+Holders: FLAGGED WALLETS (RugWatch) when the checkbox is ON.
 
-When Analyze runs with the RugWatch checkbox ON, Flagged data comes from:
+Sources ATC merges
+  1) Local  — rugwatch*.db shards if present on the machine running ATC
+  2) Cloud  — RUGWATCH_WALLETS_URL (prefer wallets_index.json multi-shard)
 
-  1) Local  — all RugWatch SQLite shards found (rugwatch.db, _002, …)
-  2) Cloud  — JSON from env RUGWATCH_WALLETS_URL
-              Prefer the multi-shard index:
-              https://raw.githubusercontent.com/YOU/RugWatch/main/data/wallets_index.json
-              (falls back to single wallets_cloud.json)
+Tags on matches: [local] · [cloud] · [both]
 
-Each match is tagged:
-  [local]  — only in local DB
-  [cloud]  — only in the cloud list
-  [both]   — in local and cloud
+Live Token Checker site (e.g. Render): almost always CLOUD only.
+Local ATC + RugWatch on the same PC: local and/or cloud.
 
-On the live Token Checker site (e.g. Render)
-  Flagged wallets are almost always CLOUD only (no your PC’s rugwatch.db).
-  Set RUGWATCH_WALLETS_URL to the index (or cloud file) and redeploy.
+Checkbox OFF → no RugWatch merge for that Analyze.
 
-On your PC (local ATC + RugWatch)
-  Can be local + cloud at once if both exist.
+Wallet risk_score (0–100)
+  Defined and edited only in RugWatch. See RugWatch docs:
+  “How wallets are rated (risk score)”. ATC may show score when present;
+  hold-% colors are ATC concentration bands, not the RugWatch score.
 
-Checkbox OFF
-  Skip RugWatch merge entirely for that Analyze (no flags from those lists).
-
-Do not confuse with:
-  Insider-flagged wallets (Rugcheck) — third-party insider tags on top holders.
-  That is a Bundles / Ruggers Insider section, not RugWatch.
+Do not confuse with
+  Insider-flagged (Rugcheck) — third-party holder tags in Bundles / Ruggers
+  Insider section. Not your RugWatch list.
 
 
 --------------------------------------------------------------------------------
