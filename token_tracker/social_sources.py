@@ -7,14 +7,15 @@ Sources (best-effort, short timeouts — never require paid keys):
   - X via Nitter search RSS ($TICKER / name) + project account bio
   - Google News RSS
   - Reddit public search JSON
-  - DuckDuckGo HTML lite (often surfaces TikTok / IG / news blurbs)
+  - LinkedIn via DuckDuckGo site:linkedin.com search + profile links
+  - DuckDuckGo HTML lite (TikTok / IG / LinkedIn / news blurbs)
 
 Authoritative string elements (CoinGecko, metadata URI, Birdeye, Jupiter,
 Solscan, Rugcheck, CMC, website OG) are fetched in coin_facts.py and merged
 into the About narrative separately.
 
-Instagram & TikTok have no free public API; we capture mentions that appear
-in news/search snippets and linked social URLs instead of full scrapes.
+Instagram, TikTok, and LinkedIn have no free full-feed API; we capture
+public links + search snippets instead of full scrapes.
 """
 
 from __future__ import annotations
@@ -178,7 +179,18 @@ def gather_narrative_sources(
     except Exception:  # noqa: BLE001
         pass
 
-    # ── DuckDuckGo (TikTok / IG / web blurbs) ───────────────────────────
+    # ── LinkedIn (site search + already-linked company/profile URLs) ────
+    try:
+        li = _from_linkedin(symbol, name, urls)
+        for s in li:
+            snippets.append(s)
+            platforms.add("linkedin")
+        if li:
+            sources_used.append("linkedin_search")
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ── DuckDuckGo (TikTok / IG / LinkedIn / web blurbs) ────────────────
     try:
         ddg = _from_duckduckgo(symbol, name)
         for s in ddg:
@@ -211,6 +223,10 @@ def gather_narrative_sources(
     if "tiktok" not in platforms and "instagram" not in platforms:
         notes_parts.append(
             "TikTok/Instagram full feeds need official APIs; only public links/search mentions are used."
+        )
+    if "linkedin" not in platforms:
+        notes_parts.append(
+            "LinkedIn has no free full API; only profile links and public search snippets are used when found."
         )
 
     return {
@@ -446,7 +462,11 @@ def _from_linked_socials(urls: list[str]) -> list[dict[str, Any]]:
         plat = _platform_from_url(u)
         handle = _handle_from_url(u)
         text = f"{plat} profile linked: {handle or u}"
-        weight = 2.0 if plat in {"tiktok", "instagram", "x", "youtube"} else 1.0
+        weight = (
+            2.0
+            if plat in {"tiktok", "instagram", "x", "youtube", "linkedin"}
+            else 1.0
+        )
         out.append(
             {
                 "source": "profile_link",
@@ -629,14 +649,113 @@ def _from_reddit(symbol: str | None, name: str | None) -> list[dict[str, Any]]:
     return out
 
 
+def _from_linkedin(
+    symbol: str | None,
+    name: str | None,
+    social_urls: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    LinkedIn as narrative source (best-effort, no official free API):
+      1) Profile/company URLs already on Dex/project links
+      2) DuckDuckGo site:linkedin.com search for ticker/name
+    """
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    # Linked URLs first (company page / profile on the token)
+    for raw in social_urls or []:
+        u = (raw or "").strip()
+        if not u or "linkedin.com" not in u.lower():
+            continue
+        key = u.rstrip("/").lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        handle = _handle_from_url(u)
+        out.append(
+            {
+                "source": "linkedin_link",
+                "platform": "linkedin",
+                "text": f"LinkedIn linked on project profile: {handle or u}",
+                "url": u if u.startswith("http") else "https://" + u.lstrip("/"),
+                "weight": 2.4,
+            }
+        )
+
+    # Public web search restricted to LinkedIn
+    queries: list[str] = []
+    if symbol:
+        queries.append(f"site:linkedin.com {symbol} crypto OR solana OR token OR company")
+        queries.append(f'site:linkedin.com/company "{symbol}"')
+    if name and len(name) > 2:
+        queries.append(f'site:linkedin.com "{name}" crypto OR blockchain OR token')
+
+    for q in queries[:2]:
+        url = f"https://duckduckgo.com/html/?q={quote_plus(q)}"
+        try:
+            page = get_text(
+                url,
+                timeout=_TIMEOUT,
+                retries=0,
+                headers={
+                    **DEFAULT_HEADERS,
+                    "Accept": "text/html,application/xhtml+xml",
+                },
+            )
+        except Exception:  # noqa: BLE001
+            continue
+        # Titles + snippets; also capture linkedin.com hrefs when present
+        for m in re.finditer(
+            r'href="(https?://[^"]*linkedin\.com[^"]*)"[^>]*>(.*?)</a>'
+            r'|class="result__snippet"[^>]*>(.*?)</(?:a|td|div)>'
+            r'|class="result__a"[^>]*>(.*?)</a>',
+            page,
+            re.I | re.S,
+        ):
+            href = (m.group(1) or "").strip()
+            raw = m.group(2) or m.group(3) or m.group(4) or ""
+            text = html.unescape(re.sub(r"<[^>]+>", " ", raw))
+            text = re.sub(r"\s+", " ", text).strip()
+            if href and "linkedin.com" in href.lower():
+                key = href.rstrip("/").lower()
+                if key not in seen:
+                    seen.add(key)
+                    out.append(
+                        {
+                            "source": "linkedin_search",
+                            "platform": "linkedin",
+                            "text": (text or "LinkedIn result")[:320],
+                            "url": href,
+                            "weight": 2.1 if _NARRATIVE_HINTS.search(text or "") else 1.7,
+                        }
+                    )
+            elif text and len(text) >= 30 and "linkedin" in text.lower():
+                key = text[:80].lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(
+                    {
+                        "source": "linkedin_search",
+                        "platform": "linkedin",
+                        "text": text[:320],
+                        "url": "",
+                        "weight": 1.8 if _NARRATIVE_HINTS.search(text) else 1.5,
+                    }
+                )
+            if len(out) >= 10:
+                return out
+    return out
+
+
 def _from_duckduckgo(symbol: str | None, name: str | None) -> list[dict[str, Any]]:
-    """HTML lite search — picks up TikTok/IG/news blurbs in result snippets."""
+    """HTML lite search — picks up TikTok/IG/LinkedIn/news blurbs in result snippets."""
     queries = []
     if symbol:
-        queries.append(f"{symbol} memecoin narrative OR tiktok OR instagram")
+        queries.append(f"{symbol} memecoin narrative OR tiktok OR instagram OR linkedin")
         queries.append(f"${symbol} pump.fun OR solana")
     if name and len(name) > 2:
-        queries.append(f'"{name}" crypto meme story OR narrative')
+        queries.append(f'"{name}" crypto meme story OR narrative OR linkedin')
 
     out: list[dict[str, Any]] = []
     for q in queries[:2]:
@@ -670,6 +789,8 @@ def _from_duckduckgo(symbol: str | None, name: str | None) -> list[dict[str, Any
                 plat = "tiktok"
             elif "instagram" in low or " insta " in f" {low} ":
                 plat = "instagram"
+            elif "linkedin" in low:
+                plat = "linkedin"
             elif "twitter" in low or " x.com" in low:
                 plat = "x"
             out.append(
@@ -678,7 +799,11 @@ def _from_duckduckgo(symbol: str | None, name: str | None) -> list[dict[str, Any
                     "platform": plat,
                     "text": text[:320],
                     "url": "",
-                    "weight": 1.6 if plat in {"tiktok", "instagram"} else 1.2,
+                    "weight": (
+                        1.6
+                        if plat in {"tiktok", "instagram", "linkedin"}
+                        else 1.2
+                    ),
                 }
             )
             if len(out) >= 12:
@@ -725,6 +850,8 @@ def _platform_from_url(url: str) -> str:
         return "tiktok"
     if "instagram" in host:
         return "instagram"
+    if "linkedin" in host:
+        return "linkedin"
     if "twitter" in host or host in {"x.com", "www.x.com"}:
         return "x"
     if "youtube" in host or "youtu.be" in host:

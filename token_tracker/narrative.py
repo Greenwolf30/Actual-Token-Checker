@@ -804,6 +804,10 @@ def _why_interested(
         reasons.append("picked up in news/search headlines")
     if "reddit" in plats and has_official:
         reasons.append("discussed on Reddit in the recent search window")
+    if "linkedin" in plats:
+        reasons.append(
+            "LinkedIn company/profile links or public search mentions appear"
+        )
     if "pumpfun" in plats:
         reasons.append("Pump.fun page metadata is available for this mint")
 

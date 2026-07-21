@@ -858,6 +858,15 @@ def _collect_about_links(
     for k, v in (links or {}).items():
         add(str(k).replace("_", " ").title(), v)
 
+    # LinkedIn from coin links or narrative social snippets
+    add("LinkedIn", (links or {}).get("linkedin"))
+    social_pack = report.get("social_narrative_sources") or {}
+    for s in social_pack.get("snippets") or []:
+        if not isinstance(s, dict):
+            continue
+        if (s.get("platform") or "").lower() == "linkedin" and s.get("url"):
+            add("LinkedIn", s.get("url"))
+
     # Official source if it's a URL
     add("Official source", story.get("official_source"))
 

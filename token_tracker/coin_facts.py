@@ -835,7 +835,7 @@ def _from_metadata_uri(uri: str) -> dict[str, Any]:
     if isinstance(ext, str) and ext.startswith("http"):
         links["website"] = ext
     elif isinstance(ext, dict):
-        for k in ("website", "twitter", "telegram", "discord"):
+        for k in ("website", "twitter", "telegram", "discord", "linkedin"):
             if ext.get(k):
                 links[k] = str(ext[k])
         if ext.get("description") and not desc:
@@ -1009,7 +1009,7 @@ def _from_solscan(mint: str) -> dict[str, Any]:
             or ""
         )
         links: dict[str, str] = {}
-        for k in ("website", "twitter", "telegram", "discord"):
+        for k in ("website", "twitter", "telegram", "discord", "linkedin"):
             if d.get(k):
                 links[k] = str(d[k])
         if meta.get("website"):
