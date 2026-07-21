@@ -3781,8 +3781,8 @@ async function uploadRuggersSectionToCloud(exportKey) {
           ? "\n\nSimilar sellers stay under Similar wallets on this mint (also on cloud). " +
             "On other mints they go to Flagged when they sell ≥99%."
           : exportKey === "creator"
-            ? "\n\nUploaded Creator sellers sit under Flagged wallets for this mint. " +
-              "If they buy back later, they move to Swing and are unflagged/removed from cloud."
+            ? "\n\nUploaded Creator sellers stay under Creator on this mint (also on cloud). " +
+              "They do not move to Flagged on this mint. Buy-back → Swing (creator label kept)."
             : "\n\nUploaded sellers stay under their Ruggers category on this mint (also on cloud). " +
               "Buy-back → Swing (label kept) · sell again → back to that category.")
     );
