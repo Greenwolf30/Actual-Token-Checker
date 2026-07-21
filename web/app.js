@@ -9,13 +9,39 @@ const HISTORY_KEY = "adtc_history_log";
 const HISTORY_MAX = 200;
 const RUGGERS_KEY = "adtc_ruggers_track";
 /** Bump when Flagged-wallet rules change so sticky junk is wiped once. */
-const RUGGERS_RULES_VERSION = 7;
+const RUGGERS_RULES_VERSION = 8;
 /** Sold ≥ this fraction of first-lookup bag → list as seller (99%). */
 const RUGGERS_SOLD_FRAC = 0.99;
 /** Remaining bag must be ≤ (1 - RUGGERS_SOLD_FRAC) of first_pct to count as sold. */
 const RUGGERS_REMAIN_FRAC = 1 - RUGGERS_SOLD_FRAC;
 /** Single sellers: min first bag % of supply (top → least holder cutoff). */
 const RUGGERS_SINGLE_MIN_PCT = 0.01;
+
+/**
+ * Ruggers origin lanes (sticky sell ↔ swing loop, labels kept on Swing).
+ * Priority when assigning first-discovery lane (creator always wins).
+ */
+const RUGGERS_LANE_PRIORITY = [
+  "creator",
+  "similar",
+  "multi",
+  "funding",
+  "insider",
+  "launch",
+  "suspect",
+  "single",
+];
+const RUGGERS_STICKY_LANES = new Set(RUGGERS_LANE_PRIORITY);
+const RUGGERS_LANE_LABEL = {
+  creator: "creator",
+  similar: "similar",
+  multi: "multi-account",
+  funding: "shared funder",
+  insider: "insider",
+  launch: "launch-window",
+  suspect: "suspect",
+  single: "single",
+};
 
 const $ = (id) => document.getElementById(id);
 
@@ -687,51 +713,29 @@ function migrateRuggersStore(store) {
       copy.flagged_known = {};
       copy.flagged_sellers = {};
       copy.rugwatch_known = {};
-      // v7: Single only for plain ≥0.01% holders — clear sticky Single so re-Analyze reclassifies
-      if (copy.sticky_lane_sellers && typeof copy.sticky_lane_sellers === "object") {
-        const sticky = {};
-        for (const [w, metaW] of Object.entries(copy.sticky_lane_sellers)) {
-          const lane = metaW && metaW.origin_lane;
-          if (lane === "single") {
+      // v8: map legacy "excluded" / re-resolve multi·funding·insider·launch·suspect lanes
+      if (copy.first_wallets && typeof copy.first_wallets === "object") {
+        for (const fw of Object.values(copy.first_wallets)) {
+          if (!fw || typeof fw !== "object") continue;
+          if (fw.origin_lane === "excluded" || fw.origin_lane === "single") {
+            // Re-resolve on next Analyze from baseline flags
+            delete fw.origin_lane;
             changed = true;
-            continue; // drop old Single stickies
           }
-          sticky[w] = metaW;
         }
-        copy.sticky_lane_sellers = sticky;
       }
       if (copy.status && typeof copy.status === "object") {
         const st = {};
         for (const [w, row] of Object.entries(copy.status)) {
           if (!row || typeof row !== "object") continue;
           const nextRow = { ...row, is_flagged: false };
-          // Drop seller tag on legacy Single so next Analyze rebuilds lanes
-          if (
-            nextRow.origin_lane === "single" ||
-            (nextRow.tag === "seller" &&
-              nextRow.origin_lane !== "similar" &&
-              nextRow.origin_lane !== "creator" &&
-              !nextRow.in_similar &&
-              !nextRow.is_creator)
-          ) {
-            if (nextRow.origin_lane === "single" || !nextRow.origin_lane) {
-              nextRow.tag = "holding";
-              nextRow.origin_lane = undefined;
-              nextRow.ever_sold = false;
-            }
+          if (nextRow.origin_lane === "excluded") {
+            delete nextRow.origin_lane;
+            changed = true;
           }
           st[w] = nextRow;
         }
         copy.status = st;
-      }
-      // Clear frozen single lanes on first_wallets (re-resolve next Analyze)
-      if (copy.first_wallets && typeof copy.first_wallets === "object") {
-        for (const fw of Object.values(copy.first_wallets)) {
-          if (fw && fw.origin_lane === "single") {
-            delete fw.origin_lane;
-            changed = true;
-          }
-        }
       }
       copy.rules_version = RUGGERS_RULES_VERSION;
       changed = true;
@@ -1336,65 +1340,66 @@ function isRuggersCreatorWallet(rec, w, first, prev) {
 }
 
 /**
- * True if baseline (first-lookup) row is a bundle category that must never
- * become Single sellers. Uses FIRST snapshot only — later re-Analyzes must not
- * reclassify plain singles into multi/suspect and hide them.
- * (similar-size, multi-account, insider, suspect, shared funder, launch-window)
+ * Pick primary origin lane from baseline flags (first-lookup).
+ * Priority: creator → similar → multi → funding → insider → launch → suspect → single
  */
-function isRuggersBundleCategory(first, prev, cur) {
-  // Prefer frozen first-lookup tags
-  const r = first || prev || cur;
-  if (!r || typeof r !== "object") return false;
-  return !!(
-    r.in_similar ||
-    r.in_multi ||
-    r.in_insider ||
-    r.in_suspect ||
-    r.in_funding ||
-    r.in_launch
-  );
+function primaryLaneFromBaselineFlags(first, uploadedSimilar) {
+  if (!first || typeof first !== "object") {
+    return uploadedSimilar ? "similar" : null;
+  }
+  if (first.label === "creator" || first.is_creator || first.origin_lane === "creator") {
+    return "creator";
+  }
+  if (uploadedSimilar || first.in_similar) return "similar";
+  if (first.in_multi) return "multi";
+  if (first.in_funding) return "funding";
+  if (first.in_insider) return "insider";
+  if (first.in_launch) return "launch";
+  if (first.in_suspect) return "suspect";
+  if (isRuggersSingleEligible(first, null)) return "single";
+  return null;
 }
 
 /**
- * Freeze lane at first discovery on THIS mint (never follows other-mint Flagged).
- * similar | single | creator | excluded
- * Creator is permanent: once creator, always origin_lane "creator".
- * Single only for plain holders ≥0.01% not in bundle categories at baseline.
- * Once origin_lane is frozen on first_wallets / status, it sticks.
+ * Freeze lane at first discovery on THIS mint.
+ * Lanes: creator | similar | multi | funding | insider | launch | suspect | single
+ * Each keeps its label on Swing; sell ≥99% again → back to same lane (like Flagged).
  */
 function resolveRuggersOriginLane(rec, w, first, prev, cur, uploadedSimilar) {
   // Creator never loses its lane / label
   if (isRuggersCreatorWallet(rec, w, first, prev)) {
     return "creator";
   }
-  // Frozen lanes on this mint — do not reclassify away from Similar/Single/Creator
+  // Frozen sticky lanes (do not reclassify after first discovery)
   const frozen =
     (first && first.origin_lane) || (prev && prev.origin_lane) || "";
-  if (frozen === "creator") return "creator";
-  if (frozen === "similar") return "similar";
-  if (frozen === "single") return "single";
-  if (frozen === "excluded") {
-    // Can still promote to similar if we learn similar later
+  if (frozen && RUGGERS_STICKY_LANES.has(frozen)) {
+    // Promote excluded/legacy → similar if we learn similar
+    if (
+      frozen !== "similar" &&
+      frozen !== "creator" &&
+      (uploadedSimilar || (first && first.in_similar) || (prev && prev.in_similar))
+    ) {
+      return "similar";
+    }
+    return frozen;
+  }
+  // Legacy "excluded" (v7) → re-map to proper bundle lane once
+  if (frozen === "excluded" || !frozen) {
     if (uploadedSimilar || (first && first.in_similar) || (prev && prev.in_similar)) {
       return "similar";
     }
     if (cur && cur.in_similar) return "similar";
-    return "excluded";
+    const primary = primaryLaneFromBaselineFlags(first, uploadedSimilar);
+    if (primary) return primary;
   }
-
   if (uploadedSimilar || (first && first.in_similar) || (prev && prev.in_similar)) {
     return "similar";
   }
   if (cur && cur.in_similar) return "similar";
 
-  // Bundle categories at baseline → never Single (no Ruggers seller section)
-  if (isRuggersBundleCategory(first, null, null)) {
-    return "excluded";
-  }
-  // Plain holders with bag ≥ 0.01% only
-  if (isRuggersSingleEligible(first, cur)) {
-    return "single";
-  }
+  const primary = primaryLaneFromBaselineFlags(first, false);
+  if (primary) return primary;
   return "excluded";
 }
 
@@ -1406,6 +1411,10 @@ function isRuggersSingleEligible(first, cur) {
       : null;
   // Do not fall back to current % — Single eligibility is first-lookup bag only
   return pct != null && pct >= RUGGERS_SINGLE_MIN_PCT;
+}
+
+function isRuggersStickyOriginLane(lane) {
+  return !!(lane && RUGGERS_STICKY_LANES.has(lane));
 }
 
 /**
@@ -1661,10 +1670,10 @@ function processRuggersFromAnalyze(data) {
     }
 
     // ── Phase loop (per concurrent lookup) ────────────────────────────
-    // Similar/Single/Creator:
+    // All sticky origin lanes (creator/similar/multi/funding/insider/launch/suspect/single):
     //   sell ≥99% of first bag → seller (sticky until buy-back)
-    //   buy-back → Swing (stay while holding)
-    //   sell ≥99% of *swing bag* again → back to origin (Similar/Single/Creator)
+    //   buy-back → Swing (keep origin label)
+    //   sell ≥99% of *swing bag* again → back to same origin lane
     //   buy-back again → Swing … (loop)
     const wasStickySeller = !!(stickyLane[w] && baselineOk);
     const wasSwing = prevTag === "swing";
@@ -1780,13 +1789,18 @@ function processRuggersFromAnalyze(data) {
         rec.first_wallets[w].origin_lane = "creator";
         rec.first_wallets[w].label = "creator";
         rec.first_wallets[w].is_creator = true;
-      } else if (!rec.first_wallets[w].origin_lane) {
+      } else if (
+        !rec.first_wallets[w].origin_lane ||
+        rec.first_wallets[w].origin_lane === "excluded"
+      ) {
+        // Assign or re-map legacy excluded → real lane
         rec.first_wallets[w].origin_lane = originLane;
       } else {
-        // Keep frozen lane; allow promote excluded → similar only
+        // Keep frozen lane; allow promote to similar only
         const fl = rec.first_wallets[w].origin_lane;
-        if (fl === "excluded" && originLane === "similar") {
+        if (fl !== "similar" && fl !== "creator" && originLane === "similar") {
           rec.first_wallets[w].origin_lane = "similar";
+          originLane = "similar";
         } else {
           originLane = fl;
         }
@@ -1931,9 +1945,7 @@ function processRuggersFromAnalyze(data) {
       baselineOk &&
       soldState.sold &&
       !isFlaggedLineage &&
-      (originLane === "similar" ||
-        originLane === "single" ||
-        originLane === "creator")
+      isRuggersStickyOriginLane(originLane)
     ) {
       stickyLane[w] = {
         ...(stickyLane[w] || {}),
@@ -1954,6 +1966,11 @@ function processRuggersFromAnalyze(data) {
         first_balance: first.balance,
         reason: soldState.reason || (stickyLane[w] && stickyLane[w].reason) || "sold_99",
         in_similar: originLane === "similar",
+        in_multi: originLane === "multi" || !!first.in_multi,
+        in_funding: originLane === "funding" || !!first.in_funding,
+        in_insider: originLane === "insider" || !!first.in_insider,
+        in_launch: originLane === "launch" || !!first.in_launch,
+        in_suspect: originLane === "suspect" || !!first.in_suspect,
         indefinite: true,
       };
     } else if (tag === "swing" && buyBack && stickyLane[w]) {
@@ -2427,20 +2444,37 @@ function markRuggersUploadedAsFlagged(exportKey, rows) {
 function ruggersBuckets(rec) {
   const creatorSold = [];
   const similarSellers = [];
+  const multiSellers = [];
+  const fundingSellers = [];
+  const insiderSellers = [];
+  const launchSellers = [];
+  const suspectSellers = [];
   const singleSellers = [];
   const flaggedWallets = [];
   const swings = [];
   const flaggedSeen = new Set();
   const similarSeen = new Set();
+  const multiSeen = new Set();
+  const fundingSeen = new Set();
+  const insiderSeen = new Set();
+  const launchSeen = new Set();
+  const suspectSeen = new Set();
+  const singleSeen = new Set();
   const swingSeen = new Set();
+  const empty = () => ({
+    creatorSold,
+    similarSellers,
+    multiSellers,
+    fundingSellers,
+    insiderSellers,
+    launchSellers,
+    suspectSellers,
+    singleSellers,
+    flaggedWallets,
+    swings,
+  });
   if (!rec || !rec.status) {
-    return {
-      creatorSold,
-      similarSellers,
-      singleSellers,
-      flaggedWallets,
-      swings,
-    };
+    return empty();
   }
 
   const flaggedSellers =
@@ -2455,13 +2489,32 @@ function ruggersBuckets(rec) {
     }
     if (isUploadedSimilarOnThisMint(rec, w)) return "similar";
     if (st && st.origin_lane === "creator") return "creator";
-    if (st && st.origin_lane) return st.origin_lane;
+    if (st && st.origin_lane && RUGGERS_STICKY_LANES.has(st.origin_lane)) {
+      return st.origin_lane;
+    }
     if (st && st.in_similar) return "similar";
     if (st && st.is_creator) return "creator";
     const fw = rec.first_wallets && rec.first_wallets[w];
-    if (fw && fw.origin_lane) return fw.origin_lane;
+    if (fw && fw.origin_lane && RUGGERS_STICKY_LANES.has(fw.origin_lane)) {
+      return fw.origin_lane;
+    }
     if (fw && fw.in_similar) return "similar";
+    if (fw && fw.in_multi) return "multi";
+    if (fw && fw.in_funding) return "funding";
+    if (fw && fw.in_insider) return "insider";
+    if (fw && fw.in_launch) return "launch";
+    if (fw && fw.in_suspect) return "suspect";
     return "single";
+  }
+
+  function pushLaneSeller(lane, row, seenSet, list) {
+    if (!row || !row.wallet || seenSet.has(row.wallet)) return;
+    seenSet.add(row.wallet);
+    list.push({
+      ...row,
+      origin_lane: lane,
+      lane_label: RUGGERS_LANE_LABEL[lane] || lane,
+    });
   }
 
   function isFlaggedSold(w, st) {
@@ -2508,14 +2561,19 @@ function ruggersBuckets(rec) {
       permanent_similar: keepSimilar,
     };
 
-    // ── Swing (buy-back). Flagged lineage keeps purple "flagged · swing". ─
-    // Creator keeps permanent creator label on Swing (same loop as Similar/Single).
+    // ── Swing (buy-back). Keep origin-lane label (multi · swing, etc.). ─
+    // Flagged lineage keeps purple "flagged · swing". Creator keeps creator.
     if (st.tag === "swing") {
       const creatorSwing = !!(
         row.is_creator ||
         lane === "creator" ||
         isRuggersCreatorWallet(rec, w, rec.first_wallets && rec.first_wallets[w], st)
       );
+      const originLaneSwing = creatorSwing
+        ? "creator"
+        : isRuggersStickyOriginLane(lane)
+          ? lane
+          : row.origin_lane || lane || "single";
       if (!swingSeen.has(w)) {
         swingSeen.add(w);
         swings.push({
@@ -2523,7 +2581,9 @@ function ruggersBuckets(rec) {
           tag: "swing",
           is_flagged: flaggedSwing || !!row.is_flagged,
           is_creator: creatorSwing || !!row.is_creator,
-          origin_lane: creatorSwing ? "creator" : row.origin_lane || lane,
+          origin_lane: originLaneSwing,
+          lane_label:
+            RUGGERS_LANE_LABEL[originLaneSwing] || originLaneSwing,
           ever_flagged_on_mint:
             !!(row.ever_flagged_on_mint || flaggedSwing || row.is_flagged),
         });
@@ -2537,6 +2597,8 @@ function ruggersBuckets(rec) {
           in_similar: true,
           is_flagged: false,
           permanent_similar: true,
+          origin_lane: "similar",
+          lane_label: "similar",
         });
       }
       continue;
@@ -2560,33 +2622,68 @@ function ruggersBuckets(rec) {
       continue;
     }
 
-    // ── Origin lanes: Similar / Creator / Single (same sticky sell rules) ─
-    // Creator always keeps is_creator; listed under Creator when seller.
+    // ── Origin lanes (same sticky sell ↔ swing rules as Flagged/Similar) ─
     if (lane === "creator" || row.is_creator) {
       creatorSold.push({
         ...row,
         is_creator: true,
         origin_lane: "creator",
+        lane_label: "creator",
       });
       continue;
     }
     if (lane === "similar" || keepSimilar) {
-      if (!similarSeen.has(w)) {
-        similarSeen.add(w);
-        similarSellers.push({
-          ...row,
-          in_similar: true,
-          is_flagged: false,
-          permanent_similar: keepSimilar,
-        });
-      }
+      pushLaneSeller("similar", {
+        ...row,
+        in_similar: true,
+        is_flagged: false,
+        permanent_similar: keepSimilar,
+      }, similarSeen, similarSellers);
       continue;
     }
-    // Single only: plain holders ≥0.01%, not bundle categories
-    if (lane === "single") {
-      singleSellers.push(row);
+    if (lane === "multi") {
+      pushLaneSeller("multi", { ...row, in_multi: true }, multiSeen, multiSellers);
+      continue;
     }
-    // lane === "excluded" (multi/insider/suspect/funder/launch) → no Single list
+    if (lane === "funding") {
+      pushLaneSeller(
+        "funding",
+        { ...row, in_funding: true },
+        fundingSeen,
+        fundingSellers
+      );
+      continue;
+    }
+    if (lane === "insider") {
+      pushLaneSeller(
+        "insider",
+        { ...row, in_insider: true },
+        insiderSeen,
+        insiderSellers
+      );
+      continue;
+    }
+    if (lane === "launch") {
+      pushLaneSeller(
+        "launch",
+        { ...row, in_launch: true },
+        launchSeen,
+        launchSellers
+      );
+      continue;
+    }
+    if (lane === "suspect") {
+      pushLaneSeller(
+        "suspect",
+        { ...row, in_suspect: true },
+        suspectSeen,
+        suspectSellers
+      );
+      continue;
+    }
+    if (lane === "single") {
+      pushLaneSeller("single", row, singleSeen, singleSellers);
+    }
   }
 
   // Flagged meta without status row (sold phase only)
@@ -2654,6 +2751,7 @@ function ruggersBuckets(rec) {
     const st = (rec.status && rec.status[w]) || {};
     if (st.tag === "swing") continue;
     const lane = meta.origin_lane || st.origin_lane || "single";
+    if (!isRuggersStickyOriginLane(lane)) continue;
     const row = {
       wallet: w,
       tag: "seller",
@@ -2661,7 +2759,13 @@ function ruggersBuckets(rec) {
       sticky_lane_seller: true,
       is_flagged: false,
       in_similar: lane === "similar",
+      in_multi: lane === "multi" || !!meta.in_multi,
+      in_funding: lane === "funding" || !!meta.in_funding,
+      in_insider: lane === "insider" || !!meta.in_insider,
+      in_launch: lane === "launch" || !!meta.in_launch,
+      in_suspect: lane === "suspect" || !!meta.in_suspect,
       origin_lane: lane,
+      lane_label: RUGGERS_LANE_LABEL[lane] || lane,
       is_creator: lane === "creator",
       sold_pct:
         st.sold_pct != null
@@ -2684,15 +2788,24 @@ function ruggersBuckets(rec) {
       listed: st.listed === true,
       reason: st.reason || meta.reason || "sold_99_sticky",
     };
-    if (lane === "similar") {
-      if (!similarSeen.has(w)) {
-        similarSeen.add(w);
-        similarSellers.push(row);
+    if (lane === "creator") {
+      if (!creatorSold.some((r) => r.wallet === w)) {
+        creatorSold.push({ ...row, is_creator: true });
       }
-    } else if (lane === "creator") {
-      if (!creatorSold.some((r) => r.wallet === w)) creatorSold.push(row);
-    } else if (!singleSellers.some((r) => r.wallet === w) && !flaggedSeen.has(w)) {
-      singleSellers.push(row);
+    } else if (lane === "similar") {
+      pushLaneSeller("similar", row, similarSeen, similarSellers);
+    } else if (lane === "multi") {
+      pushLaneSeller("multi", row, multiSeen, multiSellers);
+    } else if (lane === "funding") {
+      pushLaneSeller("funding", row, fundingSeen, fundingSellers);
+    } else if (lane === "insider") {
+      pushLaneSeller("insider", row, insiderSeen, insiderSellers);
+    } else if (lane === "launch") {
+      pushLaneSeller("launch", row, launchSeen, launchSellers);
+    } else if (lane === "suspect") {
+      pushLaneSeller("suspect", row, suspectSeen, suspectSellers);
+    } else if (lane === "single" && !flaggedSeen.has(w)) {
+      pushLaneSeller("single", row, singleSeen, singleSellers);
     }
   }
 
@@ -2713,12 +2826,22 @@ function ruggersBuckets(rec) {
   };
   creatorSold.sort(bySold);
   similarSellers.sort(bySold);
+  multiSellers.sort(bySold);
+  fundingSellers.sort(bySold);
+  insiderSellers.sort(bySold);
+  launchSellers.sort(bySold);
+  suspectSellers.sort(bySold);
   singleSellers.sort(bySold);
   flaggedWallets.sort(bySold);
   swings.sort(bySold);
   return {
     creatorSold,
     similarSellers,
+    multiSellers,
+    fundingSellers,
+    insiderSellers,
+    launchSellers,
+    suspectSellers,
     singleSellers,
     flaggedWallets,
     swings,
@@ -2816,8 +2939,18 @@ function renderRuggersWalletRow(row) {
     row.origin_lane === "creator" ||
     row.label === "creator"
   );
+  const originLane = isCreator
+    ? "creator"
+    : row.origin_lane && RUGGERS_STICKY_LANES.has(row.origin_lane)
+      ? row.origin_lane
+      : "";
+  const laneName =
+    row.lane_label ||
+    RUGGERS_LANE_LABEL[originLane] ||
+    originLane ||
+    "";
   let tagCls = "rug-tag-seller";
-  let tagLabel = "seller";
+  let tagLabel = laneName ? laneName + " · seller" : "seller";
   if (flaggedSwing && isCreator) {
     tagCls = "rug-tag-flagged rug-tag-flagged-swing rug-tag-creator";
     tagLabel = "creator · flagged · swing";
@@ -2827,6 +2960,10 @@ function renderRuggersWalletRow(row) {
   } else if (isSwing && isCreator) {
     tagCls = "rug-tag-swing rug-tag-creator";
     tagLabel = "creator · swing";
+  } else if (isSwing && laneName) {
+    // Keep category label on Swing (multi · swing, insider · swing, …)
+    tagCls = "rug-tag-swing";
+    tagLabel = laneName + " · swing";
   } else if (isSwing) {
     tagCls = "rug-tag-swing";
     tagLabel = "swing";
@@ -2839,15 +2976,11 @@ function renderRuggersWalletRow(row) {
   } else if (isCreator) {
     tagCls = "rug-tag-creator";
     tagLabel = "creator";
+  } else if (laneName) {
+    tagCls = "rug-tag-seller";
+    tagLabel = laneName + " · seller";
   }
-  const lane =
-    isCreator
-      ? "creator"
-      : row.origin_lane === "similar"
-        ? "similar"
-        : row.origin_lane === "single"
-          ? "single"
-          : "";
+  const lane = laneName;
   return (
     '<div class="rug-wallet-row' +
     (isFlagged ? " rug-wallet-flagged" : "") +
@@ -2942,6 +3075,11 @@ function ruggersRowsForExportKey(key) {
   if (!b) return [];
   if (key === "creator") return b.creatorSold || [];
   if (key === "similar") return b.similarSellers || [];
+  if (key === "multi") return b.multiSellers || [];
+  if (key === "funding") return b.fundingSellers || [];
+  if (key === "insider") return b.insiderSellers || [];
+  if (key === "launch") return b.launchSellers || [];
+  if (key === "suspect") return b.suspectSellers || [];
   if (key === "single") return b.singleSellers || [];
   return [];
 }
@@ -2958,6 +3096,11 @@ function ruggersRowsNotYetUploaded(key) {
 function ruggersExportLabel(key) {
   if (key === "creator") return "creator_sellers";
   if (key === "similar") return "similar_sellers";
+  if (key === "multi") return "multi_account_sellers";
+  if (key === "funding") return "shared_funder_sellers";
+  if (key === "insider") return "insider_sellers";
+  if (key === "launch") return "launch_window_sellers";
+  if (key === "suspect") return "suspect_sellers";
   if (key === "single") return "single_sellers";
   return String(key || "sellers");
 }
@@ -3356,6 +3499,11 @@ function refreshRuggersPanel(focusKey) {
   const nLook = Number(rec.lookup_count) || 0;
   const nSellers =
     (buckets.similarSellers || []).length +
+    (buckets.multiSellers || []).length +
+    (buckets.fundingSellers || []).length +
+    (buckets.insiderSellers || []).length +
+    (buckets.launchSellers || []).length +
+    (buckets.suspectSellers || []).length +
     (buckets.singleSellers || []).length +
     (buckets.creatorSold || []).length +
     (buckets.flaggedWallets || []).length +
@@ -3391,12 +3539,10 @@ function refreshRuggersPanel(focusKey) {
     '<p class="rug-rules">Rules: first full Analyze freezes a holder baseline; ' +
     "seller lists start <strong>empty</strong>. " +
     "<strong>Re-Analyze later</strong> — wallets that sold <strong>≥99%</strong> of that first bag " +
-    "(or left the holder list) appear as sellers. " +
-    "Similar → Similar-size group at baseline · " +
-    "Single → plain holders ≥0.01% only (not multi-account / insider / suspect / funder / launch) · " +
-    "Creator → mint creator · " +
-    "Flagged → RugWatch + sold ≥99%. " +
-    "Buy-back → <span class=\"rug-tag rug-tag-swing\">swing</span>.</p>";
+    "appear under their baseline category: Creator · Similar · Multi-account · Shared funder · " +
+    "Insider · Launch-window · Suspect · Single · Flagged (RugWatch). " +
+    "Buy-back → <span class=\"rug-tag rug-tag-swing\">swing</span> (label kept) · " +
+    "sell again → back to the same category. Loop continues.</p>";
   if (nLook < 2) {
     html +=
       '<p class="rug-rules rug-rules-warn"><strong>Baseline only (lookups: ' +
@@ -3414,8 +3560,8 @@ function refreshRuggersPanel(focusKey) {
       " · tracked: " +
       nBase +
       "). " +
-      "Baseline wallets still hold ≥1% of their first bag, or dumpers were only multi/insider/suspect " +
-      "(those no longer go under Single). Check Similar / Creator / Flagged if relevant.</p>";
+      "Baseline wallets still hold ≥1% of their first bag. " +
+      "Check Multi-account / Funder / Insider / Launch / Suspect / Similar / Creator / Flagged.</p>";
   }
 
   // Tracked mint (left) + CA search bar (right)
@@ -3482,17 +3628,60 @@ function refreshRuggersPanel(focusKey) {
     "Similar wallets (sellers)",
     "Similar-size group sellers on THIS mint (lane frozen at first discovery). " +
       "Sell ≥99% → stay here indefinitely if they never return. " +
-      "Buy-back → Swing · sell again after concurrent lookup → back here. " +
-      "Upload → cloud; permanent pin stays under Similar on this mint. " +
-      "On another mint, same wallet can be Flagged there without changing this lane.",
+      "Buy-back → Swing (label kept) · sell again after concurrent lookup → back here. " +
+      "Upload → cloud; permanent pin stays under Similar on this mint.",
     buckets.similarSellers,
     "similar"
   );
   html += renderRuggersSection(
+    "Multi-account clusters (1 Owner)",
+    "Same owner, several large ATAs at first lookup. " +
+      "Sell ≥99% of first bag → stay here · buy-back → Swing (multi-account label kept) · " +
+      "sell again → back here. Export only.",
+    buckets.multiSellers || [],
+    "multi",
+    { exportOnly: true }
+  );
+  html += renderRuggersSection(
+    "Shared SOL funder clusters (1-Owner)",
+    "Wallets that shared a common SOL funder (1-hop) at first lookup. " +
+      "Sell ≥99% → stay here · buy-back → Swing (shared funder label kept) · " +
+      "sell again → back here. Export only.",
+    buckets.fundingSellers || [],
+    "funding",
+    { exportOnly: true }
+  );
+  html += renderRuggersSection(
+    "Insider-flagged wallets (Rugcheck)",
+    "Rugcheck insider-tagged holders at first lookup. " +
+      "Sell ≥99% → stay here · buy-back → Swing (insider label kept) · " +
+      "sell again → back here. Export only.",
+    buckets.insiderSellers || [],
+    "insider",
+    { exportOnly: true }
+  );
+  html += renderRuggersSection(
+    "Same-slot multi-buys (Launch-window)",
+    "Launch-window same-slot multi-buy wallets at first lookup. " +
+      "Sell ≥99% → stay here · buy-back → Swing (launch-window label kept) · " +
+      "sell again → back here. Export only.",
+    buckets.launchSellers || [],
+    "launch",
+    { exportOnly: true }
+  );
+  html += renderRuggersSection(
+    "Suspect wallets",
+    "Bundles suspect-union wallets (not already in a more specific lane above). " +
+      "Sell ≥99% → stay here · buy-back → Swing (suspect label kept) · " +
+      "sell again → back here. Export only.",
+    buckets.suspectSellers || [],
+    "suspect",
+    { exportOnly: true }
+  );
+  html += renderRuggersSection(
     "Single wallets (sellers)",
-    "Single sellers on THIS mint (lane frozen at first discovery). Export only. " +
-      "Sell ≥99% → stay here indefinitely if they never return. " +
-      "Buy-back → Swing · sell again → back here.",
+    "Plain top holders ≥0.01% (not multi / funder / insider / launch / suspect / similar). " +
+      "Sell ≥99% → stay here · buy-back → Swing · sell again → back here. Export only.",
     buckets.singleSellers,
     "single",
     { exportOnly: true }
@@ -3523,9 +3712,9 @@ function refreshRuggersPanel(focusKey) {
   }
   html += renderRuggersSection(
     "Swing traders",
-    "Buy-back after ≥99% sell — stay here while they hold (shows holds % of supply). " +
-      "Sell ≥99% of that swing bag again → back to Similar / Single / Creator (or Flagged). " +
-      "Buy-back again → Swing. Loop continues. Creator keeps creator label; Flagged stays purple.",
+    "Buy-back after ≥99% sell — stay while they hold (holds % of supply). " +
+      "Category label is kept (e.g. multi-account · swing, insider · swing). " +
+      "Sell ≥99% of that swing bag again → back to the same origin section. Loop continues.",
     buckets.swings
   );
 
@@ -3533,19 +3722,24 @@ function refreshRuggersPanel(focusKey) {
   const nSell =
     buckets.creatorSold.length +
     buckets.similarSellers.length +
+    (buckets.multiSellers || []).length +
+    (buckets.fundingSellers || []).length +
+    (buckets.insiderSellers || []).length +
+    (buckets.launchSellers || []).length +
+    (buckets.suspectSellers || []).length +
     buckets.singleSellers.length;
   const nFlag = (buckets.flaggedWallets || []).length;
   html +=
-    '<p class="rug-footer-meta">New sellers: ' +
+    '<p class="rug-footer-meta">Lane sellers: ' +
     nSell +
-    " · Flagged (sticky until swing): " +
+    " · Flagged: " +
     nFlag +
     " · Swings: " +
     buckets.swings.length +
     " · Tracked mints: " +
     keys.length +
-    " · Upload: Creator / Similar · Export: Creator / Similar / Single" +
-    " · Swing shows holds % of supply while they hold." +
+    " · Upload: Creator / Similar · Export: all seller sections" +
+    " · Swing keeps origin labels." +
     "</p>";
 
   if (body) body.innerHTML = html;
@@ -3848,8 +4042,13 @@ function formatRuggersPlain(rec, buckets, key) {
     lines.push("");
   }
   dump("Creator sold", buckets.creatorSold);
-  dump("Similar sellers (new only)", buckets.similarSellers);
-  dump("Single sellers (new only)", buckets.singleSellers);
+  dump("Similar sellers", buckets.similarSellers);
+  dump("Multi-account (1 owner)", buckets.multiSellers || []);
+  dump("Shared SOL funder (1 owner)", buckets.fundingSellers || []);
+  dump("Insider-flagged (Rugcheck)", buckets.insiderSellers || []);
+  dump("Launch-window same-slot", buckets.launchSellers || []);
+  dump("Suspect sellers", buckets.suspectSellers || []);
+  dump("Single sellers", buckets.singleSellers);
   dump("Flagged wallets (no upload)", buckets.flaggedWallets || []);
   dump("Swing traders", buckets.swings);
   return lines.join("\n");
