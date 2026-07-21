@@ -1233,12 +1233,15 @@ Per-section actions (every seller section — not Swing)
     - Creator → stay Creator ↔ Swing (never Ruggers Flagged on this mint)
     - Similar → permanent Similar pin ↔ Swing (never Ruggers Flagged on this mint)
       including wallets that were similar when uploaded
-    - multi / funder / insider / launch / suspect / single
-      → stay under that category on this mint (also on cloud)
+    - Single → stay Single ↔ Swing (never Ruggers Flagged on this mint after Upload
+      from Single — same idea as Similar; upload is recorded per mint)
+    - multi / funder / insider / launch / suspect
+      → stay under that category on this mint (also on cloud; never Flagged here
+      after Upload from that section)
     - Holders “Flagged wallets (RugWatch)” can still list them if they match
       the RugWatch list — that is Holders matching, not the Ruggers Flagged section
     - On OTHER mints, cloud-listed wallets can enter Ruggers Flagged when they
-      sell ≥99% (unless that mint freezes them as creator/similar)
+      sell ≥99% (unless that mint freezes them as creator/similar or uploaded there)
 
 Where it lives
   Website only: browser localStorage key adtc_ruggers_track
