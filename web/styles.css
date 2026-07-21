@@ -896,30 +896,31 @@ a.copy-mint:hover,
   font-weight: 600;
   opacity: 0.92;
 }
-/* Same-slot multi-buys (bots) / (launch-window) — dim yellow tags + banner */
+/* Same-slot multi-buys (bots) / (launch-window) — dim yellow only (match RugWatch) */
 .rug-section-title .rug-label-launch-bots,
 .rug-label-launch-bots,
 .rug-section-title .rug-label-launch-window,
 .rug-label-launch-window {
   color: #b8a85c;
   font-weight: 600;
-  opacity: 0.95;
+  opacity: 0.92;
 }
 .rug-section.rug-section-launch-bots {
-  border-color: rgba(184, 168, 92, 0.45);
+  border-color: rgba(184, 168, 92, 0.28);
 }
 .rug-section.rug-section-launch-bots > .rug-section-head {
-  background: rgba(184, 168, 92, 0.14);
-  border-bottom-color: rgba(184, 168, 92, 0.35);
+  background: rgba(184, 168, 92, 0.08);
+  border-bottom-color: rgba(184, 168, 92, 0.22);
 }
 .rug-section.rug-section-launch-bots > .rug-section-head .rug-section-title {
-  color: #d4c56a;
+  color: #b8a85c;
   background: transparent;
+  opacity: 0.95;
 }
 .rug-section.rug-section-launch-bots > .rug-section-hint {
-  color: #c4b56e;
-  background: rgba(184, 168, 92, 0.06);
-  border-bottom: 1px solid rgba(184, 168, 92, 0.2);
+  color: #a89858;
+  background: rgba(184, 168, 92, 0.04);
+  border-bottom: 1px solid rgba(184, 168, 92, 0.14);
 }
 .rug-section {
   margin: 14px 0;
