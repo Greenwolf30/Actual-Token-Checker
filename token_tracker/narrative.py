@@ -148,35 +148,67 @@ def build_narrative(
         ] + [d for d in descriptions if (d.get("text") or "")[:80] != official[:80]]
     platforms = list(social_src.get("platforms_seen") or [])
 
-    # Theme tags from official text first (avoids wrong themes from random news)
-    theme_corpus = " ".join(
+    # Theme scoring: name/symbol + official prose weigh much more than news noise.
+    # (Community/news used to pull "Grok" tokens into politics via Elon mentions.)
+    name_sym_corpus = f"{name or ''} {symbol or ''}".lower()
+    official_corpus = " ".join(
         [
-            name or "",
-            symbol or "",
-            official,
+            official or "",
             " ".join(categories),
             " ".join(fact_tags),
-            " ".join(str(d.get("text") or "") for d in descriptions[:6]),
-            " ".join(str(fr.get("text") or "") for fr in fact_fragments[:6]),
+            " ".join(
+                str(fr.get("text") or "")
+                for fr in fact_fragments[:6]
+                if (fr.get("source") or "")
+                in {
+                    "pumpfun",
+                    "metadata_uri",
+                    "coingecko",
+                    "dexscreener",
+                    "birdeye",
+                    "website_og",
+                    "coinmarketcap",
+                    "solscan",
+                    "rugcheck_meta",
+                }
+            ),
         ]
     ).lower()
-    themes = _match_themes(theme_corpus)
+    community_corpus = " ".join(
+        [
+            " ".join(str(d.get("text") or "") for d in descriptions[:4]),
+            " ".join(str(s.get("text") or "") for s in web_snippets[:6]),
+            " ".join(str(p.get("text") or "") for p in sample_posts[:6]),
+        ]
+    ).lower()
+    theme_corpus = f"{name_sym_corpus} {official_corpus}".strip()
+
+    themes = _rank_themes(
+        name_symbol=name_sym_corpus,
+        official=official_corpus,
+        community=community_corpus,
+        fact_tags=fact_tags,
+    )
     theme_cats = _prefer_theme_categories(categories)
-    # Jupiter-style tags (meme, community, verified) as soft theme hints
+    # Jupiter-style tags (meme, community, verified) as soft theme hints only
     for t in fact_tags:
         tl = str(t).strip().lower()
-        if tl in {"meme", "memes"} and "animal / meme pet" not in themes:
-            themes = ["meme / culture"] + themes
+        if tl in {"meme", "memes"} and "crypto culture / degen" not in themes:
+            themes = themes + ["crypto culture / degen"]
         if tl in {"ai", "agent"} and "AI / tech" not in themes:
             themes = ["AI / tech"] + themes
     if theme_cats:
-        # Prefer real themes (Meme, Dog-Themed) over "X Ecosystem" listing tags
-        themes = theme_cats[:3] + [t for t in themes if t not in theme_cats]
+        # Prefer CoinGecko-style theme cats only when they don't fight strong name cues
+        themes = _merge_theme_lists(theme_cats[:2], themes)
 
     hype = _match_hype(
         theme_corpus, pair_summary, pumpfun, sample_posts, web_snippets, platforms
     )
-    political = _political_bits(theme_corpus) if official or categories else []
+    political = (
+        _political_bits(official_corpus)
+        if official and "politics" in (themes[0] if themes else "")
+        else []
+    )
     big_x = _big_account_bits(sample_posts, twitter if isinstance(twitter, str) else None)
 
     story_lines: list[str] = []
@@ -185,50 +217,48 @@ def build_narrative(
     # Prefer multi-source fact fragments before free-web chatter
     for fr in fact_fragments:
         t = (fr.get("text") or "").strip()
-        if not t or (official and t[:60].lower() in official[:200].lower()):
+        if not t:
+            continue
+        if _text_redundant(t, story_lines):
             continue
         labeled = f"[{fr.get('source')}] {t}"
         story_lines.append(labeled if len(labeled) <= 280 else labeled[:277] + "…")
         if len(story_lines) >= 5:
             break
-    story_lines.extend(
-        _extract_story_lines(
-            [d for d in descriptions if d.get("source") != official_source][:3],
-            web_snippets,
-        )[:3]
-    )
-    # de-dupe story lines
-    _seen_sl: set[str] = set()
-    _uniq_sl: list[str] = []
-    for sl in story_lines:
-        key = re.sub(r"\s+", " ", sl).lower()[:90]
-        if key in _seen_sl:
+    for extra in _extract_story_lines(
+        [d for d in descriptions if d.get("source") != official_source][:3],
+        web_snippets,
+    ):
+        if _text_redundant(extra, story_lines):
             continue
-        _seen_sl.add(key)
-        _uniq_sl.append(sl)
-    story_lines = _uniq_sl[:6]
+        story_lines.append(extra)
+        if len(story_lines) >= 6:
+            break
+    story_lines = _dedupe_text_list(story_lines, limit=6)
 
     real_quotes = []
     if official:
         real_quotes.append(official if len(official) <= 200 else official[:197] + "…")
-    real_quotes.extend(
-        _pick_real_world_quotes(
-            [{"text": fr.get("text")} for fr in fact_fragments[:4]],
-            web_snippets,
-            sample_posts,
-            limit=5,
-        )
-    )
-    real_quotes = real_quotes[:6]
+    for q in _pick_real_world_quotes(
+        [{"text": fr.get("text")} for fr in fact_fragments[:4]],
+        web_snippets,
+        sample_posts,
+        limit=8,
+    ):
+        if _text_redundant(q, real_quotes):
+            continue
+        real_quotes.append(q)
+        if len(real_quotes) >= 6:
+            break
 
-    if official or theme_cats or themes:
-        theme_label = themes[0] if themes else (
-            theme_cats[0] if theme_cats else "listed crypto token"
-        )
+    if themes:
+        theme_label = themes[0]
+    elif theme_cats:
+        theme_label = theme_cats[0]
+    elif official:
+        theme_label = "listed crypto token"
     else:
-        theme_label = themes[0] if themes else _fallback_theme(
-            name, symbol, dex, descriptions
-        )
+        theme_label = _fallback_theme(name, symbol, dex, descriptions)
         if theme_label == "meme / narrative token" and not official:
             theme_label = "insufficient official description"
 
@@ -565,31 +595,43 @@ def _build_storyline(
             "tags and filtered community chatter rather than inventing a backstory."
         )
 
-    # Multi-source description fragments (the string-element blend)
+    # Multi-source description fragments (skip repeats of the official blurb)
     if len(fragments) > 1:
         bits = []
-        for fr in fragments[1:5]:
+        seen_bits: list[str] = [official] if official else []
+        for fr in fragments:
             t = re.sub(r"\s+", " ", str(fr.get("text") or "")).strip()
             if not t:
                 continue
-            if official and t[:50].lower() in official[:220].lower():
+            if _text_redundant(t, seen_bits):
                 continue
+            seen_bits.append(t)
             if len(t) > 160:
                 t = t[:157] + "…"
             bits.append(f"{fr.get('source')}: {t}")
+            if len(bits) >= 3:
+                break
         if bits:
             paras.append(
                 "Across listing/metadata sources: " + " · ".join(bits) + "."
             )
 
-    # Extra story fragments / quotes
-    extra = [q for q in (real_quotes or []) if q and q != official][:3]
+    # Extra story fragments / quotes (deduped against official + already used)
+    seen_quotes: list[str] = [official] if official else []
+    extra: list[str] = []
+    for q in real_quotes or []:
+        if not q:
+            continue
+        if _text_redundant(str(q), seen_quotes):
+            continue
+        seen_quotes.append(str(q))
+        extra.append(str(q))
+        if len(extra) >= 2:
+            break
     if extra and not official:
         paras.append("Community / web fragments: " + " · ".join(extra))
     elif extra and official:
-        more = [e for e in extra if e[:40].lower() not in official[:200].lower()][:2]
-        if more:
-            paras.append("Related notes from the web: " + " · ".join(more))
+        paras.append("Related notes from the web: " + " · ".join(extra))
 
     # Pump.fun lifecycle
     pf = pumpfun or {}
@@ -933,11 +975,136 @@ def _build_corpus(
 
 
 def _match_themes(corpus: str) -> list[str]:
+    """Legacy helper: any keyword hit, rule order (prefer _rank_themes)."""
     hits: list[str] = []
     for label, keys in _THEME_RULES:
-        if any(re.search(rf"\b{re.escape(k)}\b", corpus) for k in keys):
+        if any(re.search(rf"\b{re.escape(k)}\b", corpus, re.I) for k in keys):
             hits.append(label)
     return hits
+
+
+def _theme_score_for_corpus(corpus: str, keys: tuple[str, ...]) -> float:
+    if not corpus:
+        return 0.0
+    score = 0.0
+    for k in keys:
+        if not k:
+            continue
+        # Multi-word phrases: higher weight
+        pat = rf"\b{re.escape(k)}\b"
+        n = len(re.findall(pat, corpus, flags=re.I))
+        if n:
+            score += n * (2.0 if " " in k else 1.0)
+    return score
+
+
+def _rank_themes(
+    *,
+    name_symbol: str,
+    official: str,
+    community: str,
+    fact_tags: list[str] | None = None,
+) -> list[str]:
+    """
+    Score themes so name/symbol + official copy beat noisy news/X chatter.
+    Example: "Grok 5" + tech blurb should rank AI/tech over politics even if
+    web snippets mention elections or Elon in passing.
+    """
+    scores: dict[str, float] = {}
+
+    # Hard name/symbol brand cues
+    ns = (name_symbol or "").lower()
+    for label, keys in _NAME_THEME_HINTS:
+        for k in keys:
+            if re.search(rf"\b{re.escape(k)}\b", ns, re.I):
+                scores[label] = scores.get(label, 0.0) + 8.0
+
+    for label, keys in _THEME_RULES:
+        s = 0.0
+        s += 4.0 * _theme_score_for_corpus(name_symbol, keys)
+        s += 3.0 * _theme_score_for_corpus(official, keys)
+        s += 0.35 * _theme_score_for_corpus(community, keys)
+        if s > 0:
+            scores[label] = scores.get(label, 0.0) + s
+
+    # Soft tag boosts
+    for t in fact_tags or []:
+        tl = str(t).strip().lower()
+        if tl in {"ai", "agent", "artificial-intelligence"}:
+            scores["AI / tech"] = scores.get("AI / tech", 0.0) + 2.5
+        if tl in {"meme", "memes"}:
+            scores["crypto culture / degen"] = (
+                scores.get("crypto culture / degen", 0.0) + 1.5
+            )
+        if tl in {"politics", "election"}:
+            scores["politics / election"] = scores.get("politics / election", 0.0) + 2.0
+
+    # If AI is strong on name+official, don't let weak politics from news win
+    ai = scores.get("AI / tech", 0.0)
+    pol = scores.get("politics / election", 0.0)
+    pol_keys = next(
+        (keys for lab, keys in _THEME_RULES if lab == "politics / election"),
+        (),
+    )
+    if ai >= 4.0 and pol > 0 and pol < ai * 1.25:
+        if _theme_score_for_corpus(name_symbol, pol_keys) == 0:
+            scores["politics / election"] = pol * 0.25
+
+    ranked = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))
+    # Drop near-noise themes (community-only dust)
+    out = [lab for lab, sc in ranked if sc >= 1.5]
+    return out
+
+
+def _merge_theme_lists(preferred: list[str], base: list[str]) -> list[str]:
+    out: list[str] = []
+    for t in list(preferred) + list(base):
+        if t and t not in out:
+            out.append(t)
+    return out
+
+
+def _norm_text_key(text: str) -> str:
+    t = re.sub(r"^\[[^\]]+\]\s*", "", str(text or ""))
+    t = re.sub(r"\s+", " ", t).strip().lower()
+    # strip trailing ellipsis / punctuation for compare
+    t = re.sub(r"[\.…]+$", "", t).strip()
+    return t
+
+
+def _text_redundant(candidate: str, existing: list[str]) -> bool:
+    """True if candidate is the same description already shown (or a subset)."""
+    c = _norm_text_key(candidate)
+    if len(c) < 12:
+        return True
+    for prev in existing:
+        p = _norm_text_key(prev)
+        if not p:
+            continue
+        if c == p:
+            return True
+        # Same blurb repeated with different source labels / truncation
+        if c[:80] == p[:80]:
+            return True
+        if len(c) >= 40 and c[:100] in p:
+            return True
+        if len(p) >= 40 and p[:100] in c:
+            return True
+    return False
+
+
+def _dedupe_text_list(items: list[str], *, limit: int = 8) -> list[str]:
+    out: list[str] = []
+    for raw in items:
+        s = str(raw or "").strip()
+        if not s:
+            continue
+        if _text_redundant(s, out):
+            continue
+        out.append(s)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _match_hype(
@@ -1164,11 +1331,17 @@ def _fallback_theme(
     blob = f"{name} {symbol}".lower()
     for d in descriptions or []:
         blob += " " + str(d.get("text") or "").lower()
+    # Prefer brand/tech name cues before politics
+    if any(
+        re.search(rf"\b{re.escape(k)}\b", blob)
+        for k in ("grok", "gpt", "openai", "claude", "gemini", "chatgpt", "xai", " ai ", "llm")
+    ) or re.search(r"\bai\b", blob):
+        return "AI / tech"
     if "pump" in (dex or "").lower():
         return "Pump.fun-style meme launch"
-    if any(k in blob for k in ("pepe", "doge", "inu", "cat", "dog")):
+    if any(k in blob for k in ("pepe", "doge", "inu", "popcat", "shiba")):
         return "animal / meme culture"
-    if any(k in blob for k in ("trump", "biden", "maga", "vote")):
+    if any(k in blob for k in ("trump", "biden", "maga", "vote", "election")):
         return "politics / election"
     if any(k in blob for k in ("tiktok", "viral", "trend")):
         return "viral / internet culture"
