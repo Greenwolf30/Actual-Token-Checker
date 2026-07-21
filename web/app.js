@@ -9,7 +9,7 @@ const HISTORY_KEY = "adtc_history_log";
 const HISTORY_MAX = 200;
 const RUGGERS_KEY = "adtc_ruggers_track";
 /** Bump when Flagged-wallet rules change so sticky junk is wiped once. */
-const RUGGERS_RULES_VERSION = 4;
+const RUGGERS_RULES_VERSION = 5;
 /** Sold ≥ this fraction of first-lookup bag → list as seller (99%). */
 const RUGGERS_SOLD_FRAC = 0.99;
 /** Remaining bag must be ≤ (1 - RUGGERS_SOLD_FRAC) of first_pct to count as sold. */
@@ -1183,6 +1183,8 @@ function processRuggersFromAnalyze(data) {
       uploaded_similar: {},
       // Wallets successfully Uploaded via Ruggers (any section) on this mint
       ruggers_uploaded: {},
+      // Similar/Single/Creator sellers who never buy back — stay forever until swing
+      sticky_lane_sellers: {},
     };
     for (const [w, info] of Object.entries(snap.wallets || {})) {
       rec.first_wallets[w] = {
@@ -1219,6 +1221,10 @@ function processRuggersFromAnalyze(data) {
     }
     if (!rec.ruggers_uploaded || typeof rec.ruggers_uploaded !== "object") {
       rec.ruggers_uploaded = {};
+    }
+    // Sticky Similar/Single sellers who never returned (indefinite until buy-back)
+    if (!rec.sticky_lane_sellers || typeof rec.sticky_lane_sellers !== "object") {
+      rec.sticky_lane_sellers = {};
     }
     // Backfill upload marks from similar pins / legacy uploaded flags
     for (const w of Object.keys(rec.uploaded_similar || {})) {
@@ -1312,6 +1318,10 @@ function processRuggersFromAnalyze(data) {
     rec.flagged_sellers && typeof rec.flagged_sellers === "object"
       ? { ...rec.flagged_sellers }
       : {};
+  const stickyLane =
+    rec.sticky_lane_sellers && typeof rec.sticky_lane_sellers === "object"
+      ? { ...rec.sticky_lane_sellers }
+      : {};
   const unflagNow = [];
 
   for (const [w, first] of Object.entries(rec.first_wallets || {})) {
@@ -1330,31 +1340,24 @@ function processRuggersFromAnalyze(data) {
 
     // ── Phase loop: seller ↔ swing on each concurrent lookup ──────────
     // sold ≥99%  → seller (Similar / Single / Creator / Flagged by origin)
-    // buy-back   → swing
+    // never return → stay seller indefinitely (sticky_lane_sellers)
+    // buy-back only → swing (only then leave Similar/Single)
     // sell again → seller again (same origin_lane / flagged lineage)
-    if (soldState.sold) {
+    const wasStickySeller = !!stickyLane[w];
+    if (buyBack) {
+      // Confirmed re-accumulation after a dump
       everSold = true;
-      if (buyBack) {
-        tag = "swing";
-      } else if (prevTag === "swing" && !buyBack) {
-        // Swing dumped ≥99% again → back to seller lane
-        tag = "seller";
-      } else {
-        tag = "seller";
-      }
-    } else if (everSold || buyBack || prevTag === "seller" || prevTag === "swing") {
+      tag = "swing";
+    } else if (soldState.sold || wasStickySeller || prevTag === "seller") {
+      // Still dumped / never returned — remain seller forever until buyBack
       everSold = true;
-      if (
-        buyBack ||
-        (cur.listed &&
-          ((cur.pct_supply != null && Number(cur.pct_supply) > 0) ||
-            (cur.balance != null && Number(cur.balance) > 0)))
-      ) {
-        tag = "swing";
-      } else {
-        // Still ever-sold but no bag → treat as seller residual
-        tag = "seller";
-      }
+      tag = "seller";
+    } else if (everSold || prevTag === "swing") {
+      everSold = true;
+      // Ever sold, not buyBack, not clearly still-sold metric:
+      // if they have a bag but didn't trip buyBack, keep seller sticky
+      // (avoid false Swing from noise). Real buy-backs use isRuggersBuyBack.
+      tag = "seller";
     } else {
       tag = "holding";
     }
@@ -1481,6 +1484,36 @@ function processRuggersFromAnalyze(data) {
             ? "sold"
             : null;
 
+    // Sticky Similar / Single / Creator sellers: pin until confirmed buy-back.
+    // If they never return, they stay in that section indefinitely.
+    if (
+      tag === "seller" &&
+      everSold &&
+      !isFlaggedLineage &&
+      (originLane === "similar" ||
+        originLane === "single" ||
+        originLane === "creator")
+    ) {
+      stickyLane[w] = {
+        ...(stickyLane[w] || {}),
+        origin_lane: originLane,
+        entered_at: (stickyLane[w] && stickyLane[w].entered_at) || now,
+        last_update: now,
+        sold_pct:
+          soldState.sold_pct != null
+            ? soldState.sold_pct
+            : (stickyLane[w] && stickyLane[w].sold_pct) || 100,
+        first_pct: first.pct_supply,
+        first_balance: first.balance,
+        reason: soldState.reason || (stickyLane[w] && stickyLane[w].reason) || "sold_99",
+        in_similar: originLane === "similar",
+        indefinite: true,
+      };
+    } else if (tag === "swing" && buyBack && stickyLane[w]) {
+      // Only leave sticky seller list on real buy-back → Swing
+      delete stickyLane[w];
+    }
+
     status[w] = {
       tag,
       ever_sold: everSold,
@@ -1489,17 +1522,25 @@ function processRuggersFromAnalyze(data) {
       current_pct: cur.listed ? cur.pct_supply : 0,
       current_balance: cur.listed ? cur.balance : 0,
       listed: !!cur.listed,
-      sold_pct: soldState.sold_pct,
+      sold_pct:
+        soldState.sold_pct != null
+          ? soldState.sold_pct
+          : stickyLane[w] && stickyLane[w].sold_pct != null
+            ? stickyLane[w].sold_pct
+            : null,
       reason:
         tag === "swing" && isFlaggedLineage
           ? "buy_back_flagged_swing"
           : tag === "swing"
             ? "buy_back"
-            : soldState.reason,
+            : stickyLane[w]
+              ? soldState.reason || stickyLane[w].reason || "sold_99_sticky"
+              : soldState.reason,
       in_similar: inSimilar || uploadedSimilar || originLane === "similar",
       uploaded_similar: uploadedSimilar,
       origin_lane: originLane,
       is_creator: originLane === "creator",
+      sticky_lane_seller: !!stickyLane[w],
       // Purple flagged look: active Flagged section OR flagged-on-swing
       is_flagged: !!(isFlaggedLineage && !uploadedSimilar),
       ever_flagged_on_mint: !!(isFlaggedLineage || everFlaggedOnMint),
@@ -1509,6 +1550,61 @@ function processRuggersFromAnalyze(data) {
         : prev.flagged_meta || null,
       last_update: now,
     };
+  }
+
+  // Keep sticky lane sellers even if they dropped out of status recompute edge cases
+  for (const [sw, meta] of Object.entries(stickyLane)) {
+    if (!sw || !meta) continue;
+    if (status[sw] && status[sw].tag === "swing") {
+      // buy-back already handled — drop pin
+      delete stickyLane[sw];
+      continue;
+    }
+    const lane = meta.origin_lane || "single";
+    if (!status[sw]) {
+      status[sw] = {
+        tag: "seller",
+        ever_sold: true,
+        first_pct: meta.first_pct != null ? meta.first_pct : null,
+        first_balance: meta.first_balance != null ? meta.first_balance : null,
+        current_pct: 0,
+        current_balance: 0,
+        listed: false,
+        sold_pct: meta.sold_pct != null ? meta.sold_pct : 100,
+        reason: meta.reason || "sold_99_sticky",
+        in_similar: lane === "similar",
+        origin_lane: lane,
+        is_creator: lane === "creator",
+        sticky_lane_seller: true,
+        is_flagged: false,
+        ever_flagged_on_mint: false,
+        last_update: now,
+      };
+    } else if (status[sw].tag !== "swing") {
+      status[sw].tag = "seller";
+      status[sw].ever_sold = true;
+      status[sw].sticky_lane_seller = true;
+      status[sw].origin_lane = lane;
+      status[sw].in_similar = lane === "similar" || !!status[sw].in_similar;
+      if (status[sw].sold_pct == null && meta.sold_pct != null) {
+        status[sw].sold_pct = meta.sold_pct;
+      }
+    }
+    // Ensure baseline memory so future analyzes still track them
+    if (!rec.first_wallets[sw]) {
+      rec.first_wallets[sw] = {
+        pct_supply: meta.first_pct != null ? meta.first_pct : null,
+        balance: meta.first_balance != null ? meta.first_balance : null,
+        rank: null,
+        label: lane === "creator" ? "creator" : null,
+        in_similar: lane === "similar",
+        origin_lane: lane,
+      };
+    } else {
+      rec.first_wallets[sw].origin_lane =
+        rec.first_wallets[sw].origin_lane || lane;
+      if (lane === "similar") rec.first_wallets[sw].in_similar = true;
+    }
   }
 
   // Final scrub: permanent similar-uploads never remain in flagged_sellers
@@ -1555,6 +1651,7 @@ function processRuggersFromAnalyze(data) {
 
   rec.rugwatch_known = rwKnown;
   rec.flagged_sellers = flaggedSellers;
+  rec.sticky_lane_sellers = stickyLane;
   // Keep legacy key in sync for any old UI paths (sellers-only, not full watchlist)
   rec.flagged_known = { ...flaggedSellers };
   rec.status = status;
@@ -1999,6 +2096,45 @@ function ruggersBuckets(rec) {
       listed: st.listed === true,
       reason: st.reason || "sold_99",
     });
+  }
+
+  // Sticky lane sellers who never returned — always show until buy-back
+  const sticky = rec.sticky_lane_sellers || {};
+  for (const [w, meta] of Object.entries(sticky)) {
+    if (!w || !meta) continue;
+    const st = (rec.status && rec.status[w]) || {};
+    if (st.tag === "swing") continue;
+    const lane = meta.origin_lane || st.origin_lane || "single";
+    const row = {
+      wallet: w,
+      tag: "seller",
+      ever_sold: true,
+      sticky_lane_seller: true,
+      is_flagged: false,
+      in_similar: lane === "similar",
+      origin_lane: lane,
+      is_creator: lane === "creator",
+      sold_pct:
+        st.sold_pct != null
+          ? st.sold_pct
+          : meta.sold_pct != null
+            ? meta.sold_pct
+            : 100,
+      first_pct: st.first_pct != null ? st.first_pct : meta.first_pct,
+      current_pct: st.current_pct != null ? st.current_pct : 0,
+      listed: st.listed === true,
+      reason: st.reason || meta.reason || "sold_99_sticky",
+    };
+    if (lane === "similar") {
+      if (!similarSeen.has(w)) {
+        similarSeen.add(w);
+        similarSellers.push(row);
+      }
+    } else if (lane === "creator") {
+      if (!creatorSold.some((r) => r.wallet === w)) creatorSold.push(row);
+    } else if (!singleSellers.some((r) => r.wallet === w) && !flaggedSeen.has(w)) {
+      singleSellers.push(row);
+    }
   }
 
   const bySold = (a, b) => (Number(b.sold_pct) || 0) - (Number(a.sold_pct) || 0);
@@ -2692,7 +2828,8 @@ function refreshRuggersPanel(focusKey) {
   html += renderRuggersSection(
     "Similar wallets (sellers)",
     "Similar-size group sellers on THIS mint (lane frozen at first discovery). " +
-      "Sell ≥99% → here · buy-back → Swing · sell again after concurrent lookup → back here. " +
+      "Sell ≥99% → stay here indefinitely if they never return. " +
+      "Buy-back → Swing · sell again after concurrent lookup → back here. " +
       "Upload → cloud; permanent pin stays under Similar on this mint. " +
       "On another mint, same wallet can be Flagged there without changing this lane.",
     buckets.similarSellers,
@@ -2701,7 +2838,8 @@ function refreshRuggersPanel(focusKey) {
   html += renderRuggersSection(
     "Single wallets (sellers)",
     "Single sellers on THIS mint (lane frozen at first discovery). Export only. " +
-      "Sell ≥99% → here · buy-back → Swing · sell again → back here.",
+      "Sell ≥99% → stay here indefinitely if they never return. " +
+      "Buy-back → Swing · sell again → back here.",
     buckets.singleSellers,
     "single",
     { exportOnly: true }
