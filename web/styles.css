@@ -896,7 +896,7 @@ a.copy-mint:hover,
   font-weight: 600;
   opacity: 0.92;
 }
-/* Same-slot multi-buys (bots) / (launch-window) — dim yellow only (match RugWatch) */
+/* Same-slot multi-buys — dim yellow TITLE BANNER only (not hint / body) */
 .rug-section-title .rug-label-launch-bots,
 .rug-label-launch-bots,
 .rug-section-title .rug-label-launch-window,
@@ -904,9 +904,6 @@ a.copy-mint:hover,
   color: #b8a85c;
   font-weight: 600;
   opacity: 0.92;
-}
-.rug-section.rug-section-launch-bots {
-  border-color: rgba(184, 168, 92, 0.28);
 }
 .rug-section.rug-section-launch-bots > .rug-section-head {
   background: rgba(184, 168, 92, 0.08);
@@ -917,11 +914,7 @@ a.copy-mint:hover,
   background: transparent;
   opacity: 0.95;
 }
-.rug-section.rug-section-launch-bots > .rug-section-hint {
-  color: #a89858;
-  background: rgba(184, 168, 92, 0.04);
-  border-bottom: 1px solid rgba(184, 168, 92, 0.14);
-}
+/* Hint + wallet body keep default muted/normal colors (not yellow) */
 .rug-section {
   margin: 14px 0;
   border: 1px solid var(--border);
