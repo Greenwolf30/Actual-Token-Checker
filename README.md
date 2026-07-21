@@ -61,7 +61,8 @@ Render ATC env (cloud flags):
 RUGWATCH_WALLETS_URL=https://raw.githubusercontent.com/Greenwolf30/RugWatch/main/data/wallets_index.json
 ```
 
-Full user guide: `web/documentation.txt` (also `/docs.html` on the site).
+Full user guide: `web/documentation.txt` (also `/docs.html` on the site).  
+**About tab sources** (Pump.fun API, X, Reddit, LinkedIn, news, etc.): see section **10. ABOUT** in that guide.
 
 Public deploy notes: see `DEPLOY.md`.
 

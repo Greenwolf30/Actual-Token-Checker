@@ -395,31 +395,124 @@ Robinhood / EVM maps depend on Bubblemaps support for that chain.
 10. ABOUT TAB — SECTIONS EXPLAINED
 --------------------------------------------------------------------------------
 
-About is split into story + community + news + links.
+About is built from several public sources (not one API). Full Analyze loads
+it; Quick mode often skips or thins this work.
 
+About is split into:
+  Narrative (story) · Description sources · X / community · Public news · Links
+
+Not financial advice. Text is best-effort, filtered, and can be empty when
+APIs block or the token is too new.
+
+--------------------------------------------------------------------------------
+10.0 WHERE THE DATA COMES FROM (SOURCE MAP)
+--------------------------------------------------------------------------------
+
+A) Official / listing copy (“what the project claims”) — coin_facts
+  Used first for the storyline and “official description.”
+  Best-effort, short timeouts; failures are soft (no crash).
+
+  | Source                         | What we take                          |
+  |--------------------------------|---------------------------------------|
+  | CoinGecko contract endpoint    | Description, categories, links        |
+  | On-chain metadata URI (JSON)   | Metaplex-style description / links    |
+  | Pump.fun coin JSON API         | Description, name, twitter, telegram, |
+  |   (not HTML scrape of pump.fun)| website, metadata URI when present    |
+  | Birdeye (when available)       | Description / extensions              |
+  | DexScreener pair / profile     | Description, socials, websites        |
+  | CoinMarketCap (when found)     | Description / links                   |
+  | Jupiter / token lists          | Tags (meme, AI, …)                    |
+  | Solscan (when used)            | Metadata / links                      |
+  | Rugcheck                       | Meta description, risk text notes     |
+  | Project website OG / meta      | Page description when a site is linked|
+
+  Pump.fun detail
+  - About does NOT scrape the HTML page https://pump.fun/<mint>.
+  - It calls the same style of JSON the site uses, e.g.:
+      frontend-api.pump.fun/coins/{mint}
+      frontend-api-v3.pump.fun/coins/{mint}
+  - That JSON supplies description + social URLs when the API responds.
+  - Cloudflare / API downtime → no Pump data for that run (normal).
+
+  Raydium
+  - Used for MARKET pairs/price fallback when DexScreener is weak — NOT for
+    About narrative copy (no description/social feed from Raydium).
+
+B) Community / web chatter — social_sources (secondary only)
+  | Source                    | Role                                      |
+  |---------------------------|-------------------------------------------|
+  | X / Twitter               | Project handle posts + $ticker search     |
+  | Reddit public search JSON | Recent posts mentioning ticker/name       |
+  | Google News RSS           | Headlines                                 |
+  | LinkedIn                  | Profile links + site:linkedin.com search |
+  | DuckDuckGo HTML           | Web blurbs (may tag TikTok/IG/LinkedIn)   |
+  | Linked social URLs        | IG/TikTok/X/Telegram/LinkedIn on profile  |
+
+  X / Twitter detail
+  - Primary handle usually from DexScreener socials (and extra X links).
+  - Optional X API (if X_BEARER_TOKEN set) + free Nitter-style mirrors.
+  - Pump.fun twitter field: stored as a linked social + coin links.
+  - Full X timeline/bio scrape uses the project handle — mainly when Dex
+    (or merged socials) provide it. Pump-only X is always noted as a link;
+    posts/bio may not run if that handle is never set as twitter_handle.
+  - Does NOT resolve “creator wallet → personal X account” by itself.
+
+  Reddit / LinkedIn / TikTok / Instagram
+  - No free full-feed APIs for IG/TikTok/LinkedIn.
+  - Reddit: public search.json (best-effort).
+  - LinkedIn: profile links on the token + DuckDuckGo site:linkedin.com.
+  - IG/TikTok: only public links and search mentions, not full scrapes.
+
+C) What About does NOT use
+  - RugWatch local/cloud wallet DB (that is Holders / Alerts / Ruggers)
+  - Full holder scans
+  - Paid news terminals (Bloomberg, etc.)
+  - Invented backstory when no official copy exists
+
+Priority rule
+  Official/listing descriptions rank above community/web chatter.
+  Community snippets are filtered to mentions of this ticker, name, or
+  contract when possible.
+
+--------------------------------------------------------------------------------
 10.1 NARRATIVE (“What this token is about”)
+--------------------------------------------------------------------------------
+
   - Multi-paragraph storyline from official descriptions first, then
     filtered community/web text.
-  - Sources can include: CoinGecko, on-chain metadata URI, Pump.fun,
-    Birdeye, DexScreener profile, website meta/OG, Jupiter tags,
-    Rugcheck meta, etc.
   - Theme labels (politics, AI, animal meme, CTO, …) come from keyword
-    matching on name/description/posts — see theme keywords in the app’s
-    narrative module if you need the full lists.
+    matching on name/description/posts.
   - Confidence: high / medium / low depending on whether real project
-    copy was found.
+    copy was found (and which source won).
+  - “Why people seem interested” / Key hooks may include:
+      · official description present (stated purpose/story: <text>)
+      · listing categories / tags
+      · Reddit / LinkedIn / news / Pump.fun metadata when detected
   - If no official description exists, the app refuses to invent a
-    backstory.
+    backstory (market tags + filtered chatter only).
 
+--------------------------------------------------------------------------------
 10.2 Description sources / listing tags / risk notes
-  - Short labeled quotes from each string source.
+--------------------------------------------------------------------------------
+
+  - Short labeled quotes from each string source (e.g. [pumpfun], [coingecko]).
   - Jupiter-style tags when present.
   - Rugcheck risk text (context, not a novel).
 
+--------------------------------------------------------------------------------
 10.3 X / COMMUNITY POSTS (social / web score)
+--------------------------------------------------------------------------------
+
   Where: About → “X / COMMUNITY POSTS”
 
-  Fields you see
+  Compact meta (always with values or n/a)
+    Tone: <label> · score <n|n/a> · kind <kind> · posts analyzed <n>
+    Sources: <list or n/a>
+    Handle / Profile when known
+    Summary / Note when present
+    Then: Recent X posts (or empty-message)
+
+  Fields
     Label   bullish | bearish | mixed | neutral | unknown
     Score   about −1.0 (bearish) to +1.0 (bullish)
     Kind    how the score was made (see below)
@@ -427,7 +520,7 @@ About is split into story + community + news + links.
     Sample posts     recent snippets (may include links)
 
   Kind: text-based (x_text / social_web_text)
-    - Reads posts (project X via free mirrors, optional X API, search).
+    - Reads posts (project X via free mirrors, optional X API, $ticker search).
     - Counts positive vs negative keyword hits (lexicon).
     - score = (positive − negative) / (positive + negative)
     - Labels:
@@ -453,8 +546,13 @@ About is split into story + community + news + links.
   Important
     - Keyword scoring is crude (slang, sarcasm, and bots break it).
     - Empty posts → score may fall back to market_crowd or unknown.
+    - Pump.fun-linked X is a social link; timeline scrape needs a project
+      handle (usually DexScreener) to populate sample posts.
 
+--------------------------------------------------------------------------------
 10.4 PUBLIC NEWS
+--------------------------------------------------------------------------------
+
   Where: About → “PUBLIC NEWS”
 
   What it is
@@ -482,9 +580,17 @@ About is split into story + community + news + links.
     - Not verified PR unless it shows up in public search
     - Not a trading signal by itself
 
+--------------------------------------------------------------------------------
 10.5 LINKS
-  Website, X, Telegram, DexScreener, Solscan / explorers (including
-  Robinhood Blockscout when chain is robinhood), etc.
+--------------------------------------------------------------------------------
+
+  Website, X, Telegram, LinkedIn (when found), DexScreener, Pump.fun page,
+  Solscan / explorers (including Robinhood Blockscout when chain is
+  robinhood), etc.
+
+  Links are merged from DexScreener socials, coin_facts links (including
+  Pump.fun API twitter/telegram/website), and narrative snippets that
+  include a URL (e.g. LinkedIn search hits).
 
 
 --------------------------------------------------------------------------------
