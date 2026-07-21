@@ -10,8 +10,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=rugwatch-header-pills-v37" />
-  <!-- app cache: rugwatch-header-pills-v49 -->
+  <link rel="stylesheet" href="/styles.css?v=rw-wallet-counts-bar-v38" />
+  <!-- app cache: rw-wallet-counts-bar-v50 -->
   <!-- Public API base only — never put provider keys in config.js -->
   <script src="/config.js"></script>
 </head>
@@ -64,32 +64,52 @@
           <p class="tag">Token research · server-side keys · not financial advice</p>
         </div>
       </div>
-      <div
-        class="status-row"
-        id="pillsBar"
-        title="local = RugWatch SQLite on this ATC host · cloud = GitHub wallet list · click a pill to refresh"
-      >
-        <span
-          class="pill pill-wallets"
-          id="pillWallets"
-          role="button"
-          tabindex="0"
-          title="Local RugWatch DB wallet count on this server (same style as RugWatch site)"
-          >local —</span
-        >
-        <span
-          class="pill pill-cloud"
-          id="pillCloud"
-          role="button"
-          tabindex="0"
-          title="Cloud (GitHub) flagged wallet count — click to refresh"
-          >cloud —</span
-        >
+      <div class="status-row">
         <span id="viewStats" class="pill muted" title="Public profile views for this site">views —</span>
         <span id="serverStatus" class="pill muted">checking…</span>
         <button type="button" id="settingsBtn" class="ghost" title="Site passcode (optional)" aria-label="Settings">⚙</button>
       </div>
     </header>
+
+    <!-- RugWatch wallet counts (same idea as RugWatch site pills + stats line) -->
+    <section
+      class="rw-wallet-counts"
+      id="rwWalletCounts"
+      aria-label="RugWatch local and cloud wallet counts"
+    >
+      <div class="rw-wallet-counts-inner">
+        <span class="rw-wallet-counts-title">RugWatch wallets</span>
+        <div class="pills" id="pillsBar">
+          <span
+            class="pill pill-wallets"
+            id="pillWallets"
+            role="button"
+            tabindex="0"
+            title="Local RugWatch SQLite on this ATC server — click to refresh"
+            >Local DB —</span
+          >
+          <span
+            class="pill pill-cloud"
+            id="pillCloud"
+            role="button"
+            tabindex="0"
+            title="Cloud GitHub flagged wallets — click to refresh"
+            >Cloud —</span
+          >
+        </div>
+        <div class="rw-wallet-stats" id="statsBar">
+          Local DB: — · Cloud: —
+        </div>
+        <button
+          type="button"
+          class="ghost history-btn rw-wallet-refresh"
+          id="rwCountsRefresh"
+          title="Refresh Local DB + Cloud wallet counts"
+        >
+          Refresh
+        </button>
+      </div>
+    </section>
 
     <section class="search-panel">
       <form id="searchForm" autocomplete="off">
@@ -274,6 +294,6 @@
     </form>
   </dialog>
 
-  <script src="/app.js?v=rugwatch-header-pills-v49"></script>
+  <script src="/app.js?v=rw-wallet-counts-bar-v50"></script>
 </body>
 </html>

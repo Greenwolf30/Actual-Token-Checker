@@ -5489,10 +5489,10 @@ function initRugwatchNav() {
 }
 
 /**
- * Header pills (same idea as RugWatch site):
- *   local N  = RugWatch SQLite on this ATC host
- *   cloud N  = GitHub wallet index
- * Click either pill to refresh.
+ * RugWatch wallet counts on ATC (same idea as RugWatch site):
+ *   Local DB N  = SQLite on this ATC host
+ *   Cloud N     = GitHub wallet index
+ * Pills + stats line + Refresh. Click pill/button to reload.
  */
 function fmtRwCount(n) {
   if (n == null || !Number.isFinite(Number(n))) return "—";
@@ -5502,61 +5502,83 @@ function fmtRwCount(n) {
 function renderRugwatchCounts(data) {
   const localPill = $("pillWallets");
   const cloudPill = $("pillCloud");
-  if (!localPill && !cloudPill) return;
+  const statsBar = $("statsBar");
+  if (!localPill && !cloudPill && !statsBar) return;
 
   const local = (data && data.local) || {};
   const cloud = (data && data.cloud) || {};
 
-  // Local — mirror RugWatch "wallets N" but label "local" so it is clear on ATC
+  let localLabel = "n/a";
+  let cloudLabel = "—";
+
   if (localPill) {
     if (local.db_found && local.ok) {
-      localPill.textContent = "local " + fmtRwCount(local.count);
+      localLabel = fmtRwCount(local.count);
+      localPill.textContent = "Local DB " + localLabel;
       localPill.className = "pill pill-wallets ok";
       const shards = local.shards != null ? local.shards + " shard(s)" : "";
       const names = (local.shard_names || []).join(", ");
       localPill.title =
         "Local RugWatch SQLite on this ATC server: " +
-        fmtRwCount(local.count) +
+        localLabel +
         " wallet(s)" +
         (shards ? " · " + shards : "") +
         (names ? " · " + names : "") +
         " · click to refresh" +
         (local.error ? " · " + local.error : "");
     } else {
-      localPill.textContent = local.db_found
-        ? "local " + fmtRwCount(local.count)
-        : "local n/a";
+      localLabel = local.db_found ? fmtRwCount(local.count) : "n/a";
+      localPill.textContent = "Local DB " + localLabel;
       localPill.className = "pill pill-wallets warn";
       localPill.title =
         (local.error ||
-          "No rugwatch.db on this host (normal on hosted ATC). Desktop/self-host with RugWatch data shows a real count.") +
+          "No rugwatch.db on this host (normal on Render). Cloud still works. Desktop ATC + RugWatch shows a real Local DB count.") +
         " · click to refresh";
     }
   }
 
-  // Cloud — same wording as RugWatch "cloud N"
   if (cloudPill) {
     if (cloud.url_set && cloud.ok) {
-      cloudPill.textContent = "cloud " + fmtRwCount(cloud.count);
+      cloudLabel = fmtRwCount(cloud.count);
+      cloudPill.textContent = "Cloud " + cloudLabel;
       cloudPill.className = "pill pill-cloud ok";
       cloudPill.title =
         "Cloud (GitHub) wallet list: " +
-        fmtRwCount(cloud.count) +
+        cloudLabel +
         " wallet(s)" +
         (cloud.shards != null ? " · " + cloud.shards + " shard(s)" : "") +
         (cloud.method ? " · " + cloud.method : "") +
         " · click to refresh" +
         (cloud.error ? " · " + cloud.error : "");
     } else if (cloud.url_set) {
-      cloudPill.textContent = "cloud n/a";
+      cloudLabel = "n/a";
+      cloudPill.textContent = "Cloud n/a";
       cloudPill.className = "pill pill-cloud bad";
-      cloudPill.title = (cloud.error || "Cloud list fetch failed") + " · click to refresh";
+      cloudPill.title =
+        (cloud.error || "Cloud list fetch failed") + " · click to refresh";
     } else {
-      cloudPill.textContent = "cloud off";
+      cloudLabel = "off";
+      cloudPill.textContent = "Cloud off";
       cloudPill.className = "pill pill-cloud warn";
       cloudPill.title =
         (cloud.error || "Cloud list disabled (RUGWATCH_WALLETS_URL empty)") +
         " · click to refresh";
+    }
+  }
+
+  if (statsBar) {
+    // Same style as RugWatch statsBar line
+    statsBar.textContent =
+      "Local DB: " +
+      localLabel +
+      " · Cloud: " +
+      cloudLabel +
+      (cloud.ok && cloud.count != null ? " wallets" : "");
+    if (data && data.error && !local.ok && !cloud.ok) {
+      statsBar.title = String(data.error);
+    } else {
+      statsBar.title =
+        "Flagged wallets used when RugWatch checkbox is on. Hosted site: Local DB often n/a; Cloud is the shared GitHub list.";
     }
   }
 }
@@ -5567,16 +5589,21 @@ async function loadRugwatchCounts() {
   _rwCountsBusy = true;
   const localPill = $("pillWallets");
   const cloudPill = $("pillCloud");
-  if (localPill && /local —|local \.\.\./.test(localPill.textContent)) {
-    localPill.textContent = "local …";
+  const statsBar = $("statsBar");
+  const btn = $("rwCountsRefresh");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "…";
   }
-  if (cloudPill && /cloud —|cloud \.\.\./.test(cloudPill.textContent)) {
-    cloudPill.textContent = "cloud …";
-  }
+  if (localPill) localPill.textContent = "Local DB …";
+  if (cloudPill) cloudPill.textContent = "Cloud …";
+  if (statsBar) statsBar.textContent = "Loading Local DB + Cloud counts…";
   try {
     const r = await fetch(apiUrl("/api/rugwatch-counts"), {
       headers: headers(false),
+      cache: "no-store",
     });
+    if (!r.ok) throw new Error("HTTP " + r.status);
     const j = await r.json();
     renderRugwatchCounts(j);
   } catch (e) {
@@ -5598,6 +5625,10 @@ async function loadRugwatchCounts() {
     });
   } finally {
     _rwCountsBusy = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Refresh";
+    }
   }
 }
 
@@ -5615,6 +5646,8 @@ function initRugwatchCounts() {
   };
   wire("pillWallets");
   wire("pillCloud");
+  const btn = $("rwCountsRefresh");
+  if (btn) btn.addEventListener("click", () => loadRugwatchCounts());
   loadRugwatchCounts();
 }
 
