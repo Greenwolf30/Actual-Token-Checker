@@ -775,22 +775,35 @@ def _why_interested(
     """
     reasons: list[str] = []
 
-    # Prefer the real official description text (not story_lines[0], which can
-    # be an empty/secondary fragment and left "stated purpose/story:" blank).
+    # Prefer real official prose — never Jupiter tags / organic-score lines.
+    def _is_real_blurb(t: str) -> bool:
+        s = re.sub(r"\s+", " ", (t or "").strip())
+        if len(s) < 20:
+            return False
+        low = s.lower()
+        if low.startswith("jupiter tags") or "organic score" in low:
+            return False
+        if re.match(r"^(tags?|listing tags|categories)\s*:", low):
+            return False
+        return True
+
     body = re.sub(r"\s+", " ", (official_text or "").strip())
+    if not _is_real_blurb(body):
+        body = ""
     if not body and story_lines:
         for sl in story_lines:
             cand = re.sub(r"\s+", " ", str(sl or "").strip())
-            # Strip leading [source] labels from fragments
             cand = re.sub(r"^\[[^\]]+\]\s*", "", cand).strip()
-            if cand:
+            if _is_real_blurb(cand):
                 body = cand
                 break
-    if has_official or body:
+    if body:
         reasons.append("project publishes an official description on coin data APIs")
-        if body:
-            short = body if len(body) <= 280 else body[:277] + "…"
-            reasons.append(f"stated purpose/story: {short}")
+        short = body if len(body) <= 280 else body[:277] + "…"
+        reasons.append(f"stated purpose/story: {short}")
+    elif has_official:
+        # had a non-prose "official" flag — do not claim a story
+        pass
 
     if categories:
         reasons.append("listed under: " + ", ".join(categories[:4]))

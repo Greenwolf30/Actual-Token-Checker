@@ -433,6 +433,68 @@ def analyze_token(
         pairs=pairs,
         primary_dex_id=pair_summary.get("dex_id"),
     )
+    # Enrich socials from Pump.fun coin JSON (X / website / telegram) so About
+    # can scrape the project handle even when DexScreener omits socials.
+    try:
+        native = pf.try_native_coin(token_addr) if token_addr else None
+        if isinstance(native, dict):
+            tw = (
+                native.get("twitter")
+                or native.get("twitter_url")
+                or native.get("twitterUrl")
+                or ""
+            )
+            tw_s = str(tw).strip()
+            if tw_s and not tw_s.startswith("http"):
+                tw_s = f"https://x.com/{tw_s.lstrip('@')}"
+            if tw_s.startswith("http") and (
+                "x.com/" in tw_s.lower() or "twitter.com/" in tw_s.lower()
+            ):
+                h = dx._handle_from_url(tw_s) if hasattr(dx, "_handle_from_url") else ""
+                if not h:
+                    # fallback parse
+                    import re as _re
+
+                    m = _re.search(
+                        r"(?:x|twitter)\.com/(@?[A-Za-z0-9_]{1,30})", tw_s, _re.I
+                    )
+                    h = (m.group(1) if m else "").lstrip("@")
+                if h:
+                    if not socials.get("twitter_handle"):
+                        socials["twitter_handle"] = h
+                    extras = list(socials.get("extra_twitter_handles") or [])
+                    if h not in extras and h != socials.get("twitter_handle"):
+                        extras.append(h)
+                        socials["extra_twitter_handles"] = extras
+                    soc_list = list(socials.get("socials") or [])
+                    soc_list.append(
+                        {"platform": "twitter", "handle": h, "url": tw_s}
+                    )
+                    socials["socials"] = soc_list
+            for label, raw in (
+                ("telegram", native.get("telegram") or native.get("telegram_url")),
+                ("website", native.get("website") or native.get("website_url")),
+            ):
+                u = str(raw or "").strip()
+                if not u:
+                    continue
+                if label == "telegram" and not u.startswith("http"):
+                    u = f"https://t.me/{u.lstrip('@')}"
+                if not u.startswith("http"):
+                    continue
+                if label == "website" and "pump.fun" in u.lower():
+                    continue
+                if label == "website":
+                    webs = list(socials.get("websites") or [])
+                    webs.append({"label": "Website", "url": u})
+                    socials["websites"] = webs
+                else:
+                    soc_list = list(socials.get("socials") or [])
+                    soc_list.append({"platform": label, "url": u})
+                    socials["socials"] = soc_list
+    except Exception:  # noqa: BLE001
+        pass
+
     social_url_list: list[str] = []
     for s in socials.get("socials") or []:
         if isinstance(s, dict) and s.get("url"):

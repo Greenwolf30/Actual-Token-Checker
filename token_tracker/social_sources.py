@@ -91,6 +91,7 @@ def gather_narrative_sources(
         pass
 
     # ── Pump.fun coin metadata ─────────────────────────────────────────
+    pump_twitter: str | None = None
     if token_address and (
         (token_address or "").lower().endswith("pump")
         or pump_url
@@ -100,11 +101,26 @@ def gather_narrative_sources(
             pf = _from_pumpfun(token_address)
             for s in pf.get("snippets") or []:
                 snippets.append(s)
-                platforms.add("pumpfun")
+                platforms.add(s.get("platform") or "pumpfun")
             for d in pf.get("descriptions") or []:
                 descriptions.append(d)
             if pf.get("used"):
                 sources_used.append("pumpfun_coin")
+                platforms.add("pumpfun")
+            pump_twitter = (pf.get("twitter_handle") or "").strip().lstrip("@") or None
+            # Promote Pump.fun X as project handle when Dex did not supply one
+            if pump_twitter and not (twitter_handle or "").strip():
+                twitter_handle = pump_twitter
+            for u in (
+                pf.get("twitter_url"),
+                pf.get("website"),
+                pf.get("telegram"),
+            ):
+                if u and str(u).startswith("http"):
+                    if social_urls is None:
+                        social_urls = []
+                    if str(u) not in social_urls:
+                        social_urls = list(social_urls) + [str(u)]
         except Exception:  # noqa: BLE001
             pass
 
@@ -386,69 +402,133 @@ def _from_pumpfun(mint: str) -> dict[str, Any]:
     snippets: list[dict[str, Any]] = []
     descriptions: list[dict[str, str]] = []
     used = False
-    endpoints = [
-        f"https://frontend-api.pump.fun/coins/{mint}",
-        f"https://frontend-api-v3.pump.fun/coins/{mint}",
-        f"https://client-api-2-74b1891ee9f9.herokuapp.com/coins/{mint}",
-    ]
-    for url in endpoints:
-        try:
-            data = get_json(url, timeout=6.0, retries=0)
-        except Exception:  # noqa: BLE001
-            continue
-        if not isinstance(data, dict):
-            continue
-        desc = (
-            data.get("description")
-            or data.get("desc")
-            or data.get("body")
-            or ""
+    twitter_handle: str | None = None
+    data: dict[str, Any] | None = None
+    try:
+        from . import pumpfun as pf_mod
+
+        data = pf_mod.try_native_coin(mint)
+    except Exception:  # noqa: BLE001
+        data = None
+    if not isinstance(data, dict):
+        endpoints = [
+            f"https://frontend-api-v3.pump.fun/coins/{mint}",
+            f"https://frontend-api.pump.fun/coins/{mint}",
+            f"https://client-api-2-74b1891ee9f9.herokuapp.com/coins/{mint}",
+        ]
+        for url in endpoints:
+            try:
+                data = get_json(url, timeout=8.0, retries=1)
+            except Exception:  # noqa: BLE001
+                continue
+            if isinstance(data, dict) and (
+                data.get("mint") or data.get("symbol") or data.get("description")
+            ):
+                break
+            data = None
+    if not isinstance(data, dict):
+        return {
+            "snippets": [],
+            "descriptions": [],
+            "used": False,
+            "twitter_handle": None,
+        }
+
+    desc = (
+        data.get("description")
+        or data.get("desc")
+        or data.get("body")
+        or data.get("about")
+        or ""
+    )
+    if isinstance(desc, dict):
+        desc = desc.get("en") or desc.get("text") or ""
+    desc = re.sub(r"\s+", " ", str(desc or "")).strip()
+    name = data.get("name") or ""
+    symbol = data.get("symbol") or ""
+    twitter = data.get("twitter") or data.get("twitter_url") or data.get("twitterUrl") or ""
+    telegram = data.get("telegram") or data.get("telegram_url") or ""
+    website = data.get("website") or data.get("website_url") or ""
+
+    def _abs_url(val: str, kind: str) -> str:
+        v = (val or "").strip()
+        if not v:
+            return ""
+        if v.startswith("http"):
+            return v
+        if kind == "twitter":
+            return f"https://x.com/{v.lstrip('@')}"
+        if kind == "telegram":
+            return f"https://t.me/{v.lstrip('@')}"
+        return ""
+
+    twitter_u = _abs_url(str(twitter), "twitter")
+    telegram_u = _abs_url(str(telegram), "telegram")
+    website_u = str(website).strip() if str(website).startswith("http") else ""
+    if website_u and "pump.fun" in website_u.lower():
+        website_u = ""
+
+    if twitter_u:
+        twitter_handle = _handle_from_url(twitter_u) or str(twitter).lstrip("@") or None
+
+    # Prefer real description alone for "official" prose (not name-only blobs)
+    if desc and len(desc) >= 12:
+        descriptions.append(
+            {
+                "source": "pumpfun",
+                "text": desc[:900],
+                "url": f"https://pump.fun/{mint}",
+            }
         )
-        name = data.get("name") or ""
-        symbol = data.get("symbol") or ""
-        twitter = data.get("twitter") or data.get("twitter_url") or ""
-        telegram = data.get("telegram") or ""
-        website = data.get("website") or ""
-        text_bits = [str(desc or "").strip()]
-        if name or symbol:
-            text_bits.insert(0, f"{name} (${symbol})".strip())
-        blob = " ".join(t for t in text_bits if t)
-        if blob:
-            descriptions.append(
-                {
-                    "source": "pumpfun",
-                    "text": blob[:900],
-                    "url": f"https://pump.fun/{mint}",
-                }
-            )
+        snippets.append(
+            {
+                "source": "pumpfun_coin",
+                "platform": "pumpfun",
+                "text": desc[:320],
+                "url": f"https://pump.fun/{mint}",
+                "weight": 4.0,
+            }
+        )
+        used = True
+    elif name or symbol:
+        # Still mark pumpfun presence without inventing a story
+        snippets.append(
+            {
+                "source": "pumpfun_coin",
+                "platform": "pumpfun",
+                "text": f"{name} (${symbol}) on Pump.fun".strip(),
+                "url": f"https://pump.fun/{mint}",
+                "weight": 2.0,
+            }
+        )
+        used = True
+
+    for label, val in (
+        ("twitter", twitter_u),
+        ("telegram", telegram_u),
+        ("website", website_u),
+    ):
+        if val:
             snippets.append(
                 {
-                    "source": "pumpfun_coin",
-                    "platform": "pumpfun",
-                    "text": (str(desc).strip() or blob)[:320],
-                    "url": f"https://pump.fun/{mint}",
-                    "weight": 4.0,
+                    "source": "pumpfun_links",
+                    "platform": _platform_from_url(val) if label != "website" else "web",
+                    "text": f"Linked on Pump.fun: {label} {val}",
+                    "url": val,
+                    "weight": 2.2 if label == "twitter" else 1.5,
                 }
             )
             used = True
-        for label, val in (
-            ("twitter", twitter),
-            ("telegram", telegram),
-            ("website", website),
-        ):
-            if val and isinstance(val, str) and val.startswith("http"):
-                snippets.append(
-                    {
-                        "source": "pumpfun_links",
-                        "platform": _platform_from_url(val),
-                        "text": f"Linked on Pump.fun: {label} {val}",
-                        "url": val,
-                        "weight": 1.5,
-                    }
-                )
-        if used:
-            break
-    return {"snippets": snippets, "descriptions": descriptions, "used": used}
+
+    return {
+        "snippets": snippets,
+        "descriptions": descriptions,
+        "used": used,
+        "twitter_handle": twitter_handle,
+        "website": website_u,
+        "telegram": telegram_u,
+        "twitter_url": twitter_u,
+    }
 
 
 def _from_linked_socials(urls: list[str]) -> list[dict[str, Any]]:

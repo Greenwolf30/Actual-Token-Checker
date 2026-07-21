@@ -65,7 +65,8 @@ _CHAIN_TO_CG: dict[str, str] = {
     "near": "near-protocol",
 }
 
-# Sources whose free-text counts as "official project copy"
+# Sources whose free-text counts as "official project copy" (real prose only).
+# Jupiter tags/organic score are NOT prose — never treat as official description.
 _OFFICIAL_SOURCES = {
     "coingecko",
     "metadata_uri",
@@ -77,8 +78,14 @@ _OFFICIAL_SOURCES = {
     "solscan",
     "rugcheck_meta",
     "geckoterminal",
-    "jupiter",
 }
+
+# Tag/metadata lines that must never become "stated purpose/story"
+_NON_PROSE_DESC = re.compile(
+    r"^(jupiter\s*tags|organic\s*score|tags?\s*:|verified on jupiter|"
+    r"listing tags|categories?\s*:)",
+    re.I,
+)
 
 
 def fetch_coin_facts(
@@ -232,19 +239,24 @@ def fetch_coin_facts(
     except Exception:  # noqa: BLE001
         pass
 
-    # 8) Jupiter token search (tags + name; sometimes no free-text desc)
+    # 8) Jupiter token search — tags/name only (never use tag string as official blurb)
     if is_sol:
         try:
             jup = _from_jupiter(token_address)
             if jup.get("ok"):
                 sources.append("jupiter")
-                if jup.get("description"):
-                    descriptions.append((3.8, "jupiter", jup["description"]))
                 tags.extend(jup.get("tags") or [])
                 name_resolved = jup.get("name") or name_resolved
                 symbol_resolved = jup.get("symbol") or symbol_resolved
                 if jup.get("is_verified"):
                     tags.append("jupiter_verified")
+                if jup.get("organic_score_label"):
+                    tags.append(f"organic:{jup.get('organic_score_label')}")
+                # Only accept real free-text if API ever returns one (not fabricated tags)
+                if jup.get("description") and _is_prose_description(
+                    jup["description"], "jupiter_prose"
+                ):
+                    descriptions.append((3.8, "jupiter_prose", jup["description"]))
         except Exception:  # noqa: BLE001
             pass
 
@@ -302,12 +314,13 @@ def fetch_coin_facts(
     except Exception:  # noqa: BLE001
         pass
 
-    # Pick best official description (highest weight, longest sensible text)
+    # Pick best official description (highest weight, longest *prose* text)
     official = ""
     official_source = ""
     description_fragments: list[dict[str, str]] = []
     seen_desc: set[str] = set()
     if descriptions:
+        # Prefer known prose sources (pumpfun / metadata / CG / dex) over tags
         descriptions.sort(key=lambda x: (x[0], len(x[2])), reverse=True)
         for w, src, text in descriptions:
             cleaned = _clean_desc(text)
@@ -317,13 +330,21 @@ def fetch_coin_facts(
             if key in seen_desc:
                 continue
             seen_desc.add(key)
-            description_fragments.append({"source": src, "text": cleaned[:900]})
-            if not official and len(cleaned) >= 20:
+            is_prose = _is_prose_description(cleaned, src)
+            # Keep fragments for UI only when they are real prose (or non-jupiter)
+            if is_prose or src not in {"jupiter", "jupiter_prose"}:
+                if is_prose or src != "jupiter":
+                    description_fragments.append({"source": src, "text": cleaned[:900]})
+            if not official and is_prose and len(cleaned) >= 20:
                 official = cleaned
                 official_source = src
-        if not official and description_fragments:
-            official = description_fragments[0]["text"]
-            official_source = description_fragments[0]["source"]
+        # Never fall back to tag-only Jupiter lines as official
+        if not official:
+            for fr in description_fragments:
+                if _is_prose_description(fr.get("text") or "", fr.get("source") or ""):
+                    official = (fr.get("text") or "")[:1200]
+                    official_source = fr.get("source") or ""
+                    break
 
     # De-dupe categories + tags
     cat_out: list[str] = []
@@ -441,6 +462,32 @@ def _clean_desc(text: str) -> str:
     if t.lower() in {"", "n/a", "none", "null", "-", "tbd", "null description"}:
         return ""
     return t
+
+
+def _is_prose_description(text: str, source: str = "") -> bool:
+    """True if text looks like a real project blurb, not tags/scores."""
+    t = _clean_desc(text)
+    if len(t) < 20:
+        return False
+    src = (source or "").lower()
+    if src == "jupiter":
+        # Jupiter lite API has tags, not free-text project stories
+        return False
+    if _NON_PROSE_DESC.search(t):
+        return False
+    if re.match(r"^jupiter tags:", t, re.I):
+        return False
+    if "organic score" in t.lower() and "jupiter" in t.lower():
+        return False
+    # Mostly "tag: value · tag: value" metadata lines
+    if t.count("·") >= 1 and len(t) < 80 and ":" in t and " " not in t[t.find(":") + 1 : t.find(":") + 8]:
+        # still allow normal sentences with colons
+        pass
+    # Reject pure tag lists: "foo, bar, baz" with no sentence structure
+    if re.fullmatch(r"[\w\s,/\-·:]+", t) and t.count(",") >= 2 and "." not in t and len(t) < 100:
+        if any(k in t.lower() for k in ("launchpad", "verified", "organic", "unknown")):
+            return False
+    return True
 
 
 def _from_coingecko(chain_id: str | None, address: str) -> dict[str, Any]:
@@ -664,34 +711,83 @@ def _from_dexscreener(
 
 
 def _from_pumpfun(mint: str) -> dict[str, Any]:
+    # Prefer shared cached native coin fetch (same data as market path)
+    try:
+        from . import pumpfun as pf_mod
+
+        data = pf_mod.try_native_coin(mint)
+        if isinstance(data, dict) and (data.get("mint") or data.get("symbol") or data.get("name")):
+            return _pumpfun_row_from_dict(data)
+    except Exception:  # noqa: BLE001
+        data = None
+
     for url in (
-        f"https://frontend-api.pump.fun/coins/{mint}",
         f"https://frontend-api-v3.pump.fun/coins/{mint}",
+        f"https://frontend-api.pump.fun/coins/{mint}",
+        f"https://client-api-2-74b1891ee9f9.herokuapp.com/coins/{mint}",
     ):
         try:
-            data = get_json(url, timeout=6.0, retries=0)
+            data = get_json(url, timeout=8.0, retries=1)
         except Exception:  # noqa: BLE001
             continue
         if not isinstance(data, dict):
             continue
-        desc = (data.get("description") or data.get("desc") or "").strip()
-        links: dict[str, str] = {}
-        if data.get("twitter"):
-            links["twitter"] = str(data["twitter"])
-        if data.get("telegram"):
-            links["telegram"] = str(data["telegram"])
-        if data.get("website"):
-            links["website"] = str(data["website"])
-        uri = data.get("metadata_uri") or data.get("uri") or data.get("image_uri") or ""
-        return {
-            "ok": True,
-            "name": data.get("name"),
-            "symbol": data.get("symbol"),
-            "description": desc[:1200],
-            "links": links,
-            "uri": str(uri) if uri and str(uri).startswith("http") else "",
-        }
+        if not (data.get("mint") or data.get("symbol") or data.get("name") or data.get("description")):
+            continue
+        return _pumpfun_row_from_dict(data)
     return {"ok": False}
+
+
+def _pumpfun_row_from_dict(data: dict[str, Any]) -> dict[str, Any]:
+    """Normalize Pump.fun coin JSON → description + links."""
+    desc = (
+        data.get("description")
+        or data.get("desc")
+        or data.get("body")
+        or data.get("about")
+        or ""
+    )
+    if isinstance(desc, dict):
+        desc = desc.get("en") or desc.get("text") or ""
+    desc = _clean_desc(str(desc))
+
+    links: dict[str, str] = {}
+    tw = data.get("twitter") or data.get("twitter_url") or data.get("twitterUrl")
+    if tw:
+        tw_s = str(tw).strip()
+        if tw_s and not tw_s.startswith("http"):
+            tw_s = f"https://x.com/{tw_s.lstrip('@')}"
+        if tw_s.startswith("http"):
+            links["twitter"] = tw_s
+    tg = data.get("telegram") or data.get("telegram_url")
+    if tg:
+        tg_s = str(tg).strip()
+        if tg_s and not tg_s.startswith("http"):
+            tg_s = f"https://t.me/{tg_s.lstrip('@')}"
+        if tg_s.startswith("http"):
+            links["telegram"] = tg_s
+    web = data.get("website") or data.get("website_url") or data.get("url")
+    if web and str(web).startswith("http"):
+        # Avoid treating pump.fun itself as project website
+        if "pump.fun" not in str(web).lower():
+            links["website"] = str(web)
+
+    uri = (
+        data.get("metadata_uri")
+        or data.get("uri")
+        or data.get("metadataUri")
+        or data.get("image_uri")
+        or ""
+    )
+    uri_s = str(uri) if uri and str(uri).startswith("http") else ""
+    return {
+        "ok": True,
+        "name": data.get("name"),
+        "symbol": data.get("symbol"),
+        "description": desc[:1200],
+        "links": links,
+        "uri": uri_s,
+    }
 
 
 def _from_rugcheck(mint: str) -> dict[str, Any]:
@@ -939,21 +1035,15 @@ def _from_jupiter(mint: str) -> dict[str, Any]:
     for t in row.get("tags") or []:
         if isinstance(t, str) and t.strip():
             tags.append(t.strip())
-    # Build a short "what Jupiter says" string from tags when no free-text desc
-    desc = ""
-    if tags:
-        desc = "Jupiter tags: " + ", ".join(tags[:8])
-        if row.get("organicScoreLabel"):
-            desc += f" · organic score: {row.get('organicScoreLabel')}"
-        if row.get("isVerified"):
-            desc += " · verified on Jupiter"
-
+    # Do NOT invent a description from tags (that polluted About "stated purpose")
+    organic = row.get("organicScoreLabel")
     return {
         "ok": True,
         "name": row.get("name"),
         "symbol": (str(row.get("symbol") or "").lstrip("$") or None),
-        "description": desc,
+        "description": "",  # tags only — never official prose
         "tags": tags,
+        "organic_score_label": organic,
         "is_verified": bool(row.get("isVerified")),
     }
 
