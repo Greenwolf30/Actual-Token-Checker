@@ -190,8 +190,8 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
         "notes": (
             "Bundle detection is heuristic from a top-holder snapshot only. "
             "Suspect total % = sum of unique suspect wallets' supply %. "
-            "It does not prove same funding source or sniper bot coordination. "
-            "Full graphs need paid indexers / historical funding analysis."
+            "Comprehensive mode also scans launch-window same-slot multi-buys "
+            "and 1-hop SOL funding clusters (Helius). Not a full commercial sniper graph."
         ),
     }
 
@@ -360,6 +360,44 @@ def format_bundles_text(data: dict[str, Any]) -> str:
     else:
         lines.append(
             "  Insider-flagged wallets will show here if value returns True"
+        )
+
+    # Funding clusters (shared SOL funder — comprehensive check)
+    funding = data.get("funding_clusters") or []
+    if funding:
+        lines.append("")
+        lines.append("  Shared SOL funder clusters (1-hop):")
+        for fc in funding[:6]:
+            kids = list(fc.get("children") or [])
+            lines.append(
+                f"    • funder {fc.get('funder')} → {fc.get('child_count') or len(kids)} wallets"
+            )
+            for c in kids[:6]:
+                lines.append(f"         {c}")
+            if len(kids) > 6:
+                lines.append(f"         … +{len(kids) - 6} more")
+    else:
+        lines.append("")
+        lines.append(
+            "  Shared SOL funder clusters will show here if value returns True"
+        )
+
+    # Launch-window same-slot groups
+    slots = data.get("same_slot_groups") or []
+    if slots:
+        lines.append("")
+        lines.append("  Launch-window same-slot multi-buys:")
+        for g in slots[:5]:
+            lines.append(
+                f"    • slot {g.get('slot')}: {g.get('unique_buyers')} wallets / "
+                f"{g.get('tx_count')} txs"
+            )
+            for w in (g.get("wallets") or [])[:5]:
+                lines.append(f"         {w}")
+    else:
+        lines.append("")
+        lines.append(
+            "  Launch-window same-slot multi-buys will show here if value returns True"
         )
 
     suspects = data.get("suspect_wallets") or []

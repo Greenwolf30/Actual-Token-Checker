@@ -46,14 +46,16 @@ def comprehensive_bundle_check(
         sources_used.append("jito_style_helius_slots")
     if jito_eng.get("ok"):
         sources_used.append("jito_engine")
+    # funding added after scan (appended when clusters found)
 
     # Build synthetic holders_data for heuristic layer from Helius (primary)
-    # enriched with Rugcheck insiders + Birdeye tags
+    # enriched with Rugcheck insiders + Birdeye tags; aggregate by owner (not ATA)
     holders_data = _merge_holder_layers(helius, rug, bird)
     base = bun.analyze_bundles(holders_data)
 
     fusion_signals: list[dict[str, Any]] = []
     extra_score = 0
+    funding_report: dict[str, Any] = {"ok": False, "clusters": []}
 
     # Rugcheck-specific
     if rug.get("ok"):
@@ -156,20 +158,22 @@ def comprehensive_bundle_check(
                 }
             )
 
-    # Jito-style same-slot groups
+    # Jito-style same-slot groups (launch window)
     groups = jito_style.get("same_slot_groups") or []
     if jito_style.get("ok") and groups:
         best = max(groups, key=lambda g: int(g.get("unique_buyers") or 0))
+        sev = "high" if int(best.get("unique_buyers") or 0) >= 3 else "medium"
         fusion_signals.append(
             {
                 "id": "jito_style_same_slot",
                 "provider": "jito_style",
-                "severity": "high",
-                "title": "Same-slot multi-wallet buys (Jito-style)",
+                "severity": sev,
+                "title": "Launch-window same-slot multi-wallet buys",
                 "detail": (
                     f"{best.get('unique_buyers')} wallets across {best.get('tx_count')} txs "
                     f"in slot {best.get('slot')} — atomic/MEV-style snipe pattern "
-                    f"(via Helius tx history; {len(groups)} slot group(s) total)."
+                    f"(Helius history; {len(groups)} slot group(s); "
+                    f"scanned {jito_style.get('sigs_scanned') or '?'} txs)."
                 ),
             }
         )
@@ -178,22 +182,114 @@ def comprehensive_bundle_check(
         if base.get("ok"):
             suspects = list(base.get("suspect_wallets") or [])
             existing = {s.get("wallet") for s in suspects}
-            for w in best.get("wallets") or []:
-                if w not in existing:
-                    suspects.append(
-                        {
-                            "wallet": w,
-                            "reasons": ["same-slot multi-buy (Jito-style)"],
-                            "pct_supply": None,
-                        }
-                    )
+            for g in groups[:5]:
+                for w in g.get("wallets") or []:
+                    if w not in existing:
+                        suspects.append(
+                            {
+                                "wallet": w,
+                                "reasons": ["same-slot multi-buy (launch window)"],
+                                "pct_supply": None,
+                            }
+                        )
+                        existing.add(w)
             base = dict(base)
-            base["suspect_wallets"] = suspects[:25]
-            # Refresh suspect total % after fusion adds wallets
-            spct, sn = bun._suspect_total_percent(suspects[:25])  # type: ignore[attr-defined]
+            base["suspect_wallets"] = suspects[:40]
+            spct, sn = bun._suspect_total_percent(suspects[:40])  # type: ignore[attr-defined]
             s0 = dict(base.get("summary") or {})
             s0["suspect_total_pct"] = spct
             s0["suspect_wallet_count"] = sn
+            base["summary"] = s0
+        base = dict(base)
+        base["same_slot_groups"] = groups[:12]
+        base["early_buyers"] = list(jito_style.get("early_buyers") or [])[:30]
+
+    # Funding hops: common SOL funder among suspects / similar-size / early buyers
+    seed_wallets: list[str] = []
+    if base.get("ok"):
+        for s in base.get("suspect_wallets") or []:
+            if s.get("wallet"):
+                seed_wallets.append(str(s["wallet"]))
+        for g in base.get("similar_size_groups") or []:
+            for w in g.get("wallets") or []:
+                seed_wallets.append(str(w))
+            for m in g.get("members") or []:
+                if isinstance(m, dict) and m.get("wallet"):
+                    seed_wallets.append(str(m["wallet"]))
+    for g in groups[:3]:
+        seed_wallets.extend(str(x) for x in (g.get("wallets") or []))
+    for eb in (jito_style.get("early_buyers") or [])[:15]:
+        if isinstance(eb, dict) and eb.get("wallet"):
+            seed_wallets.append(str(eb["wallet"]))
+
+    try:
+        funding_report = src.analyze_funding_clusters(seed_wallets)
+    except Exception as exc:  # noqa: BLE001
+        funding_report = {"ok": False, "error": str(exc), "clusters": []}
+
+    if funding_report.get("ok") and (funding_report.get("clusters") or []):
+        if "funding_1hop" not in sources_used:
+            sources_used.append("funding_1hop")
+        f_clusters = list(funding_report.get("clusters") or [])
+        best_f = f_clusters[0]
+        fusion_signals.append(
+            {
+                "id": "funding_cluster",
+                "provider": "funding",
+                "severity": best_f.get("severity") or "high",
+                "title": "Shared SOL funder (1-hop)",
+                "detail": (
+                    f"{best_f.get('child_count')} suspect wallets funded by "
+                    f"{best_f.get('funder')} — classic split-wallet bundle. "
+                    f"{len(f_clusters)} funder cluster(s) found "
+                    f"(scanned {funding_report.get('txs_scanned') or 0} txs)."
+                ),
+            }
+        )
+        extra_score += min(
+            28, 12 + int(best_f.get("child_count") or 0) * 4
+        )
+        if base.get("ok"):
+            suspects = list(base.get("suspect_wallets") or [])
+            existing = {s.get("wallet") for s in suspects}
+            for fc in f_clusters[:4]:
+                funder = fc.get("funder")
+                kids = list(fc.get("children") or [])
+                for w in kids:
+                    if w not in existing:
+                        suspects.append(
+                            {
+                                "wallet": w,
+                                "reasons": [f"funded by {funder}"],
+                                "pct_supply": None,
+                            }
+                        )
+                        existing.add(w)
+                    else:
+                        for s in suspects:
+                            if s.get("wallet") == w:
+                                rs = list(s.get("reasons") or [])
+                                note = f"funded by {funder}"
+                                if note not in rs:
+                                    rs.append(note)
+                                s["reasons"] = rs
+                if funder and funder not in existing:
+                    suspects.append(
+                        {
+                            "wallet": funder,
+                            "reasons": ["common funder of bundle wallets"],
+                            "pct_supply": None,
+                        }
+                    )
+                    existing.add(funder)
+            base = dict(base)
+            base["suspect_wallets"] = suspects[:40]
+            base["funding_clusters"] = f_clusters[:8]
+            spct, sn = bun._suspect_total_percent(suspects[:40])  # type: ignore[attr-defined]
+            s0 = dict(base.get("summary") or {})
+            s0["suspect_total_pct"] = spct
+            s0["suspect_wallet_count"] = sn
+            s0["funding_clusters"] = len(f_clusters)
             base["summary"] = s0
 
     if jito_eng.get("ok"):
@@ -219,7 +315,7 @@ def comprehensive_bundle_check(
         base = dict(base)
         base["summary"] = s
         base["source"] = "+".join(sources_used) or "none"
-        base["method"] = "comprehensive_helius_rugcheck_birdeye_jito"
+        base["method"] = "comprehensive_helius_rugcheck_birdeye_jito_funding"
         base["fusion_signals"] = fusion_signals
         base["source_reports"] = {
             "helius_ok": bool(helius.get("ok")),
@@ -229,6 +325,8 @@ def comprehensive_bundle_check(
             "jito_style_ok": bool(jito_style.get("ok")),
             "jito_engine_ok": bool(jito_eng.get("ok")),
             "jito_style_groups": len(groups),
+            "funding_ok": bool(funding_report.get("ok")),
+            "funding_clusters": len(funding_report.get("clusters") or []),
             "errors": {
                 k: (sources.get(k) or {}).get("error")
                 for k in ("helius", "rugcheck", "birdeye", "jito_style", "jito_engine")
@@ -250,9 +348,10 @@ def comprehensive_bundle_check(
             )
         base["signals"] = signals
         base["notes"] = (
-            "Comprehensive bundle check: Helius top holders + Rugcheck insiders/risks + "
-            "Birdeye (if key) security/holder tags + Jito-style same-slot multi-buys "
-            "(via Helius txs). Jito public API does not dump historical snipers per mint. "
+            "Comprehensive bundle check: Helius top holders (owner-resolved) + "
+            "Rugcheck insiders/risks + Birdeye (if key) + launch-window same-slot "
+            "multi-buys + 1-hop SOL funding clusters (Helius). "
+            "Not a full commercial sniper graph. "
             + (base.get("notes") or "")
         ).strip()
         return base
@@ -323,14 +422,67 @@ def comprehensive_bundle_check(
     }
 
 
+def _aggregate_holders_by_owner(holders: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge rows so wallet = owner (sum multi-ATA bags)."""
+    by_w: dict[str, dict[str, Any]] = {}
+    for h in holders:
+        if not isinstance(h, dict):
+            continue
+        w = (h.get("wallet") or h.get("owner") or "").strip()
+        ata = (h.get("token_account") or "").strip()
+        # If wallet equals ATA and we only have address, keep but tag
+        if not w:
+            continue
+        cur = by_w.get(w)
+        if not cur:
+            by_w[w] = dict(h)
+            by_w[w]["wallet"] = w
+            if ata and ata != w:
+                by_w[w]["token_account"] = ata
+            continue
+        # Sum balances / pct
+        try:
+            b0 = float(cur.get("balance") or 0)
+            b1 = float(h.get("balance") or 0)
+            cur["balance"] = b0 + b1
+        except (TypeError, ValueError):
+            pass
+        try:
+            p0 = float(cur.get("pct_supply") or 0)
+            p1 = float(h.get("pct_supply") or 0)
+            if p0 or p1:
+                cur["pct_supply"] = p0 + p1
+        except (TypeError, ValueError):
+            pass
+        if h.get("insider"):
+            cur["insider"] = True
+        if ata and ata != w:
+            atas = list(cur.get("token_accounts") or [])
+            if cur.get("token_account") and cur["token_account"] not in atas:
+                atas.append(cur["token_account"])
+            if ata not in atas:
+                atas.append(ata)
+            cur["token_accounts"] = atas[:8]
+    ordered = sorted(
+        by_w.values(),
+        key=lambda r: float(r.get("pct_supply") or r.get("balance") or 0),
+        reverse=True,
+    )
+    for i, row in enumerate(ordered):
+        row["rank"] = i + 1
+    return ordered
+
+
 def _merge_holder_layers(
     helius: dict[str, Any],
     rug: dict[str, Any],
     bird: dict[str, Any],
 ) -> dict[str, Any]:
-    """Prefer Helius holders; stamp Rugcheck insider flags by wallet."""
+    """Prefer Helius holders; stamp Rugcheck insider flags by wallet; owner-aggregate."""
     if helius.get("ok") and helius.get("holders"):
-        holders = [dict(h) for h in helius.get("holders") or []]
+        holders = _aggregate_holders_by_owner(
+            [dict(h) for h in helius.get("holders") or []]
+        )
         insider_w = {
             h.get("wallet")
             for h in (rug.get("holders") or [])
@@ -387,9 +539,10 @@ def _merge_holder_layers(
                     "label": h.get("label"),
                     "is_known_program": False,
                     "insider": bool(h.get("insider")),
-                    "token_account": "",
+                    "token_account": h.get("token_account") or "",
                 }
             )
+        holders = _aggregate_holders_by_owner(holders)
         return {
             "ok": True,
             "source": "rugcheck_fallback",

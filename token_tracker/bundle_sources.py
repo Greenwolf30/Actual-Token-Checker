@@ -158,13 +158,17 @@ def _rpc(url: str, method: str, params: list[Any] | dict[str, Any]) -> Any:
     return data.get("result")
 
 
-def _helius_same_slot_snipes(mint: str, *, max_sigs: int = 40) -> dict[str, Any]:
+def _helius_same_slot_snipes(
+    mint: str,
+    *,
+    max_sigs: int = 120,
+    max_tx_fetch: int = 60,
+) -> dict[str, Any]:
     """
     Detect early multi-wallet same-slot activity (atomic / Jito-style snipes).
 
-    Jito's public bundle API submits MEV bundles; it does not return a
-    historical 'snipers for mint X' list. Same-slot multi-buyer patterns
-    from Helius enhanced txs are the practical public proxy.
+    Walks mint signatures toward *oldest* activity (launch window), not only
+    the latest trades. Jito public API does not return historical snipers.
     """
     url = helius_url()
     if not url:
@@ -174,13 +178,26 @@ def _helius_same_slot_snipes(mint: str, *, max_sigs: int = 40) -> dict[str, Any]
             "method": "helius_enhanced_txs_same_slot",
         }
 
+    # Paginate toward older signatures (launch is usually oldest activity)
+    all_sigs: list[dict[str, Any]] = []
+    before: str | None = None
+    pages = 0
     try:
-        # Recent signatures involving the mint (as account)
-        sigs = _rpc(
-            url,
-            "getSignaturesForAddress",
-            [mint, {"limit": max_sigs}],
-        )
+        while len(all_sigs) < max_sigs and pages < 4:
+            params: dict[str, Any] = {"limit": min(50, max_sigs - len(all_sigs))}
+            if before:
+                params["before"] = before
+            batch = _rpc(url, "getSignaturesForAddress", [mint, params])
+            pages += 1
+            if not isinstance(batch, list) or not batch:
+                break
+            all_sigs.extend([b for b in batch if isinstance(b, dict)])
+            last_sig = batch[-1].get("signature") if batch else None
+            if not last_sig or last_sig == before:
+                break
+            before = str(last_sig)
+            if len(batch) < 20:
+                break
     except Exception as exc:  # noqa: BLE001
         return {
             "ok": False,
@@ -188,18 +205,23 @@ def _helius_same_slot_snipes(mint: str, *, max_sigs: int = 40) -> dict[str, Any]
             "method": "helius_enhanced_txs_same_slot",
         }
 
-    if not isinstance(sigs, list) or not sigs:
+    if not all_sigs:
         return {
             "ok": True,
             "method": "helius_enhanced_txs_same_slot",
             "same_slot_groups": [],
-            "notes": "No recent signatures for mint.",
+            "early_buyers": [],
+            "notes": "No signatures for mint.",
         }
 
-    # Pull a handful of full txs (oldest of the batch ≈ earlier activity)
-    sample = list(reversed(sigs[:25]))  # older first within window
+    # Prefer oldest portion of what we collected (launch window)
+    # all_sigs is newest-first from RPC; take the tail as older activity
+    older = list(reversed(all_sigs[-max_tx_fetch:]))
     by_slot: dict[int, list[dict[str, Any]]] = {}
-    for row in sample:
+    first_buy_ts: dict[str, int] = {}
+    buyer_hits: dict[str, int] = {}
+
+    for row in older:
         sig = row.get("signature")
         if not sig:
             continue
@@ -222,39 +244,234 @@ def _helius_same_slot_snipes(mint: str, *, max_sigs: int = 40) -> dict[str, Any]
         slot = tx.get("slot")
         if slot is None:
             continue
+        block_time = tx.get("blockTime")
         buyers = _extract_buyers_from_tx(tx, mint)
         if not buyers:
             continue
         by_slot.setdefault(int(slot), []).append(
-            {"signature": sig, "buyers": buyers, "slot": int(slot)}
+            {
+                "signature": sig,
+                "buyers": buyers,
+                "slot": int(slot),
+                "block_time": block_time,
+            }
         )
+        for w in buyers:
+            buyer_hits[w] = buyer_hits.get(w, 0) + 1
+            if block_time is not None:
+                bt = int(block_time)
+                if w not in first_buy_ts or bt < first_buy_ts[w]:
+                    first_buy_ts[w] = bt
 
     groups = []
     for slot, entries in sorted(by_slot.items()):
         wallets: set[str] = set()
         for e in entries:
             wallets.update(e.get("buyers") or [])
-        if len(wallets) >= 3 and len(entries) >= 2:
+        # 2+ wallets in same slot is interesting; 3+ is strong
+        if len(wallets) >= 2:
             groups.append(
                 {
                     "slot": slot,
                     "tx_count": len(entries),
                     "unique_buyers": len(wallets),
-                    "wallets": sorted(wallets)[:20],
+                    "wallets": sorted(wallets)[:24],
                     "signatures": [e.get("signature") for e in entries[:8]],
+                    "block_time": next(
+                        (e.get("block_time") for e in entries if e.get("block_time")),
+                        None,
+                    ),
+                    "strength": "high" if len(wallets) >= 3 else "medium",
                 }
             )
 
+    # Prefer strongest groups
+    groups.sort(
+        key=lambda g: (-int(g.get("unique_buyers") or 0), -int(g.get("tx_count") or 0))
+    )
+    early_buyers = [
+        {
+            "wallet": w,
+            "buy_tx_hits": buyer_hits[w],
+            "first_buy_ts": first_buy_ts.get(w),
+        }
+        for w in sorted(buyer_hits.keys(), key=lambda x: -buyer_hits[x])[:40]
+    ]
+
     return {
         "ok": True,
-        "method": "helius_enhanced_txs_same_slot",
-        "same_slot_groups": groups[:15],
-        "sigs_scanned": len(sample),
+        "method": "helius_enhanced_txs_same_slot_launch_window",
+        "same_slot_groups": groups[:20],
+        "early_buyers": early_buyers,
+        "sigs_scanned": len(older),
+        "sigs_collected": len(all_sigs),
         "notes": (
-            "Same-slot multi-wallet buys ≈ atomic/Jito-style snipe pattern. "
-            "Not a direct Jito historical bundle dump."
+            "Launch-window same-slot multi-wallet buys (Helius history). "
+            "Proxy for atomic/Jito-style snipes — not a Jito archive dump."
         ),
     }
+
+
+def analyze_funding_clusters(
+    wallets: list[str],
+    *,
+    max_wallets: int = 12,
+    sigs_per_wallet: int = 12,
+) -> dict[str, Any]:
+    """
+    Trace recent SOL inflows for suspect wallets; group by common funder.
+
+    Best-effort via Helius getSignaturesForAddress + getTransaction.
+    1 hop only (who sent SOL into each suspect).
+    """
+    url = helius_url()
+    if not url:
+        return {
+            "ok": False,
+            "error": "Helius required for funding-hop scan",
+            "method": "helius_sol_inflow_1hop",
+            "clusters": [],
+        }
+
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for w in wallets:
+        a = (w or "").strip()
+        if not a or a in seen or len(a) < 32:
+            continue
+        seen.add(a)
+        cleaned.append(a)
+        if len(cleaned) >= max_wallets:
+            break
+
+    if len(cleaned) < 2:
+        return {
+            "ok": True,
+            "method": "helius_sol_inflow_1hop",
+            "clusters": [],
+            "notes": "Need ≥2 suspect wallets for funding clustering.",
+            "wallets_scanned": cleaned,
+        }
+
+    # wallet -> set of funders (SOL senders into this wallet)
+    funders_of: dict[str, set[str]] = {w: set() for w in cleaned}
+    scanned = 0
+
+    for w in cleaned:
+        try:
+            sigs = _rpc(
+                url,
+                "getSignaturesForAddress",
+                [w, {"limit": sigs_per_wallet}],
+            )
+        except Exception:  # noqa: BLE001
+            continue
+        if not isinstance(sigs, list):
+            continue
+        for row in sigs[:sigs_per_wallet]:
+            sig = (row or {}).get("signature")
+            if not sig:
+                continue
+            try:
+                tx = _rpc(
+                    url,
+                    "getTransaction",
+                    [
+                        sig,
+                        {
+                            "encoding": "jsonParsed",
+                            "maxSupportedTransactionVersion": 0,
+                        },
+                    ],
+                )
+            except Exception:  # noqa: BLE001
+                continue
+            if not tx:
+                continue
+            scanned += 1
+            for funder in _extract_sol_funders(tx, w):
+                if funder and funder != w:
+                    funders_of[w].add(funder)
+
+    # Invert: funder -> children
+    by_funder: dict[str, list[str]] = {}
+    for child, parents in funders_of.items():
+        for p in parents:
+            by_funder.setdefault(p, []).append(child)
+
+    clusters = []
+    for funder, children in by_funder.items():
+        uniq = sorted(set(children))
+        if len(uniq) < 2:
+            continue
+        clusters.append(
+            {
+                "funder": funder,
+                "children": uniq[:20],
+                "child_count": len(uniq),
+                "severity": "critical" if len(uniq) >= 4 else "high",
+            }
+        )
+    clusters.sort(key=lambda c: -int(c.get("child_count") or 0))
+
+    return {
+        "ok": True,
+        "method": "helius_sol_inflow_1hop",
+        "clusters": clusters[:12],
+        "wallets_scanned": cleaned,
+        "txs_scanned": scanned,
+        "notes": (
+            "Wallets that received SOL from the same funder (1 hop). "
+            "Classic split-wallet bundle pattern. Best-effort; not full graph."
+        ),
+    }
+
+
+def _extract_sol_funders(tx: dict[str, Any], recipient: str) -> list[str]:
+    """Wallets that sent SOL to recipient in this tx (parsed balance deltas)."""
+    funders: set[str] = set()
+    meta = tx.get("meta") or {}
+    msg = (tx.get("transaction") or {}).get("message") or {}
+    keys = msg.get("accountKeys") or []
+    addrs: list[str] = []
+    for k in keys:
+        if isinstance(k, dict):
+            addrs.append(str(k.get("pubkey") or ""))
+        else:
+            addrs.append(str(k or ""))
+    pre = meta.get("preBalances") or []
+    post = meta.get("postBalances") or []
+    if len(pre) != len(post) or len(pre) != len(addrs):
+        # Fallback: fee payer as possible funder if recipient appears
+        if addrs and recipient in addrs and addrs[0] != recipient:
+            return [addrs[0]]
+        return []
+
+    rec_idx = None
+    for i, a in enumerate(addrs):
+        if a == recipient:
+            rec_idx = i
+            break
+    if rec_idx is None:
+        return []
+    try:
+        rec_delta = int(post[rec_idx]) - int(pre[rec_idx])
+    except (TypeError, ValueError):
+        return []
+    if rec_delta <= 0:
+        return []
+
+    # Anyone whose SOL balance dropped is a candidate funder
+    for i, a in enumerate(addrs):
+        if not a or a == recipient:
+            continue
+        try:
+            d = int(post[i]) - int(pre[i])
+        except (TypeError, ValueError):
+            continue
+        if d < 0:
+            funders.add(a)
+    return list(funders)
 
 
 def _extract_buyers_from_tx(tx: dict[str, Any], mint: str) -> list[str]:
@@ -304,8 +521,12 @@ def _fetch_rugcheck(mint: str) -> dict[str, Any]:
 
     top = data.get("topHolders") or []
     holders = []
-    for i, row in enumerate(top[:30]):
-        owner = row.get("owner") or row.get("address") or ""
+    for i, row in enumerate(top[:40]):
+        # Prefer owner (wallet); address is often the ATA token account
+        owner = (row.get("owner") or "").strip()
+        ata = (row.get("address") or "").strip()
+        if not owner:
+            owner = ata
         try:
             pct = float(row.get("pct")) if row.get("pct") is not None else None
         except (TypeError, ValueError):
@@ -314,6 +535,7 @@ def _fetch_rugcheck(mint: str) -> dict[str, Any]:
             {
                 "rank": i + 1,
                 "wallet": owner,
+                "token_account": ata if ata and ata != owner else "",
                 "pct_supply": pct,
                 "insider": bool(row.get("insider")),
                 "label": "insider" if row.get("insider") else None,
