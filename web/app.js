@@ -2707,13 +2707,26 @@ function ruggersBuckets(rec) {
     if (flaggedSold) {
       if (!flaggedSeen.has(w)) {
         flaggedSeen.add(w);
+        const metaF = flaggedSellers[w] || st.flagged_meta || {};
+        const fromM = [];
+        const addFrom = (m) => {
+          const s = (m || "").trim();
+          if (s && !fromM.includes(s)) fromM.push(s);
+        };
+        for (const m of metaF.flagged_from_mints || []) addFrom(m);
+        addFrom(metaF.flagged_from_mint);
+        for (const m of (rwKnown[w] && rwKnown[w].flagged_from_mints) || [])
+          addFrom(m);
+        addFrom(rwKnown[w] && rwKnown[w].flagged_from_mint);
+        addFrom(rec.address);
         flaggedWallets.push({
           ...row,
           tag: "seller",
           is_flagged: true,
-          risk_score:
-            (flaggedSellers[w] && flaggedSellers[w].risk_score) || st.risk_score,
-          label: (flaggedSellers[w] && flaggedSellers[w].label) || st.label,
+          risk_score: metaF.risk_score || st.risk_score,
+          label: metaF.label || st.label,
+          flagged_from_mints: fromM,
+          flagged_from_mint: fromM[0] || null,
         });
       }
       continue;
