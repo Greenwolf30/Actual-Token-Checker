@@ -398,35 +398,24 @@ def _from_dexscreener(
 
 
 def _from_pumpfun(mint: str) -> dict[str, Any]:
-    """Best-effort Pump.fun coin JSON (often Cloudflare-blocked)."""
+    """
+    Pump.fun coin *About* section for narrative (API + metadata + page).
+
+    Prefer shared fetch_coin_about so About tab matches the pump.fun card.
+    """
     snippets: list[dict[str, Any]] = []
     descriptions: list[dict[str, str]] = []
     used = False
     twitter_handle: str | None = None
-    data: dict[str, Any] | None = None
+    about: dict[str, Any] | None = None
     try:
         from . import pumpfun as pf_mod
 
-        data = pf_mod.try_native_coin(mint)
+        about = pf_mod.fetch_coin_about(mint)
     except Exception:  # noqa: BLE001
-        data = None
-    if not isinstance(data, dict):
-        endpoints = [
-            f"https://frontend-api-v3.pump.fun/coins/{mint}",
-            f"https://frontend-api.pump.fun/coins/{mint}",
-            f"https://client-api-2-74b1891ee9f9.herokuapp.com/coins/{mint}",
-        ]
-        for url in endpoints:
-            try:
-                data = get_json(url, timeout=8.0, retries=1)
-            except Exception:  # noqa: BLE001
-                continue
-            if isinstance(data, dict) and (
-                data.get("mint") or data.get("symbol") or data.get("description")
-            ):
-                break
-            data = None
-    if not isinstance(data, dict):
+        about = None
+
+    if not isinstance(about, dict) or not about.get("ok"):
         return {
             "snippets": [],
             "descriptions": [],
@@ -434,70 +423,46 @@ def _from_pumpfun(mint: str) -> dict[str, Any]:
             "twitter_handle": None,
         }
 
-    desc = (
-        data.get("description")
-        or data.get("desc")
-        or data.get("body")
-        or data.get("about")
-        or ""
-    )
-    if isinstance(desc, dict):
-        desc = desc.get("en") or desc.get("text") or ""
-    desc = re.sub(r"\s+", " ", str(desc or "")).strip()
-    name = data.get("name") or ""
-    symbol = data.get("symbol") or ""
-    twitter = data.get("twitter") or data.get("twitter_url") or data.get("twitterUrl") or ""
-    telegram = data.get("telegram") or data.get("telegram_url") or ""
-    website = data.get("website") or data.get("website_url") or ""
-
-    def _abs_url(val: str, kind: str) -> str:
-        v = (val or "").strip()
-        if not v:
-            return ""
-        if v.startswith("http"):
-            return v
-        if kind == "twitter":
-            return f"https://x.com/{v.lstrip('@')}"
-        if kind == "telegram":
-            return f"https://t.me/{v.lstrip('@')}"
-        return ""
-
-    twitter_u = _abs_url(str(twitter), "twitter")
-    telegram_u = _abs_url(str(telegram), "telegram")
-    website_u = str(website).strip() if str(website).startswith("http") else ""
+    desc = re.sub(r"\s+", " ", str(about.get("description") or "")).strip()
+    name = about.get("name") or ""
+    symbol = about.get("symbol") or ""
+    page = about.get("page_url") or f"https://pump.fun/coin/{mint}"
+    links = about.get("links") if isinstance(about.get("links"), dict) else {}
+    twitter_u = str(links.get("twitter") or "").strip()
+    telegram_u = str(links.get("telegram") or "").strip()
+    website_u = str(links.get("website") or "").strip()
     if website_u and "pump.fun" in website_u.lower():
         website_u = ""
-
     if twitter_u:
-        twitter_handle = _handle_from_url(twitter_u) or str(twitter).lstrip("@") or None
+        twitter_handle = _handle_from_url(twitter_u)
 
-    # Prefer real description alone for "official" prose (not name-only blobs)
-    if desc and len(desc) >= 12:
+    src_label = about.get("description_source") or "pumpfun_about"
+    # Prefer real About prose alone (not name-only blobs)
+    if desc and len(desc) >= 8:
         descriptions.append(
             {
-                "source": "pumpfun",
+                "source": "pumpfun_about",
                 "text": desc[:900],
-                "url": f"https://pump.fun/{mint}",
+                "url": page,
             }
         )
         snippets.append(
             {
-                "source": "pumpfun_coin",
+                "source": "pumpfun_about",
                 "platform": "pumpfun",
                 "text": desc[:320],
-                "url": f"https://pump.fun/{mint}",
-                "weight": 4.0,
+                "url": page,
+                "weight": 4.5,
             }
         )
         used = True
     elif name or symbol:
-        # Still mark pumpfun presence without inventing a story
         snippets.append(
             {
                 "source": "pumpfun_coin",
                 "platform": "pumpfun",
                 "text": f"{name} (${symbol}) on Pump.fun".strip(),
-                "url": f"https://pump.fun/{mint}",
+                "url": page,
                 "weight": 2.0,
             }
         )
@@ -528,6 +493,7 @@ def _from_pumpfun(mint: str) -> dict[str, Any]:
         "website": website_u,
         "telegram": telegram_u,
         "twitter_url": twitter_u,
+        "about_source": src_label,
     }
 
 

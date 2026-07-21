@@ -372,6 +372,313 @@ def try_native_coin(mint: str) -> dict[str, Any] | None:
     return None
 
 
+def _clean_about_text(text: Any) -> str:
+    import re
+
+    if text is None:
+        return ""
+    if isinstance(text, dict):
+        text = text.get("en") or text.get("text") or text.get("description") or ""
+    t = re.sub(r"<[^>]+>", " ", str(text or ""))
+    t = re.sub(r"\s+", " ", t).strip()
+    if t.lower() in {"", "n/a", "none", "null", "-", "tbd", "null description"}:
+        return ""
+    # Drop Pump.fun site chrome / SEO market blurbs (not the project About)
+    low = t.lower()
+    chrome_bits = (
+        "price today",
+        "live ",
+        "trade on solana via pump",
+        "market cap $",
+        "trade aq on",
+        "via pump.fun",
+    )
+    if any(b in low for b in chrome_bits) and (
+        "market cap" in low or "price today" in low or "trade " in low
+    ):
+        return ""
+    if low.startswith("live ") and "price" in low and "usd" in low:
+        return ""
+    return t
+
+
+def _about_from_coin_dict(coin: dict[str, Any]) -> str:
+    """
+    Extract the About-section prose from Pump.fun coin JSON.
+
+    UI "About" maps to description (and a few legacy aliases).
+    """
+    for key in (
+        "description",
+        "about",
+        "desc",
+        "body",
+        "bio",
+        "summary",
+        "story",
+        "project_description",
+        "token_description",
+    ):
+        got = _clean_about_text(coin.get(key))
+        if len(got) >= 8:
+            return got
+    # Nested blobs some API versions use
+    for nest_key in ("profile", "metadata", "info", "details"):
+        nest = coin.get(nest_key)
+        if isinstance(nest, dict):
+            for key in ("description", "about", "desc", "body", "bio"):
+                got = _clean_about_text(nest.get(key))
+                if len(got) >= 8:
+                    return got
+    return ""
+
+
+def _about_from_metadata_uri(uri: str | None) -> tuple[str, dict[str, str], dict[str, Any]]:
+    """Follow metadata_uri (what Pump.fun About often stores for the mint)."""
+    u = (uri or "").strip()
+    if not u:
+        return "", {}, {}
+    if u.startswith("ipfs://"):
+        cid = u[len("ipfs://") :].lstrip("/")
+        candidates = [
+            f"https://ipfs.io/ipfs/{cid}",
+            f"https://cloudflare-ipfs.com/ipfs/{cid}",
+            f"https://nftstorage.link/ipfs/{cid}",
+        ]
+    else:
+        candidates = [u]
+
+    from .http_util import get_json, get_text
+    import json
+
+    data: Any = None
+    for url in candidates:
+        try:
+            data = get_json(url, timeout=8.0, retries=0)
+            if isinstance(data, dict):
+                break
+        except Exception:  # noqa: BLE001
+            try:
+                raw = get_text(url, timeout=8.0, retries=0)
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    break
+            except Exception:  # noqa: BLE001
+                continue
+    if not isinstance(data, dict):
+        return "", {}, {}
+
+    desc = _clean_about_text(
+        data.get("description")
+        or data.get("desc")
+        or data.get("about")
+        or (data.get("properties") or {}).get("description")
+    )
+    links: dict[str, str] = {}
+    ext = data.get("extensions") or {}
+    if isinstance(ext, dict):
+        for k in ("website", "twitter", "telegram", "discord"):
+            if ext.get(k):
+                links[k] = str(ext[k])
+        if not desc and ext.get("description"):
+            desc = _clean_about_text(ext.get("description"))
+    ext_url = data.get("external_url")
+    if isinstance(ext_url, str) and ext_url.startswith("http"):
+        links.setdefault("website", ext_url)
+    meta = {
+        "name": data.get("name"),
+        "symbol": data.get("symbol"),
+    }
+    return desc, links, meta
+
+
+def _about_from_pumpfun_page(mint: str) -> str:
+    """
+    Last-resort: scrape pump.fun coin page meta / embedded JSON for About text.
+    """
+    import json
+    import re
+
+    m = (mint or "").strip()
+    if not m:
+        return ""
+    from .http_util import get_text
+
+    for url in (
+        f"https://pump.fun/coin/{m}",
+        f"https://pump.fun/{m}",
+        f"https://www.pump.fun/coin/{m}",
+    ):
+        try:
+            html = get_text(url, timeout=10.0, retries=0) or ""
+        except Exception:  # noqa: BLE001
+            continue
+        if not html or len(html) < 80:
+            continue
+        # og / twitter / meta description
+        for pat in (
+            r'property=["\']og:description["\']\s+content=["\']([^"\']+)["\']',
+            r'content=["\']([^"\']+)["\']\s+property=["\']og:description["\']',
+            r'name=["\']description["\']\s+content=["\']([^"\']+)["\']',
+            r'name=["\']twitter:description["\']\s+content=["\']([^"\']+)["\']',
+        ):
+            mm = re.search(pat, html, re.I)
+            if mm:
+                got = _clean_about_text(mm.group(1))
+                # Skip generic site chrome
+                if len(got) >= 12 and "pump.fun" not in got.lower()[:20]:
+                    low = got.lower()
+                    if "trade" in low and "pump.fun" in low and len(got) < 80:
+                        continue
+                    return got
+        # Next.js / embedded coin JSON with description
+        for pat in (
+            r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>',
+            r'"description"\s*:\s*"((?:\\.|[^"\\]){12,})"',
+        ):
+            mm = re.search(pat, html, re.I | re.S)
+            if not mm:
+                continue
+            blob = mm.group(1)
+            if pat.startswith(r"<script"):
+                try:
+                    data = json.loads(blob)
+                except Exception:  # noqa: BLE001
+                    continue
+                # Walk for description near this mint
+                found = _walk_json_for_description(data, mint=m)
+                if found:
+                    return found
+            else:
+                try:
+                    # unescape JSON string
+                    got = json.loads(f'"{blob}"')
+                except Exception:  # noqa: BLE001
+                    got = blob.encode("utf-8").decode("unicode_escape", errors="ignore")
+                got = _clean_about_text(got)
+                if len(got) >= 12:
+                    return got
+    return ""
+
+
+def _walk_json_for_description(obj: Any, *, mint: str, depth: int = 0) -> str:
+    if depth > 8:
+        return ""
+    if isinstance(obj, dict):
+        # Prefer nodes that mention this mint
+        mint_l = (mint or "").lower()
+        node_mint = str(obj.get("mint") or obj.get("address") or "").lower()
+        desc = _about_from_coin_dict(obj) if any(
+            k in obj for k in ("description", "about", "desc", "body")
+        ) else ""
+        if desc and (not mint_l or not node_mint or mint_l in node_mint or node_mint in mint_l):
+            if len(desc) >= 8:
+                return desc
+        for v in obj.values():
+            got = _walk_json_for_description(v, mint=mint, depth=depth + 1)
+            if got:
+                return got
+    elif isinstance(obj, list):
+        for it in obj[:40]:
+            got = _walk_json_for_description(it, mint=mint, depth=depth + 1)
+            if got:
+                return got
+    return ""
+
+
+def fetch_coin_about(mint: str) -> dict[str, Any]:
+    """
+    Resolve the Pump.fun coin *About* section for narrative.
+
+    Priority:
+      1) coin JSON description / about fields (API)
+      2) metadata_uri JSON description (same text About often loads)
+      3) pump.fun coin page meta / embedded JSON scrape
+
+    Returns:
+      {
+        ok, name, symbol, description, description_source,
+        links, uri, page_url, raw_coin
+      }
+    """
+    m = (mint or "").strip()
+    if not m:
+        return {"ok": False, "description": "", "links": {}}
+
+    coin = try_native_coin(m)
+    name = None
+    symbol = None
+    links: dict[str, str] = {}
+    uri = ""
+    desc = ""
+    desc_source = ""
+
+    if isinstance(coin, dict):
+        name = coin.get("name")
+        symbol = coin.get("symbol")
+        desc = _about_from_coin_dict(coin)
+        if desc:
+            desc_source = "pumpfun_about"
+        uri = str(
+            coin.get("metadata_uri")
+            or coin.get("uri")
+            or coin.get("metadataUri")
+            or ""
+        ).strip()
+        # Socials from coin row (shown on the same About/profile card)
+        tw = coin.get("twitter") or coin.get("twitter_url") or coin.get("twitterUrl")
+        if tw:
+            tw_s = str(tw).strip()
+            if tw_s and not tw_s.startswith("http"):
+                tw_s = f"https://x.com/{tw_s.lstrip('@')}"
+            if tw_s.startswith("http"):
+                links["twitter"] = tw_s
+        tg = coin.get("telegram") or coin.get("telegram_url")
+        if tg:
+            tg_s = str(tg).strip()
+            if tg_s and not tg_s.startswith("http"):
+                tg_s = f"https://t.me/{tg_s.lstrip('@')}"
+            if tg_s.startswith("http"):
+                links["telegram"] = tg_s
+        web = coin.get("website") or coin.get("website_url")
+        if web and str(web).startswith("http") and "pump.fun" not in str(web).lower():
+            links["website"] = str(web)
+        if uri.startswith("http"):
+            links.setdefault("metadata_uri", uri)
+
+    # About empty on coin row → metadata (Pump.fun About often uses this)
+    if len(desc) < 8 and uri:
+        meta_desc, meta_links, meta = _about_from_metadata_uri(uri)
+        if len(meta_desc) >= 8:
+            desc = meta_desc
+            desc_source = "pumpfun_about_metadata"
+            for k, v in meta_links.items():
+                links.setdefault(k, v)
+            name = name or meta.get("name")
+            symbol = symbol or meta.get("symbol")
+
+    # API blocked / empty → page scrape
+    if len(desc) < 8:
+        page_desc = _about_from_pumpfun_page(m)
+        if len(page_desc) >= 8:
+            desc = page_desc
+            desc_source = "pumpfun_about_page"
+
+    page_url = f"https://pump.fun/coin/{m}"
+    ok = bool(desc or name or symbol or coin)
+    return {
+        "ok": ok,
+        "name": name,
+        "symbol": symbol,
+        "description": desc[:1200] if desc else "",
+        "description_source": desc_source or ("pumpfun_coin" if coin else ""),
+        "links": links,
+        "uri": uri if uri.startswith("http") else "",
+        "page_url": page_url,
+        "raw_coin": coin if isinstance(coin, dict) else None,
+    }
+
+
 def is_prebond_coin(native: dict[str, Any] | None) -> bool:
     """True while still on Pump.fun bonding curve (not migrated)."""
     if not isinstance(native, dict):

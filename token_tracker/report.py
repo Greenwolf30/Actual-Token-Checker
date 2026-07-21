@@ -504,12 +504,20 @@ def format_alerts_section(report: dict[str, Any]) -> str:
         return str(alerts)
 
 
+def _will_show_placeholder(label: str) -> str:
+    """Empty-slot copy — same style as Alerts (“if value returns True”)."""
+    name = (label or "Value").strip()
+    return f"  {name} will show here if value returns True"
+
+
 def format_about_section(report: dict[str, Any]) -> str:
     """About tab: Narrative storyline + X posts + Public News + Links."""
     if not report.get("ok") and not report.get("narrative") and not report.get("community_sentiment_x"):
         return (
             "ABOUT\n"
             "  Run Analyze to load narrative, X posts, and public news.\n"
+            + _will_show_placeholder("Narrative, X posts, and public news")
+            + "\n"
         )
 
     token = report.get("token") or {}
@@ -532,12 +540,19 @@ def format_about_section(report: dict[str, Any]) -> str:
     lines.append("")
     lines.append("NARRATIVE")
     lines.append("  What this token is about")
-    headline = story.get("headline") or (
-        f"{token.get('name') or 'Token'} (${token.get('symbol') or '?'})"
-    )
-    lines.append(f"  {headline}")
-    if story.get("theme"):
-        lines.append(f"  Theme:  {story.get('theme')}")
+    has_story = bool(story.get("headline") or story.get("theme") or story.get("storyline"))
+    if has_story or story:
+        headline = story.get("headline") or (
+            f"{token.get('name') or 'Token'} (${token.get('symbol') or '?'})"
+        )
+        lines.append(f"  {headline}")
+        if story.get("theme"):
+            lines.append(f"  Theme:  {story.get('theme')}")
+        else:
+            lines.append(_will_show_placeholder("Theme / category"))
+    else:
+        lines.append(_will_show_placeholder("Token story / theme"))
+
     cf = story.get("coin_facts") if isinstance(story.get("coin_facts"), dict) else {}
     conf = (cf or {}).get("confidence") or ""
     srcs = story.get("sources_used") or []
@@ -548,6 +563,8 @@ def format_about_section(report: dict[str, Any]) -> str:
         if srcs:
             bits.append("sources: " + ", ".join(str(s) for s in srcs[:14]))
         lines.append("  (" + " · ".join(bits) + ")")
+    else:
+        lines.append(_will_show_placeholder("Confidence / sources"))
 
     lines.append("")
     storyline = (story.get("storyline") or story.get("paragraph") or "").strip()
@@ -559,23 +576,58 @@ def format_about_section(report: dict[str, Any]) -> str:
             lines.append(_wrap(p, indent="  ", width=72))
             lines.append("")
     else:
-        lines.append("  (No narrative yet — run a full Analyze.)")
+        lines.append(_will_show_placeholder("Narrative storyline"))
         lines.append("")
 
-    # Multi-source string elements that built the "what is this token" story
+    official_desc = (story.get("official_description") or "").strip()
+    if not official_desc and isinstance(cf, dict):
+        official_desc = str(cf.get("official_description") or "").strip()
+
+    def _already_shown_prose(text: str, *pools: str) -> bool:
+        t = re.sub(r"\s+", " ", (text or "")).strip().lower()
+        if len(t) < 20:
+            return False
+        head = t[:48]
+        for pool in pools:
+            p = re.sub(r"\s+", " ", (pool or "")).strip().lower()
+            if not p:
+                continue
+            if head in p or t in p or (len(p) >= 24 and p[:48] in t):
+                return True
+        return False
+
+    # Multi-source string elements — only *new* prose not already in the storyline
     fragments = list(story.get("description_fragments") or [])
     if not fragments and isinstance(cf, dict):
         fragments = list(cf.get("description_fragments") or [])
-    if fragments:
+    frag_lines: list[str] = []
+    seen_fr: list[str] = []
+    for fr in fragments:
+        src = fr.get("source") or "?"
+        text = re.sub(r"\s+", " ", str(fr.get("text") or "")).strip()
+        if not text:
+            continue
+        if _already_shown_prose(text, storyline, official_desc):
+            continue
+        key = text.lower()
+        if any(
+            key == s
+            or (len(key) >= 24 and (key[:60] == s[:60] or key in s or s in key))
+            for s in seen_fr
+        ):
+            continue
+        seen_fr.append(key)
+        if len(text) > 180:
+            text = text[:177] + "…"
+        frag_lines.append(f"    • [{src}] {text}")
+        if len(frag_lines) >= 6:
+            break
+    if frag_lines:
         lines.append("  Description sources (string elements):")
-        for fr in fragments[:8]:
-            src = fr.get("source") or "?"
-            text = re.sub(r"\s+", " ", str(fr.get("text") or "")).strip()
-            if not text:
-                continue
-            if len(text) > 180:
-                text = text[:177] + "…"
-            lines.append(f"    • [{src}] {text}")
+        lines.extend(frag_lines)
+        lines.append("")
+    else:
+        lines.append(_will_show_placeholder("Description sources (string elements)"))
         lines.append("")
 
     listing_tags = story.get("listing_tags") or (
@@ -583,6 +635,9 @@ def format_about_section(report: dict[str, Any]) -> str:
     ) or []
     if listing_tags:
         lines.append("  Listing tags: " + ", ".join(str(t) for t in listing_tags[:12]))
+        lines.append("")
+    else:
+        lines.append(_will_show_placeholder("Listing tags"))
         lines.append("")
 
     risk_notes = list(story.get("risk_notes") or [])
@@ -593,27 +648,59 @@ def format_about_section(report: dict[str, Any]) -> str:
         for r in risk_notes[:5]:
             lines.append(f"    • {r}")
         lines.append("")
+    else:
+        lines.append(_will_show_placeholder("Rugcheck risk text"))
+        lines.append("")
 
     why = story.get("why_interested") or []
-    if why:
+    # Dedupe hooks that restate the same description already in the storyline
+    hook_lines: list[str] = []
+    shown_why: list[str] = []
+    for w in _dedupe_str_list(why):
+        ws = re.sub(r"\s+", " ", str(w or "")).strip()
+        if not ws:
+            continue
+        low = ws.lower()
+        # Drop pure "we have a description" / restated purpose copy
+        if low.startswith("stated purpose/story"):
+            continue
+        if "publishes an official description" in low:
+            continue
+        core = re.sub(
+            r"^(fits theme/category|secondary angle|listed under)\s*:?\s*",
+            "",
+            ws,
+            flags=re.I,
+        ).strip()
+        if _already_shown_prose(core, storyline, official_desc):
+            continue
+        if any(
+            core.lower() == s
+            or (len(core) >= 24 and (core[:50].lower() == s[:50] or core.lower() in s))
+            for s in shown_why
+        ):
+            continue
+        shown_why.append(core.lower())
+        hook_lines.append(f"    • {ws}")
+        if len(hook_lines) >= 6:
+            break
+    if hook_lines:
         lines.append("  Key hooks:")
-        for w in _dedupe_str_list(why)[:6]:
-            # Full reason line (includes stated purpose/story description)
-            lines.append(f"    • {w}")
+        lines.extend(hook_lines)
         lines.append("")
-    # Always surface official description here if storyline hooks missed it
-    official_desc = (story.get("official_description") or "").strip()
-    if not official_desc and isinstance(cf, dict):
-        official_desc = str(cf.get("official_description") or "").strip()
-    if official_desc:
-        already = any(
-            official_desc[:40].lower() in str(w).lower() for w in why
-        ) or (official_desc[:50].lower() in storyline.lower() if storyline else False)
-        if not already:
-            od = official_desc if len(official_desc) <= 400 else official_desc[:397] + "…"
-            lines.append("  Official description:")
-            lines.append(_wrap(od, indent="    ", width=72))
-            lines.append("")
+    else:
+        lines.append(_will_show_placeholder("Key hooks"))
+        lines.append("")
+
+    # Official description only if storyline never included it
+    if official_desc and not _already_shown_prose(official_desc, storyline):
+        od = official_desc if len(official_desc) <= 400 else official_desc[:397] + "…"
+        lines.append("  Official description:")
+        lines.append(_wrap(od, indent="    ", width=72))
+        lines.append("")
+    elif not official_desc:
+        lines.append(_will_show_placeholder("Official description"))
+        lines.append("")
 
     # ── X / COMMUNITY POSTS ───────────────────────────────────────────
     # Compact meta (always with values) so nothing crowds/covers post text.
@@ -622,12 +709,13 @@ def format_about_section(report: dict[str, Any]) -> str:
     lines.append("X / COMMUNITY POSTS")
     kind = sent.get("kind") or ("x_text" if x.get("posts_analyzed") else "unknown")
     label = sent.get("label")
-    if label is None or str(label).strip() == "" or str(label).lower() == "none":
-        label_s = "n/a"
-    else:
-        label_s = str(label).strip()
+    label_missing = (
+        label is None or str(label).strip() == "" or str(label).lower() == "none"
+    )
+    label_s = "n/a" if label_missing else str(label).strip()
     score = sent.get("score")
-    if score is None or score == "":
+    score_missing = score is None or score == ""
+    if score_missing:
         score_s = "n/a"
     else:
         try:
@@ -640,12 +728,17 @@ def format_about_section(report: dict[str, Any]) -> str:
     else:
         posts_s = str(posts_n)
     srcs = [str(s) for s in (x.get("sources_used") or []) if s]
+    srcs_missing = not srcs
     srcs_s = ", ".join(srcs) if srcs else "n/a"
     # One tight meta line + optional handle / summary / note
     lines.append(
         f"  Tone: {label_s} · score {score_s} · kind {kind} · posts analyzed {posts_s}"
     )
     lines.append(f"  Sources: {srcs_s}")
+    if label_missing or score_missing or srcs_missing:
+        lines.append(
+            _will_show_placeholder("X tone / score / sources (when metrics exist)")
+        )
     tw_handle = (
         (x.get("twitter_handle") or socials.get("twitter_handle") or "")
         .strip()
@@ -655,10 +748,12 @@ def format_about_section(report: dict[str, Any]) -> str:
         lines.append(f"  Handle: @{tw_handle}")
         lines.append(f"  Profile: https://x.com/{tw_handle}")
     else:
-        lines.append("  Handle: n/a")
+        lines.append(_will_show_placeholder("X handle / profile"))
     summary = (sent.get("summary") or "").strip()
     if summary:
         lines.append("  Summary: " + summary)
+    else:
+        lines.append(_will_show_placeholder("X sentiment summary"))
     notes = (x.get("notes") or "").strip()
     if notes:
         lines.append("  Note: " + notes)
@@ -690,11 +785,9 @@ def format_about_section(report: dict[str, Any]) -> str:
                 lines.append(f"      ({src})")
             shown += 1
         if shown == 0:
-            lines.append("  (No readable post text in samples.)")
+            lines.append(_will_show_placeholder("Recent X post text"))
     else:
-        lines.append(
-            "  (No sample posts fetched — tone may use market-crowd fallback.)"
-        )
+        lines.append(_will_show_placeholder("Recent X posts"))
 
     # ── PUBLIC NEWS ───────────────────────────────────────────────────
     lines.append("")
@@ -726,9 +819,9 @@ def format_about_section(report: dict[str, Any]) -> str:
             if shown >= 12:
                 break
         if shown == 0:
-            lines.append("  (No distinct public news headlines found for this token.)")
+            lines.append(_will_show_placeholder("Public news headlines"))
     else:
-        lines.append("  (No public news events found for this token right now.)")
+        lines.append(_will_show_placeholder("Public news events"))
         lines.append("  Sources checked: Google News RSS + web search snippets.")
 
     # ── LINKS ─────────────────────────────────────────────────────────
@@ -742,7 +835,7 @@ def format_about_section(report: dict[str, Any]) -> str:
             lines.append(f"  {lab}:")
             lines.append(f"    {url}")
     else:
-        lines.append("  (No website / social URLs found on DexScreener or coin APIs.)")
+        lines.append(_will_show_placeholder("Website / social links"))
 
     lines.append("")
     lines.append("-" * 72)

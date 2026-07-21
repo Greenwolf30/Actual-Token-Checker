@@ -71,6 +71,9 @@ _OFFICIAL_SOURCES = {
     "coingecko",
     "metadata_uri",
     "pumpfun",
+    "pumpfun_about",
+    "pumpfun_about_metadata",
+    "pumpfun_about_page",
     "birdeye",
     "dexscreener",
     "coinmarketcap",
@@ -170,26 +173,42 @@ def fetch_coin_facts(
         except Exception:  # noqa: BLE001
             pass
 
-    # 4) Pump.fun coin page
-    if (token_address or "").lower().endswith("pump") or is_sol:
+    # 4) Pump.fun coin About section (primary narrative for *pump mints)
+    is_pump = (token_address or "").lower().endswith("pump")
+    if is_pump or is_sol:
         try:
             pf = _from_pumpfun(token_address)
             if pf.get("ok"):
                 sources.append("pumpfun_coin")
-                if pf.get("description"):
-                    descriptions.append((4.5, "pumpfun", pf["description"]))
+                about = (pf.get("description") or "").strip()
+                about_src = pf.get("description_source") or "pumpfun"
+                if about:
+                    # Prefer Pump.fun About over other APIs for pump mints
+                    weight = 5.3 if is_pump else 4.7
+                    # Canonical label for About tab / sources list
+                    src_label = (
+                        "pumpfun_about"
+                        if "pumpfun" in str(about_src).lower()
+                        else str(about_src)
+                    )
+                    descriptions.append((weight, src_label, about))
+                    sources.append("pumpfun_about")
                 links.update(pf.get("links") or {})
                 name_resolved = pf.get("name") or name_resolved
                 symbol_resolved = pf.get("symbol") or symbol_resolved
-                # If we still lack metadata URI, try pumping description as story
-                if not meta_uri and pf.get("uri"):
-                    meta_uri = pf["uri"]
+                if pf.get("uri"):
+                    meta_uri = meta_uri or pf["uri"]
                     links.setdefault("metadata_uri", pf["uri"])
+                    links.setdefault("pumpfun", pf.get("page_url") or f"https://pump.fun/coin/{token_address}")
+                # If About came only from API and meta still has distinct prose, keep both
+                if pf.get("uri") and not about:
                     try:
                         mu = _from_metadata_uri(pf["uri"])
                         if mu.get("ok") and mu.get("description"):
                             sources.append("metadata_uri")
-                            descriptions.append((4.8, "metadata_uri", mu["description"]))
+                            descriptions.append(
+                                (5.1 if is_pump else 4.8, "pumpfun_about_metadata", mu["description"])
+                            )
                             links.update(mu.get("links") or {})
                     except Exception:  # noqa: BLE001
                         pass
@@ -318,7 +337,7 @@ def fetch_coin_facts(
     official = ""
     official_source = ""
     description_fragments: list[dict[str, str]] = []
-    seen_desc: set[str] = set()
+    seen_desc: list[str] = []
     if descriptions:
         # Prefer known prose sources (pumpfun / metadata / CG / dex) over tags
         descriptions.sort(key=lambda x: (x[0], len(x[2])), reverse=True)
@@ -326,10 +345,15 @@ def fetch_coin_facts(
             cleaned = _clean_desc(text)
             if len(cleaned) < 12:
                 continue
-            key = cleaned.lower()[:100]
-            if key in seen_desc:
+            low = cleaned.lower()
+            # Near-dupe: same mint description mirrored across pumpfun/metadata/dex
+            if any(
+                low == s
+                or (len(low) >= 24 and (low[:70] == s[:70] or low in s or s in low))
+                for s in seen_desc
+            ):
                 continue
-            seen_desc.add(key)
+            seen_desc.append(low)
             is_prose = _is_prose_description(cleaned, src)
             # Keep fragments for UI only when they are real prose (or non-jupiter)
             if is_prose or src not in {"jupiter", "jupiter_prose"}:
@@ -395,6 +419,9 @@ def fetch_coin_facts(
     if official and official_source in {
         "coingecko",
         "pumpfun",
+        "pumpfun_about",
+        "pumpfun_about_metadata",
+        "pumpfun_about_page",
         "dexscreener",
         "metadata_uri",
         "birdeye",
@@ -711,82 +738,28 @@ def _from_dexscreener(
 
 
 def _from_pumpfun(mint: str) -> dict[str, Any]:
-    # Prefer shared cached native coin fetch (same data as market path)
+    """
+    Pump.fun About section for narrative (description on the coin page).
+
+    Uses shared fetch_coin_about: API description → metadata_uri → page scrape.
+    """
     try:
         from . import pumpfun as pf_mod
 
-        data = pf_mod.try_native_coin(mint)
-        if isinstance(data, dict) and (data.get("mint") or data.get("symbol") or data.get("name")):
-            return _pumpfun_row_from_dict(data)
+        about = pf_mod.fetch_coin_about(mint)
     except Exception:  # noqa: BLE001
-        data = None
-
-    for url in (
-        f"https://frontend-api-v3.pump.fun/coins/{mint}",
-        f"https://frontend-api.pump.fun/coins/{mint}",
-        f"https://client-api-2-74b1891ee9f9.herokuapp.com/coins/{mint}",
-    ):
-        try:
-            data = get_json(url, timeout=8.0, retries=1)
-        except Exception:  # noqa: BLE001
-            continue
-        if not isinstance(data, dict):
-            continue
-        if not (data.get("mint") or data.get("symbol") or data.get("name") or data.get("description")):
-            continue
-        return _pumpfun_row_from_dict(data)
-    return {"ok": False}
-
-
-def _pumpfun_row_from_dict(data: dict[str, Any]) -> dict[str, Any]:
-    """Normalize Pump.fun coin JSON → description + links."""
-    desc = (
-        data.get("description")
-        or data.get("desc")
-        or data.get("body")
-        or data.get("about")
-        or ""
-    )
-    if isinstance(desc, dict):
-        desc = desc.get("en") or desc.get("text") or ""
-    desc = _clean_desc(str(desc))
-
-    links: dict[str, str] = {}
-    tw = data.get("twitter") or data.get("twitter_url") or data.get("twitterUrl")
-    if tw:
-        tw_s = str(tw).strip()
-        if tw_s and not tw_s.startswith("http"):
-            tw_s = f"https://x.com/{tw_s.lstrip('@')}"
-        if tw_s.startswith("http"):
-            links["twitter"] = tw_s
-    tg = data.get("telegram") or data.get("telegram_url")
-    if tg:
-        tg_s = str(tg).strip()
-        if tg_s and not tg_s.startswith("http"):
-            tg_s = f"https://t.me/{tg_s.lstrip('@')}"
-        if tg_s.startswith("http"):
-            links["telegram"] = tg_s
-    web = data.get("website") or data.get("website_url") or data.get("url")
-    if web and str(web).startswith("http"):
-        # Avoid treating pump.fun itself as project website
-        if "pump.fun" not in str(web).lower():
-            links["website"] = str(web)
-
-    uri = (
-        data.get("metadata_uri")
-        or data.get("uri")
-        or data.get("metadataUri")
-        or data.get("image_uri")
-        or ""
-    )
-    uri_s = str(uri) if uri and str(uri).startswith("http") else ""
+        about = None
+    if not isinstance(about, dict) or not about.get("ok"):
+        return {"ok": False}
     return {
         "ok": True,
-        "name": data.get("name"),
-        "symbol": data.get("symbol"),
-        "description": desc[:1200],
-        "links": links,
-        "uri": uri_s,
+        "name": about.get("name"),
+        "symbol": about.get("symbol"),
+        "description": (about.get("description") or "")[:1200],
+        "description_source": about.get("description_source") or "pumpfun_about",
+        "links": about.get("links") or {},
+        "uri": about.get("uri") or "",
+        "page_url": about.get("page_url") or "",
     }
 
 
