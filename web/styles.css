@@ -907,8 +907,21 @@ a.copy-mint:hover,
   color: #b89ad4;
   border: 1px solid rgba(140, 100, 180, 0.32);
 }
+/* Flagged buy-back on Swing — keep purple scheme */
+.rug-tag-flagged-swing {
+  background: rgba(140, 100, 180, 0.2);
+  color: #cbb0e8;
+  border: 1px solid rgba(160, 120, 200, 0.45);
+}
 .rug-wallet-flagged .rug-wallet-meta {
   color: #9a8aab;
+}
+.rug-wallet-flagged-swing {
+  border-left: 3px solid rgba(160, 120, 200, 0.55);
+  padding-left: 6px;
+}
+.rug-wallet-flagged-swing .rug-wallet-meta {
+  color: #a994c0;
 }
 .rug-footer-meta {
   margin: 12px 0 0;
