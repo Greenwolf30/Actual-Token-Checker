@@ -3778,11 +3778,15 @@ function sumRuggersCategorySoldSupplyPct(rows) {
 
 function formatRuggersSoldSupplyTotal(pct) {
   if (pct == null || !Number.isFinite(Number(pct)) || Number(pct) <= 0) {
-    return "0% supply sold";
+    return "";
   }
   const n = Number(pct);
+  // Avoid "0% supply sold" from tiny floats after rounding
+  if (n < 0.0005) return "";
   const s = n >= 10 ? n.toFixed(1) : n >= 1 ? n.toFixed(2) : n.toFixed(3);
-  return s.replace(/\.?0+$/, "") + "% supply sold";
+  const body = s.replace(/(\.\d*?[1-9])0+$/, "$1").replace(/\.0+$/, "");
+  if (!body || body === "0") return "";
+  return body + "% supply sold";
 }
 
 /**
@@ -3830,11 +3834,14 @@ function sumRuggersCategoryBoughtSupplyPct(rows) {
 
 function formatRuggersBoughtSupplyTotal(pct) {
   if (pct == null || !Number.isFinite(Number(pct)) || Number(pct) <= 0) {
-    return "0% supply bought";
+    return "";
   }
   const n = Number(pct);
+  if (n < 0.0005) return "";
   const s = n >= 10 ? n.toFixed(1) : n >= 1 ? n.toFixed(2) : n.toFixed(3);
-  return s.replace(/\.?0+$/, "") + "% supply bought";
+  const body = s.replace(/(\.\d*?[1-9])0+$/, "$1").replace(/\.0+$/, "");
+  if (!body || body === "0") return "";
+  return body + "% supply bought";
 }
 
 /**
@@ -3853,22 +3860,26 @@ function renderRuggersSection(title, hint, rows, exportKey, opts) {
   }
   const n = rows ? rows.length : 0;
   // Swing = bought-back / currently held supply; all seller sections = sold supply
-  const supplyMode =
-    (opts && opts.supplyMode) ||
-    (String(title || "").toLowerCase().indexOf("swing") >= 0
-      ? "bought"
-      : "sold");
-  const supplyTot =
-    supplyMode === "bought"
+  const isSwingSection =
+    (opts && opts.supplyMode === "bought") ||
+    /^swing\b/i.test(String(title || "").trim());
+  const supplyMode = isSwingSection ? "bought" : "sold";
+  const supplyTot = !rows || !rows.length
+    ? 0
+    : supplyMode === "bought"
       ? sumRuggersCategoryBoughtSupplyPct(rows)
       : sumRuggersCategorySoldSupplyPct(rows);
-  // Hide the pill when total is 0% (empty or no measurable supply %)
-  const showSupply = Number.isFinite(supplyTot) && Number(supplyTot) > 0;
-  const supplyLabel = showSupply
-    ? supplyMode === "bought"
+  // Only show pill when formatted label is non-empty and not 0%
+  // (covers empty sections, true 0%, and tiny floats that round to 0%)
+  const supplyLabel =
+    supplyMode === "bought"
       ? formatRuggersBoughtSupplyTotal(supplyTot)
-      : formatRuggersSoldSupplyTotal(supplyTot)
-    : "";
+      : formatRuggersSoldSupplyTotal(supplyTot);
+  const showSupply = !!(
+    supplyLabel &&
+    !/^0%/.test(supplyLabel) &&
+    supplyLabel.indexOf("%") >= 0
+  );
   const supplyTitle =
     supplyMode === "bought"
       ? "Sum of mint-supply % currently held (bought back) across Swing wallets (capped at 100%)"
@@ -3925,7 +3936,9 @@ function renderRuggersSection(title, hint, rows, exportKey, opts) {
     "</span>" +
     (showSupply
       ? ' <span class="' +
-        (supplyMode === "bought" ? "rug-supply-bought" : "rug-supply-sold") +
+        (isSwingSection || supplyMode === "bought"
+          ? "rug-supply-bought"
+          : "rug-supply-sold") +
         '" title="' +
         escHtml(supplyTitle) +
         '">' +
