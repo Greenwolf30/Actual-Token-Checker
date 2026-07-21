@@ -914,12 +914,11 @@ What Logs is for
   - Review market, holder, bundle, and alert snapshots from those runs.
   - Download the list to a file for your own notes.
 
-When a search is saved
-  - A row is added only after a successful full Analyze finishes
-    (status shows OK / full data loaded).
-  - Failed searches (not found, errors) are not saved.
-  - Quick or partial loads wait until the full run completes before
-    they appear in Logs.
+When a search is saved (website)
+  - Saved after Analyze returns ok (including many Quick runs).
+  - Failed searches (not found / hard errors) are not saved.
+  - Full Analyze with holders is preferred for rich snapshots; Quick may
+    still log a thinner entry if the market result was ok.
   - Searching the same token again adds another row (each run is kept
     as its own entry).
 
@@ -1214,6 +1213,11 @@ A: Yes. Lookup count does not matter. Sales are always measured against
 | Robinhood / 429 / deploy tips | §14–15 |
 | RugWatch **wallet scoring 0–100** | RugWatch docs only (pointer in §12) |
 | RugWatch Monitor / Scan mint UI | RugWatch docs only |
+
+Congruence notes (code vs older wording)
+  - Ruggers toolbar Clear mint / Clear all / Refresh: **removed** (doc §11).
+  - Logs: website may log successful **Quick** runs too (not only full).
+  - Docs page loads web/documentation.txt (+ GitHub fallback).
 
 If a button exists on the RugWatch site only, it belongs in RugWatch docs.
 
