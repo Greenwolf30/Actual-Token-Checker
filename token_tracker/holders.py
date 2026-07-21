@@ -106,17 +106,26 @@ def is_known_lp_or_program(
 
 
 def _dex_pool_label(dex_id: str | None) -> str:
+    """Human labels parallel to Pump.fun style (… pool (liquidity))."""
     d = (dex_id or "dex").strip().lower()
     if "meteora" in d:
+        if "dlmm" in d:
+            return "Meteora DLMM pool (liquidity)"
+        if "damm" in d or "dyn" in d:
+            return "Meteora DAMM pool (liquidity)"
         return "Meteora pool (liquidity)"
     if "raydium" in d:
+        if "clmm" in d:
+            return "Raydium CLMM pool (liquidity)"
+        if "cpmm" in d:
+            return "Raydium CPMM pool (liquidity)"
         return "Raydium pool (liquidity)"
     if "orca" in d or "whirlpool" in d:
-        return "Orca pool (liquidity)"
+        return "Orca Whirlpool pool (liquidity)"
     if d in {"pumpswap", "pump-swap"} or "pumpswap" in d:
         return "PumpSwap pool (liquidity)"
     if d in {"pumpfun", "pump", "pump-fun"} or "pumpfun" in d:
-        return "Pump.fun bonding curve / pair"
+        return "Pump.fun bonding curve"
     if "jupiter" in d:
         return "Jupiter pool (liquidity)"
     if "lifinity" in d:
@@ -127,16 +136,42 @@ def _dex_pool_label(dex_id: str | None) -> str:
     return f"{pretty} pool (liquidity)"
 
 
+def _ingest_dex_pair_row(
+    out: dict[str, str], p: dict[str, Any], mint_lower: str
+) -> None:
+    if not isinstance(p, dict):
+        return
+    base = ((p.get("baseToken") or {}).get("address") or "").strip().lower()
+    quote = ((p.get("quoteToken") or {}).get("address") or "").strip().lower()
+    if base != mint_lower and quote != mint_lower:
+        return
+    pair = (p.get("pairAddress") or "").strip()
+    if not pair or len(pair) < 32:
+        return
+    lab = _dex_pool_label(p.get("dexId"))
+    prev = out.get(pair)
+    # Prefer more specific Meteora / Raydium labels
+    if not prev:
+        out[pair] = lab
+        return
+    if "meteora" in lab.lower() and "meteora" not in prev.lower():
+        out[pair] = lab
+    elif "raydium" in lab.lower() and "raydium" not in prev.lower():
+        out[pair] = lab
+
+
 def fetch_dex_pool_accounts(mint: str | None) -> dict[str, str]:
     """
-    Map pair/pool address → label for ALL DexScreener pairs on this mint.
+    Map pair/pool address → label for ALL Dex pairs on this mint.
 
     Includes Meteora, Raydium, Orca, PumpSwap, etc. — not only the primary pair.
+    Sources: DexScreener token pairs + GeckoTerminal pools (best-effort).
     """
     m = (mint or "").strip()
     if not m or len(m) < 32:
         return {}
     out: dict[str, str] = {}
+    ml = m.lower()
     try:
         from .http_util import get_json
 
@@ -145,28 +180,49 @@ def fetch_dex_pool_accounts(mint: str | None) -> dict[str, str]:
             timeout=12.0,
             retries=0,
         )
+        if isinstance(data, dict):
+            for p in data.get("pairs") or []:
+                if isinstance(p, dict):
+                    _ingest_dex_pair_row(out, p, ml)
     except Exception:  # noqa: BLE001
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    ml = m.lower()
-    for p in data.get("pairs") or []:
-        if not isinstance(p, dict):
-            continue
-        base = ((p.get("baseToken") or {}).get("address") or "").strip().lower()
-        quote = ((p.get("quoteToken") or {}).get("address") or "").strip().lower()
-        if base != ml and quote != ml:
-            continue
-        pair = (p.get("pairAddress") or "").strip()
-        if not pair or len(pair) < 32:
-            continue
-        lab = _dex_pool_label(p.get("dexId"))
-        # Prefer Meteora/Raydium-style labels over generic if address already seen
-        prev = out.get(pair)
-        if not prev or (
-            "meteora" in lab.lower() and "meteora" not in prev.lower()
-        ):
-            out[pair] = lab
+        pass
+
+    # GeckoTerminal often lists Meteora pools DexScreener may under-index
+    try:
+        from .http_util import get_json
+
+        gt = get_json(
+            f"https://api.geckoterminal.com/api/v2/networks/solana/tokens/"
+            f"{m}/pools?page=1",
+            timeout=12.0,
+            retries=0,
+            headers={**DEFAULT_HEADERS, "Accept": "application/json"},
+        )
+        rows = (gt or {}).get("data") if isinstance(gt, dict) else None
+        if isinstance(rows, list):
+            for row in rows[:25]:
+                if not isinstance(row, dict):
+                    continue
+                attrs = row.get("attributes") or {}
+                addr = (
+                    (attrs.get("address") or row.get("id") or "")
+                    .split("_")[-1]
+                    .strip()
+                )
+                if not addr or len(addr) < 32:
+                    continue
+                name = str(attrs.get("name") or attrs.get("dex_id") or "").lower()
+                dex = str(attrs.get("dex_id") or attrs.get("dex") or name)
+                # Gecko id sometimes "solana_POOL"
+                if "meteora" in name or "meteora" in dex:
+                    lab = "Meteora pool (liquidity)"
+                else:
+                    lab = _dex_pool_label(dex or name)
+                if addr not in out or "meteora" in lab.lower():
+                    out[addr] = lab
+    except Exception:  # noqa: BLE001
+        pass
+
     return out
 
 
@@ -206,23 +262,42 @@ def apply_known_lp_tags(
     if pair and pair not in pool_map:
         pool_map[pair] = "Liquidity pair"
 
+    # Lowercase map for case-insensitive address match
+    pool_map_l = {k.lower(): (k, v) for k, v in pool_map.items() if k}
+
+    def _stamp_pool(h: dict[str, Any], plab: str) -> None:
+        h["is_known_program"] = True
+        cur = (h.get("label") or "").strip()
+        if not cur or cur.lower() in {
+            "liquidity pair",
+            "unknown",
+            "known liquidity / program",
+        }:
+            h["label"] = plab
+        elif plab.lower() not in cur.lower():
+            h["label"] = cur + " · " + plab
+
     for h in holders:
         if not isinstance(h, dict):
             continue
         w = (h.get("wallet") or h.get("owner") or "").strip()
-        if not w:
+        ata = (h.get("token_account") or "").strip()
+        if not w and not ata:
             continue
         if w in _KNOWN_OWNERS:
             h["is_known_program"] = True
             h["label"] = h.get("label") or _KNOWN_OWNERS[w]
-        if w in pool_map:
-            h["is_known_program"] = True
-            cur = (h.get("label") or "").strip()
-            plab = pool_map[w]
-            if not cur or cur.lower() in {"liquidity pair", "unknown", "known liquidity / program"}:
-                h["label"] = plab
-            elif plab.lower() not in cur.lower():
-                h["label"] = cur + " · " + plab
+        # Match wallet or token account to known pool / pair addresses
+        for addr in (w, ata):
+            if not addr:
+                continue
+            hit = pool_map.get(addr) or (
+                pool_map_l.get(addr.lower())[1]
+                if addr.lower() in pool_map_l
+                else None
+            )
+            if hit:
+                _stamp_pool(h, hit)
         if is_known_lp_or_program(
             w,
             label=h.get("label"),
@@ -1731,15 +1806,32 @@ def format_holders_text(data: dict[str, Any]) -> str:
         + " · click wallet → Solscan:"
     )
     for h in listed:
-        label = f"  [{h['label']}]" if h.get("label") else ""
+        lab = (h.get("label") or "").strip()
+        # Same style as Pump.fun liquidity lines: [Pump…] / [Meteora pool (liquidity)]
+        label = f"  [{lab}]" if lab else ""
         pct = _pct(h.get("pct_supply"))
         pri = holding_priority_label(h.get("pct_supply"))
-        pri_s = f" · {pri} priority" if pri in {"low", "medium", "high", "critical"} else ""
+        # LP / pool rows: no bag-priority band (same idea as skipping risk flags)
+        is_lp = bool(h.get("is_known_program")) or is_known_lp_or_program(
+            h.get("wallet"), label=lab, is_known_program=bool(h.get("is_known_program"))
+        )
+        pri_s = (
+            ""
+            if is_lp
+            else (
+                f" · {pri} priority"
+                if pri in {"low", "medium", "high", "critical"}
+                else ""
+            )
+        )
         bal = h.get("balance")
         bal_s = f"{bal:,.4f}" if isinstance(bal, (int, float)) else str(bal)
         w = h.get("wallet") or ""
         lines.append(f"    #{h.get('rank')} {bal_s} ({pct}{pri_s}){label}")
         lines.append(f"         {w}")
+        if lab and is_lp:
+            # Second line echo — same pattern as Pump liquidity clarity
+            lines.append(f"         [{lab}]")
         if w:
             lines.append(f"         https://solscan.io/account/{w}")
 
