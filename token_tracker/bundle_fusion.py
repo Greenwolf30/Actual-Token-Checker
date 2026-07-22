@@ -982,7 +982,12 @@ def comprehensive_bundle_check(
         # Total bundle % = unique wallets across counted vectors (no double-count)
         # Also partitions similar vs suspect (no shared wallets; suspect ≠ similar).
         try:
-            tb = bun.recompute_total_bundle_all_vectors(base)
+            tb = bun.recompute_total_bundle_all_vectors(
+                base,
+                include_fresh=include_fresh,
+                include_multi_send=include_multi_send,
+                include_shared_sol=include_shared_sol,
+            )
             s = dict(base.get("summary") or {})
             s["total_bundle_pct"] = tb.get("total_bundle_pct")
             s["flagged_wallets"] = tb.get("flagged_wallets")
@@ -996,6 +1001,9 @@ def comprehensive_bundle_check(
             s["total_bundle_show_similar_suspect"] = bool(
                 tb.get("total_bundle_show_similar_suspect")
             )
+            s["total_bundle_include_fresh"] = bool(include_fresh)
+            s["total_bundle_include_multi_send"] = bool(include_multi_send)
+            s["total_bundle_include_shared_sol"] = bool(include_shared_sol)
             s["total_bundle_unique_wallets"] = tb.get(
                 "total_bundle_unique_wallets"
             ) or tb.get("flagged_wallets")

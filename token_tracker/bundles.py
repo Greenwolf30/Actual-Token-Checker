@@ -1523,6 +1523,10 @@ def _total_bundle_percent(
 
 def recompute_total_bundle_all_vectors(
     data: dict[str, Any] | None,
+    *,
+    include_fresh: bool = True,
+    include_multi_send: bool = True,
+    include_shared_sol: bool = True,
 ) -> dict[str, Any]:
     """
     Total bundle % = unique wallets across counted vectors (deduped).
@@ -1530,18 +1534,23 @@ def recompute_total_bundle_all_vectors(
     Each wallet contributes its supply % at most once (max % if it appears in
     several vectors or lists). Cap display total at 100%.
 
-    Primary vectors (always preferred for Total + Bundles display):
-      multi_account, insider, multi_send (token only), fresh, shared_funder.
+    Always counted (when present):
+      multi_account, insider
 
-    Fallback only (shown / counted only when ALL primary vectors are 0):
-      similar_size groups, suspect wallets.
+    Optional (only when the matching Analyze checkbox is ON):
+      multi_send, fresh, shared_funder
+
+    When Fresh + Multi-send + Shared SOL are ALL off:
+      multi_account + insider + similar_size + suspect
+
+    When some optionals are on:
+      multi_account + insider + only the checked optionals
+      (similar/suspect not in Total)
+
+    UI may still show last-known % on unchecked optional boxes; those last-known
+    vectors are NOT double-counted into Total unless the checkbox is ON.
 
     Never counted: launch_window (disabled).
-
-    Token multi-send only for multi_send (not sol_multi_send_clusters) so SOL
-    funder wallets are not double-counted with shared_funder as two vectors.
-    Shared SOL + token multi-send still share one unique wallet set for Total.
-
     Excludes known LP / program wallets.
     """
     data = data if isinstance(data, dict) else {}
@@ -1748,54 +1757,57 @@ def recompute_total_bundle_all_vectors(
         "excluded_from_total": True,
     }
 
-    # Primary always; similar-size + suspect only if primary is all-zero
-    PRIMARY = {
-        "multi_account",
-        "insider",
-        "multi_send",
-        "fresh",
-        "shared_funder",
+    # Always: multi-account + insider
+    # Optionals: only when checkbox ON (do not count last-known/cache into Total)
+    # All 3 optionals OFF → also count similar + suspect with multi-account
+    ALWAYS = ("multi_account", "insider")
+    OPTIONAL_FLAGS = {
+        "multi_send": bool(include_multi_send),
+        "fresh": bool(include_fresh),
+        "shared_funder": bool(include_shared_sol),
     }
-    FALLBACK = ("similar_size", "suspect")
+    any_optional_on = any(OPTIONAL_FLAGS.values())
 
-    primary_any = False
-    for key in PRIMARY:
-        meta = by_vector.get(key) or {}
-        try:
-            vp = float(meta.get("pct") or 0)
-            vn = int(meta.get("count") or 0)
-        except (TypeError, ValueError):
-            continue
-        if vn > 0 or vp > 0:
-            primary_any = True
-            break
+    active_keys: list[str] = list(ALWAYS)
+    for key, on in OPTIONAL_FLAGS.items():
+        if on:
+            active_keys.append(key)
 
-    use_fallback = not primary_any
-    # Mark similar / suspect for UI: hide unless fallback mode
+    if not any_optional_on:
+        # Fresh + Multi-send + Shared SOL all unchecked
+        active_keys.extend(["similar_size", "suspect"])
+        mode = "multi_plus_similar_suspect"
+        use_sim_sus_in_total = True
+    else:
+        mode = "primary"
+        use_sim_sus_in_total = False
+
+    excluded = ["launch_window"]
+    for key, on in OPTIONAL_FLAGS.items():
+        if not on:
+            excluded.append(key)
+            if key in by_vector:
+                by_vector[key] = dict(by_vector[key])
+                by_vector[key]["excluded_from_total"] = True
+                by_vector[key]["optional_scan_off"] = True
+
     if "similar_size" in by_vector:
         by_vector["similar_size"] = dict(by_vector["similar_size"])
         by_vector["similar_size"]["fallback_only"] = True
-        by_vector["similar_size"]["shown"] = use_fallback
-        if not use_fallback:
-            by_vector["similar_size"]["excluded_from_total"] = True
+        by_vector["similar_size"]["shown"] = True  # UI always lists
+        by_vector["similar_size"]["excluded_from_total"] = not use_sim_sus_in_total
     if "suspect" in by_vector:
         by_vector["suspect"] = dict(by_vector["suspect"])
         by_vector["suspect"]["fallback_only"] = True
-        by_vector["suspect"]["shown"] = use_fallback
-        if not use_fallback:
-            by_vector["suspect"]["excluded_from_total"] = True
+        by_vector["suspect"]["shown"] = True
+        by_vector["suspect"]["excluded_from_total"] = not use_sim_sus_in_total
 
-    if use_fallback:
-        active_keys = list(FALLBACK)
-        excluded = ["launch_window"]
-        mode = "fallback_similar_suspect"
-        for key in FALLBACK:
+    if use_sim_sus_in_total:
+        for key in ("similar_size", "suspect"):
             if key in by_vector:
                 by_vector[key]["excluded_from_total"] = False
     else:
-        active_keys = list(PRIMARY)
-        excluded = ["similar_size", "suspect", "launch_window"]
-        mode = "primary"
+        excluded.extend(["similar_size", "suspect"])
 
     # Unique wallets across active vectors only (no double-count)
     union: dict[str, float] = {}
@@ -1833,7 +1845,10 @@ def recompute_total_bundle_all_vectors(
         "total_bundle_cross_vector_dedupe": True,
         "total_bundle_excluded_vectors": list(excluded),
         "total_bundle_mode": mode,
-        "total_bundle_show_similar_suspect": use_fallback,
+        "total_bundle_show_similar_suspect": use_sim_sus_in_total,
+        "total_bundle_include_fresh": bool(include_fresh),
+        "total_bundle_include_multi_send": bool(include_multi_send),
+        "total_bundle_include_shared_sol": bool(include_shared_sol),
         "total_bundle_unique_wallets": slot_count,
         "total_bundle_crosslisted_wallets": [],
         "total_bundle_crosslisted_count": 0,

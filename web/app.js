@@ -6449,24 +6449,7 @@ function restoreLastAnalyze() {
       note.innerHTML = noteHtml;
       if (note.firstChild) root.insertBefore(note.firstChild, root.firstChild);
     }
-    // Final pass: force frozen stats bar (with deltas) after any DOM tweaks
-    try {
-      const barHtml =
-        data._bundlesStatsBarHtml ||
-        (data.bundles_view &&
-          data.bundles_view.summary &&
-          data.bundles_view.summary._ui_stats_bar_html) ||
-        (data.bundleDelta && data.bundleDelta.barHtml) ||
-        (loadBundleStatsBarSnap("") && loadBundleStatsBarSnap("").html) ||
-        null;
-      if (root && barHtml && String(barHtml).indexOf("bun-stats") >= 0) {
-        const bar = root.querySelector(".bun-stats");
-        if (bar) bar.outerHTML = barHtml;
-        else root.insertAdjacentHTML("beforeend", barHtml);
-      }
-    } catch (_) {
-      /* ignore */
-    }
+    // Do not re-inject full stats bar HTML (caused empty Suspect to show old %)
     return true;
   } catch (err) {
     console.error("[restore analyze]", err);
@@ -7215,9 +7198,12 @@ function renderBundlesUi(data) {
         : 0;
     const showSimSus =
       s.total_bundle_mode === "fallback_similar_suspect" ||
+      s.total_bundle_mode === "multi_plus_similar_suspect" ||
       s.total_bundle_show_similar_suspect === true;
-    // Fallback only: short label, no extra wording
-    const totalLabel = showSimSus ? "showing Similar/suspect" : "Total bundle";
+    // Fallback: multi-account + similar/suspect when Fresh/Multi/Shared all off
+    const totalLabel = showSimSus
+      ? "Total (multi + similar/suspect)"
+      : "Total bundle";
     html += stat(totalLabel, withDelta(bunPctHtml(tbp), "total_bundle_pct"));
   }
   html += stat(
@@ -7999,77 +7985,44 @@ function renderBundlesUi(data) {
 
   root.innerHTML = html;
 
-  // ── Freeze / thaw Bundles stats bar (deltas must survive refresh) ──
-  // Live Analyze: bake the exact .bun-stats HTML (with ▲/▼) into
-  //   1) bundles_view.summary (same object saveLastAnalyze already persists)
-  //   2) localStorage / sessionStorage snap
-  // Restore: always swap that HTML back in — no recompute.
+  // ── Freeze deltas only (never full bar — full-bar restore caused stale %s) ──
+  // Live: store delta HTML + pair for next Analyze / refresh arrows.
+  // Restore: recompute boxes from last Analyze summary (correct empty Suspect, etc.)
+  //           then re-apply frozen delta HTML only.
   try {
-    const bar = root.querySelector(".bun-stats");
-    if (!isRestore && bar) {
-      const barHtml = bar.outerHTML;
-      // 1) Bake into the payload that last-Analyze restore already uses
+    if (!isRestore && mint) {
+      if (Object.keys(htmlByKeyThisRun).length) {
+        saveBundleDeltaHtml(mint || "last", { ...htmlByKeyThisRun });
+      }
       try {
         if (view && view.summary && typeof view.summary === "object") {
-          view.summary._ui_stats_bar_html = barHtml;
           view.summary._ui_delta_html = { ...htmlByKeyThisRun };
+          // Do NOT bake full bar HTML — that overwrote correct Analyze on refresh
+          delete view.summary._ui_stats_bar_html;
         }
         if (data && data.bundles_view && data.bundles_view.summary) {
-          data.bundles_view.summary._ui_stats_bar_html = barHtml;
           data.bundles_view.summary._ui_delta_html = { ...htmlByKeyThisRun };
+          delete data.bundles_view.summary._ui_stats_bar_html;
         }
       } catch (_) {
         /* ignore */
       }
-      // 2) Browser storage (mint optional — always keep last bar)
-      saveBundleStatsBarSnap(mint || "last", barHtml);
-      try {
-        sessionStorage.setItem(BUNDLE_STATS_BAR_SNAP_KEY, barHtml);
-      } catch (_) {
-        /* ignore */
-      }
-      if (Object.keys(htmlByKeyThisRun).length) {
-        saveBundleDeltaHtml(mint || "last", {
-          ...htmlByKeyThisRun,
-          barHtml,
-        });
-      }
       if (data) {
-        data._bundleDeltaPair = data._bundleDeltaPair || {
+        data._bundleDeltaPair = {
           mint: bundleStatsMintKey(mint),
           forNext: curStats,
           deltaFrom: prev || zeroBundleStats(),
           deltaCur: curStats,
+          htmlByKey: { ...htmlByKeyThisRun },
         };
-        data._bundleDeltaPair.barHtml = barHtml;
-        data._bundleDeltaPair.htmlByKey = { ...htmlByKeyThisRun };
-        data._bundlesStatsBarHtml = barHtml;
+        data._bundlesStatsBarHtml = null;
       }
-    } else if (isRestore) {
-      // Prefer: baked into restored bundles_view (most reliable)
-      let baked =
-        (s && s._ui_stats_bar_html) ||
-        (view.summary && view.summary._ui_stats_bar_html) ||
-        (data && data._bundlesStatsBarHtml) ||
-        (data && data.bundleDelta && data.bundleDelta.barHtml) ||
-        null;
-      if (!baked) {
-        try {
-          baked = sessionStorage.getItem(BUNDLE_STATS_BAR_SNAP_KEY);
-        } catch (_) {
-          /* ignore */
-        }
-      }
-      if (!baked) {
-        const snap = loadBundleStatsBarSnap(mint) || loadBundleStatsBarSnap("last");
-        if (snap && snap.html) baked = snap.html;
-      }
-      if (baked && typeof baked === "string" && baked.indexOf("bun-stats") >= 0) {
-        if (bar) {
-          bar.outerHTML = baked;
-        } else {
-          root.insertAdjacentHTML("afterbegin", baked);
-        }
+      // Clear stale full-bar snaps so they cannot override a later Analyze
+      try {
+        localStorage.removeItem(BUNDLE_STATS_BAR_SNAP_KEY);
+        sessionStorage.removeItem(BUNDLE_STATS_BAR_SNAP_KEY);
+      } catch (_) {
+        /* ignore */
       }
     }
   } catch (err) {
