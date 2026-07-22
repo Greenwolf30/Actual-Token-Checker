@@ -241,6 +241,7 @@ function pushHistoryLog(entry) {
 
 function entryOverviewText(e) {
   const lines = [];
+  if (!e || typeof e !== "object") return "(empty log entry)";
   let ts = String(e.ts || "").slice(0, 19).replace("T", " ");
   if (ts) ts = ts + " UTC";
   const sym = e.symbol || e.query || "token";
@@ -4302,7 +4303,9 @@ function downloadRuggersSection(exportKey) {
     });
     name = "ruggers_" + section + "_" + n + "wallets_" + stamp + ".json";
   } else {
-    const lines = payload.wallets.map((w) => w.address);
+    const lines = (payload.wallets || [])
+      .map((w) => (w && (w.address || w.wallet)) || "")
+      .filter(Boolean);
     blob = new Blob([lines.join("\n") + "\n"], {
       type: "text/plain;charset=utf-8",
     });
@@ -4561,16 +4564,34 @@ function refreshRuggersPanel(focusKey) {
       return tb.localeCompare(ta);
     });
 
-  // Prefer currently displayed token address if known
-  let activeKey = focusKey || "";
+  // Resolve focus/sum mint → a key that actually exists in the track store.
+  // focusKey is often solana:<mint> after restore/Analyze even when that mint has
+  // no Ruggers baseline yet (other mints still in localStorage) — never read
+  // store[missing].address (TypeError: reading 'address').
+  const resolveRuggersKey = (hint) => {
+    const h = String(hint || "").trim();
+    if (!h) return "";
+    if (keys.includes(h) && store[h]) return h;
+    const bare = h.includes(":") ? h.split(":").pop() : h;
+    return (
+      keys.find(
+        (k) =>
+          k === h ||
+          k === bare ||
+          k.endsWith(":" + h) ||
+          k.endsWith(":" + bare) ||
+          k === "solana:" + h ||
+          k === "solana:" + bare ||
+          (k.includes(":") && k.split(":").pop() === bare)
+      ) || ""
+    );
+  };
+
+  let activeKey = resolveRuggersKey(focusKey);
   if (!activeKey) {
     const addrEl = $("sumAddr");
     const addr = addrEl ? String(addrEl.textContent || "").trim() : "";
-    if (addr) {
-      activeKey =
-        keys.find((k) => k === addr || k.endsWith(":" + addr) || k === "solana:" + addr) ||
-        "";
-    }
+    activeKey = resolveRuggersKey(addr);
   }
   if (!activeKey && keys.length) activeKey = keys[0];
 
@@ -4596,12 +4617,29 @@ function refreshRuggersPanel(focusKey) {
     return;
   }
 
-  const rec = store[activeKey];
+  // Defensive: keys is non-empty; still never assume store[activeKey] exists
+  let rec = store[activeKey];
+  if (!rec || typeof rec !== "object") {
+    activeKey = keys[0];
+    rec = store[activeKey];
+  }
+  if (!rec || typeof rec !== "object") {
+    _lastRuggersBuckets = null;
+    _lastRuggersRec = null;
+    _lastRuggersKey = "";
+    if (body) {
+      body.innerHTML =
+        '<p class="logs-empty">Ruggers track data is missing or corrupt. Run a full Analyze again.</p>';
+    }
+    if (dump) dump.textContent = "Ruggers track data is missing or corrupt.";
+    return;
+  }
+
   const buckets = ruggersBuckets(rec);
   _lastRuggersBuckets = buckets;
   _lastRuggersRec = rec;
   _lastRuggersKey = activeKey;
-  const mintAddr = (rec.address || "").trim() || "";
+  const mintAddr = String(rec.address || "").trim() || "";
   const titleLeft =
     (rec.symbol ? "$" + rec.symbol + " · " : "") +
     (rec.name ? rec.name + " · " : "");
@@ -5192,17 +5230,20 @@ function wireCopyMintClicks(root) {
 
 function formatRuggersPlain(rec, buckets, key) {
   const lines = [];
-  lines.push("RUGGERS · " + (rec.symbol || "") + " " + (rec.address || key));
-  lines.push("First: " + shortWhen(rec.first_ts) + " · Last: " + shortWhen(rec.last_ts));
-  lines.push("Lookups: " + (rec.lookup_count || 1));
+  const r0 = rec && typeof rec === "object" ? rec : {};
+  const b0 = buckets && typeof buckets === "object" ? buckets : {};
+  lines.push("RUGGERS · " + (r0.symbol || "") + " " + (r0.address || key || ""));
+  lines.push("First: " + shortWhen(r0.first_ts) + " · Last: " + shortWhen(r0.last_ts));
+  lines.push("Lookups: " + (r0.lookup_count || 1));
   lines.push("");
   function dump(title, rows) {
-    lines.push("--- " + title + " (" + rows.length + ") ---");
-    if (!rows.length) {
+    const list = Array.isArray(rows) ? rows : [];
+    lines.push("--- " + title + " (" + list.length + ") ---");
+    if (!list.length) {
       lines.push("  (none)");
       return;
     }
-    for (const r of rows) {
+    for (const r of list) {
       const isSw = r.tag === "swing";
       const hold =
         r.holds_supply_pct != null
@@ -5232,16 +5273,16 @@ function formatRuggersPlain(rec, buckets, key) {
     }
     lines.push("");
   }
-  dump("Creator sold", buckets.creatorSold);
-  dump("Similar sellers", buckets.similarSellers);
-  dump("Multi-account (1 owner)", buckets.multiSellers || []);
-  dump("Shared SOL funder (1 owner)", buckets.fundingSellers || []);
-  dump("Insider-flagged (Rugcheck)", buckets.insiderSellers || []);
+  dump("Creator sold", b0.creatorSold);
+  dump("Similar sellers", b0.similarSellers);
+  dump("Multi-account (1 owner)", b0.multiSellers || []);
+  dump("Shared SOL funder (1 owner)", b0.fundingSellers || []);
+  dump("Insider-flagged (Rugcheck)", b0.insiderSellers || []);
   // Launch-window dump removed (scan disabled).
-  dump("Suspect sellers", buckets.suspectSellers || []);
-  dump("Single sellers", buckets.singleSellers);
-  dump("Flagged wallets (RugWatch)", buckets.flaggedWallets || []);
-  dump("Swing traders", buckets.swings);
+  dump("Suspect sellers", b0.suspectSellers || []);
+  dump("Single sellers", b0.singleSellers);
+  dump("Flagged wallets (RugWatch)", b0.flaggedWallets || []);
+  dump("Swing traders", b0.swings);
   return lines.join("\n");
 }
 
