@@ -54,8 +54,7 @@ def comprehensive_bundle_check(
         sources_used.append("rugcheck")
     if bird.get("ok") and not bird.get("skipped"):
         sources_used.append("birdeye")
-    if jito_style.get("ok"):
-        sources_used.append("jito_style_helius_slots")
+    # Launch-window (jito_style same-slot) disabled — never add as source
     if jito_eng.get("ok"):
         sources_used.append("jito_engine")
     # funding added after scan (appended when clusters found)
@@ -225,132 +224,15 @@ def comprehensive_bundle_check(
                 }
             )
 
-    # Jito-style same-slot groups (launch window)
-    groups = jito_style.get("same_slot_groups") or []
-    if jito_style.get("ok") and groups:
-        best = max(groups, key=lambda g: int(g.get("unique_buyers") or 0))
-        sev = "high" if int(best.get("unique_buyers") or 0) >= 3 else "medium"
-        fusion_signals.append(
-            {
-                "id": "jito_style_same_slot",
-                "provider": "jito_style",
-                "severity": sev,
-                "title": "Launch-window same-slot multi-wallet buys",
-                "detail": (
-                    f"{best.get('unique_buyers')} wallets across {best.get('tx_count')} txs "
-                    f"in slot {best.get('slot')} — atomic/MEV-style snipe pattern "
-                    f"(Helius history; {len(groups)} slot group(s); "
-                    f"scanned {jito_style.get('sigs_scanned') or '?'} txs)."
-                ),
-            }
-        )
-        extra_score += min(30, 10 + int(best.get("unique_buyers") or 0) * 3)
-        # Add wallets to suspects (skip known LP / program vaults)
-        if base.get("ok"):
-            suspects = list(base.get("suspect_wallets") or [])
-            existing = {s.get("wallet") for s in suspects}
-            for g in groups[:5]:
-                for w in g.get("wallets") or []:
-                    ws = (str(w) if w is not None else "").strip()
-                    if not ws or ws in lp_wallets:
-                        continue
-                    if ws not in existing:
-                        suspects.append(
-                            {
-                                "wallet": ws,
-                                "reasons": ["same-slot multi-buy (launch window)"],
-                                "pct_supply": pct_by_w.get(ws),
-                                "label": label_by_w.get(ws),
-                            }
-                        )
-                        existing.add(ws)
-                    else:
-                        for s in suspects:
-                            if s.get("wallet") == ws and s.get("pct_supply") is None:
-                                s["pct_supply"] = pct_by_w.get(ws)
-            base = dict(base)
-            base["suspect_wallets"] = suspects[:40]
-            spct, sn = bun._suspect_total_percent(suspects[:40])  # type: ignore[attr-defined]
-            s0 = dict(base.get("summary") or {})
-            s0["suspect_total_pct"] = spct
-            s0["suspect_wallet_count"] = sn
-            base["summary"] = s0
-        # first_buy_ts from early_buyers map (unix) for per-wallet timestamps
-        first_buy_by_w: dict[str, int] = {}
-        for eb in list(jito_style.get("early_buyers") or []):
-            if not isinstance(eb, dict):
-                continue
-            ew = (eb.get("wallet") or "").strip()
-            if not ew:
-                continue
-            try:
-                if eb.get("first_buy_ts") is not None:
-                    first_buy_by_w[ew] = int(eb["first_buy_ts"])
-            except (TypeError, ValueError):
-                pass
-
-        # Attach per-wallet %; DROP Pump.fun / known LP wallets entirely
-        # (they must not appear in same-slot multi-buys)
-        enriched_groups = []
-        for g in groups[:12]:
-            gg = dict(g)
-            wrows = []
-            kept_wallets: list[str] = []
-            for w in g.get("wallets") or []:
-                ws = (str(w) if w is not None else "").strip()
-                if not ws or ws in lp_wallets:
-                    continue
-                lab = label_by_w.get(ws)
-                if lab and any(
-                    k in lab.lower()
-                    for k in (
-                        "liquidity",
-                        "pump",
-                        "bonding",
-                        "raydium",
-                        "orca",
-                        "meteora",
-                        "pool",
-                        "vault",
-                        "amm",
-                    )
-                ):
-                    continue
-                kept_wallets.append(ws)
-                row: dict[str, Any] = {
-                    "wallet": ws,
-                    "pct_supply": pct_by_w.get(ws),
-                    "block_time": g.get("block_time"),
-                }
-                if lab:
-                    row["label"] = lab
-                if ws in first_buy_by_w:
-                    row["first_buy_ts"] = first_buy_by_w[ws]
-                wrows.append(row)
-            # Need ≥2 non-LP wallets to keep a multi-buy slot group
-            if len(kept_wallets) < 2:
-                continue
-            gg["wallets"] = kept_wallets[:24]
-            gg["unique_buyers"] = len(kept_wallets)
-            gg["wallet_rows"] = wrows
-            tot, n = bun._sum_wallets_pct(wrows)  # type: ignore[attr-defined]
-            gg["total_pct"] = tot
-            gg["wallets_with_pct"] = n
-            enriched_groups.append(gg)
+    # Launch-window / same-slot multi-buys: disabled (no Helius scan; not in
+    # Bundles or Ruggers). Empty lists so UI never shows a launch section.
+    groups: list = []
+    if base.get("ok"):
         base = dict(base)
-        base["same_slot_groups"] = enriched_groups
-        # early_buyers: strip LP vaults too
-        early_clean = []
-        for eb in list(jito_style.get("early_buyers") or [])[:40]:
-            if not isinstance(eb, dict):
-                continue
-            ew = (eb.get("wallet") or "").strip()
-            if not ew or ew in lp_wallets:
-                continue
-            early_clean.append(eb)
-        base["early_buyers"] = early_clean[:30]
+        base["same_slot_groups"] = []
+        base["early_buyers"] = []
 
-    # Funding hops: common SOL funder among suspects / similar-size / early buyers
+    # Funding hops: common SOL funder among suspects / similar-size
     seed_wallets: list[str] = []
     if base.get("ok"):
         for s in base.get("suspect_wallets") or []:
@@ -362,11 +244,6 @@ def comprehensive_bundle_check(
             for m in g.get("members") or []:
                 if isinstance(m, dict) and m.get("wallet"):
                     seed_wallets.append(str(m["wallet"]))
-    for g in groups[:3]:
-        seed_wallets.extend(str(x) for x in (g.get("wallets") or []))
-    for eb in (jito_style.get("early_buyers") or [])[:15]:
-        if isinstance(eb, dict) and eb.get("wallet"):
-            seed_wallets.append(str(eb["wallet"]))
 
     try:
         funding_report = src.analyze_funding_clusters(seed_wallets)
@@ -917,9 +794,9 @@ def comprehensive_bundle_check(
             pass
         base["notes"] = (
             "Comprehensive bundle check: Helius top holders (owner-resolved) + "
-            "Rugcheck insiders/risks + Birdeye (if key) + launch-window same-slot "
-            "multi-buys + 1-hop SOL funding + fresh/sole-token wallets + "
-            "token multi-send (one sender → many). "
+            "Rugcheck insiders/risks + Birdeye (if key) + 1-hop SOL funding + "
+            "fresh/sole-token wallets + token multi-send (one sender → many). "
+            "Launch-window / same-slot multi-buys disabled. "
             "Total bundle % = sum of each risk vector’s supply % with NO "
             "cross-vector wallet dedupe (can exceed 100% if wallets hit multiple "
             "vectors). Similar-size groups and suspect wallets are excluded from "

@@ -459,18 +459,8 @@ def _ruggers_track_snapshot(
     except Exception:  # noqa: BLE001
         pass
 
-    for g in list(bundles.get("same_slot_groups") or []):
-        if not isinstance(g, dict):
-            continue
-        for w in list(g.get("wallets") or []):
-            ws = str(w or "").strip()
-            if ws and ws not in lp_exclude:
-                launch_wallets.add(ws)
-        for row in list(g.get("wallet_rows") or []):
-            if isinstance(row, dict):
-                ws = (row.get("wallet") or "").strip()
-                if ws and ws not in lp_exclude:
-                    launch_wallets.add(ws)
+    # Launch-window disabled — never tag Ruggers wallets as in_launch
+    # (same_slot_groups left empty by bundle fusion).
 
     # Fresh wallets (sole-token / near-sole — almost only this mint)
     for fw in list(bundles.get("fresh_wallets") or []):

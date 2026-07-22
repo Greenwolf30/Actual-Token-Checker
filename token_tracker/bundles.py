@@ -261,8 +261,8 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
             "Suspect total % = sum of unique suspect wallets' supply %. "
             "Total bundle % (full Analyze) = sum of each risk vector’s supply % "
             "with NO cross-vector wallet dedupe (multi-account + insider + "
-            "multi-send + fresh + shared funder + launch-window). "
-            "Similar-size groups and suspect wallets are EXCLUDED from Total "
+            "multi-send + fresh + shared funder). "
+            "Similar-size, suspect, and launch-window are EXCLUDED from Total "
             "bundle %. A wallet in two counted vectors counts twice. "
             "Not a full commercial sniper graph."
         ),
@@ -973,112 +973,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
                 "  (none — multi-send needs HELIUS_API_KEY on the API + full Analyze)"
             )
 
-    # Launch-window same-slot groups
-    slots = data.get("same_slot_groups") or []
-    lines.append("")
-    lines.append("── LAUNCH-WINDOW ──")
-    # Glossary (Slot / launch-window / same-slot / holds %) lives in
-    # DOCUMENTATION.txt §6.3c — not repeated in the Bundles UI.
-    def _is_lp_row(r: dict[str, Any]) -> bool:
-        if r.get("is_known_program"):
-            return True
-        lab = str(
-            r.get("label") or label_map.get((r.get("wallet") or "").strip()) or ""
-        )
-        low = lab.lower()
-        return any(
-            k in low
-            for k in (
-                "liquidity",
-                "raydium",
-                "orca",
-                "meteora",
-                "pool",
-                "vault",
-                "pump",
-                "amm",
-                "bonding",
-            )
-        )
-
-    if slots:
-        # Rebuild non-LP groups for display + totals
-        shown_groups: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
-        launch_rows: list[dict[str, Any]] = []
-        for g in slots:
-            if g.get("wallet_rows"):
-                rows = list(g.get("wallet_rows") or [])
-            else:
-                wallets = list(g.get("wallets") or [])
-                rows = [
-                    {
-                        "wallet": w,
-                        "pct_supply": pct_map.get((w or "").strip()),
-                        "label": label_map.get((w or "").strip()),
-                    }
-                    for w in wallets
-                ]
-            rows = [r for r in rows if not _is_lp_row(r)]
-            if len(rows) < 2:
-                continue
-            shown_groups.append((g, rows))
-            for r in rows:
-                ws = (r.get("wallet") or "").strip()
-                if ws:
-                    launch_rows.append(
-                        {
-                            "wallet": ws,
-                            "pct_supply": r.get("pct_supply")
-                            if r.get("pct_supply") is not None
-                            else pct_map.get(ws),
-                        }
-                    )
-        if shown_groups:
-            launch_total, launch_n = _sum_wallets_pct(launch_rows)
-            lines.append(
-                f"  Same-slot multi-buys — total {_pct(launch_total)} across "
-                f"{launch_n} wallet(s):"
-            )
-            for g, rows in shown_groups[:5]:
-                g_total, g_n = _sum_wallets_pct(rows)
-                total_s = _pct(g_total) if g_total is not None else "n/a"
-                slot_when = _fmt_unix_utc(g.get("block_time"))
-                slot_head = f"    • slot {g.get('slot')}"
-                if slot_when:
-                    slot_head += f" @ {slot_when}"
-                lines.append(
-                    f"{slot_head}: {g.get('unique_buyers') or g_n} wallets / "
-                    f"{g.get('tx_count')} txs  ·  total {total_s}"
-                )
-                for row in rows[:10]:
-                    w = (row.get("wallet") or "").strip()
-                    # Prefer wallet first-buy ts; fall back to slot block_time
-                    when = (
-                        row.get("first_buy_ts")
-                        or row.get("block_time")
-                        or g.get("block_time")
-                    )
-                    lines.append(
-                        _fmt_wallet_hold_line(
-                            w,
-                            row.get("pct_supply")
-                            if row.get("pct_supply") is not None
-                            else pct_map.get(w),
-                            label=row.get("label") or label_map.get(w),
-                            is_lp=False,
-                            when=when,
-                        )
-                    )
-                if len(rows) > 10:
-                    lines.append(f"         … +{len(rows) - 10} more")
-        else:
-            lines.append(
-                "  (none — no same-slot multi-buys in launch window this scan)"
-            )
-    else:
-        lines.append(
-            "  (none — no same-slot multi-buys in launch window this scan)"
-        )
+    # Launch-window removed from Bundles (scan disabled — saves Helius RPCs).
 
     suspects = data.get("suspect_wallets") or []
     lines.append("")
@@ -1512,13 +1407,14 @@ def recompute_total_bundle_all_vectors(
 
     Counted vectors:
       multi_account, insider, multi_send (token only), fresh,
-      shared_funder (funding clusters), launch_window (same-slot).
+      shared_funder (funding clusters).
 
     EXCLUDED as categories from Total bundle %:
       similar_size groups, suspect wallets (pure members only).
+      launch_window (scan disabled; not in Bundles/Ruggers).
 
     Exception: if a wallet is multi-send (or multi-account / insider / fresh /
-    shared funder / launch-window) AND also appears under similar-size or
+    shared funder) AND also appears under similar-size or
     suspect, it is STILL counted via the counted group(s). Those wallets are
     listed alone in total_bundle_crosslisted_wallets for the report.
 
@@ -1691,25 +1587,13 @@ def recompute_total_bundle_all_vectors(
     by_vector["shared_funder"] = {"pct": p, "count": n}
     counted_maps["shared_funder"] = fund_map
 
-    # 7) Launch-window same-slot multi-buys
-    lw_rows: list[tuple[str, Any]] = []
-    for g in data.get("same_slot_groups") or []:
-        if not isinstance(g, dict):
-            continue
-        for row in g.get("wallet_rows") or []:
-            if isinstance(row, dict):
-                lw_rows.append((row.get("wallet"), row.get("pct_supply")))
-            else:
-                lw_rows.append((row, None))
-        for w in g.get("wallets") or []:
-            if isinstance(w, dict):
-                lw_rows.append((w.get("wallet"), w.get("pct_supply")))
-            else:
-                lw_rows.append((w, None))
-    lw_map = _wallet_map(lw_rows)
-    p, n = _sum_map(lw_map)
-    by_vector["launch_window"] = {"pct": p, "count": n}
-    counted_maps["launch_window"] = lw_map
+    # 7) Launch-window — disabled (not counted, not listed)
+    by_vector["launch_window"] = {
+        "pct": 0.0,
+        "count": 0,
+        "excluded_from_total": True,
+        "disabled": True,
+    }
 
     # Suspect wallets — EXCLUDED as a category (unless also in counted)
     sus_rows: list[tuple[str, Any]] = []
@@ -1733,16 +1617,14 @@ def recompute_total_bundle_all_vectors(
         "multi_send",
         "fresh",
         "shared_funder",
-        "launch_window",
     }
-    EXCLUDED = ("similar_size", "suspect")
+    EXCLUDED = ("similar_size", "suspect", "launch_window")
     VECTOR_LABEL = {
         "multi_account": "multi-account",
         "insider": "insider",
         "multi_send": "multi-send",
         "fresh": "fresh",
         "shared_funder": "shared funder",
-        "launch_window": "launch-window",
         "similar_size": "similar-size",
         "suspect": "suspect",
     }
@@ -2467,7 +2349,7 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
         "multi_send_wallets": ms_list[:32],
         "multi_send_clusters": token_ms,
         "sol_multi_send_clusters": sol_ms,
-        "same_slot_groups": slots_out,
+        "same_slot_groups": [],  # launch-window disabled
         "suspect_wallets": suspects_out,
         "total_bundle_crosslisted_wallets": list(
             data.get("total_bundle_crosslisted_wallets") or []

@@ -1400,7 +1400,7 @@ function primaryLaneFromBaselineFlags(first, uploadedSimilar) {
   if (first.in_multi_send) return "multi_send";
   if (first.in_funding) return "funding";
   if (first.in_insider) return "insider";
-  if (first.in_launch) return "launch";
+  // Launch-window disabled — never route into a launch lane
   if (first.in_fresh) return "fresh";
   if (first.in_suspect) return "suspect";
   if (isRuggersSingleEligible(first, null)) return "single";
@@ -1422,6 +1422,8 @@ function resolveRuggersOriginLane(rec, w, first, prev, cur, uploadedSimilar) {
   const frozen =
     (first && first.origin_lane) || (prev && prev.origin_lane) || "";
   if (frozen && RUGGERS_STICKY_LANES.has(frozen)) {
+    // Launch-window removed — remap sticky launch → single
+    if (frozen === "launch") return "single";
     // Promote excluded/legacy → similar if we learn similar
     if (
       frozen !== "similar" &&
@@ -3048,6 +3050,8 @@ function ruggersBuckets(rec) {
     if (st && st.is_creator) return "creator";
     const fw = rec.first_wallets && rec.first_wallets[w];
     if (fw && fw.origin_lane && RUGGERS_STICKY_LANES.has(fw.origin_lane)) {
+      // Launch-window removed — remap sticky launch → single
+      if (fw.origin_lane === "launch") return "single";
       return fw.origin_lane;
     }
     if (fw && fw.in_similar) return "similar";
@@ -3055,7 +3059,7 @@ function ruggersBuckets(rec) {
     if (fw && fw.in_multi_send) return "multi_send";
     if (fw && fw.in_funding) return "funding";
     if (fw && fw.in_insider) return "insider";
-    if (fw && fw.in_launch) return "launch";
+    // Launch-window disabled
     if (fw && fw.in_fresh) return "fresh";
     if (fw && fw.in_suspect) return "suspect";
     return "single";
@@ -3310,13 +3314,9 @@ function ruggersBuckets(rec) {
       continue;
     }
     if (lane === "launch") {
+      // Launch-window removed — sticky launch wallets go to Single
       if (isRuggersExcludedLpWallet(row)) continue;
-      pushLaneSeller(
-        "launch",
-        { ...row, in_launch: true },
-        launchSeen,
-        launchSellers
-      );
+      pushLaneSeller("single", { ...row, in_launch: false }, singleSeen, singleSellers);
       continue;
     }
     if (lane === "fresh") {
@@ -3518,7 +3518,7 @@ function ruggersBuckets(rec) {
     } else if (lane === "insider") {
       pushLaneSeller("insider", row, insiderSeen, insiderSellers);
     } else if (lane === "launch") {
-      pushLaneSeller("launch", row, launchSeen, launchSellers);
+      pushLaneSeller("single", { ...row, in_launch: false }, singleSeen, singleSellers);
     } else if (lane === "fresh") {
       pushLaneSeller("fresh", row, freshSeen, freshSellers);
     } else if (lane === "suspect") {
@@ -4769,25 +4769,7 @@ function refreshRuggersPanel(focusKey) {
     buckets.insiderSellers || [],
     "insider"
   );
-  html += renderRuggersSection(
-    "Same-slot multi-buys (bots) (launch-window)",
-    "",
-    filterOutRuggersLpRows(buckets.launchSellers || []),
-    "launch",
-    {
-      sectionClass: "rug-section-launch-bots",
-      titleHtml: ruggersLaunchTitleHtml(),
-      hintHtml:
-        "Same-slot multi-buy sellers from the launch-window scan (several different " +
-        "wallets bought this mint in the same Solana slot ≈ ~400ms). " +
-        "<strong>Possibly</strong> bots, snipers, MEV/bundle-style entry, and/or " +
-        "team multi-wallet buys — co-timed activity is a heuristic, not proof of " +
-        "identity or automation. " +
-        "Tagged at first full Analyze · Sell ≥99% → stay here · buy-back → Swing " +
-        "(label kept as same-slot multi-buys (bots)) · " +
-        "sell again → back here. Export + Upload.",
-    }
-  );
+  // Launch-window / same-slot multi-buys removed from Ruggers (scan disabled).
   html += renderRuggersSection(
     "Fresh wallets",
     "Holders whose bag is almost only this mint (sole / near-sole token) at first lookup. " +
@@ -4807,7 +4789,7 @@ function refreshRuggersPanel(focusKey) {
   );
   html += renderRuggersSection(
     "Single wallets (sellers)",
-    "Plain top holders ≥0.01% (not multi / multi-send / funder / insider / launch / fresh / suspect / similar). " +
+    "Plain top holders ≥0.01% (not multi / multi-send / funder / insider / fresh / suspect / similar). " +
       "Sell ≥99% → stay here · buy-back → Swing · sell again → back here. Export + Upload.",
     buckets.singleSellers,
     "single"
@@ -5255,7 +5237,7 @@ function formatRuggersPlain(rec, buckets, key) {
   dump("Multi-account (1 owner)", buckets.multiSellers || []);
   dump("Shared SOL funder (1 owner)", buckets.fundingSellers || []);
   dump("Insider-flagged (Rugcheck)", buckets.insiderSellers || []);
-  dump("Launch-window same-slot", buckets.launchSellers || []);
+  // Launch-window dump removed (scan disabled).
   dump("Suspect sellers", buckets.suspectSellers || []);
   dump("Single sellers", buckets.singleSellers);
   dump("Flagged wallets (RugWatch)", buckets.flaggedWallets || []);
@@ -6158,7 +6140,7 @@ function renderBundlesUi(data) {
     root.innerHTML =
       '<div class="bun-hint"><strong>Bundles unavailable</strong><br />' +
       escHtml(view.error || "No data") +
-      "<br /><br />Tips: full Analyze · Solana mint · holders must succeed · Helius for funding / fresh / multi-send / launch-window.</div>";
+      "<br /><br />Tips: full Analyze · Solana mint · holders must succeed · Helius for funding / fresh / multi-send.</div>";
     return;
   }
 
@@ -6228,7 +6210,6 @@ function renderBundlesUi(data) {
       multi_send: "multi-send",
       fresh: "fresh",
       shared_funder: "shared funder",
-      launch_window: "launch-window",
     };
     for (const [k, lab] of Object.entries(labels)) {
       const m = bv[k];
@@ -6608,38 +6589,7 @@ function renderBundlesUi(data) {
     html += bunEmptySection("Multi-send (one → many)", emptyMsg);
   }
 
-  // Launch-window
-  const slots = view.same_slot_groups || [];
-  if (slots.length) {
-    html +=
-      '<section class="bun-section"><div class="bun-section-head">' +
-      '<span class="bun-section-title">Launch-window (same-slot multi-buys)</span>' +
-      '<span class="bun-section-total">' +
-      escHtml(String(slots.length)) +
-      " slot group(s)</span></div><div class=\"bun-section-body\">";
-    for (const g of slots) {
-      html +=
-        '<div class="bun-cluster"><div class="bun-cluster-head">Slot ' +
-        escHtml(g.slot != null ? String(g.slot) : "—") +
-        (g.block_time ? " · " + escHtml(String(g.block_time)) : "") +
-        " · " +
-        escHtml(String(g.wallet_count || (g.wallets || []).length || 0)) +
-        " wallets · sum " +
-        bunPctHtml(g.total_pct) +
-        "</div>";
-      html += bunWalletTable(g.wallets || [], [
-        { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
-        { key: "pct_supply", label: "Holds now", render: (v) => bunPctHtml(v) },
-      ]);
-      html += "</div>";
-    }
-    html += "</div></section>";
-  } else {
-    html += bunEmptySection(
-      "Launch-window (same-slot multi-buys)",
-      "None found in early mint scan (needs Helius + full Analyze)."
-    );
-  }
+  // Launch-window removed from Bundles (Helius scan disabled).
 
   // Suspects — total supply % across unique suspect wallets (right of title)
   const sus = view.suspect_wallets || [];

@@ -91,8 +91,16 @@ def fetch_all_bundle_sources(
                 "meta": h.get("meta") or {},
                 "source": h.get("source"),
             },
-            # Same-slot multi-buy (Jito-style) — after Helius RPC is warm
-            "jito_style": _helius_same_slot_snipes(mint),
+            # Launch-window / same-slot scan disabled (saves ~40–44 Helius RPCs
+            # per Analyze). Not shown in Bundles or Ruggers.
+            "jito_style": {
+                "ok": False,
+                "skipped": True,
+                "same_slot_groups": [],
+                "early_buyers": [],
+                "method": "helius_enhanced_txs_same_slot_disabled",
+                "notes": "Launch-window scan disabled — not used in Bundles/Ruggers.",
+            },
         }
 
     def _rug() -> dict[str, Any]:
