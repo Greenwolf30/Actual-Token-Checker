@@ -1776,19 +1776,10 @@ function processRuggersFromAnalyze(data) {
         )
           .trim()
           .toLowerCase();
-        // Keep if we can prove upload was from this mint
+        // Keep only if we can prove upload was from this mint
+        // (status.ruggers_uploaded alone is not enough — old builds set it
+        // from cloud origin and poisoned Upload (0) on new mints)
         if (fromRk === thisMintAddr || fromFs === thisMintAddr) {
-          cleanedUp[w] = meta;
-          continue;
-        }
-        // Keep if status was explicitly marked after a real Upload action
-        const st = rec.status && rec.status[w];
-        if (
-          st &&
-          st.ruggers_uploaded === true &&
-          st.ruggers_uploaded_section &&
-          String(st.ruggers_uploaded_section) !== "unknown"
-        ) {
           cleanedUp[w] = meta;
           continue;
         }
