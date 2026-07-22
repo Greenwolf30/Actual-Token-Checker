@@ -6197,12 +6197,7 @@ function renderBundlesUi(data) {
   html += stat("Total bundle", bunPctHtml(s.total_bundle_pct));
   html += stat("Similar-size", bunPctHtml(s.similar_size_total_pct));
   html += stat("Fresh total", bunPctHtml(s.fresh_total_pct));
-  html += stat("Multi-send combined", bunPctHtml(s.multi_send_total_pct));
-  html += stat("Multi-send senders", bunPctHtml(s.multi_send_sender_total_pct));
-  html += stat(
-    "Multi-send receivers",
-    bunPctHtml(s.multi_send_receiver_total_pct)
-  );
+  html += stat("Multi-send total", bunPctHtml(s.multi_send_total_pct));
   html += stat("Suspect total", bunPctHtml(s.suspect_total_pct));
   html += stat("Top10 ex-LP", bunPctHtml(s.top10_pct_excluding_known_programs));
   html += "</div>";
