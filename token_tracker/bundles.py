@@ -1219,8 +1219,8 @@ def _sum_wallets_pct(
             pct = float(s["pct_supply"]) if s.get("pct_supply") is not None else None
         except (TypeError, ValueError):
             pct = None
+        # Ignore wallets with unknown % — do not invent 0 and zero the total
         if pct is None:
-            by_w.setdefault(w, by_w.get(w, 0.0))
             continue
         by_w[w] = max(by_w.get(w, 0.0), pct)
     if not by_w:
@@ -1229,7 +1229,7 @@ def _sum_wallets_pct(
     if total > 100.0:
         total = 100.0
     has_any = any(v > 0 for v in by_w.values())
-    return (round(total, 4) if has_any else 0.0), len(by_w)
+    return (round(total, 4) if has_any else None), (len(by_w) if has_any else 0)
 
 
 # Same cutoff as Ruggers Single lane (web_server / app.js)
@@ -1419,19 +1419,20 @@ def _multi_send_split_totals(
             p = float(row["pct_supply"]) if row.get("pct_supply") is not None else None
         except (TypeError, ValueError):
             p = None
+        # Skip unknown % — do not force 0% (UI can keep last known)
         if p is None:
-            combined_map.setdefault(w, combined_map.get(w, 0.0))
             continue
         combined_map[w] = max(combined_map.get(w, 0.0), p)
     if not combined_map:
+        # Clusters may exist without hold % on this snapshot
         ct, cn = None, 0
     else:
         total = sum(combined_map.values())
         if total > 100.0:
             total = 100.0
         has_any = any(v > 0 for v in combined_map.values())
-        ct = round(total, 4) if has_any else 0.0
-        cn = len(combined_map)
+        ct = round(total, 4) if has_any else None
+        cn = len(combined_map) if has_any else 0
 
     try:
         sp_f = float(st) if st is not None else 0.0

@@ -6538,15 +6538,27 @@ function mergeLastKnownOptionalStats(cur, lastKnown) {
   for (const k of OPTIONAL_BUNDLE_PCT_KEYS) {
     const c = out[k];
     const p = prev[k];
-    if (
-      (c == null || !Number.isFinite(Number(c))) &&
-      p != null &&
-      Number.isFinite(Number(p))
-    ) {
+    if (p == null || !Number.isFinite(Number(p)) || Number(p) <= 0) continue;
+    // Keep last known when live is missing or zeroed (scan off / no hold % on snapshot)
+    if (c == null || !Number.isFinite(Number(c)) || Number(c) <= 0) {
       out[k] = Number(p);
     }
   }
   return out;
+}
+
+/** Prefer live optional %, else last known (never force 0 over a real last known). */
+function resolveOptionalDisplayPct(liveVal, lastKnownObj) {
+  const live =
+    liveVal != null && Number.isFinite(Number(liveVal)) ? Number(liveVal) : null;
+  const known =
+    lastKnownObj && lastKnownObj.pct != null && Number.isFinite(Number(lastKnownObj.pct))
+      ? Number(lastKnownObj.pct)
+      : null;
+  if (live != null && live > 0) return live;
+  if (known != null && known > 0) return known;
+  if (live != null) return live; // explicit 0 from live
+  return known;
 }
 
 function loadBundleDeltaHtmlMap() {
@@ -7037,11 +7049,21 @@ function renderBundlesUi(data) {
     }
     const last = loadBundleDeltaHtml("last");
     if (last) sources.push(last);
+    try {
+      const ss = sessionStorage.getItem("adtc_delta_html_last");
+      if (ss) sources.push(JSON.parse(ss));
+    } catch (_) {
+      /* ignore */
+    }
     // First non-empty map that has at least one delta span
     for (const src of sources) {
       if (!src || typeof src !== "object") continue;
       const keys = Object.keys(src).filter(
-        (k) => k !== "savedAt" && k !== "barHtml" && src[k]
+        (k) =>
+          k !== "savedAt" &&
+          k !== "barHtml" &&
+          src[k] &&
+          String(src[k]).indexOf("bun-stat-delta") >= 0
       );
       if (keys.length) return src;
     }
@@ -7190,16 +7212,34 @@ function renderBundlesUi(data) {
     }
   }
   const optKnown = mint ? loadOptionalLastKnown(mint) : {};
-  // Persist live scan times (not last-known/cache) for later off-box display
+  // Persist live scan times only when we have a real positive total
+  // (do not overwrite last known with 0 from a failed / empty hold-% snapshot)
   if (!isRestore && mint) {
-    if (!s.fresh_from_cache && s.fresh_total_pct != null) {
-      saveOptionalLastKnown(mint, "fresh", s.fresh_total_pct);
+    if (
+      !s.fresh_from_cache &&
+      s.fresh_total_pct != null &&
+      Number(s.fresh_total_pct) > 0
+    ) {
+      saveOptionalLastKnown(mint, "fresh", s.fresh_total_pct, s.fresh_cached_at);
     }
-    if (!s.multi_send_from_cache && s.multi_send_total_pct != null) {
-      saveOptionalLastKnown(mint, "multi_send", s.multi_send_total_pct);
+    if (
+      !s.multi_send_from_cache &&
+      s.multi_send_total_pct != null &&
+      Number(s.multi_send_total_pct) > 0
+    ) {
+      saveOptionalLastKnown(
+        mint,
+        "multi_send",
+        s.multi_send_total_pct,
+        s.multi_send_cached_at
+      );
     }
-    if (!s.funding_from_cache && s.funding_total_pct != null) {
-      saveOptionalLastKnown(mint, "funding", s.funding_total_pct);
+    if (
+      !s.funding_from_cache &&
+      s.funding_total_pct != null &&
+      Number(s.funding_total_pct) > 0
+    ) {
+      saveOptionalLastKnown(mint, "funding", s.funding_total_pct, s.funding_cached_at);
     }
   }
 
@@ -7263,36 +7303,28 @@ function renderBundlesUi(data) {
     "Similar-size",
     withDelta(bunPctHtml(s.similar_size_total_pct), "similar_size_total_pct")
   );
-  // ── Fresh (optional) — last known + timestamp when not live ────────
+  // ── Fresh / Multi-send / Shared SOL (optional) ─────────────────────
   {
     const freshCached = !!s.fresh_from_cache;
     const freshErr = String(s.fresh_error || "");
     const freshSkipped = /scan off|enable .Fresh|Fresh wallets scan off/i.test(
       freshErr
     );
-    let freshPct =
-      s.fresh_total_pct != null && Number.isFinite(Number(s.fresh_total_pct))
-        ? Number(s.fresh_total_pct)
-        : null;
-    if (freshPct == null && deltaCurStats && deltaCurStats.fresh_total_pct != null) {
-      freshPct = Number(deltaCurStats.fresh_total_pct);
-    }
-    if (
-      freshPct == null &&
-      optKnown.fresh &&
-      optKnown.fresh.pct != null
-    ) {
-      freshPct = Number(optKnown.fresh.pct);
-    }
+    let freshPct = resolveOptionalDisplayPct(
+      s.fresh_total_pct != null
+        ? s.fresh_total_pct
+        : deltaCurStats && deltaCurStats.fresh_total_pct,
+      optKnown.fresh
+    );
     const freshAt =
-      s.fresh_cached_at ||
-      (optKnown.fresh && optKnown.fresh.at) ||
-      "";
-    const showFreshLast =
+      s.fresh_cached_at || (optKnown.fresh && optKnown.fresh.at) || "";
+    const usingFreshLast =
       freshCached ||
-      (freshSkipped && freshPct != null) ||
-      (freshPct != null && !freshCached && freshSkipped);
-    const freshSub = showFreshLast
+      freshSkipped ||
+      (freshPct != null &&
+        freshPct > 0 &&
+        (s.fresh_total_pct == null || Number(s.fresh_total_pct) <= 0));
+    const freshSub = usingFreshLast
       ? lastKnownSub(true, freshAt, optKnown.fresh && optKnown.fresh.at)
       : "";
     if (freshSkipped && freshPct == null && !freshCached) {
@@ -7309,7 +7341,7 @@ function renderBundlesUi(data) {
       const live = freshPct != null ? freshPct : 0;
       html += stat(
         "Fresh total",
-        withDelta(bunPctHtml(live), "fresh_total_pct", live),
+        withDelta(bunPctHtmlBox(live), "fresh_total_pct", live),
         freshSub
       );
     }
@@ -7318,27 +7350,23 @@ function renderBundlesUi(data) {
     const msErr = String(s.multi_send_error || "");
     const msSkipped = /scan off|enable [“"]Multi|Multi-send scan off/i.test(msErr);
     const msCached = !!s.multi_send_from_cache;
-    let msPct =
-      s.multi_send_total_pct != null && Number.isFinite(Number(s.multi_send_total_pct))
-        ? Number(s.multi_send_total_pct)
-        : null;
-    if (msPct == null && deltaCurStats && deltaCurStats.multi_send_total_pct != null) {
-      msPct = Number(deltaCurStats.multi_send_total_pct);
-    }
-    if (
-      msPct == null &&
-      optKnown.multi_send &&
-      optKnown.multi_send.pct != null
-    ) {
-      msPct = Number(optKnown.multi_send.pct);
-    }
+    let msPct = resolveOptionalDisplayPct(
+      s.multi_send_total_pct != null
+        ? s.multi_send_total_pct
+        : deltaCurStats && deltaCurStats.multi_send_total_pct,
+      optKnown.multi_send
+    );
     const msAt =
       s.multi_send_cached_at ||
       (optKnown.multi_send && optKnown.multi_send.at) ||
       "";
-    const showMsLast =
-      msCached || (msSkipped && msPct != null);
-    const msSub = showMsLast
+    const usingMsLast =
+      msCached ||
+      msSkipped ||
+      (msPct != null &&
+        msPct > 0 &&
+        (s.multi_send_total_pct == null || Number(s.multi_send_total_pct) <= 0));
+    const msSub = usingMsLast
       ? lastKnownSub(true, msAt, optKnown.multi_send && optKnown.multi_send.at)
       : "";
     if (msSkipped && msPct == null && !msCached) {
@@ -7366,52 +7394,34 @@ function renderBundlesUi(data) {
       fundErr
     );
     const fundCached = !!s.funding_from_cache;
-    // Prefer live %, else frozen last-known (refresh / scan-off still show deltas)
-    let fundPct =
-      s.funding_total_pct != null && Number.isFinite(Number(s.funding_total_pct))
-        ? Number(s.funding_total_pct)
-        : null;
-    if (fundPct == null && deltaCurStats && deltaCurStats.funding_total_pct != null) {
-      fundPct = Number(deltaCurStats.funding_total_pct);
-    }
-    if (fundPct == null && prev && prev.funding_total_pct != null) {
-      fundPct = Number(prev.funding_total_pct);
-    }
-    if (
-      fundPct == null &&
-      optKnown.funding &&
-      optKnown.funding.pct != null
-    ) {
-      fundPct = Number(optKnown.funding.pct);
-    }
+    let fundPct = resolveOptionalDisplayPct(
+      s.funding_total_pct != null
+        ? s.funding_total_pct
+        : deltaCurStats && deltaCurStats.funding_total_pct != null
+          ? deltaCurStats.funding_total_pct
+          : prev && prev.funding_total_pct,
+      optKnown.funding
+    );
     const fundAt =
-      s.funding_cached_at ||
-      (optKnown.funding && optKnown.funding.at) ||
-      "";
-    const showFundLast =
-      fundCached || (fundSkipped && fundPct != null);
-    const fundSub = showFundLast
+      s.funding_cached_at || (optKnown.funding && optKnown.funding.at) || "";
+    const usingFundLast =
+      fundCached ||
+      fundSkipped ||
+      (fundPct != null &&
+        fundPct > 0 &&
+        (s.funding_total_pct == null || Number(s.funding_total_pct) <= 0));
+    const fundSub = usingFundLast
       ? lastKnownSub(true, fundAt, optKnown.funding && optKnown.funding.at)
       : "";
     let sharedSolVal;
     if (fundSkipped && !fundCached && fundPct == null) {
-      // Truly never scanned — still show flat delta vs 0 if baseline exists
       sharedSolVal = withDelta(
         '<span style="color:var(--text-muted)">skipped</span>',
         "funding_total_pct",
         0
       );
-    } else if (fundSkipped && !fundCached && s.funding_total_pct == null && fundPct != null) {
-      // Scan off but we have last-known % — keep number + hold color + delta
-      sharedSolVal = withDelta(bunPctHtmlBox(fundPct), "funding_total_pct", fundPct);
     } else {
-      // Live or cached Shared SOL value (including 0%)
-      const live =
-        s.funding_total_pct != null && Number.isFinite(Number(s.funding_total_pct))
-          ? Number(s.funding_total_pct)
-          : fundPct != null
-            ? fundPct
-            : 0;
+      const live = fundPct != null ? fundPct : 0;
       sharedSolVal = withDelta(bunPctHtmlBox(live), "funding_total_pct", live);
     }
     html += stat("Shared SOL total", sharedSolVal, fundSub);
@@ -8074,6 +8084,14 @@ function renderBundlesUi(data) {
       if (Object.keys(freezeMap).length) {
         if (mint) saveBundleDeltaHtml(mint, freezeMap);
         saveBundleDeltaHtml("last", freezeMap);
+        try {
+          sessionStorage.setItem(
+            "adtc_delta_html_last",
+            JSON.stringify(freezeMap)
+          );
+        } catch (_) {
+          /* ignore */
+        }
       }
       try {
         if (view && view.summary && typeof view.summary === "object") {
@@ -8713,12 +8731,4 @@ function init() {
   const q = params.get("q") || params.get("query");
   if (q) {
     $("query").value = q;
-    if (params.get("chain")) $("chain").value = params.get("chain");
-    if (params.get("auto") === "1") analyze();
-  } else {
-    // No auto-analyze: restore last Analyze (all tabs) after page refresh
-    restoreLastAnalyze();
-  }
-}
-
-document.addEventListener("DOMContentLoaded", init);
+    if (params.get("chain")) $("chai
