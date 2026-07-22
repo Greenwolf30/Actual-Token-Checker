@@ -1540,8 +1540,9 @@ def recompute_total_bundle_all_vectors(
       multi_send (token multi-send), fresh, shared_funder (Shared SOL)
 
     Total = unique wallets across active vectors (each wallet once at max %).
-    Checked optionals are included; unchecked are not — even if the UI still
-    shows last-known / “Last updated” for an unchecked box.
+    Wallets that appear in more than one list (e.g. Fresh + Shared SOL) are
+    not double-counted. Checked optionals are included; unchecked are not —
+    even if the UI still shows last-known for an unchecked box.
 
     When Fresh + Multi-send + Shared SOL are ALL unchecked:
       multi_account + insider + similar_size + suspect
@@ -1848,8 +1849,10 @@ def recompute_total_bundle_all_vectors(
     else:
         excluded.extend(["similar_size", "suspect"])
 
-    # Unique wallets across active vectors (deduped floor)
+    # Total = unique wallets across active vectors only (no double-count).
+    # A wallet in Fresh + Shared SOL (etc.) contributes once at max hold %.
     union: dict[str, float] = {}
+    appear_in: dict[str, list[str]] = {}
     for key in active_keys:
         wmap = counted_maps.get(key) or {}
         if key == "similar_size":
@@ -1862,30 +1865,30 @@ def recompute_total_bundle_all_vectors(
             except (TypeError, ValueError):
                 continue
             union[w] = max(union.get(w, 0.0), pf)
+            appear_in.setdefault(w, []).append(key)
 
     any_data = bool(union)
-    grand_unique = round(min(100.0, sum(union.values())), 4) if any_data else 0.0
+    grand = round(min(100.0, sum(union.values())), 4) if any_data else 0.0
     slot_count = len(union)
+    crosslisted = [
+        {"wallet": w, "vectors": vecs, "pct_supply": union[w]}
+        for w, vecs in appear_in.items()
+        if len(vecs) > 1
+    ]
+    crosslisted.sort(
+        key=lambda r: (
+            -float(r.get("pct_supply") or 0),
+            str(r.get("wallet") or ""),
+        )
+    )
 
-    # Vector-sum Total when optionals are checked: multi + insider + each
-    # checked primary’s bag total (Fresh / Multi-send / Shared SOL). Matches
-    # “sum of the three” in the top boxes. Unique is a floor if higher.
-    grand_sum = 0.0
-    for key in active_keys:
-        wmap = counted_maps.get(key) or {}
-        if key == "similar_size":
-            wmap = sim_map
-        elif key == "suspect":
-            wmap = sus_map
-        p, _n = _sum_map(wmap)
-        grand_sum += float(p or 0)
-    # Prefer summary totals for optionals when maps under-count (UI boxes)
+    # Align optional vector display % with summary when maps under-count
+    # (does not change Total — Total stays unique-wallet only).
     s_sum = data.get("summary") if isinstance(data.get("summary"), dict) else {}
     if include_fresh:
         try:
             ft = float(s_sum.get("fresh_total_pct"))  # type: ignore[arg-type]
             if ft > float((by_vector.get("fresh") or {}).get("pct") or 0):
-                grand_sum += ft - float((by_vector.get("fresh") or {}).get("pct") or 0)
                 by_vector["fresh"] = dict(by_vector.get("fresh") or {})
                 by_vector["fresh"]["pct"] = ft
         except (TypeError, ValueError):
@@ -1894,9 +1897,6 @@ def recompute_total_bundle_all_vectors(
         try:
             mt = float(s_sum.get("multi_send_total_pct"))  # type: ignore[arg-type]
             if mt > float((by_vector.get("multi_send") or {}).get("pct") or 0):
-                grand_sum += mt - float(
-                    (by_vector.get("multi_send") or {}).get("pct") or 0
-                )
                 by_vector["multi_send"] = dict(by_vector.get("multi_send") or {})
                 by_vector["multi_send"]["pct"] = mt
         except (TypeError, ValueError):
@@ -1905,37 +1905,28 @@ def recompute_total_bundle_all_vectors(
         try:
             st = float(s_sum.get("funding_total_pct"))  # type: ignore[arg-type]
             if st > float((by_vector.get("shared_funder") or {}).get("pct") or 0):
-                grand_sum += st - float(
-                    (by_vector.get("shared_funder") or {}).get("pct") or 0
-                )
                 by_vector["shared_funder"] = dict(
                     by_vector.get("shared_funder") or {}
                 )
                 by_vector["shared_funder"]["pct"] = st
         except (TypeError, ValueError):
             pass
-    grand_sum = round(min(100.0, grand_sum), 4)
-    if any_optional_on:
-        grand = max(grand_unique, grand_sum)
-    else:
-        grand = max(grand_unique, grand_sum)
-    any_data = any_data or grand > 0
 
     # Single holders: non-LP ≥0.01% not in any category vector
     single_pct, single_n = _single_holders_total(data)
     # Write onto data.summary so UI payload / fusion see it
     try:
-        s_sum = dict(data.get("summary") or {})
-        s_sum["single_holders_total_pct"] = single_pct
-        s_sum["single_holders_wallet_count"] = single_n
-        data["summary"] = s_sum
+        s_sum2 = dict(data.get("summary") or {})
+        s_sum2["single_holders_total_pct"] = single_pct
+        s_sum2["single_holders_wallet_count"] = single_n
+        data["summary"] = s_sum2
     except Exception:  # noqa: BLE001
         pass
 
     result: dict[str, Any] = {
         "total_bundle_by_vector": by_vector,
-        "total_bundle_additive": bool(any_optional_on),
-        "total_bundle_cross_vector_dedupe": not bool(any_optional_on),
+        "total_bundle_additive": False,
+        "total_bundle_cross_vector_dedupe": True,
         "total_bundle_excluded_vectors": list(excluded),
         "total_bundle_mode": mode,
         "total_bundle_show_similar_suspect": use_sim_sus_in_total,
@@ -1943,8 +1934,8 @@ def recompute_total_bundle_all_vectors(
         "total_bundle_include_multi_send": bool(include_multi_send),
         "total_bundle_include_shared_sol": bool(include_shared_sol),
         "total_bundle_unique_wallets": slot_count,
-        "total_bundle_crosslisted_wallets": [],
-        "total_bundle_crosslisted_count": 0,
+        "total_bundle_crosslisted_wallets": crosslisted[:24],
+        "total_bundle_crosslisted_count": len(crosslisted),
         "single_holders_total_pct": single_pct,
         "single_holders_wallet_count": single_n,
     }

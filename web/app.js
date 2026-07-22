@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v125";
+const ADTC_CLIENT_VERSION = "v126";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -7330,17 +7330,14 @@ function resolveTokenMultiSendTotalPct(view, summary) {
 }
 
 /**
- * Total bundle when Fresh / Multi-send / Shared SOL are gated by checkboxes:
- *  - Checked optional → its live total enters Total (sum of primaries)
- *  - Unchecked → out of Total even if last-known is shown
- *  - All three unchecked → multi + insider + similar + suspect
- * Total = multi-account + insider + each checked primary’s live box %
- * (vector sum; same numbers as the three top boxes when those scans are live).
+ * Total bundle = unique wallets only (no double-count across categories).
+ * Checked Fresh / Multi-send / Shared SOL are included; unchecked are not
+ * (even if last-known is shown). Same wallet in Fresh + Shared SOL counts once
+ * at max hold %. All three unchecked → multi + insider + similar + suspect.
  */
 function recomputeTotalBundleFromView(view, summary) {
   const s = summary || {};
   const v = view || {};
-  const bv = s.total_bundle_by_vector || {};
 
   function flagOn(serverKey, checkboxFn) {
     if (s[serverKey] === true) return true;
@@ -7351,19 +7348,6 @@ function recomputeTotalBundleFromView(view, summary) {
       return false;
     }
   }
-  function vecPct(key) {
-    const m = bv[key];
-    if (!m) return 0;
-    if (m.excluded_from_total) return 0;
-    const p = Number(m.pct);
-    return Number.isFinite(p) && p > 0 ? p : 0;
-  }
-  function livePct(serverVal, vecKey) {
-    if (serverVal != null && Number.isFinite(Number(serverVal))) {
-      return Math.max(0, Number(serverVal));
-    }
-    return vecPct(vecKey);
-  }
 
   const countFresh = flagOn("total_bundle_include_fresh", useFreshEnabled);
   const countMs = flagOn("total_bundle_include_multi_send", useMultiSendEnabled);
@@ -7373,22 +7357,7 @@ function recomputeTotalBundleFromView(view, summary) {
   );
   const anyOptionalOn = countFresh || countMs || countSol;
 
-  const ma = vecPct("multi_account");
-  const ins = vecPct("insider");
-  // Checked primaries: use THIS scan’s box totals (not browser last-known)
-  const f = countFresh ? livePct(s.fresh_total_pct, "fresh") : 0;
-  const m = countMs ? livePct(s.multi_send_total_pct, "multi_send") : 0;
-  const sol = countSol ? livePct(s.funding_total_pct, "shared_funder") : 0;
-
-  let total;
-  if (anyOptionalOn) {
-    // Sum multi + insider + each checked primary (Fresh / Multi-send / Shared SOL)
-    total = ma + ins + f + m + sol;
-  } else {
-    total = ma + ins + vecPct("similar_size") + vecPct("suspect");
-  }
-
-  // Wallet-union floor so we never show less than unique bags on lists
+  // One row per wallet; sumUniqueWalletSupplyPct keeps max % only
   const rows = [];
   function pushRow(w, pct) {
     if (w == null || w === "") return;
@@ -7403,10 +7372,13 @@ function recomputeTotalBundleFromView(view, summary) {
         r.pct_supply != null ? r.pct_supply : r.combined_pct
       );
   }
+
+  // Always: multi-account + insider
   const clusters = v.clusters || [];
   for (let i = 0; i < clusters.length; i++) pushWalletObj(clusters[i]);
   const insW = v.insider_wallets || [];
   for (let i = 0; i < insW.length; i++) pushWalletObj(insW[i]);
+
   if (countFresh) {
     const fresh = v.fresh_wallets || [];
     for (let i = 0; i < fresh.length; i++) pushWalletObj(fresh[i]);
@@ -7468,18 +7440,18 @@ function recomputeTotalBundleFromView(view, summary) {
     const sus = v.suspect_wallets || [];
     for (let i = 0; i < sus.length; i++) pushWalletObj(sus[i]);
   }
-  const unique = sumUniqueWalletSupplyPct(rows);
-  // Prefer the larger of vector-sum (matches three boxes) vs unique bags
-  if (unique != null && unique > total) total = unique;
 
+  const unique = sumUniqueWalletSupplyPct(rows);
+  let total = unique != null ? unique : 0;
   if (total > 100) total = 100;
   total = Math.round(total * 10000) / 10000;
 
+  // Prefer server unique total when present and higher (full map)
   const server =
     s.total_bundle_pct != null && Number.isFinite(Number(s.total_bundle_pct))
       ? Number(s.total_bundle_pct)
       : null;
-  if (server != null && server > total + 0.0001) return server;
+  if (server != null && server > total + 0.0001) return Math.min(100, server);
   return total;
 }
 
@@ -9722,13 +9694,17 @@ function renderBundlesUi(data) {
       s.total_bundle_unique_wallets != null
         ? s.total_bundle_unique_wallets
         : s.flagged_wallets;
+    const crossN = s.total_bundle_crosslisted_count;
     html +=
-      '<p class="bun-meta">Total bundle = multi-account + insider + sum of checked Fresh / Multi-send / Shared SOL ' +
-      "for this Analyze (unchecked boxes are display-only if last-known). " +
+      '<p class="bun-meta">Total bundle = unique wallets only (duplicates across Fresh / Multi-send / Shared SOL / multi / insider counted once at max hold %). ' +
+      "Only checked optionals enter Total; last-known under an unchecked box does not. " +
       "All three unchecked → multi + similar/suspect." +
-      (uniqN != null ? " · " + escHtml(String(uniqN)) + " wallet(s)" : "") +
+      (uniqN != null ? " · " + escHtml(String(uniqN)) + " unique wallet(s)" : "") +
+      (crossN != null && Number(crossN) > 0
+        ? " · " + escHtml(String(crossN)) + " in multiple lists (deduped)"
+        : "") +
       (parts.length
-        ? " In total: " + escHtml(parts.join(" + "))
+        ? " Per-vector (ref, may overlap): " + escHtml(parts.join(" + "))
         : "") +
       ".</p>";
   }
