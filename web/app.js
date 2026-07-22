@@ -6169,12 +6169,14 @@ function saveLastAnalyze(data, query) {
           (data.market && data.market.address) ||
           "";
         const e = mint ? getBundleStatsEntry(mint) : null;
-        if (e) {
+        const htmlByKey = mint ? loadBundleDeltaHtml(mint) : null;
+        if (e || htmlByKey) {
           bundleDelta = {
             mint: bundleStatsMintKey(mint),
-            forNext: e.forNext,
-            deltaFrom: e.deltaFrom,
-            deltaCur: e.deltaCur,
+            forNext: e && e.forNext,
+            deltaFrom: e && e.deltaFrom,
+            deltaCur: e && e.deltaCur,
+            htmlByKey: htmlByKey || null,
           };
         }
       } catch (_) {
@@ -6283,8 +6285,23 @@ function restoreLastAnalyze() {
   try {
     const data = cached.data;
     data._restoredFromBrowserCache = true;
+    // Carry frozen delta pair onto the payload so Bundles can replay arrows
+    if (cached.bundleDelta) {
+      data.bundleDelta = cached.bundleDelta;
+    }
     if (cached.query && $("query") && !$("query").value.trim()) {
       $("query").value = cached.query;
+    }
+    // Ensure mint address exists for delta map lookup (token may be sparse)
+    try {
+      const q = String(cached.query || data.query || "").trim();
+      const tok = data.token && typeof data.token === "object" ? data.token : {};
+      const mkt = data.market && typeof data.market === "object" ? data.market : {};
+      if (!tok.address && !mkt.address && q && q.length >= 32 && !/\s/.test(q)) {
+        data.token = { ...tok, address: q };
+      }
+    } catch (_) {
+      /* ignore */
     }
     if (cached.chain && $("chain")) {
       try {
@@ -6422,6 +6439,61 @@ function cloneBundleStats(stats) {
     out[k] = v != null && Number.isFinite(Number(v)) ? Number(v) : null;
   }
   return out;
+}
+
+/** All-zero baseline so the first Analyze still freezes a delta pair for refresh. */
+function zeroBundleStats() {
+  const out = {};
+  for (const k of BUNDLE_STAT_KEYS) out[k] = 0;
+  return out;
+}
+
+/**
+ * Precomputed delta HTML per stat key (survives refresh even if pair math fails).
+ * Keyed by bare mint.
+ */
+const BUNDLE_DELTA_HTML_KEY = "adtc_bundle_delta_html";
+
+function loadBundleDeltaHtmlMap() {
+  try {
+    const raw = localStorage.getItem(BUNDLE_DELTA_HTML_KEY);
+    if (!raw) return {};
+    const o = JSON.parse(raw);
+    return o && typeof o === "object" ? o : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveBundleDeltaHtml(mint, htmlByKey) {
+  const m = bundleStatsMintKey(mint);
+  if (!m || !htmlByKey) return;
+  try {
+    const map = loadBundleDeltaHtmlMap();
+    map[m] = { ...htmlByKey, savedAt: Date.now() };
+    const keys = Object.keys(map);
+    if (keys.length > 80) {
+      keys
+        .sort((a, b) => (map[a].savedAt || 0) - (map[b].savedAt || 0))
+        .slice(0, keys.length - 80)
+        .forEach((k) => delete map[k]);
+    }
+    localStorage.setItem(BUNDLE_DELTA_HTML_KEY, JSON.stringify(map));
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+function loadBundleDeltaHtml(mint) {
+  const m = bundleStatsMintKey(mint);
+  if (!m) return null;
+  const map = loadBundleDeltaHtmlMap();
+  const row = map[m];
+  if (row && typeof row === "object") return row;
+  for (const k of Object.keys(map)) {
+    if (bundleStatsMintKey(k) === m && map[k]) return map[k];
+  }
+  return null;
 }
 
 /** Normalize map entry → { forNext, deltaFrom, deltaCur, savedAt }. */
@@ -6725,30 +6797,51 @@ function renderBundlesUi(data) {
       : null;
   const riskCls = bundleRiskScoreClass(riskScore != null ? riskScore : 0);
 
-  const mint =
+  let mint =
     (data.token && data.token.address) ||
     (data.market && data.market.address) ||
     (view.token_address || "") ||
     "";
+  // Fallback: query field / search box (CA) when token sparse after restore
+  if (!mint) {
+    const q = String(
+      (data && data.query) ||
+        ($("query") && $("query").value) ||
+        ""
+    ).trim();
+    if (q.length >= 32 && !/\s/.test(q)) mint = q;
+  }
   const curStats = extractBundleSummaryStats(s, riskScore);
   const isRestore = !!(data && data._restoredFromBrowserCache);
   let stored = mint ? getBundleStatsEntry(mint) : null;
+  // Frozen HTML from last live render (most reliable refresh path)
+  let frozenHtml = mint ? loadBundleDeltaHtml(mint) : null;
 
-  // Also pull delta pair from last Analyze payload (backup if map was empty)
+  // Pull delta pair from last Analyze payload (backup if map was empty)
   if (mint && (!stored || !stored.deltaFrom)) {
     try {
       const cached = loadLastAnalyze();
       const emb =
-        (cached && (cached.bundleDelta || (cached.data && cached.data.bundleDelta))) ||
         (data && data.bundleDelta) ||
+        (cached && (cached.bundleDelta || (cached.data && cached.data.bundleDelta))) ||
         null;
-      if (emb && bundleStatsMintKey(emb.mint || mint) === bundleStatsMintKey(mint)) {
-        saveBundleStatsEntry(mint, {
-          forNext: emb.forNext || emb.deltaCur || curStats,
-          deltaFrom: emb.deltaFrom || null,
-          deltaCur: emb.deltaCur || emb.forNext || curStats,
-        });
-        stored = getBundleStatsEntry(mint);
+      if (
+        emb &&
+        (!emb.mint ||
+          bundleStatsMintKey(emb.mint) === bundleStatsMintKey(mint))
+      ) {
+        if (emb.deltaFrom || emb.deltaCur || emb.forNext) {
+          saveBundleStatsEntry(mint, {
+            forNext: emb.forNext || emb.deltaCur || curStats,
+            deltaFrom: emb.deltaFrom || undefined,
+            deltaCur: emb.deltaCur || emb.forNext || curStats,
+          });
+          stored = getBundleStatsEntry(mint);
+        }
+        if (emb.htmlByKey && typeof emb.htmlByKey === "object") {
+          frozenHtml = emb.htmlByKey;
+          saveBundleDeltaHtml(mint, emb.htmlByKey);
+        }
       }
     } catch (_) {
       /* ignore */
@@ -6762,20 +6855,19 @@ function renderBundlesUi(data) {
   if (isRestore) {
     if (stored && stored.deltaFrom) {
       prev = stored.deltaFrom;
-      // Prefer frozen last-shown current so refresh matches last live deltas
       deltaCurStats = stored.deltaCur || curStats;
-    } else if (stored && stored.forNext) {
-      // Had a baseline but never a 2nd run — no arrows yet
-      prev = null;
-      deltaCurStats = curStats;
+    } else if (stored && stored.deltaCur && stored.forNext) {
+      // Partial pair: still try forNext vs deltaCur if different snapshots
+      prev = stored.forNext;
+      deltaCurStats = stored.deltaCur;
     } else {
       prev = null;
     }
-    // Seed forNext for next live run; NEVER clear deltaFrom/deltaCur on refresh
+    // NEVER clear frozen pair on refresh — only re-seed forNext if missing
     if (mint && curStats) {
       try {
         saveBundleStatsEntry(mint, {
-          forNext: stored && stored.forNext ? stored.forNext : curStats,
+          forNext: (stored && stored.forNext) || curStats,
           deltaFrom: stored && stored.deltaFrom ? stored.deltaFrom : undefined,
           deltaCur: stored && stored.deltaCur ? stored.deltaCur : undefined,
         });
@@ -6785,8 +6877,14 @@ function renderBundlesUi(data) {
     }
   } else if (mint) {
     prev = resolveBundleStatsPrev(mint);
+    // First live Analyze of this mint: baseline against zeros so arrows freeze
+    // for refresh (otherwise deltaFrom stays null and refresh shows nothing).
+    if (!prev) prev = zeroBundleStats();
     deltaCurStats = curStats;
   }
+
+  // Collect HTML deltas this render so we can freeze them for refresh
+  const htmlByKeyThisRun = {};
 
   function stat(label, valueHtml) {
     return (
@@ -6799,17 +6897,21 @@ function renderBundlesUi(data) {
   }
 
   function withDelta(mainHtml, key, curOverride) {
-    // Show deltas whenever we have a compare baseline (live or restored last pair)
-    if (!prev) return mainHtml;
     const kind = key === "risk" ? "score" : "pct";
-    let curVal =
-      curOverride !== undefined ? curOverride : deltaCurStats[key];
-    let prevVal = prev[key];
-    // Supply %: null → 0 so Shared SOL / Multi-send / Fresh get deltas
-    // when a scan was off then on (or the reverse).
-    const d = formatBundleStatDelta(curVal, prevVal, kind, {
-      coalesceNull: kind === "pct",
-    });
+    let d = "";
+    if (prev) {
+      const curVal =
+        curOverride !== undefined ? curOverride : deltaCurStats[key];
+      const prevVal = prev[key];
+      d = formatBundleStatDelta(curVal, prevVal, kind, {
+        coalesceNull: kind === "pct",
+      });
+    }
+    // Restore fallback: use last frozen HTML if recompute produced nothing
+    if (!d && isRestore && frozenHtml && frozenHtml[key]) {
+      d = frozenHtml[key];
+    }
+    if (d) htmlByKeyThisRun[key] = d;
     return d ? mainHtml + " " + d : mainHtml;
   }
 
@@ -6916,36 +7018,32 @@ function renderBundlesUi(data) {
   );
   html += "</div>";
 
-  // After a live Analyze: freeze this run's delta pair (survives refresh)
-  // and set forNext so the *next* Analyze compares against these numbers.
+  // Freeze this run's delta pair + precomputed HTML so refresh can replay arrows.
   if (!isRestore && mint && curStats) {
-    const pair = {
+    // prev is always set on live (real baseline or zeros)
+    const baseline = prev || zeroBundleStats();
+    saveBundleStatsEntry(mint, {
       forNext: curStats,
-      // Lock pair whenever we compared; if first run, keep prior frozen pair
-      deltaFrom: prev || undefined,
-      deltaCur: prev ? curStats : undefined,
-    };
-    // First live run: still set forNext + deltaCur for next compare, keep old deltas
-    if (!prev) {
-      pair.forNext = curStats;
-      pair.deltaCur = curStats;
-      // leave deltaFrom undefined → saveBundleStatsEntry preserves existing
-    } else {
-      pair.deltaFrom = prev;
-      pair.deltaCur = curStats;
+      deltaFrom: baseline,
+      deltaCur: curStats,
+    });
+    if (Object.keys(htmlByKeyThisRun).length) {
+      saveBundleDeltaHtml(mint, htmlByKeyThisRun);
     }
-    saveBundleStatsEntry(mint, pair);
-    // Stash on data so saveLastAnalyze can embed the pair
     try {
       data._bundleDeltaPair = {
         mint: bundleStatsMintKey(mint),
         forNext: curStats,
-        deltaFrom: prev || (stored && stored.deltaFrom) || null,
+        deltaFrom: baseline,
         deltaCur: curStats,
+        htmlByKey: { ...htmlByKeyThisRun },
       };
     } catch (_) {
       /* ignore */
     }
+  } else if (isRestore && mint && Object.keys(htmlByKeyThisRun).length) {
+    // Refresh re-freeze whatever we displayed (keeps pair alive)
+    saveBundleDeltaHtml(mint, htmlByKeyThisRun);
   }
 
   const src = (s.sources_used || []).join(", ") || view.method || view.source || "—";
