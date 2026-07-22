@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v129";
+const ADTC_CLIENT_VERSION = "v130";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -114,7 +114,7 @@ const RUGGERS_STICKY_LANES = new Set(RUGGERS_LANE_PRIORITY);
 const RUGGERS_LANE_LABEL = {
   creator: "creator",
   similar: "suspect",
-  multi: "suspect",
+  multi: "multi-account",
   multi_send: "multi-send",
   funding: "shared funder",
   insider: "suspect",
@@ -1898,19 +1898,11 @@ function primaryLaneFromBaselineFlags(first, uploadedSimilar) {
   if (first.label === "creator" || first.is_creator || first.origin_lane === "creator") {
     return "creator";
   }
-  // Unified Suspect = multi-account + similar-size + rugcheck + legacy suspect
-  if (
-    uploadedSimilar ||
-    first.in_similar ||
-    first.in_multi ||
-    first.in_insider ||
-    first.in_suspect
-  ) {
-    return "suspect";
-  }
+  if (first.in_multi) return "multi";
+  // Similar-size renamed Suspect (not multi-account; not Rugcheck-only list)
+  if (uploadedSimilar || first.in_similar) return "suspect";
   if (first.in_multi_send) return "multi_send";
   if (first.in_funding) return "funding";
-  // Launch-window disabled
   if (first.in_fresh) return "fresh";
   if (isRuggersSingleEligible(first, null)) return "single";
   return null;
@@ -1933,50 +1925,29 @@ function resolveRuggersOriginLane(rec, w, first, prev, cur, uploadedSimilar) {
   if (frozen && RUGGERS_STICKY_LANES.has(frozen)) {
     // Launch-window removed — remap sticky launch → single
     if (frozen === "launch") return "single";
-    // Legacy multi / similar / insider → unified Suspect
-    if (
-      frozen === "multi" ||
-      frozen === "similar" ||
-      frozen === "insider"
-    ) {
-      return "suspect";
-    }
+    // similar / old insider-as-suspect → Suspect; multi stays multi
+    if (frozen === "similar" || frozen === "insider") return "suspect";
+    if (frozen === "multi") return "multi";
     if (
       frozen !== "suspect" &&
+      frozen !== "multi" &&
       frozen !== "creator" &&
       (uploadedSimilar ||
-        (first &&
-          (first.in_similar ||
-            first.in_multi ||
-            first.in_insider ||
-            first.in_suspect)) ||
-        (prev &&
-          (prev.in_similar ||
-            prev.in_multi ||
-            prev.in_insider ||
-            prev.in_suspect)))
+        (first && first.in_similar) ||
+        (prev && prev.in_similar))
     ) {
       return "suspect";
     }
     return frozen;
   }
-  // Legacy "excluded" → re-map once
   if (frozen === "excluded" || !frozen) {
     const primary = primaryLaneFromBaselineFlags(first, uploadedSimilar);
     if (primary) return primary;
   }
-  if (
-    uploadedSimilar ||
-    (first &&
-      (first.in_similar ||
-        first.in_multi ||
-        first.in_insider ||
-        first.in_suspect)) ||
-    (cur &&
-      (cur.in_similar || cur.in_multi || cur.in_insider || cur.in_suspect))
-  ) {
+  if (uploadedSimilar || (first && first.in_similar) || (cur && cur.in_similar)) {
     return "suspect";
   }
+  if ((first && first.in_multi) || (cur && cur.in_multi)) return "multi";
 
   const primary = primaryLaneFromBaselineFlags(first, false);
   if (primary) return primary;
@@ -4358,16 +4329,12 @@ function ruggersBuckets(rec) {
           }
         }
       }
-    } else if (
-      lane === "similar" ||
-      lane === "multi" ||
-      lane === "insider" ||
-      lane === "suspect"
-    ) {
-      // Unified Suspect lane (multi-account + similar + rugcheck)
+    } else if (lane === "multi") {
+      pushLaneSeller("multi", row, multiSeen, multiSellers);
+    } else if (lane === "similar" || lane === "suspect" || lane === "insider") {
       pushLaneSeller(
         "suspect",
-        { ...row, origin_lane: "suspect", in_suspect: true },
+        { ...row, origin_lane: "suspect", in_similar: true },
         suspectSeen,
         suspectSellers
       );
@@ -5640,8 +5607,8 @@ function _refreshRuggersPanelImpl(focusKey) {
     '<p class="rug-rules">Rules: first full Analyze freezes a holder baseline; ' +
     "seller lists start <strong>empty</strong>. " +
     "<strong>Re-Analyze later</strong> — wallets that sold <strong>≥99%</strong> of that first bag " +
-    "appear under their baseline category: Creator · Similar · Multi-account · Shared funder · " +
-    "Insider · Same-slot multi-buys (bots) · Suspect · Single · Flagged wallets (RugWatch). " +
+    "appear under their baseline category: Creator · Multi-account · Multi-send · Shared funder · " +
+    "Fresh · Suspect (similar-size) · Single · Flagged wallets (RugWatch). " +
     "Buy-back → <span class=\"rug-tag rug-tag-swing\">swing</span> (label kept) · " +
     "sell again → back to the same category. Loop continues.</p>";
 
@@ -5733,57 +5700,62 @@ function _refreshRuggersPanelImpl(focusKey) {
     "creator"
   );
   html += renderRuggersSection(
+    "Multi-account clusters (1 Owner)",
+    "Same owner, several large Associated Token Accounts at first lookup. " +
+      "Sell ≥99% → stay here · buy-back → Swing · sell again → back here. Export + Upload.",
+    buckets.multiSellers || [],
+    "multi"
+  );
+  html += renderRuggersSection(
     "Multi-send (one → many)",
     "Token multi-send wallets (one sender → many receivers) at first lookup. " +
-      "Same identity rules: first bag, sold % of supply, sticky sell ↔ Swing, Export + Upload.",
+      "Export + Upload.",
     buckets.multiSendSellers || [],
     "multi_send"
   );
   html += renderRuggersSection(
     "Shared SOL funder clusters (1-Owner)",
-    "Wallets that shared a common SOL funder (1-hop) at first lookup. " +
-      "Sell ≥99% → stay here · buy-back → Swing (shared funder label kept) · " +
-      "sell again → back here. Export + Upload.",
+    "Wallets that shared a common SOL funder (1-hop) at first lookup. Export + Upload.",
     buckets.fundingSellers || [],
     "funding"
   );
-  // Launch-window removed from Ruggers (scan disabled).
   html += renderRuggersSection(
     "Fresh wallets",
-    "Holders whose bag is almost only this mint (sole / near-sole token) at first lookup. " +
-      "Same identity parameters: first bag %, sold % of supply, sticky sell ↔ Swing, Export + Upload.",
+    "Holders whose bag is almost only this mint at first lookup. Export + Upload.",
     buckets.freshSellers || [],
     "fresh"
   );
-  // Merge multi + similar + insider + legacy suspect into one Suspect section
-  const unifiedSuspectSellers = [];
-  const usSeen = new Set();
-  for (const row of []
-    .concat(buckets.suspectSellers || [])
-    .concat(buckets.multiSellers || [])
+  // Suspect = former similar-size (not multi-account; not old Rugcheck list)
+  const suspectSellersOnly = []
     .concat(buckets.similarSellers || [])
-    .concat(buckets.insiderSellers || [])) {
+    .concat(buckets.suspectSellers || []);
+  const susSeen = new Set();
+  const suspectSellersDedup = [];
+  for (const row of suspectSellersOnly) {
     const w = row && row.wallet;
-    if (!w || usSeen.has(w)) continue;
-    usSeen.add(w);
-    unifiedSuspectSellers.push({
+    if (!w || susSeen.has(w)) continue;
+    // Exclude multi-account lane wallets from Suspect section
+    if (row.in_multi || row.origin_lane === "multi") continue;
+    susSeen.add(w);
+    suspectSellersDedup.push({
       ...row,
       origin_lane: "suspect",
       lane_label: "suspect",
+      in_similar: true,
       in_suspect: true,
     });
   }
   html += renderRuggersSection(
     "Suspect wallets",
-    "Unified Suspect: multi-account clusters + similar-size bags + Rugcheck insiders " +
-      "(deduped). Same sticky sell ↔ Swing rules as other lanes. Export + Upload.",
-    unifiedSuspectSellers,
+    "Similar-size top bags (renamed Suspect). Not multi-account. " +
+      "Sticky sell ↔ Swing. Export + Upload.",
+    suspectSellersDedup,
     "suspect"
   );
   html += renderRuggersSection(
     "Single wallets (sellers)",
-    "Plain top holders ≥0.01% (not multi-send / funder / fresh / suspect). " +
-      "Sell ≥99% → stay here · buy-back → Swing · sell again → back here. Export + Upload.",
+    "Plain top holders ≥0.01% (not multi / multi-send / funder / fresh / suspect). " +
+      "Export + Upload.",
     buckets.singleSellers,
     "single"
   );
@@ -7392,8 +7364,9 @@ function recomputeTotalBundleFromView(view, summary) {
     rows.push(r);
   }
 
-  // Multi-account / rugcheck / similar live only via unified suspect_wallets
-  // when all optionals are off (see bottom).
+  // Multi-account always in Total
+  const clusters = v.clusters || [];
+  for (let i = 0; i < clusters.length; i++) pushWalletObj(clusters[i]);
 
   if (countFresh) {
     const fresh = v.fresh_wallets || [];
@@ -7425,10 +7398,18 @@ function recomputeTotalBundleFromView(view, summary) {
       for (let j = 0; j < recs.length; j++) pushWalletObj(recs[j]);
     }
   }
-  // Unified Suspect (multi + similar + rugcheck) only when all optionals off
+  // Suspect (= similar-size) only when all optionals off
   if (!anyOptionalOn) {
-    const sus = v.suspect_wallets || [];
-    for (let i = 0; i < sus.length; i++) pushWalletObj(sus[i]);
+    const sims = v.similar_size_groups || [];
+    for (let i = 0; i < sims.length; i++) {
+      const g = sims[i] || {};
+      const mem = g.members || g.wallets || [];
+      for (let j = 0; j < mem.length; j++) {
+        const m = mem[j];
+        if (m && typeof m === "object") pushWalletObj(m);
+        else pushWalletObj({ wallet: m, pct_supply: g.avg_pct });
+      }
+    }
   }
 
   const unique = sumUniqueWalletSupplyPct(rows);
@@ -9452,16 +9433,45 @@ function renderBundlesUi(data) {
     // Prefer union of listed bags so Fresh etc. always land in Total
     const tbp = recomputeTotalBundleFromView(view, s);
     const showSimSus =
+      s.total_bundle_mode === "multi_plus_suspect" ||
       s.total_bundle_mode === "suspect_fallback" ||
       s.total_bundle_mode === "fallback_similar_suspect" ||
       s.total_bundle_mode === "multi_plus_similar_suspect" ||
       s.total_bundle_show_similar_suspect === true;
     const totalLabel = showSimSus
-      ? "Total (suspect fallback)"
+      ? "Total (multi + suspect)"
       : "Total bundle";
     html += stat(totalLabel, withDelta(bunPctHtml(tbp), "total_bundle_pct", tbp));
   }
-  // Similar-size / multi-account / rugcheck folded into Suspect total
+  {
+    const maN =
+      s.multi_account_total_pct != null &&
+      Number.isFinite(Number(s.multi_account_total_pct))
+        ? Number(s.multi_account_total_pct)
+        : null;
+    const maFromList = (view.clusters || []).reduce(function (sum, c) {
+      const p = Number(c && c.pct_supply);
+      return sum + (Number.isFinite(p) && p > 0 ? p : 0);
+    }, 0);
+    const maPct = maN != null ? maN : maFromList > 0 ? Math.min(100, maFromList) : 0;
+    html += stat(
+      "Multi-account",
+      withDelta(bunPctHtml(maPct), "multi_account_total_pct", maPct)
+    );
+  }
+  {
+    const susPct =
+      s.suspect_total_pct != null && Number.isFinite(Number(s.suspect_total_pct))
+        ? Number(s.suspect_total_pct)
+        : s.similar_size_total_pct != null &&
+            Number.isFinite(Number(s.similar_size_total_pct))
+          ? Number(s.similar_size_total_pct)
+          : 0;
+    html += stat(
+      "Suspect total",
+      withDelta(bunPctHtml(susPct), "suspect_total_pct", susPct)
+    );
+  }
   // ── Fresh / Multi-send / Shared SOL (optional) ─────────────────────
   {
     const freshCached = !!s.fresh_from_cache;
@@ -9590,17 +9600,7 @@ function renderBundlesUi(data) {
     }
     html += stat("Shared SOL total", sharedSolVal, fundSubEsc);
   }
-  html += stat(
-    "Suspect total",
-    withDelta(
-      bunPctHtml(s.suspect_total_pct),
-      "suspect_total_pct",
-      s.suspect_total_pct != null && Number.isFinite(Number(s.suspect_total_pct))
-        ? Number(s.suspect_total_pct)
-        : undefined
-    )
-  );
-  // Single holders: non-LP bags ≥0.01% not in multi/similar/insider/etc.
+  // Single holders: non-LP bags ≥0.01% not in multi/similar/optional categories
   {
     let singlePct =
       s.single_holders_total_pct != null &&
@@ -9659,10 +9659,11 @@ function renderBundlesUi(data) {
     const bv = s.total_bundle_by_vector || {};
     const parts = [];
     const labels = {
+      multi_account: "multi-account",
+      similar_size: "suspect",
       multi_send: "multi-send",
       fresh: "fresh",
       shared_funder: "shared SOL",
-      suspect: "suspect",
     };
     for (const [k, lab] of Object.entries(labels)) {
       const m = bv[k];
@@ -9682,8 +9683,8 @@ function renderBundlesUi(data) {
     const crossN = s.total_bundle_crosslisted_count;
     html +=
       '<p class="bun-meta">Total = unique wallets (no double-count). ' +
-      "Checked Fresh / Multi-send / Shared SOL enter Total. " +
-      "All three unchecked → unified Suspect only (multi-account + similar-size + Rugcheck). " +
+      "Multi-account always counts. Suspect (similar-size) counts only when Fresh / Multi-send / Shared SOL are all off. " +
+      "Checked optionals enter Total; last-known under an unchecked box does not. " +
       (uniqN != null ? " · " + escHtml(String(uniqN)) + " unique wallet(s)" : "") +
       (crossN != null && Number(crossN) > 0
         ? " · " + escHtml(String(crossN)) + " cross-listed (deduped)"
@@ -9712,28 +9713,47 @@ function renderBundlesUi(data) {
     html += "</div>";
   }
 
-  // Optional categories (fresh / multi-send / shared SOL) vs unified Suspect
-  const fundEarly = view.funding_clusters || [];
-  const freshEarly = view.fresh_wallets || [];
-  const msWalletsEarly = view.multi_send_wallets || [];
-  const tokenMsEarly = view.multi_send_clusters || [];
-  const solMsEarly = view.sol_multi_send_clusters || [];
-  const hasPrimaryCats = !!(
-    fundEarly.length ||
-    freshEarly.length ||
-    msWalletsEarly.length ||
-    tokenMsEarly.length ||
-    solMsEarly.length ||
-    (s.total_bundle_mode && s.total_bundle_mode === "primary" &&
-      Number(s.total_bundle_pct) > 0 &&
-      !s.total_bundle_show_similar_suspect)
-  );
+  // Suspect (= similar-size) in Total only when Fresh/Multi-send/Shared SOL all off
   const showSimilarSuspect =
     s.total_bundle_show_similar_suspect != null
       ? !!s.total_bundle_show_similar_suspect
-      : !hasPrimaryCats;
+      : s.total_bundle_mode === "multi_plus_suspect" ||
+        s.total_bundle_mode === "suspect_fallback" ||
+        s.total_bundle_mode === "fallback_similar_suspect" ||
+        s.total_bundle_mode === "multi_plus_similar_suspect";
 
-  // Multi-account / similar-size / insider → unified Suspect section (below Fresh)
+  // Multi-account clusters (own category — box above + list)
+  const clusters = view.clusters || [];
+  if (clusters.length) {
+    const maTot =
+      s.multi_account_total_pct != null
+        ? s.multi_account_total_pct
+        : null;
+    html +=
+      '<section class="bun-section"><div class="bun-section-head">' +
+      '<span class="bun-section-title">Multi-account clusters</span>' +
+      '<span class="bun-section-total">' +
+      (maTot != null ? bunPctHtml(maTot) + " · " : "") +
+      escHtml(String(clusters.length)) +
+      " owner(s) · several ATAs each</span></div><div class=\"bun-section-body\">";
+    html +=
+      '<p class="bun-sub">One owner with multiple large Associated Token Accounts. Always counted in Total (unique wallets).</p>';
+    html += bunWalletTable(clusters, [
+      { key: "wallet", label: "Owner", render: (v) => bunWalletLink(v) },
+      {
+        key: "accounts",
+        label: "ATAs",
+        render: (v) => escHtml(v != null ? String(v) : "—"),
+      },
+      { key: "pct_supply", label: "Total hold", render: (v) => bunPctHtml(v) },
+    ]);
+    html += "</div></section>";
+  } else {
+    html += bunEmptySection(
+      "Multi-account clusters",
+      "None found — one owner with several large Associated Token Accounts."
+    );
+  }
 
   // Shared SOL funder
   const fund = view.funding_clusters || [];
@@ -10055,72 +10075,48 @@ function renderBundlesUi(data) {
 
   // Launch-window removed from Bundles (Helius scan disabled).
 
-  // Unified Suspect = multi-account + similar-size + Rugcheck (unique wallets)
-  const sus = view.suspect_wallets || [];
-  let susTot = s.suspect_total_pct;
-  if (susTot == null && sus.length) {
-    let sum = 0;
-    const seen = new Set();
-    for (const r of sus) {
-      const w = String((r && r.wallet) || "").trim();
-      if (!w || seen.has(w)) continue;
-      seen.add(w);
-      const p = Number(r.pct_supply);
-      if (Number.isFinite(p) && p > 0) sum += p;
-    }
-    if (sum > 100) sum = 100;
-    susTot = sum > 0 ? sum : 0;
-  }
-  if (sus.length) {
+  // Suspect = similar-size bags (renamed). Not multi-account; not old Rugcheck list.
+  const sims = view.similar_size_groups || [];
+  let susTot =
+    s.suspect_total_pct != null
+      ? s.suspect_total_pct
+      : s.similar_size_total_pct;
+  if (sims.length) {
     html +=
       '<section class="bun-section"><div class="bun-section-head">' +
       '<span class="bun-section-title">Suspect wallets</span>' +
-      '<span class="bun-section-total">total ' +
+      '<span class="bun-section-total">' +
       bunPctHtml(susTot) +
-      " · " +
-      escHtml(String(s.suspect_wallet_count || sus.length)) +
-      " unique wallet(s)" +
+      " combined" +
       (showSimilarSuspect ? " · in Total" : "") +
       "</span></div><div class=\"bun-section-body\">";
     if (showSimilarSuspect) {
       html +=
-        '<p class="bun-sub">Unified Suspect: multi-account clusters + similar-size bags + Rugcheck insiders (deduped). Counted in Total when Fresh, Multi-send, and Shared SOL are all off.</p>';
+        '<p class="bun-sub">Similar-size top bags (renamed Suspect). Counted in Total when Fresh, Multi-send, and Shared SOL are all off (with multi-account; unique wallets).</p>';
     } else {
       html +=
-        '<p class="bun-sub">Unified Suspect: multi-account + similar-size + Rugcheck (deduped). Listed for reference — not in Total while Fresh / Multi-send / Shared SOL are checked.</p>';
+        '<p class="bun-sub">Similar-size top bags (renamed Suspect). Listed for reference — not in Total while Fresh / Multi-send / Shared SOL are checked.</p>';
     }
-    html += bunWalletTable(sus, [
-      { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
-      { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
-      {
-        key: "sources",
-        label: "Source",
-        render: (v) =>
-          escHtml(
-            Array.isArray(v) && v.length
-              ? v.join(", ")
-              : "—"
-          ),
-      },
-      {
-        key: "reasons",
-        label: "Why",
-        render: (v) => {
-          const list = (Array.isArray(v) ? v : v ? [v] : []).filter((r) => {
-            const t = String(r || "").toLowerCase();
-            return !(
-              t.startsWith("funded by ") || t.indexOf("common funder") >= 0
-            );
-          });
-          return escHtml(list.length ? list.join("; ") : "—");
-        },
-      },
-    ]);
+    for (const g of sims) {
+      html +=
+        '<div class="bun-cluster"><div class="bun-cluster-head">' +
+        escHtml(String(g.count || (g.wallets || []).length || 0)) +
+        " wallets ≈ " +
+        bunPctHtml(g.avg_pct) +
+        " each" +
+        (g.total_pct != null ? " · sum " + bunPctHtml(g.total_pct) : "") +
+        "</div>";
+      html += bunWalletTable(g.wallets || [], [
+        { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
+        { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
+      ]);
+      html += "</div>";
+    }
     html += "</div></section>";
   } else {
     html += bunEmptySection(
       "Suspect wallets",
-      "None found — multi-account owners, similar-size top bags, and Rugcheck insider-flagged holders appear here as one deduped list."
+      "None found — top wallets with nearly the same bag size (formerly similar-size)."
     );
   }
 
@@ -10207,16 +10203,46 @@ function renderBundlesUi(data) {
 
     const tbp = recomputeTotalBundleFromView(view, s);
     const showSimSus =
+      s.total_bundle_mode === "multi_plus_suspect" ||
       s.total_bundle_mode === "suspect_fallback" ||
       s.total_bundle_mode === "fallback_similar_suspect" ||
       s.total_bundle_mode === "multi_plus_similar_suspect" ||
       s.total_bundle_show_similar_suspect === true;
     pushStat(
-      showSimSus ? "Total (suspect fallback)" : "Total bundle",
+      showSimSus ? "Total (multi + suspect)" : "Total bundle",
       fmtSupplyPct(tbp) || "0%",
       pctPriorityClass(tbp) || "",
       "total_bundle_pct",
       tbp
+    );
+
+    const maN =
+      s.multi_account_total_pct != null &&
+      Number.isFinite(Number(s.multi_account_total_pct))
+        ? Number(s.multi_account_total_pct)
+        : 0;
+    pushStat(
+      "Multi-account",
+      fmtSupplyPct(s.multi_account_total_pct != null ? s.multi_account_total_pct : maN) ||
+        "0%",
+      pctPriorityClass(maN) || (maN <= 0 ? "bun-pct-zero" : ""),
+      "multi_account_total_pct",
+      maN
+    );
+
+    const susN =
+      s.suspect_total_pct != null && Number.isFinite(Number(s.suspect_total_pct))
+        ? Number(s.suspect_total_pct)
+        : s.similar_size_total_pct != null &&
+            Number.isFinite(Number(s.similar_size_total_pct))
+          ? Number(s.similar_size_total_pct)
+          : 0;
+    pushStat(
+      "Suspect total",
+      fmtSupplyPct(susN) || "0%",
+      pctPriorityClass(susN) || (susN <= 0 ? "bun-pct-zero" : ""),
+      "suspect_total_pct",
+      susN
     );
 
     const fp =
@@ -10284,18 +10310,6 @@ function renderBundlesUi(data) {
       "funding_total_pct",
       fdp,
       fundSubPlain
-    );
-
-    const sus =
-      s.suspect_total_pct != null && Number.isFinite(Number(s.suspect_total_pct))
-        ? Number(s.suspect_total_pct)
-        : 0;
-    pushStat(
-      "Suspect total",
-      fmtSupplyPct(s.suspect_total_pct) || "0%",
-      pctPriorityClass(sus) || "",
-      "suspect_total_pct",
-      sus
     );
 
     const singlePct =

@@ -409,33 +409,16 @@ def comprehensive_bundle_check(
                 }
             else:
                 base = dict(base)
-            cleaned_suspects: list[dict[str, Any]] = []
-            for s in list(base.get("suspect_wallets") or [])[:40]:
-                if not isinstance(s, dict):
-                    continue
-                orig = list(s.get("reasons") or [])
-
-                def _is_funding_reason(r: Any) -> bool:
-                    if not isinstance(r, str):
-                        return False
-                    low = r.lower()
-                    return (
-                        low.startswith("funded by ")
-                        or "common funder" in low
-                    )
-
-                kept = [r for r in orig if not _is_funding_reason(r)]
-                if orig and not kept:
-                    continue
-                row = dict(s)
-                row["reasons"] = kept
-                cleaned_suspects.append(row)
-            base["suspect_wallets"] = cleaned_suspects[:40]
+            # Old Rugcheck-only suspect list not used; UI Suspect = similar-size
+            base["suspect_wallets"] = []
             base["funding_clusters"] = enriched_fc
-            spct, sn = bun._suspect_total_percent(cleaned_suspects[:40])  # type: ignore[attr-defined]
             s0 = dict(base.get("summary") or {})
-            s0["suspect_total_pct"] = spct
-            s0["suspect_wallet_count"] = sn
+            # Keep Suspect total = similar-size (do not overwrite with empty old list)
+            if s0.get("suspect_total_pct") is None and s0.get(
+                "similar_size_total_pct"
+            ) is not None:
+                s0["suspect_total_pct"] = s0.get("similar_size_total_pct")
+                s0["suspect_wallet_count"] = s0.get("similar_size_wallet_count")
             s0["funding_clusters"] = len(f_clusters)
             # Unique wallet total % across funders + children (for Bundles header)
             try:
@@ -1109,11 +1092,10 @@ def comprehensive_bundle_check(
             "Comprehensive bundle check: Helius top holders (owner-resolved) + "
             "Rugcheck insiders/risks + Birdeye (if key) + 1-hop SOL funding + "
             "fresh/sole-token wallets + token multi-send (one sender → many). "
-            "Total bundle % = unique wallets across multi-account + insider + "
-            "multi-send + fresh + shared funder (each wallet once). "
-            "Similar-size and suspect only show/count when those primary "
-            "categories are all empty. Suspect = multi-account + insider only "
-            "(not similar-size); no wallet is listed in both Similar and Suspect. "
+            "Multi-account is its own category (always in Total). "
+            "Suspect = similar-size bags (UI rename); counts in Total only when "
+            "Fresh / Multi-send / Shared SOL are all off (with multi; unique wallets). "
+            "Optionals enter Total when checked. No double-count. "
             "Not a full commercial sniper graph. "
             + (base.get("notes") or "")
         ).strip()
