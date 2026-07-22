@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v108";
+const ADTC_CLIENT_VERSION = "v109";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -2031,40 +2031,22 @@ function processRuggersFromAnalyze(data) {
     rec.flagged_sellers && typeof rec.flagged_sellers === "object"
       ? { ...rec.flagged_sellers }
       : {};
-  // Sticky sellers: only wallets that were on THIS mint's baseline (or stamped
-  // source_mint === this mint). Drop foreign hardware bleed from other mints.
+  // Sticky sellers: drop only rows stamped for a *different* mint
   const stickyLane = {};
   {
     const rawSticky =
       rec.sticky_lane_sellers && typeof rec.sticky_lane_sellers === "object"
         ? rec.sticky_lane_sellers
         : {};
-    const base = rec.first_wallets || {};
+    const want = mintBare.toLowerCase();
     for (const [w, meta] of Object.entries(rawSticky)) {
       if (!w || !meta) continue;
       const src = bareMintAddr(meta.source_mint || "").toLowerCase();
-      if (src && src !== mintBare.toLowerCase()) continue;
-      let onBase = !!base[w];
-      if (!onBase) {
-        const wl = String(w).toLowerCase();
-        for (const k of Object.keys(base)) {
-          if (String(k).toLowerCase() === wl) {
-            onBase = true;
-            break;
-          }
-        }
-      }
-      // No baseline and no valid source stamp → foreign inject; drop
-      if (!onBase && !src) continue;
-      if (!onBase && src && src === mintBare.toLowerCase()) {
-        // stamped this mint but missing baseline — keep (sold off-list)
-      } else if (!onBase) {
-        continue;
-      }
+      if (src && src !== want) continue; // foreign mint only
       stickyLane[w] = { ...meta, source_mint: mintBare };
     }
   }
-  // Drop foreign flagged_sellers early
+  // Drop foreign flagged_sellers only when stamped for another mint
   for (const w of Object.keys(flaggedSellers)) {
     const meta = flaggedSellers[w];
     const src = bareMintAddr((meta && meta.source_mint) || "").toLowerCase();
@@ -2792,9 +2774,18 @@ function processRuggersFromAnalyze(data) {
         status[sw].sold_supply_pct = meta.first_pct;
       }
     }
-    // Only extend baseline for sticky wallets already known on THIS mint
-    // (never invent first_wallets from foreign sticky bleed)
-    if (rec.first_wallets[sw]) {
+    // Keep baseline for sticky sellers so they remain trackable
+    if (!rec.first_wallets[sw]) {
+      rec.first_wallets[sw] = {
+        pct_supply: meta.first_pct != null ? meta.first_pct : null,
+        balance: meta.first_balance != null ? meta.first_balance : null,
+        rank: null,
+        label: lane === "creator" ? "creator" : null,
+        in_similar: lane === "similar",
+        origin_lane: lane,
+        source_mint: mintBare,
+      };
+    } else {
       rec.first_wallets[sw].origin_lane =
         rec.first_wallets[sw].origin_lane || lane;
       if (lane === "similar") rec.first_wallets[sw].in_similar = true;
@@ -2939,61 +2930,34 @@ function processRuggersFromAnalyze(data) {
 }
 
 /**
- * Remove sticky/status/flagged rows that belong to a different mint.
- * Prevents "same hardware from mint A" showing under mint B.
+ * Remove sticky/status/flagged rows that are *explicitly* stamped for another mint.
+ * Unstamped rows are kept (legacy data) — never wipe a whole track on open.
  */
 function scrubForeignMintRuggersRows(rec, mintBare) {
   if (!rec || !mintBare) return;
   const want = bareMintAddr(mintBare).toLowerCase();
-  const baseline = rec.first_wallets && typeof rec.first_wallets === "object"
-    ? rec.first_wallets
-    : {};
-  function belongs(meta, wallet) {
-    if (!meta || typeof meta !== "object") meta = {};
-    const src = bareMintAddr(
-      meta.source_mint || meta.track_mint || ""
-    ).toLowerCase();
-    // Explicit foreign stamp → drop
-    if (src && src !== want) return false;
-    // Explicit this-mint stamp → keep
-    if (src && src === want) return true;
-    // No stamp: must be on this mint baseline (or creator)
-    const w = String(wallet || "").trim();
-    if (!w) return false;
-    if (baseline[w]) return true;
-    const wl = w.toLowerCase();
-    for (const k of Object.keys(baseline)) {
-      if (String(k).toLowerCase() === wl) return true;
-    }
-    if (rec.creator && String(rec.creator).toLowerCase() === wl) return true;
-    // No baseline + no stamp = foreign hardware bleed
-    return false;
+  if (!want) return;
+  function isForeign(meta) {
+    if (!meta || typeof meta !== "object") return false;
+    const src = bareMintAddr(meta.source_mint || meta.track_mint || "").toLowerCase();
+    return !!(src && src !== want);
   }
   if (rec.sticky_lane_sellers && typeof rec.sticky_lane_sellers === "object") {
     for (const w of Object.keys(rec.sticky_lane_sellers)) {
-      if (!belongs(rec.sticky_lane_sellers[w], w)) {
-        delete rec.sticky_lane_sellers[w];
-      } else {
-        rec.sticky_lane_sellers[w].source_mint = mintBare;
-      }
+      if (isForeign(rec.sticky_lane_sellers[w])) delete rec.sticky_lane_sellers[w];
+      else if (rec.sticky_lane_sellers[w]) rec.sticky_lane_sellers[w].source_mint = mintBare;
     }
   }
   if (rec.flagged_sellers && typeof rec.flagged_sellers === "object") {
     for (const w of Object.keys(rec.flagged_sellers)) {
-      if (!belongs(rec.flagged_sellers[w], w)) {
-        delete rec.flagged_sellers[w];
-      } else {
-        rec.flagged_sellers[w].source_mint = mintBare;
-      }
+      if (isForeign(rec.flagged_sellers[w])) delete rec.flagged_sellers[w];
+      else if (rec.flagged_sellers[w]) rec.flagged_sellers[w].source_mint = mintBare;
     }
   }
   if (rec.status && typeof rec.status === "object") {
     for (const w of Object.keys(rec.status)) {
-      if (!belongs(rec.status[w], w)) {
-        delete rec.status[w];
-      } else {
-        rec.status[w].source_mint = mintBare;
-      }
+      if (isForeign(rec.status[w])) delete rec.status[w];
+      else if (rec.status[w]) rec.status[w].source_mint = mintBare;
     }
   }
 }
@@ -5010,28 +4974,47 @@ function wireRuggersExportButtons() {
 }
 
 function refreshRuggersPanel(focusKey) {
+  try {
+    _refreshRuggersPanelImpl(focusKey);
+  } catch (err) {
+    console.error("[ruggers] panel crash", err);
+    try {
+      const body = $("ruggersBody");
+      if (body) {
+        body.innerHTML =
+          '<p class="logs-empty"><strong>Ruggers error</strong><br/>' +
+          escHtml(String(err && err.message ? err.message : err)) +
+          "<br/><br/>Hard-refresh the page, then run a full Analyze again.</p>";
+      }
+    } catch (_) {
+      /* ignore */
+    }
+  }
+}
+
+function _refreshRuggersPanelImpl(focusKey) {
   const body = $("ruggersBody");
   const dump = $("text-ruggers");
-  let store;
+  let store = {};
   try {
-    store = loadRuggersStore();
+    store = loadRuggersStore() || {};
   } catch (err) {
     console.error("[ruggers] load store failed", err);
     store = {};
   }
+
   const keys = Object.keys(store)
     .filter((k) => {
       if (k === "__meta") return false;
       const r = store[k];
-      return !!(r && typeof r === "object" && r.first_wallets && typeof r.first_wallets === "object");
+      return !!(r && typeof r === "object" && r.first_wallets != null);
     })
     .sort((a, b) => {
-      const ta = store[a].last_ts || store[a].first_ts || "";
-      const tb = store[b].last_ts || store[b].first_ts || "";
-      return tb.localeCompare(ta);
+      const ta = (store[a] && (store[a].last_ts || store[a].first_ts)) || "";
+      const tb = (store[b] && (store[b].last_ts || store[b].first_ts)) || "";
+      return String(tb).localeCompare(String(ta));
     });
 
-  // Expected mint: focusKey (from Analyze) > summary bar CA > nothing
   const focusHint = String(focusKey || "").trim();
   const summaryMint = getSummaryBarMintAddr();
   const expectedBare = bareMintAddr(focusHint) || summaryMint || "";
@@ -5039,43 +5022,29 @@ function refreshRuggersPanel(focusKey) {
   let activeKey = "";
   let rec = null;
 
-  // 1) Exact key from Analyze result (most reliable)
+  // 1) Direct key from Analyze
   if (focusHint && store[focusHint] && typeof store[focusHint] === "object") {
-    const cand = store[focusHint];
-    if (
-      !expectedBare ||
-      sameMintAddr(cand.address || focusHint, expectedBare) ||
-      sameMintAddr(focusHint, expectedBare)
-    ) {
-      activeKey = focusHint;
-      rec = cand;
-    }
+    activeKey = focusHint;
+    rec = store[focusHint];
   }
 
-  // 2) Address lookup (canonical solana: + bare + full scan)
+  // 2) Lookup by mint address
   if (!rec && expectedBare) {
     const found = findRuggersRecForMint(store, expectedBare, "solana");
-    if (found.rec && typeof found.rec === "object") {
-      // Accept if address matches OR key bare matches (legacy missing address field)
-      if (
-        sameMintAddr(found.rec.address || found.key, expectedBare) ||
-        sameMintAddr(found.key, expectedBare)
-      ) {
-        activeKey = found.key || mintKeyFromToken(expectedBare, "solana");
-        rec = found.rec;
-        if (!rec.address) rec.address = expectedBare;
-      }
+    if (found.rec) {
+      activeKey = found.key || mintKeyFromToken(expectedBare, "solana");
+      rec = found.rec;
     }
   }
 
-  // 3) No specific mint in view — most recently tracked mint
-  if (!rec && !expectedBare && keys.length) {
+  // 3) Always fall back to most recent tracked mint so the tab never goes blank
+  //    when the store has data (dropdown can switch mint).
+  if (!rec && keys.length) {
     activeKey = keys[0];
     rec = store[activeKey];
   }
 
-  // Empty store
-  if (!keys.length && !rec) {
+  if (!rec || typeof rec !== "object" || !activeKey) {
     _lastRuggersBuckets = null;
     _lastRuggersRec = null;
     _lastRuggersKey = "";
@@ -5089,94 +5058,27 @@ function refreshRuggersPanel(focusKey) {
       "then import the file in RugWatch → Upload tab.";
     if (body) {
       body.innerHTML =
-        '<p class="logs-empty">' +
-        emptyMsg.replace(/\n/g, "<br/>") +
-        "</p>";
+        '<p class="logs-empty">' + emptyMsg.replace(/\n/g, "<br/>") + "</p>";
     }
     if (dump) dump.textContent = emptyMsg;
     return;
   }
 
-  // Have tracks but not for the mint currently in the summary bar
-  if (!rec || typeof rec !== "object" || !activeKey) {
-    _lastRuggersBuckets = null;
-    _lastRuggersRec = null;
-    _lastRuggersKey = "";
-    let pickList = "";
-    if (keys.length) {
-      pickList =
-        "<br/><br/><strong>Tracked mints on this browser:</strong><ul style=\"margin:8px 0 0 18px\">";
-      for (const k of keys.slice(0, 12)) {
-        const r = store[k] || {};
-        const ca = bareMintAddr(r.address || k) || k;
-        const sym = r.symbol ? "$" + r.symbol + " · " : "";
-        pickList +=
-          "<li class=\"mono\" style=\"margin:4px 0\">" +
-          escHtml(sym + ca) +
-          "</li>";
-      }
-      pickList +=
-        "</ul><p class=\"logs-empty\" style=\"margin-top:10px\">Use the mint dropdown after opening a tracked mint, or Analyze this CA (full) to start a baseline.</p>";
-    }
-    if (body) {
-      body.innerHTML =
-        '<p class="logs-empty">' +
-        (expectedBare
-          ? "No Ruggers baseline for <span class=\"mono\">" +
-            escHtml(expectedBare.slice(0, 12)) +
-            "…</span> yet.<br/><br/>Run a <strong>full Analyze</strong> (not Quick) on this mint. " +
-            "Sellers only appear after a later re-Analyze of the <em>same</em> mint."
-          : "Select a mint or run a full Analyze.") +
-        pickList +
-        "</p>";
-    }
-    if (dump) {
-      dump.textContent = expectedBare
-        ? "No Ruggers baseline for this mint yet: " + expectedBare
-        : "No Ruggers track selected.";
-    }
-    return;
+  // Normalize address field
+  if (!rec.address) {
+    rec.address = bareMintAddr(rec.address || activeKey || expectedBare) || "";
   }
 
-  // Refuse foreign mint only when we have a clear expected CA and it mismatches
-  if (
-    expectedBare &&
-    rec.address &&
-    !sameMintAddr(rec.address, expectedBare) &&
-    !sameMintAddr(activeKey, expectedBare)
-  ) {
-    console.warn(
-      "[ruggers] panel refused foreign track",
-      rec.address,
-      "expected",
-      expectedBare
-    );
-    // Fall through to empty-for-expected path by clearing rec
-    _lastRuggersBuckets = null;
-    _lastRuggersRec = null;
-    _lastRuggersKey = "";
-    if (body) {
-      body.innerHTML =
-        '<p class="logs-empty">Ruggers refused to show another mint&rsquo;s track.<br/>' +
-        "Expected <span class=\"mono\">" +
-        escHtml(expectedBare.slice(0, 12)) +
-        "…</span> — Analyze this CA (full) or pick it from Tracked mints.</p>";
-    }
-    return;
-  }
-
-  // Soft scrub — never blank the whole panel if scrub throws
   try {
     purgeFalseRuggersUploadMarks(rec);
   } catch (err) {
-    console.warn("[ruggers] purge upload marks", err);
+    console.warn("[ruggers] purge", err);
   }
   try {
     const mintForScrub = bareMintAddr(rec.address || expectedBare || activeKey);
     if (mintForScrub) scrubForeignMintRuggersRows(rec, mintForScrub);
-    if (!rec.address && mintForScrub) rec.address = mintForScrub;
   } catch (err) {
-    console.warn("[ruggers] scrub foreign rows", err);
+    console.warn("[ruggers] scrub", err);
   }
   try {
     store[activeKey] = rec;
@@ -5190,13 +5092,20 @@ function refreshRuggersPanel(focusKey) {
     buckets = ruggersBuckets(rec);
   } catch (err) {
     console.error("[ruggers] buckets failed", err);
-    if (body) {
-      body.innerHTML =
-        '<p class="logs-empty">Ruggers failed to build seller lists: ' +
-        escHtml(String(err && err.message ? err.message : err)) +
-        "<br/>Try full Analyze again.</p>";
-    }
-    return;
+    buckets = {
+      creatorSold: [],
+      similarSellers: [],
+      multiSellers: [],
+      multiSendSellers: [],
+      fundingSellers: [],
+      insiderSellers: [],
+      launchSellers: [],
+      freshSellers: [],
+      suspectSellers: [],
+      singleSellers: [],
+      flaggedWallets: [],
+      swings: [],
+    };
   }
   _lastRuggersBuckets = buckets;
   _lastRuggersRec = rec;
@@ -10129,7 +10038,13 @@ function renderSections(data, query) {
     } else if (!holdersOk) {
       console.warn("[ruggers] skipped — holders/ruggers_track not ok");
     } else {
-      const result = processRuggersFromAnalyze(data);
+      let result = null;
+      try {
+        result = processRuggersFromAnalyze(data);
+      } catch (procErr) {
+        console.error("[ruggers] process threw", procErr);
+        result = null;
+      }
       if (result && result.key) {
         rugKey = result.key;
         const nBase = result.rec && result.rec.first_wallets
@@ -10144,12 +10059,24 @@ function renderSections(data, query) {
         );
       } else {
         console.warn("[ruggers] process returned null (no mint/snapshot)");
+        // Still try to open panel for this mint CA so the tab is not blank
+        try {
+          const addr =
+            (data.token && data.token.address) ||
+            (data.market && data.market.address) ||
+            "";
+          if (addr) rugKey = mintKeyFromToken(addr, (data.token && data.token.chain_id) || "solana");
+        } catch (_) {}
       }
     }
   } catch (err) {
     console.error("[ruggers] process failed", err);
   }
-  refreshRuggersPanel(rugKey);
+  try {
+    refreshRuggersPanel(rugKey);
+  } catch (refErr) {
+    console.error("[ruggers] refresh failed", refErr);
+  }
 
   // Prefer Alerts tab when there are top-priority warnings
   const n = (data.alerts_meta && data.alerts_meta.priority_count) || 0;
