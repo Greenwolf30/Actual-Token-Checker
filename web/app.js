@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v86";
+const ADTC_CLIENT_VERSION = "v87";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Bump when Flagged-wallet rules change so sticky junk is wiped once. */
@@ -6310,6 +6310,114 @@ function slimBundlesViewForStorage(bv) {
 }
 
 /** Summary-only bundles_view (stats bar always works after refresh). */
+
+/** Per-tab text storage (avoids one huge last-Analyze blob dropping Maps/About). */
+const SECTION_STORE_KEYS = {
+  overview: "adtc_sec_overview",
+  holders: "adtc_sec_holders",
+  bundles: "adtc_sec_bundles",
+  alerts: "adtc_sec_alerts",
+  maps: "adtc_sec_maps",
+  about: "adtc_sec_about",
+};
+
+function saveSectionsSeparately(sections) {
+  if (!sections || typeof sections !== "object") return;
+  const now = Date.now();
+  for (const [tab, key] of Object.entries(SECTION_STORE_KEYS)) {
+    try {
+      const raw = sections[tab];
+      if (raw == null || !String(raw).trim()) continue;
+      const text = truncateSectionText(raw, 20000);
+      const payload = JSON.stringify({ savedAt: now, text: text });
+      safeLocalStorageSet(key, payload);
+      safeSessionStorageSet(key, payload);
+    } catch (_) {
+      /* ignore */
+    }
+  }
+}
+
+function loadSectionText(tab) {
+  const key = SECTION_STORE_KEYS[tab];
+  if (!key) return null;
+  for (const store of [localStorage, sessionStorage]) {
+    try {
+      const raw = store.getItem(key);
+      if (!raw) continue;
+      const o = JSON.parse(raw);
+      if (o && o.text && String(o.text).trim()) return String(o.text);
+    } catch (_) {
+      /* ignore */
+    }
+  }
+  return null;
+}
+
+/**
+ * Mount Bundles top stats with pure DOM textContent so deltas cannot be
+ * stripped by HTML sanitization / string assembly bugs.
+ * items: [{label, valueText, valueClass, deltaText, deltaCls, sub}]
+ */
+function mountBundleStatsBar(mountEl, items, version) {
+  if (!mountEl) return;
+  while (mountEl.firstChild) mountEl.removeChild(mountEl.firstChild);
+
+  const note = document.createElement("div");
+  note.className = "bun-delta-note";
+  note.id = "bunDeltaNote";
+  note.textContent =
+    "Since last Analyze · " +
+    (version || "?") +
+    " · each box shows (d …) change";
+  mountEl.appendChild(note);
+
+  const grid = document.createElement("div");
+  grid.className = "bun-stats";
+  grid.setAttribute("data-adtc-deltas", "1");
+
+  (items || []).forEach((it) => {
+    if (!it) return;
+    const box = document.createElement("div");
+    box.className = "bun-stat";
+    box.setAttribute("data-bun-stat", String(it.label || ""));
+
+    const lab = document.createElement("span");
+    lab.className = "bun-stat-label";
+    lab.textContent = String(it.label || "");
+
+    const val = document.createElement("span");
+    val.className = "bun-stat-value";
+
+    const main = document.createElement("span");
+    if (it.valueClass) main.className = String(it.valueClass);
+    main.textContent = String(it.valueText != null ? it.valueText : "—");
+
+    const dlt = document.createElement("span");
+    dlt.className =
+      "bun-stat-delta " + String(it.deltaCls || "bun-delta-flat");
+    // Leading space + parenthetical always present
+    let dText = String(it.deltaText != null ? it.deltaText : "(d =0%)");
+    if (dText.charAt(0) !== "(") dText = "(" + dText + ")";
+    dlt.textContent = " " + dText;
+
+    val.appendChild(main);
+    val.appendChild(dlt);
+    box.appendChild(lab);
+    box.appendChild(val);
+
+    if (it.sub) {
+      const sub = document.createElement("span");
+      sub.className = "bun-stat-sub";
+      sub.textContent = String(it.sub);
+      box.appendChild(sub);
+    }
+    grid.appendChild(box);
+  });
+
+  mountEl.appendChild(grid);
+}
+
 function summaryOnlyBundlesView(bv) {
   if (!bv || typeof bv !== "object") return null;
   const c = jsonClone(bv) || {};
@@ -6861,10 +6969,12 @@ function restoreLastAnalyze(cachedOpt) {
     for (const tab of TABS) {
       if (tab === "history" || tab === "ruggers" || tab === "bundles") continue;
       try {
-        if (sections[tab] && String(sections[tab]).trim()) {
-          setPanelText(tab, lastKnownLine + String(sections[tab]));
+        let body = sections[tab] && String(sections[tab]).trim()
+          ? String(sections[tab])
+          : loadSectionText(tab);
+        if (body && String(body).trim()) {
+          setPanelText(tab, lastKnownLine + String(body));
         } else {
-          // Do not leave the default "Run Analyze..." placeholder — explain cache miss
           setPanelText(
             tab,
             lastKnownLine +
@@ -8628,6 +8738,219 @@ function renderBundlesUi(data) {
 
   root.innerHTML = html;
 
+
+  // v87: rebuild top stats with DOM textContent so deltas always show
+  try {
+    const ver =
+      typeof ADTC_CLIENT_VERSION !== "undefined" ? ADTC_CLIENT_VERSION : "?";
+    const items = [];
+    function pushStat(label, valueText, valueClass, key, curOverride, sub) {
+      const kind = key === "risk" ? "score" : "pct";
+      const curVal =
+        curOverride !== undefined
+          ? curOverride
+          : deltaCurStats
+            ? deltaCurStats[key]
+            : null;
+      const prevVal = prev ? prev[key] : 0;
+      const parts = computeBundleStatDeltaParts(
+        curVal != null && Number.isFinite(Number(curVal)) ? Number(curVal) : 0,
+        prevVal != null && Number.isFinite(Number(prevVal)) ? Number(prevVal) : 0,
+        kind,
+        { coalesceNull: true }
+      );
+      const deltaText = "(" + (parts && parts.text ? parts.text : "d =0%") + ")";
+      const deltaCls = (parts && parts.cls) || "bun-delta-flat";
+      htmlByKeyThisRun[key] =
+        '<span class="bun-stat-delta ' +
+        deltaCls +
+        '">' +
+        deltaText +
+        "</span>";
+      items.push({
+        label: label,
+        valueText: valueText,
+        valueClass: valueClass || "",
+        deltaText: deltaText,
+        deltaCls: deltaCls,
+        sub: sub || "",
+      });
+    }
+
+    const riskText =
+      (s.bundle_risk || "—") +
+      (riskScore != null ? " (" + Math.round(riskScore) + "/100)" : "");
+    pushStat("Risk", riskText, riskCls, "risk");
+
+    const tbp =
+      s.total_bundle_pct != null && Number.isFinite(Number(s.total_bundle_pct))
+        ? Number(s.total_bundle_pct)
+        : 0;
+    const showSimSus =
+      s.total_bundle_mode === "fallback_similar_suspect" ||
+      s.total_bundle_mode === "multi_plus_similar_suspect" ||
+      s.total_bundle_show_similar_suspect === true;
+    pushStat(
+      showSimSus ? "Total (multi + similar/suspect)" : "Total bundle",
+      fmtSupplyPct(tbp) || "0%",
+      pctPriorityClass(tbp) || "",
+      "total_bundle_pct",
+      tbp
+    );
+
+    const simN =
+      s.similar_size_total_pct != null &&
+      Number.isFinite(Number(s.similar_size_total_pct))
+        ? Number(s.similar_size_total_pct)
+        : 0;
+    pushStat(
+      "Similar-size",
+      fmtSupplyPct(s.similar_size_total_pct) || "0%",
+      pctPriorityClass(simN) || "",
+      "similar_size_total_pct",
+      simN
+    );
+
+    // Recompute optional display % (block-locals from HTML build are out of scope)
+    const freshDisp = resolveOptionalDisplayPct(
+      s.fresh_total_pct != null
+        ? s.fresh_total_pct
+        : deltaCurStats && deltaCurStats.fresh_total_pct,
+      optKnown.fresh
+    );
+    const fp =
+      freshDisp != null && Number.isFinite(Number(freshDisp))
+        ? Number(freshDisp)
+        : 0;
+    pushStat(
+      "Fresh total",
+      fmtSupplyPct(fp) || "0%",
+      fp > 0 ? "pct-low" : "bun-pct-zero",
+      "fresh_total_pct",
+      fp
+    );
+
+    const msDisp = resolveOptionalDisplayPct(
+      s.multi_send_total_pct != null
+        ? s.multi_send_total_pct
+        : deltaCurStats && deltaCurStats.multi_send_total_pct,
+      optKnown.multi_send
+    );
+    const mp =
+      msDisp != null && Number.isFinite(Number(msDisp)) ? Number(msDisp) : 0;
+    pushStat(
+      "Multi-send total",
+      fmtSupplyPct(mp) || "0%",
+      mp > 0 ? "pct-low" : "bun-pct-zero",
+      "multi_send_total_pct",
+      mp
+    );
+
+    const fundDisp = resolveOptionalDisplayPct(
+      s.funding_total_pct != null
+        ? s.funding_total_pct
+        : deltaCurStats && deltaCurStats.funding_total_pct,
+      optKnown.funding
+    );
+    const fdp =
+      fundDisp != null && Number.isFinite(Number(fundDisp))
+        ? Number(fundDisp)
+        : 0;
+    pushStat(
+      "Shared SOL total",
+      fmtSupplyPct(fdp) || "0%",
+      fdp > 0 ? "pct-low" : "bun-pct-zero",
+      "funding_total_pct",
+      fdp
+    );
+
+    const sus =
+      s.suspect_total_pct != null && Number.isFinite(Number(s.suspect_total_pct))
+        ? Number(s.suspect_total_pct)
+        : 0;
+    pushStat(
+      "Suspect total",
+      fmtSupplyPct(s.suspect_total_pct) || "0%",
+      pctPriorityClass(sus) || "",
+      "suspect_total_pct",
+      sus
+    );
+
+    const singlePct =
+      s.single_holders_total_pct != null &&
+      Number.isFinite(Number(s.single_holders_total_pct))
+        ? Number(s.single_holders_total_pct)
+        : 0;
+    pushStat(
+      "Single holders",
+      fmtSupplyPct(singlePct) || "0%",
+      pctPriorityClass(singlePct) || "",
+      "single_holders_total_pct",
+      singlePct
+    );
+
+    const t10 =
+      s.top10_pct_excluding_known_programs != null &&
+      Number.isFinite(Number(s.top10_pct_excluding_known_programs))
+        ? Number(s.top10_pct_excluding_known_programs)
+        : 0;
+    pushStat(
+      "Top10 ex-LP",
+      fmtSupplyPct(s.top10_pct_excluding_known_programs) || "0%",
+      pctPriorityClass(t10) || "",
+      "top10_ex_lp",
+      t10
+    );
+
+    const oldNote = root.querySelector(".bun-delta-note");
+    const oldStats = root.querySelector(".bun-stats");
+    const mount = document.createElement("div");
+    mount.id = "bunStatsMount";
+    mountBundleStatsBar(mount, items, ver);
+    if (oldNote && oldNote.parentNode) {
+      oldNote.parentNode.insertBefore(mount, oldNote);
+      try {
+        oldNote.remove();
+      } catch (_) {
+        oldNote.parentNode.removeChild(oldNote);
+      }
+    } else if (oldStats && oldStats.parentNode) {
+      oldStats.parentNode.insertBefore(mount, oldStats);
+    } else if (root.firstChild) {
+      root.insertBefore(mount, root.firstChild);
+    } else {
+      root.appendChild(mount);
+    }
+    if (oldStats && oldStats.parentNode) {
+      try {
+        oldStats.remove();
+      } catch (_) {
+        oldStats.parentNode.removeChild(oldStats);
+      }
+    }
+    // Drop any leftover top-level note/stats not inside mount
+    try {
+      root.querySelectorAll(".bun-delta-note").forEach((n) => {
+        if (!mount.contains(n)) n.parentNode && n.parentNode.removeChild(n);
+      });
+      root.querySelectorAll(":scope > .bun-stats").forEach((n) => {
+        if (!mount.contains(n)) n.parentNode && n.parentNode.removeChild(n);
+      });
+    } catch (_) {
+      /* ignore */
+    }
+
+    console.info(
+      "[bundles deltas DOM]",
+      "v=" + ver,
+      "items=" + items.length,
+      "sample=",
+      items[1] ? items[1].valueText + " " + items[1].deltaText : "?"
+    );
+  } catch (err) {
+    console.error("[bundles deltas DOM]", err);
+  }
+
   // Map stats box labels → delta keys (for post-inject on restore)
   const DELTA_LABEL_TO_KEY = {
     Risk: "risk",
@@ -9294,6 +9617,10 @@ async function analyze(ev) {
     // Persist AFTER UI so delta freeze is included — must not be skipped
     try {
       const ok = saveLastAnalyze(data, query);
+      try {
+        saveSectionsSeparately((data && data.sections) || {});
+      } catch (_) {}
+
       if (!ok) {
         console.warn(
           "[analyze] last Analyze may not fully persist; Bundles backup attempted"
