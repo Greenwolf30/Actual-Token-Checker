@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v107";
+const ADTC_CLIENT_VERSION = "v108";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -960,15 +960,20 @@ function findRuggersRecForMint(store, address, chain) {
     if (!k || seen.has(k)) continue;
     seen.add(k);
     const rec = s[k];
-    if (rec && typeof rec === "object" && sameMintAddr(rec.address || k, bare)) {
+    if (!rec || typeof rec !== "object") continue;
+    // Match on rec.address OR key itself (legacy rows sometimes lack address)
+    if (
+      sameMintAddr(rec.address, bare) ||
+      sameMintAddr(k, bare) ||
+      sameMintAddr(rec.address || k, bare)
+    ) {
       return { key: k, rec };
     }
   }
-  // Full scan — address match only (never fuzzy suffix matches)
+  // Full scan — address / key match only (never fuzzy suffix of unrelated mints)
   for (const [k, rec] of Object.entries(s)) {
     if (k === "__meta" || !rec || typeof rec !== "object") continue;
-    if (sameMintAddr(rec.address, bare)) return { key: k, rec };
-    if (sameMintAddr(k, bare) && sameMintAddr(rec.address || k, bare)) {
+    if (sameMintAddr(rec.address, bare) || sameMintAddr(k, bare)) {
       return { key: k, rec };
     }
   }
@@ -2906,14 +2911,22 @@ function processRuggersFromAnalyze(data) {
   rec.chain = rec.chain || snap.chain || "solana";
 
   // Drop any sticky/status rows that were stamped for a different mint
-  scrubForeignMintRuggersRows(rec, mintBare);
+  try {
+    scrubForeignMintRuggersRows(rec, mintBare);
+  } catch (err) {
+    console.warn("[ruggers] scrub after process", err);
+  }
 
   store[storeKey] = rec;
   // Remove legacy bare-key duplicate if present
   try {
     if (store[mintBare] && store[mintBare] !== rec) delete store[mintBare];
   } catch (_) {}
-  saveRuggersStore(store);
+  try {
+    saveRuggersStore(store);
+  } catch (err) {
+    console.warn("[ruggers] save store failed", err);
+  }
 
   // Cloud unflag only for non-lineage cleanup (flagged identity stays for loop)
   if (unflagNow.length) {
@@ -4999,36 +5012,70 @@ function wireRuggersExportButtons() {
 function refreshRuggersPanel(focusKey) {
   const body = $("ruggersBody");
   const dump = $("text-ruggers");
-  const store = loadRuggersStore();
+  let store;
+  try {
+    store = loadRuggersStore();
+  } catch (err) {
+    console.error("[ruggers] load store failed", err);
+    store = {};
+  }
   const keys = Object.keys(store)
-    .filter((k) => k !== "__meta" && store[k] && typeof store[k] === "object" && store[k].first_wallets)
+    .filter((k) => {
+      if (k === "__meta") return false;
+      const r = store[k];
+      return !!(r && typeof r === "object" && r.first_wallets && typeof r.first_wallets === "object");
+    })
     .sort((a, b) => {
       const ta = store[a].last_ts || store[a].first_ts || "";
       const tb = store[b].last_ts || store[b].first_ts || "";
       return tb.localeCompare(ta);
     });
 
-  // Expected mint: focusKey (Analyze) > summary bar CA > nothing
-  // Never fuzzy-match another mint's track.
+  // Expected mint: focusKey (from Analyze) > summary bar CA > nothing
   const focusHint = String(focusKey || "").trim();
   const summaryMint = getSummaryBarMintAddr();
-  const expectedBare = bareMintAddr(focusHint) || summaryMint;
+  const expectedBare = bareMintAddr(focusHint) || summaryMint || "";
 
   let activeKey = "";
   let rec = null;
-  if (expectedBare) {
-    const found = findRuggersRecForMint(store, expectedBare, "solana");
-    if (found.rec && sameMintAddr(found.rec.address || found.key, expectedBare)) {
-      activeKey = found.key;
-      rec = found.rec;
+
+  // 1) Exact key from Analyze result (most reliable)
+  if (focusHint && store[focusHint] && typeof store[focusHint] === "object") {
+    const cand = store[focusHint];
+    if (
+      !expectedBare ||
+      sameMintAddr(cand.address || focusHint, expectedBare) ||
+      sameMintAddr(focusHint, expectedBare)
+    ) {
+      activeKey = focusHint;
+      rec = cand;
     }
-  } else if (keys.length) {
-    // No mint in view — only then show most recent track
+  }
+
+  // 2) Address lookup (canonical solana: + bare + full scan)
+  if (!rec && expectedBare) {
+    const found = findRuggersRecForMint(store, expectedBare, "solana");
+    if (found.rec && typeof found.rec === "object") {
+      // Accept if address matches OR key bare matches (legacy missing address field)
+      if (
+        sameMintAddr(found.rec.address || found.key, expectedBare) ||
+        sameMintAddr(found.key, expectedBare)
+      ) {
+        activeKey = found.key || mintKeyFromToken(expectedBare, "solana");
+        rec = found.rec;
+        if (!rec.address) rec.address = expectedBare;
+      }
+    }
+  }
+
+  // 3) No specific mint in view — most recently tracked mint
+  if (!rec && !expectedBare && keys.length) {
     activeKey = keys[0];
     rec = store[activeKey];
   }
 
-  if (!keys.length) {
+  // Empty store
+  if (!keys.length && !rec) {
     _lastRuggersBuckets = null;
     _lastRuggersRec = null;
     _lastRuggersKey = "";
@@ -5050,52 +5097,107 @@ function refreshRuggersPanel(focusKey) {
     return;
   }
 
-  // Hard refuse: never display mint A's sellers under mint B
-  if (expectedBare && rec && !sameMintAddr(rec.address || activeKey, expectedBare)) {
+  // Have tracks but not for the mint currently in the summary bar
+  if (!rec || typeof rec !== "object" || !activeKey) {
+    _lastRuggersBuckets = null;
+    _lastRuggersRec = null;
+    _lastRuggersKey = "";
+    let pickList = "";
+    if (keys.length) {
+      pickList =
+        "<br/><br/><strong>Tracked mints on this browser:</strong><ul style=\"margin:8px 0 0 18px\">";
+      for (const k of keys.slice(0, 12)) {
+        const r = store[k] || {};
+        const ca = bareMintAddr(r.address || k) || k;
+        const sym = r.symbol ? "$" + r.symbol + " · " : "";
+        pickList +=
+          "<li class=\"mono\" style=\"margin:4px 0\">" +
+          escHtml(sym + ca) +
+          "</li>";
+      }
+      pickList +=
+        "</ul><p class=\"logs-empty\" style=\"margin-top:10px\">Use the mint dropdown after opening a tracked mint, or Analyze this CA (full) to start a baseline.</p>";
+    }
+    if (body) {
+      body.innerHTML =
+        '<p class="logs-empty">' +
+        (expectedBare
+          ? "No Ruggers baseline for <span class=\"mono\">" +
+            escHtml(expectedBare.slice(0, 12)) +
+            "…</span> yet.<br/><br/>Run a <strong>full Analyze</strong> (not Quick) on this mint. " +
+            "Sellers only appear after a later re-Analyze of the <em>same</em> mint."
+          : "Select a mint or run a full Analyze.") +
+        pickList +
+        "</p>";
+    }
+    if (dump) {
+      dump.textContent = expectedBare
+        ? "No Ruggers baseline for this mint yet: " + expectedBare
+        : "No Ruggers track selected.";
+    }
+    return;
+  }
+
+  // Refuse foreign mint only when we have a clear expected CA and it mismatches
+  if (
+    expectedBare &&
+    rec.address &&
+    !sameMintAddr(rec.address, expectedBare) &&
+    !sameMintAddr(activeKey, expectedBare)
+  ) {
     console.warn(
       "[ruggers] panel refused foreign track",
       rec.address,
       "expected",
       expectedBare
     );
-    rec = null;
-    activeKey = "";
-  }
-
-  if (!rec || typeof rec !== "object" || !activeKey) {
+    // Fall through to empty-for-expected path by clearing rec
     _lastRuggersBuckets = null;
     _lastRuggersRec = null;
     _lastRuggersKey = "";
     if (body) {
       body.innerHTML =
-        '<p class="logs-empty">' +
-        (expectedBare
-          ? "No Ruggers baseline for this mint yet (" +
-            escHtml(expectedBare.slice(0, 8)) +
-            "…). Run a full Analyze (not Quick) on this CA. Sellers only appear after a later re-Analyze of the same mint — never from another mint."
-          : "Ruggers track data is missing or corrupt. Run a full Analyze again.") +
-        "</p>";
-    }
-    if (dump) {
-      dump.textContent = expectedBare
-        ? "No Ruggers baseline for this mint yet."
-        : "Ruggers track data is missing or corrupt.";
+        '<p class="logs-empty">Ruggers refused to show another mint&rsquo;s track.<br/>' +
+        "Expected <span class=\"mono\">" +
+        escHtml(expectedBare.slice(0, 12)) +
+        "…</span> — Analyze this CA (full) or pick it from Tracked mints.</p>";
     }
     return;
   }
 
-  // Live-purge + foreign-mint scrub when rendering
+  // Soft scrub — never blank the whole panel if scrub throws
   try {
     purgeFalseRuggersUploadMarks(rec);
-    scrubForeignMintRuggersRows(rec, bareMintAddr(rec.address || expectedBare));
-    rec.address = bareMintAddr(rec.address) || expectedBare;
+  } catch (err) {
+    console.warn("[ruggers] purge upload marks", err);
+  }
+  try {
+    const mintForScrub = bareMintAddr(rec.address || expectedBare || activeKey);
+    if (mintForScrub) scrubForeignMintRuggersRows(rec, mintForScrub);
+    if (!rec.address && mintForScrub) rec.address = mintForScrub;
+  } catch (err) {
+    console.warn("[ruggers] scrub foreign rows", err);
+  }
+  try {
     store[activeKey] = rec;
     saveRuggersStore(store);
   } catch (_) {
     /* ignore */
   }
 
-  const buckets = ruggersBuckets(rec);
+  let buckets;
+  try {
+    buckets = ruggersBuckets(rec);
+  } catch (err) {
+    console.error("[ruggers] buckets failed", err);
+    if (body) {
+      body.innerHTML =
+        '<p class="logs-empty">Ruggers failed to build seller lists: ' +
+        escHtml(String(err && err.message ? err.message : err)) +
+        "<br/>Try full Analyze again.</p>";
+    }
+    return;
+  }
   _lastRuggersBuckets = buckets;
   _lastRuggersRec = rec;
   _lastRuggersKey = activeKey;
