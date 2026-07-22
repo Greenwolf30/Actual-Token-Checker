@@ -6340,13 +6340,22 @@ function renderBundlesUi(data) {
   const fundSkipped = /scan off|enable .Shared SOL|Shared SOL funder scan off/i.test(
     fundErr
   );
+  const fundCached = !!s.funding_from_cache;
   if (fund.length) {
     html +=
       '<section class="bun-section"><div class="bun-section-head">' +
-      '<span class="bun-section-title">Shared SOL funder</span>' +
+      '<span class="bun-section-title">Shared SOL funder' +
+      (fundCached ? " (last known)" : "") +
+      "</span>" +
       '<span class="bun-section-total">' +
       escHtml(String(fund.length)) +
-      " cluster(s)</span></div><div class=\"bun-section-body\">";
+      " cluster(s)" +
+      (fundCached ? " · no re-scan" : "") +
+      "</span></div><div class=\"bun-section-body\">";
+    if (fundCached) {
+      html +=
+        '<p class="bun-sub">Last known Shared SOL for this mint (checkbox off — no Helius pings). Check Shared SOL to refresh.</p>';
+    }
     for (const fc of fund) {
       html +=
         '<div class="bun-cluster"><div class="bun-cluster-head">Funder ' +
@@ -6376,15 +6385,24 @@ function renderBundlesUi(data) {
 
   // Fresh
   const fresh = view.fresh_wallets || [];
+  const freshCached = !!s.fresh_from_cache;
   if (fresh.length) {
     html +=
       '<section class="bun-section"><div class="bun-section-head">' +
-      '<span class="bun-section-title">Fresh wallets</span>' +
+      '<span class="bun-section-title">Fresh wallets' +
+      (freshCached ? " (last known)" : "") +
+      "</span>" +
       '<span class="bun-section-total">total ' +
       bunPctHtml(s.fresh_total_pct) +
       " · " +
       escHtml(String(fresh.length)) +
-      " wallet(s)</span></div><div class=\"bun-section-body\">";
+      " wallet(s)" +
+      (freshCached ? " · no re-scan" : "") +
+      "</span></div><div class=\"bun-section-body\">";
+    if (freshCached) {
+      html +=
+        '<p class="bun-sub">Last known Fresh wallets for this mint (checkbox off — no Helius pings). Check Fresh to refresh.</p>';
+    }
     html += bunWalletTable(fresh, [
       { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
       { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
@@ -6413,7 +6431,7 @@ function renderBundlesUi(data) {
       "Fresh wallets",
       useFreshEnabled()
         ? "None found — wallets holding almost only this mint (needs Helius + full Analyze)."
-        : "Skipped — turn on “Fresh” above Analyze to run this scan."
+        : "Skipped — turn on “Fresh” above Analyze to scan (or re-scan after a prior full Analyze with Fresh on to keep last known)."
     );
   }
 
@@ -6421,6 +6439,7 @@ function renderBundlesUi(data) {
   const msWallets = view.multi_send_wallets || [];
   const tokenMs = view.multi_send_clusters || [];
   const solMs = view.sol_multi_send_clusters || [];
+  const msCached = !!s.multi_send_from_cache;
   if (msWallets.length || tokenMs.length || solMs.length) {
     const shape = String(s.multi_send_hold_shape || "");
     let shapeNote = "";
@@ -6433,12 +6452,20 @@ function renderBundlesUi(data) {
     }
     html +=
       '<section class="bun-section"><div class="bun-section-head">' +
-      '<span class="bun-section-title">Multi-send (one → many)</span>' +
+      '<span class="bun-section-title">Multi-send (one → many)' +
+      (msCached ? " (last known)" : "") +
+      "</span>" +
       '<span class="bun-section-total">combined ' +
       bunPctHtml(s.multi_send_total_pct) +
       " · " +
       escHtml(String(msWallets.length || 0)) +
-      " wallet(s)</span></div><div class=\"bun-section-body\">";
+      " wallet(s)" +
+      (msCached ? " · no re-scan" : "") +
+      "</span></div><div class=\"bun-section-body\">";
+    if (msCached) {
+      html +=
+        '<p class="bun-sub">Last known Multi-send for this mint (checkbox off — no Helius pings). Check Multi-send to refresh.</p>';
+    }
     html +=
       '<p class="bun-sub">Senders (each one wallet): ' +
       bunPctHtml(s.multi_send_sender_total_pct) +

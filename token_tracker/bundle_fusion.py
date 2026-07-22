@@ -9,6 +9,7 @@ from typing import Any
 
 from . import bundles as bun
 from . import bundle_sources as src
+from . import optional_scan_cache as osc
 
 
 def comprehensive_bundle_check(
@@ -29,10 +30,9 @@ def comprehensive_bundle_check(
 
     include_fresh / include_multi_send / include_shared_sol control optional
     Helius scans (saves credits / RPS when off; other bundle signals still run).
-    include_shared_sol=False skips Shared SOL funder (heaviest scan, ~0–156 RPCs)
-    and leaves SOL multi-send empty (token multi-send still runs if multi-send on).
-    include_multi_send=False skips token multi-send AND does not re-label
-    funding clusters as SOL multi-send (no Multi-send totals / section data).
+    When a checkbox is OFF, last known results for that mint (from a prior
+    Analyze with the box ON) are reused — no new Helius pings for that scan.
+    Checking ON again re-scans live and updates the store.
     include_fresh_multi_send=False (legacy) turns fresh + multi-send off.
     """
     if include_fresh_multi_send is False:
@@ -248,99 +248,182 @@ def comprehensive_bundle_check(
                 if isinstance(m, dict) and m.get("wallet"):
                     seed_wallets.append(str(m["wallet"]))
 
+    shared_sol_from_cache = False
     if include_shared_sol:
         try:
             funding_report = src.analyze_funding_clusters(seed_wallets)
         except Exception as exc:  # noqa: BLE001
             funding_report = {"ok": False, "error": str(exc), "clusters": []}
     else:
-        funding_report = {
-            "ok": False,
-            "clusters": [],
-            "skipped": True,
-            "error": "Shared SOL funder scan off (enable “Shared SOL” to run).",
-        }
-        if base.get("ok"):
-            base = dict(base)
-            base["funding_clusters"] = []
-            s0 = dict(base.get("summary") or {})
-            s0["funding_clusters"] = 0
-            s0["funding_error"] = funding_report["error"]
-            base["summary"] = s0
+        # No Helius — reuse last known Shared SOL for this mint if any
+        cached_ss = osc.get_slice(mint, "shared_sol")
+        if cached_ss and list(cached_ss.get("funding_clusters") or []):
+            shared_sol_from_cache = True
+            funding_report = {
+                "ok": True,
+                "clusters": list(cached_ss.get("raw_clusters") or [])
+                or [
+                    {
+                        "funder": fc.get("funder"),
+                        "children": [
+                            (
+                                r.get("wallet")
+                                if isinstance(r, dict)
+                                else r
+                            )
+                            for r in list(fc.get("child_rows") or fc.get("children") or [])
+                        ],
+                        "child_count": fc.get("child_count")
+                        or len(fc.get("children") or []),
+                        "severity": fc.get("severity") or "high",
+                    }
+                    for fc in list(cached_ss.get("funding_clusters") or [])
+                    if isinstance(fc, dict)
+                ],
+                "from_cache": True,
+                "txs_scanned": cached_ss.get("txs_scanned") or 0,
+            }
+            # Prefer already-enriched clusters from cache
+            if base.get("ok") and cached_ss.get("funding_clusters"):
+                base = dict(base)
+                base["funding_clusters"] = list(cached_ss.get("funding_clusters") or [])
+                s0 = dict(base.get("summary") or {})
+                s0["funding_clusters"] = len(base["funding_clusters"])
+                s0["funding_from_cache"] = True
+                s0.pop("funding_error", None)
+                base["summary"] = s0
+        else:
+            funding_report = {
+                "ok": False,
+                "clusters": [],
+                "skipped": True,
+                "error": "Shared SOL funder scan off (enable “Shared SOL” to run).",
+            }
+            if base.get("ok"):
+                base = dict(base)
+                base["funding_clusters"] = []
+                s0 = dict(base.get("summary") or {})
+                s0["funding_clusters"] = 0
+                s0["funding_error"] = funding_report["error"]
+                base["summary"] = s0
 
     if funding_report.get("ok") and (funding_report.get("clusters") or []):
         if "funding_1hop" not in sources_used:
-            sources_used.append("funding_1hop")
+            sources_used.append(
+                "funding_1hop_cached" if shared_sol_from_cache else "funding_1hop"
+            )
         f_clusters = list(funding_report.get("clusters") or [])
-        best_f = f_clusters[0]
-        fusion_signals.append(
-            {
-                "id": "funding_cluster",
-                "provider": "funding",
-                "severity": best_f.get("severity") or "high",
-                "title": "Shared SOL funder (1-hop)",
-                "detail": (
-                    f"{best_f.get('child_count')} suspect wallets funded by "
-                    f"{best_f.get('funder')} — classic split-wallet bundle. "
-                    f"{len(f_clusters)} funder cluster(s) found "
-                    f"(scanned {funding_report.get('txs_scanned') or 0} txs)."
-                ),
-            }
+        best_f = f_clusters[0] if f_clusters else {}
+        # Skip re-enrich if we already injected cached enriched clusters
+        already = bool(
+            shared_sol_from_cache
+            and base.get("ok")
+            and list(base.get("funding_clusters") or [])
         )
-        extra_score += min(
-            28, 12 + int(best_f.get("child_count") or 0) * 4
-        )
-        if base.get("ok"):
-            # Funding stays ONLY on Shared SOL funder + multi-send (SOL fan-out).
-            # Do not push "funded by …" into Suspects or other sections.
-            enriched_fc = []
-            for fc in f_clusters[:8]:
-                ff = dict(fc)
-                kids = list(fc.get("children") or [])
-                child_rows = [
-                    {"wallet": c, "pct_supply": pct_by_w.get(c)} for c in kids
-                ]
-                funder = (fc.get("funder") or "").strip()
-                tot, n = bun._sum_wallets_pct(child_rows)  # type: ignore[attr-defined]
-                if funder and funder in pct_by_w:
-                    try:
-                        tot = min(100.0, float(tot or 0) + float(pct_by_w[funder]))
-                    except (TypeError, ValueError):
-                        pass
-                ff["child_rows"] = child_rows
-                ff["funder_pct"] = pct_by_w.get(funder)
-                ff["total_pct"] = tot
-                ff["wallets_with_pct"] = n
-                enriched_fc.append(ff)
-            base = dict(base)
-            # Strip "funded by …" / common-funder reasons from suspects.
-            # Funding UI lives only under Shared SOL funder + multi-send.
-            cleaned_suspects: list[dict[str, Any]] = []
-            for s in list(base.get("suspect_wallets") or [])[:40]:
-                if not isinstance(s, dict):
-                    continue
-                orig = list(s.get("reasons") or [])
+        if not already:
+            fusion_signals.append(
+                {
+                    "id": "funding_cluster",
+                    "provider": "funding",
+                    "severity": best_f.get("severity") or "high",
+                    "title": "Shared SOL funder (1-hop)"
+                    + (" (last known)" if shared_sol_from_cache else ""),
+                    "detail": (
+                        f"{best_f.get('child_count')} suspect wallets funded by "
+                        f"{best_f.get('funder')} — classic split-wallet bundle. "
+                        f"{len(f_clusters)} funder cluster(s) found "
+                        f"(scanned {funding_report.get('txs_scanned') or 0} txs)."
+                        + (
+                            " Reused last Analyze (no Helius re-scan)."
+                            if shared_sol_from_cache
+                            else ""
+                        )
+                    ),
+                }
+            )
+            if not shared_sol_from_cache:
+                extra_score += min(
+                    28, 12 + int(best_f.get("child_count") or 0) * 4
+                )
+            if base.get("ok"):
+                # Funding stays ONLY on Shared SOL funder + multi-send (SOL fan-out).
+                enriched_fc = []
+                for fc in f_clusters[:8]:
+                    ff = dict(fc)
+                    kids = list(fc.get("children") or [])
+                    child_rows = [
+                        {"wallet": c, "pct_supply": pct_by_w.get(c)} for c in kids
+                    ]
+                    funder = (fc.get("funder") or "").strip()
+                    tot, n = bun._sum_wallets_pct(child_rows)  # type: ignore[attr-defined]
+                    if funder and funder in pct_by_w:
+                        try:
+                            tot = min(
+                                100.0, float(tot or 0) + float(pct_by_w[funder])
+                            )
+                        except (TypeError, ValueError):
+                            pass
+                    ff["child_rows"] = child_rows
+                    ff["funder_pct"] = pct_by_w.get(funder)
+                    ff["total_pct"] = tot
+                    ff["wallets_with_pct"] = n
+                    enriched_fc.append(ff)
+                base = dict(base)
+                cleaned_suspects: list[dict[str, Any]] = []
+                for s in list(base.get("suspect_wallets") or [])[:40]:
+                    if not isinstance(s, dict):
+                        continue
+                    orig = list(s.get("reasons") or [])
 
-                def _is_funding_reason(r: Any) -> bool:
-                    if not isinstance(r, str):
-                        return False
-                    low = r.lower()
-                    return low.startswith("funded by ") or "common funder" in low
+                    def _is_funding_reason(r: Any) -> bool:
+                        if not isinstance(r, str):
+                            return False
+                        low = r.lower()
+                        return (
+                            low.startswith("funded by ")
+                            or "common funder" in low
+                        )
 
-                kept = [r for r in orig if not _is_funding_reason(r)]
-                if orig and not kept:
-                    continue  # was funding-only suspect — drop
-                row = dict(s)
-                row["reasons"] = kept
-                cleaned_suspects.append(row)
-            base["suspect_wallets"] = cleaned_suspects[:40]
-            base["funding_clusters"] = enriched_fc
-            spct, sn = bun._suspect_total_percent(cleaned_suspects[:40])  # type: ignore[attr-defined]
-            s0 = dict(base.get("summary") or {})
-            s0["suspect_total_pct"] = spct
-            s0["suspect_wallet_count"] = sn
-            s0["funding_clusters"] = len(f_clusters)
-            base["summary"] = s0
+                    kept = [r for r in orig if not _is_funding_reason(r)]
+                    if orig and not kept:
+                        continue
+                    row = dict(s)
+                    row["reasons"] = kept
+                    cleaned_suspects.append(row)
+                base["suspect_wallets"] = cleaned_suspects[:40]
+                base["funding_clusters"] = enriched_fc
+                spct, sn = bun._suspect_total_percent(cleaned_suspects[:40])  # type: ignore[attr-defined]
+                s0 = dict(base.get("summary") or {})
+                s0["suspect_total_pct"] = spct
+                s0["suspect_wallet_count"] = sn
+                s0["funding_clusters"] = len(f_clusters)
+                if shared_sol_from_cache:
+                    s0["funding_from_cache"] = True
+                base["summary"] = s0
+                if include_shared_sol and enriched_fc:
+                    osc.put_slice(
+                        mint,
+                        "shared_sol",
+                        {
+                            "ok": True,
+                            "funding_clusters": enriched_fc,
+                            "raw_clusters": f_clusters[:8],
+                            "txs_scanned": funding_report.get("txs_scanned") or 0,
+                        },
+                    )
+        elif shared_sol_from_cache:
+            fusion_signals.append(
+                {
+                    "id": "funding_cluster",
+                    "provider": "funding",
+                    "severity": "info",
+                    "title": "Shared SOL funder (1-hop) (last known)",
+                    "detail": (
+                        "Showing last known Shared SOL clusters for this mint "
+                        "(Shared SOL unchecked — no Helius re-scan)."
+                    ),
+                }
+            )
 
     # ── Fresh / sole-token wallets + token multi-send (one sender → many) ──
     # Seed from non-LP top holders (cap for RPC cost).
@@ -385,6 +468,8 @@ def comprehensive_bundle_check(
     fresh_report: dict[str, Any] = {"ok": False, "wallets": []}
     multi_send_report: dict[str, Any] = {"ok": False, "clusters": []}
     multi_send_error = None
+    fresh_from_cache = False
+    multi_send_from_cache = False
     if include_fresh:
         try:
             # Cap wallets for free Helius ~10 RPS (fresh = 2+ RPCs each)
@@ -394,12 +479,22 @@ def comprehensive_bundle_check(
         except Exception as exc:  # noqa: BLE001
             fresh_report = {"ok": False, "error": str(exc), "wallets": []}
     else:
-        fresh_report = {
-            "ok": False,
-            "wallets": [],
-            "skipped": True,
-            "error": "Fresh wallets scan off (enable “Fresh” to run).",
-        }
+        cached_fr = osc.get_slice(mint, "fresh")
+        if cached_fr and list(cached_fr.get("wallets") or []):
+            fresh_from_cache = True
+            fresh_report = {
+                "ok": True,
+                "wallets": list(cached_fr.get("wallets") or []),
+                "wallets_scanned": cached_fr.get("wallets_scanned") or 0,
+                "from_cache": True,
+            }
+        else:
+            fresh_report = {
+                "ok": False,
+                "wallets": [],
+                "skipped": True,
+                "error": "Fresh wallets scan off (enable “Fresh” to run).",
+            }
     if include_multi_send:
         try:
             multi_send_report = src.analyze_token_multi_sends(
@@ -408,13 +503,30 @@ def comprehensive_bundle_check(
         except Exception as exc:  # noqa: BLE001
             multi_send_report = {"ok": False, "error": str(exc), "clusters": []}
     else:
-        multi_send_report = {
-            "ok": False,
-            "clusters": [],
-            "skipped": True,
-            "error": "Multi-send scan off (enable “Multi-send” to run).",
-        }
-        multi_send_error = multi_send_report.get("error")
+        cached_ms = osc.get_slice(mint, "multi_send")
+        if cached_ms and (
+            list(cached_ms.get("clusters") or [])
+            or list(cached_ms.get("sol_multi_send_clusters") or [])
+        ):
+            multi_send_from_cache = True
+            multi_send_report = {
+                "ok": True,
+                "clusters": list(cached_ms.get("clusters") or []),
+                "txs_scanned": cached_ms.get("txs_scanned") or 0,
+                "from_cache": True,
+            }
+            # Stash sol multi for later if Multi-send box is off
+            multi_send_report["_cached_sol_multi"] = list(
+                cached_ms.get("sol_multi_send_clusters") or []
+            )
+        else:
+            multi_send_report = {
+                "ok": False,
+                "clusters": [],
+                "skipped": True,
+                "error": "Multi-send scan off (enable “Multi-send” to run).",
+            }
+            multi_send_error = multi_send_report.get("error")
 
     # Attach supply % to fresh wallets
     fresh_rows: list[dict[str, Any]] = []
@@ -448,14 +560,31 @@ def comprehensive_bundle_check(
                     "id": "fresh_sole_token",
                     "provider": "helius",
                     "severity": "medium" if len(fresh_rows) < 4 else "high",
-                    "title": "Fresh wallets",
+                    "title": "Fresh wallets"
+                    + (" (last known)" if fresh_from_cache else ""),
                     "detail": (
                         f"{len(fresh_rows)} holder(s) hold this mint with almost no "
                         f"other SPL tokens (scanned {fresh_report.get('wallets_scanned') or 0})."
+                        + (
+                            " Reused last Analyze (no Helius re-scan)."
+                            if fresh_from_cache
+                            else ""
+                        )
                     ),
                 }
             )
-            extra_score += min(18, 6 + len(fresh_rows) * 2)
+            if not fresh_from_cache:
+                extra_score += min(18, 6 + len(fresh_rows) * 2)
+            if include_fresh and not fresh_from_cache:
+                osc.put_slice(
+                    mint,
+                    "fresh",
+                    {
+                        "ok": True,
+                        "wallets": fresh_rows,
+                        "wallets_scanned": fresh_report.get("wallets_scanned") or 0,
+                    },
+                )
 
     # Token multi-send clusters + SOL multi-send (from funding clusters)
     # Exclude LP / bonding-curve / known program wallets so pool % (~30%+) is never
@@ -562,8 +691,8 @@ def comprehensive_bundle_check(
         )
 
     # SOL multi-send = funding clusters re-labeled (one funder → many children).
-    # Only when Multi-send is on — otherwise funding stays under Shared funder only
-    # and Bundles Multi-send stays empty / "Skipped".
+    # When Multi-send is on: build from current funding (live or Shared SOL cache).
+    # When Multi-send is off: reuse last known multi-send slice (incl. SOL clusters).
     sol_multi: list[dict[str, Any]] = []
     if include_multi_send:
         for fc in list((base.get("funding_clusters") if base.get("ok") else None) or [])[:8]:
@@ -641,6 +770,8 @@ def comprehensive_bundle_check(
                     "severity": fc.get("severity") or "high",
                 }
             )
+    elif multi_send_from_cache:
+        sol_multi = list(multi_send_report.get("_cached_sol_multi") or [])
     elif multi_send_error is None:
         multi_send_error = "Multi-send scan off (enable “Multi-send” to run)."
 
@@ -679,6 +810,8 @@ def comprehensive_bundle_check(
         )
         s0["fresh_total_pct"] = ft
         s0["fresh_wallet_with_pct"] = fn
+        if fresh_from_cache:
+            s0["fresh_from_cache"] = True
         # Unique multi-send wallets (token + SOL) total supply %
         ms_shell = {
             "multi_send_clusters": multi_clusters,
@@ -700,8 +833,8 @@ def comprehensive_bundle_check(
         s0["multi_send_receiver_total_pct"] = split.get("receiver_total_pct")
         s0["multi_send_receiver_count"] = split.get("receiver_count")
         s0["multi_send_hold_shape"] = split.get("hold_shape")
-        # When Multi-send is off, never leave residual totals (token + SOL empty).
-        if not include_multi_send:
+        # Multi-send off + no last-known cache → empty / skipped
+        if not include_multi_send and not multi_send_from_cache:
             multi_send_error = (
                 multi_send_error
                 or "Multi-send scan off (enable “Multi-send” to run)."
@@ -718,8 +851,25 @@ def comprehensive_bundle_check(
             s0["multi_send_error"] = str(multi_send_error)[:240]
             base["multi_send_clusters"] = []
             base["sol_multi_send_clusters"] = []
+        elif multi_send_from_cache:
+            s0["multi_send_from_cache"] = True
+            s0.pop("multi_send_error", None)
         elif multi_send_error and not multi_clusters and not sol_multi:
             s0["multi_send_error"] = str(multi_send_error)[:240]
+        # Store live Multi-send for later reuse when box is unchecked
+        if include_multi_send and not multi_send_from_cache and (
+            multi_clusters or sol_multi
+        ):
+            osc.put_slice(
+                mint,
+                "multi_send",
+                {
+                    "ok": True,
+                    "clusters": multi_clusters,
+                    "sol_multi_send_clusters": sol_multi,
+                    "txs_scanned": multi_send_report.get("txs_scanned") or 0,
+                },
+            )
         base["summary"] = s0
 
     if jito_eng.get("ok"):

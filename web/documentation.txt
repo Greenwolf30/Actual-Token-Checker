@@ -79,6 +79,12 @@ Analyze options (next to the search form)
   Shared SOL — Shared SOL funder 1-hop · HEAVIEST · up to ~156 pings (see §6.3g)
                also powers SOL multi-send when Multi-send is on
 
+  Last-known (no re-scan): After you Analyze a mint with Fresh / Multi-send /
+  Shared SOL ON, those results are remembered for that mint on the server.
+  If you turn a box OFF and Analyze again, Bundles still shows the last known
+  values for that box labeled “(last known) · no re-scan” — zero new Helius
+  pings for that scan. Turn the box ON again to refresh live.
+
   Shared SOL is usually the largest Helius cost on a full Analyze. Prefer
   unchecking it when you only need Fresh / Multi-send / holders.
   Do not check Fresh and Multi-send at the same time if you are on free Helius

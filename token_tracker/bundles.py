@@ -2312,6 +2312,9 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
             or ms_split.get("hold_shape"),
             "multi_send_error": s.get("multi_send_error"),
             "funding_error": s.get("funding_error"),
+            "fresh_from_cache": s.get("fresh_from_cache"),
+            "multi_send_from_cache": s.get("multi_send_from_cache"),
+            "funding_from_cache": s.get("funding_from_cache"),
             "token_multi_send_clusters": s.get("token_multi_send_clusters")
             or len(token_ms),
             "sol_multi_send_clusters": s.get("sol_multi_send_clusters") or len(sol_ms),
