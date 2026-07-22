@@ -6196,12 +6196,6 @@ function saveLastAnalyze(data, query) {
     const sections = data.sections || {};
     // Embed delta pair + exact stats bar HTML so refresh never loses arrows
     let bundleDelta = data._bundleDeltaPair || null;
-    const barFromView =
-      (data.bundles_view &&
-        data.bundles_view.summary &&
-        data.bundles_view.summary._ui_stats_bar_html) ||
-      data._bundlesStatsBarHtml ||
-      null;
     if (!bundleDelta) {
       try {
         const mint =
@@ -6209,38 +6203,34 @@ function saveLastAnalyze(data, query) {
           (data.market && data.market.address) ||
           "";
         const e = mint ? getBundleStatsEntry(mint) : null;
-        const htmlByKey = mint ? loadBundleDeltaHtml(mint) : null;
-        const barSnap = loadBundleStatsBarSnap(mint);
+        const htmlByKey =
+          (mint && loadBundleDeltaHtml(mint)) ||
+          loadBundleDeltaHtml("last") ||
+          (data.bundles_view &&
+            data.bundles_view.summary &&
+            data.bundles_view.summary._ui_delta_html) ||
+          null;
         bundleDelta = {
-          mint: bundleStatsMintKey(mint),
+          mint: bundleStatsMintKey(mint) || "last",
           forNext: e && e.forNext,
           deltaFrom: e && e.deltaFrom,
           deltaCur: e && e.deltaCur,
           htmlByKey: htmlByKey || null,
-          barHtml:
-            barFromView ||
-            (barSnap && barSnap.html) ||
-            (htmlByKey && htmlByKey.barHtml) ||
-            null,
         };
       } catch (_) {
-        bundleDelta = {
-          barHtml: barFromView || null,
-        };
+        bundleDelta = null;
       }
-    } else if (!bundleDelta.barHtml && barFromView) {
-      bundleDelta.barHtml = barFromView;
     }
-    // Ensure summary still carries baked bar (survives as part of bundles_view)
+    // Always keep delta HTML on summary for refresh
     try {
       if (
         data.bundles_view &&
         data.bundles_view.summary &&
         bundleDelta &&
-        bundleDelta.barHtml &&
-        !data.bundles_view.summary._ui_stats_bar_html
+        bundleDelta.htmlByKey
       ) {
-        data.bundles_view.summary._ui_stats_bar_html = bundleDelta.barHtml;
+        data.bundles_view.summary._ui_delta_html = bundleDelta.htmlByKey;
+        delete data.bundles_view.summary._ui_stats_bar_html;
       }
     } catch (_) {
       /* ignore */
@@ -6996,22 +6986,89 @@ function renderBundlesUi(data) {
   const curStats = extractBundleSummaryStats(s, riskScore);
   const isRestore = !!(data && data._restoredFromBrowserCache);
   let stored = mint ? getBundleStatsEntry(mint) : null;
-  // Frozen HTML from last live render (most reliable refresh path)
-  let frozenHtml = mint ? loadBundleDeltaHtml(mint) : null;
 
-  // Pull delta pair from last Analyze payload (backup if map was empty)
-  if (mint && (!stored || !stored.deltaFrom)) {
+  // Frozen delta HTML — load from every backup so refresh cannot lose arrows
+  function pickFrozenDeltaHtml() {
+    const sources = [];
     try {
-      const cached = loadLastAnalyze();
-      const emb =
-        (data && data.bundleDelta) ||
-        (cached && (cached.bundleDelta || (cached.data && cached.data.bundleDelta))) ||
-        null;
+      if (s && s._ui_delta_html && typeof s._ui_delta_html === "object") {
+        sources.push(s._ui_delta_html);
+      }
       if (
-        emb &&
-        (!emb.mint ||
-          bundleStatsMintKey(emb.mint) === bundleStatsMintKey(mint))
+        view.summary &&
+        view.summary._ui_delta_html &&
+        typeof view.summary._ui_delta_html === "object"
       ) {
+        sources.push(view.summary._ui_delta_html);
+      }
+      if (data && data.bundleDelta && data.bundleDelta.htmlByKey) {
+        sources.push(data.bundleDelta.htmlByKey);
+      }
+      if (data && data._bundleDeltaPair && data._bundleDeltaPair.htmlByKey) {
+        sources.push(data._bundleDeltaPair.htmlByKey);
+      }
+      const cached = loadLastAnalyze();
+      if (cached && cached.bundleDelta && cached.bundleDelta.htmlByKey) {
+        sources.push(cached.bundleDelta.htmlByKey);
+      }
+      if (
+        cached &&
+        cached.data &&
+        cached.data.bundleDelta &&
+        cached.data.bundleDelta.htmlByKey
+      ) {
+        sources.push(cached.data.bundleDelta.htmlByKey);
+      }
+      if (
+        cached &&
+        cached.data &&
+        cached.data.bundles_view &&
+        cached.data.bundles_view.summary &&
+        cached.data.bundles_view.summary._ui_delta_html
+      ) {
+        sources.push(cached.data.bundles_view.summary._ui_delta_html);
+      }
+    } catch (_) {
+      /* ignore */
+    }
+    if (mint) {
+      const m = loadBundleDeltaHtml(mint);
+      if (m) sources.push(m);
+    }
+    const last = loadBundleDeltaHtml("last");
+    if (last) sources.push(last);
+    // First non-empty map that has at least one delta span
+    for (const src of sources) {
+      if (!src || typeof src !== "object") continue;
+      const keys = Object.keys(src).filter(
+        (k) => k !== "savedAt" && k !== "barHtml" && src[k]
+      );
+      if (keys.length) return src;
+    }
+    return null;
+  }
+
+  let frozenHtml = pickFrozenDeltaHtml();
+
+  // Restore delta pair baseline from last Analyze / map
+  try {
+    const cached = loadLastAnalyze();
+    const emb =
+      (data && data.bundleDelta) ||
+      (data && data._bundleDeltaPair) ||
+      (cached && (cached.bundleDelta || (cached.data && cached.data.bundleDelta))) ||
+      null;
+    if (emb && mint) {
+      const mintOk =
+        !emb.mint ||
+        bundleStatsMintKey(emb.mint) === bundleStatsMintKey(mint) ||
+        emb.mint === "last";
+      if (mintOk) {
+        if (emb.htmlByKey && typeof emb.htmlByKey === "object") {
+          frozenHtml = frozenHtml || emb.htmlByKey;
+          saveBundleDeltaHtml(mint, emb.htmlByKey);
+          saveBundleDeltaHtml("last", emb.htmlByKey);
+        }
         if (emb.deltaFrom || emb.deltaCur || emb.forNext) {
           saveBundleStatsEntry(mint, {
             forNext: emb.forNext || emb.deltaCur || curStats,
@@ -7020,18 +7077,14 @@ function renderBundlesUi(data) {
           });
           stored = getBundleStatsEntry(mint);
         }
-        if (emb.htmlByKey && typeof emb.htmlByKey === "object") {
-          frozenHtml = emb.htmlByKey;
-          saveBundleDeltaHtml(mint, emb.htmlByKey);
-        }
       }
-    } catch (_) {
-      /* ignore */
     }
+  } catch (_) {
+    /* ignore */
   }
 
   // Live: compare new result → previous forNext baseline.
-  // Restore: keep last shown deltas (deltaFrom → deltaCur) until next Analyze.
+  // Restore: recompute from frozen pair AND/OR use frozen HTML spans.
   let prev = null;
   let deltaCurStats = curStats;
   if (isRestore) {
@@ -7039,13 +7092,11 @@ function renderBundlesUi(data) {
       prev = stored.deltaFrom;
       deltaCurStats = stored.deltaCur || curStats;
     } else if (stored && stored.deltaCur && stored.forNext) {
-      // Partial pair: still try forNext vs deltaCur if different snapshots
       prev = stored.forNext;
       deltaCurStats = stored.deltaCur;
     } else {
       prev = null;
     }
-    // NEVER clear frozen pair on refresh — only re-seed forNext if missing
     if (mint && curStats) {
       try {
         saveBundleStatsEntry(mint, {
@@ -7060,7 +7111,6 @@ function renderBundlesUi(data) {
   } else if (mint) {
     prev = resolveBundleStatsPrev(mint);
     // First live Analyze of this mint: baseline against zeros so arrows freeze
-    // for refresh (otherwise deltaFrom stays null and refresh shows nothing).
     if (!prev) prev = zeroBundleStats();
     deltaCurStats = curStats;
   }
@@ -7156,10 +7206,12 @@ function renderBundlesUi(data) {
   function withDelta(mainHtml, key, curOverride) {
     const kind = key === "risk" ? "score" : "pct";
     let d = "";
-    // On refresh: prefer exact frozen delta HTML first (what user saw last live run)
+    // 1) Prefer frozen HTML on restore (exact last live arrows)
     if (isRestore && frozenHtml && frozenHtml[key]) {
-      d = frozenHtml[key];
-    } else if (prev) {
+      d = String(frozenHtml[key]);
+    }
+    // 2) Else recompute from baseline pair (works live + restore)
+    if (!d && prev) {
       const curVal =
         curOverride !== undefined ? curOverride : deltaCurStats[key];
       const prevVal = prev[key];
@@ -7167,6 +7219,7 @@ function renderBundlesUi(data) {
         coalesceNull: kind === "pct",
       });
     }
+    // 3) Live still freezes whatever we show
     if (d) htmlByKeyThisRun[key] = d;
     return d ? mainHtml + " " + d : mainHtml;
   }
@@ -7985,45 +8038,84 @@ function renderBundlesUi(data) {
 
   root.innerHTML = html;
 
+  // Map stats box labels → delta keys (for post-inject on restore)
+  const DELTA_LABEL_TO_KEY = {
+    Risk: "risk",
+    "Total bundle": "total_bundle_pct",
+    "Total (multi + similar/suspect)": "total_bundle_pct",
+    "showing Similar/suspect": "total_bundle_pct",
+    "Similar-size": "similar_size_total_pct",
+    "Fresh total": "fresh_total_pct",
+    "Multi-send total": "multi_send_total_pct",
+    "Shared SOL total": "funding_total_pct",
+    "Suspect total": "suspect_total_pct",
+    "Single holders": "single_holders_total_pct",
+    "Top10 ex-LP": "top10_ex_lp",
+  };
+
+  function injectFrozenDeltasIntoDom(rootEl, htmlByKey) {
+    if (!rootEl || !htmlByKey) return;
+    rootEl.querySelectorAll(".bun-stat").forEach((el) => {
+      const labEl = el.querySelector(".bun-stat-label");
+      const valEl = el.querySelector(".bun-stat-value");
+      if (!labEl || !valEl) return;
+      if (valEl.querySelector(".bun-stat-delta")) return; // already has delta
+      const lab = String(labEl.textContent || "").trim();
+      const key = DELTA_LABEL_TO_KEY[lab];
+      if (!key || !htmlByKey[key]) return;
+      valEl.insertAdjacentHTML("beforeend", " " + htmlByKey[key]);
+    });
+  }
+
   // ── Freeze deltas only (never full bar — full-bar restore caused stale %s) ──
-  // Live: store delta HTML + pair for next Analyze / refresh arrows.
-  // Restore: recompute boxes from last Analyze summary (correct empty Suspect, etc.)
-  //           then re-apply frozen delta HTML only.
   try {
-    if (!isRestore && mint) {
-      if (Object.keys(htmlByKeyThisRun).length) {
-        saveBundleDeltaHtml(mint || "last", { ...htmlByKeyThisRun });
+    if (!isRestore) {
+      const freezeMap = { ...htmlByKeyThisRun };
+      if (Object.keys(freezeMap).length) {
+        if (mint) saveBundleDeltaHtml(mint, freezeMap);
+        saveBundleDeltaHtml("last", freezeMap);
       }
       try {
         if (view && view.summary && typeof view.summary === "object") {
-          view.summary._ui_delta_html = { ...htmlByKeyThisRun };
-          // Do NOT bake full bar HTML — that overwrote correct Analyze on refresh
+          view.summary._ui_delta_html = freezeMap;
           delete view.summary._ui_stats_bar_html;
         }
         if (data && data.bundles_view && data.bundles_view.summary) {
-          data.bundles_view.summary._ui_delta_html = { ...htmlByKeyThisRun };
+          data.bundles_view.summary._ui_delta_html = freezeMap;
           delete data.bundles_view.summary._ui_stats_bar_html;
         }
       } catch (_) {
         /* ignore */
       }
       if (data) {
+        const baseline = prev || zeroBundleStats();
+        const carrySrc =
+          (stored && (stored.deltaCur || stored.forNext)) || baseline;
+        const statsForNext = mergeLastKnownOptionalStats(curStats, carrySrc);
+        const statsForCur = mergeLastKnownOptionalStats(curStats, carrySrc);
         data._bundleDeltaPair = {
-          mint: bundleStatsMintKey(mint),
-          forNext: curStats,
-          deltaFrom: prev || zeroBundleStats(),
-          deltaCur: curStats,
-          htmlByKey: { ...htmlByKeyThisRun },
+          mint: bundleStatsMintKey(mint) || "last",
+          forNext: statsForNext,
+          deltaFrom: baseline,
+          deltaCur: statsForCur,
+          htmlByKey: freezeMap,
         };
         data._bundlesStatsBarHtml = null;
       }
-      // Clear stale full-bar snaps so they cannot override a later Analyze
       try {
         localStorage.removeItem(BUNDLE_STATS_BAR_SNAP_KEY);
         sessionStorage.removeItem(BUNDLE_STATS_BAR_SNAP_KEY);
       } catch (_) {
         /* ignore */
       }
+    } else {
+      // Restore: force-inject frozen deltas if withDelta missed any box
+      const map =
+        frozenHtml ||
+        (s && s._ui_delta_html) ||
+        (data && data.bundleDelta && data.bundleDelta.htmlByKey) ||
+        null;
+      if (map) injectFrozenDeltasIntoDom(root, map);
     }
   } catch (err) {
     console.warn("[bundles delta snap]", err);
