@@ -907,19 +907,25 @@ def comprehensive_bundle_check(
             mt, mn = bun._multi_send_total_percent(ms_shell_token, pct_by_w)  # type: ignore[attr-defined]
         except Exception:  # noqa: BLE001
             mt, mn = None, 0
+        if mt is None and multi_clusters:
+            mt, mn = 0.0, 0
         s0["multi_send_total_pct"] = mt
         s0["multi_send_wallet_with_pct"] = mn
-        # Scan diagnostics (helps explain "none found")
-        if multi_send_report.get("txs_scanned") is not None:
-            s0["multi_send_txs_scanned"] = multi_send_report.get("txs_scanned")
-        if multi_send_report.get("sigs_available") is not None:
-            s0["multi_send_sigs_available"] = multi_send_report.get(
-                "sigs_available"
-            )
-        if multi_send_report.get("edge_senders") is not None:
-            s0["multi_send_edge_senders"] = multi_send_report.get("edge_senders")
-        if multi_send_report.get("notes"):
-            s0["multi_send_scan_notes"] = str(multi_send_report.get("notes"))[:280]
+        # Lightweight scan diagnostics for empty Multi-send UI
+        for _k in (
+            "txs_scanned",
+            "sigs_available",
+            "edge_senders",
+            "notes",
+        ):
+            if multi_send_report.get(_k) is not None:
+                sk = (
+                    "multi_send_scan_notes"
+                    if _k == "notes"
+                    else "multi_send_" + _k
+                )
+                val = multi_send_report.get(_k)
+                s0[sk] = str(val)[:280] if _k == "notes" else val
         # Split totals for token multi-send only
         try:
             split = bun._multi_send_split_totals(ms_shell_token, pct_by_w)  # type: ignore[attr-defined]

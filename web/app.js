@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v126";
+const ADTC_CLIENT_VERSION = "v128";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -7269,17 +7269,16 @@ function bunPctHtml(n) {
     : escHtml(label);
 }
 
-/**
- * Unique-wallet sum of supply % (token multi-send list / clusters).
- * Used so Multi-send total always matches visible Holds.
- */
+/** Unique-wallet sum of supply % (each address once at max hold %). */
 function sumUniqueWalletSupplyPct(rows) {
   const by = Object.create(null);
   for (let i = 0; i < (rows || []).length; i++) {
     const row = rows[i] || {};
-    const w = String(row.wallet || "").trim();
+    const w = String(row.wallet || row.owner || "").trim();
     if (!w) continue;
-    const p = Number(row.pct_supply);
+    const p = Number(
+      row.pct_supply != null ? row.pct_supply : row.combined_pct
+    );
     if (!Number.isFinite(p)) continue;
     by[w] = Math.max(by[w] || 0, p);
   }
@@ -7291,22 +7290,22 @@ function sumUniqueWalletSupplyPct(rows) {
   return t > 0 ? Math.round(t * 10000) / 10000 : null;
 }
 
-/**
- * Token multi-send total from bundles_view (ignores sol-* / Shared SOL wallets).
- * Prefer server summary when it already matches; recompute when null/0 but wallets hold.
- */
-function resolveTokenMultiSendTotalPct(view, summary) {
-  const s = summary || {};
-  const raw = (view && view.multi_send_wallets) || [];
-  const tokenMs = (view && view.multi_send_clusters) || [];
-  const wallets = raw.filter(function (r) {
-    const roles = (r && r.roles) || [];
-    if (!roles.length) return true;
-    return !roles.every(function (role) {
-      return String(role || "").toLowerCase().indexOf("sol") === 0;
-    });
-  });
-  const rows = wallets.slice();
+/** Drop pure sol-* multi_send_wallets (Shared SOL pattern, not token multi-send). */
+function tokenMultiSendWalletRows(view) {
+  const v = view || {};
+  const rows = [];
+  const raw = v.multi_send_wallets || [];
+  for (let i = 0; i < raw.length; i++) {
+    const r = raw[i] || {};
+    const roles = r.roles || [];
+    const onlySol =
+      roles.length &&
+      roles.every(function (role) {
+        return String(role || "").toLowerCase().indexOf("sol") === 0;
+      });
+    if (!onlySol) rows.push(r);
+  }
+  const tokenMs = v.multi_send_clusters || [];
   for (let ci = 0; ci < tokenMs.length; ci++) {
     const mc = tokenMs[ci] || {};
     if (mc.sender) {
@@ -7315,25 +7314,30 @@ function resolveTokenMultiSendTotalPct(view, summary) {
     const recs = mc.receivers || [];
     for (let ri = 0; ri < recs.length; ri++) rows.push(recs[ri]);
   }
-  const recomputed = sumUniqueWalletSupplyPct(rows);
-  let tot = s.multi_send_total_pct;
-  if (
-    recomputed != null &&
-    (tot == null ||
-      !Number.isFinite(Number(tot)) ||
-      (Number(tot) === 0 && recomputed > 0))
-  ) {
-    tot = recomputed;
+  return rows;
+}
+
+/**
+ * Token multi-send total %: server summary, else unique sum of token wallets.
+ * Never falls back to Shared SOL last-known.
+ */
+function resolveTokenMultiSendTotalPct(view, summary) {
+  const s = summary || {};
+  const recomputed = sumUniqueWalletSupplyPct(tokenMultiSendWalletRows(view));
+  const server =
+    s.multi_send_total_pct != null && Number.isFinite(Number(s.multi_send_total_pct))
+      ? Number(s.multi_send_total_pct)
+      : null;
+  if (recomputed != null && (server == null || (server === 0 && recomputed > 0))) {
+    return recomputed;
   }
-  if (tot != null && Number.isFinite(Number(tot))) return Number(tot);
+  if (server != null) return server;
   return recomputed;
 }
 
 /**
- * Total bundle = unique wallets only (no double-count across categories).
- * Checked Fresh / Multi-send / Shared SOL are included; unchecked are not
- * (even if last-known is shown). Same wallet in Fresh + Shared SOL counts once
- * at max hold %. All three unchecked → multi + insider + similar + suspect.
+ * Total bundle = unique wallets across counted lists only (no double-count).
+ * Only checked Fresh / Multi-send / Shared SOL enter Total.
  */
 function recomputeTotalBundleFromView(view, summary) {
   const s = summary || {};
@@ -7357,23 +7361,16 @@ function recomputeTotalBundleFromView(view, summary) {
   );
   const anyOptionalOn = countFresh || countMs || countSol;
 
-  // One row per wallet; sumUniqueWalletSupplyPct keeps max % only
   const rows = [];
-  function pushRow(w, pct) {
-    if (w == null || w === "") return;
-    rows.push({ wallet: w, pct_supply: pct });
-  }
   function pushWalletObj(r) {
-    if (!r) return;
-    if (typeof r === "string") pushRow(r, null);
-    else
-      pushRow(
-        r.wallet || r.owner,
-        r.pct_supply != null ? r.pct_supply : r.combined_pct
-      );
+    if (r == null) return;
+    if (typeof r === "string") {
+      rows.push({ wallet: r, pct_supply: null });
+      return;
+    }
+    rows.push(r);
   }
 
-  // Always: multi-account + insider
   const clusters = v.clusters || [];
   for (let i = 0; i < clusters.length; i++) pushWalletObj(clusters[i]);
   const insW = v.insider_wallets || [];
@@ -7384,43 +7381,27 @@ function recomputeTotalBundleFromView(view, summary) {
     for (let i = 0; i < fresh.length; i++) pushWalletObj(fresh[i]);
   }
   if (countMs) {
-    const msW = v.multi_send_wallets || [];
-    for (let i = 0; i < msW.length; i++) {
-      const r = msW[i] || {};
-      const roles = r.roles || [];
-      const onlySol =
-        roles.length &&
-        roles.every(function (role) {
-          return String(role || "").toLowerCase().indexOf("sol") === 0;
-        });
-      if (!onlySol) pushWalletObj(r);
-    }
-    const tokenMs = v.multi_send_clusters || [];
-    for (let i = 0; i < tokenMs.length; i++) {
-      const mc = tokenMs[i] || {};
-      pushRow(mc.sender, mc.sender_pct);
-      const recs = mc.receivers || [];
-      for (let j = 0; j < recs.length; j++) pushWalletObj(recs[j]);
-    }
+    const msRows = tokenMultiSendWalletRows(v);
+    for (let i = 0; i < msRows.length; i++) pushWalletObj(msRows[i]);
   }
   if (countSol) {
     const fund = v.funding_clusters || [];
     for (let i = 0; i < fund.length; i++) {
       const fc = fund[i] || {};
-      pushRow(
-        fc.funder || fc.sender,
-        fc.funder_pct != null ? fc.funder_pct : fc.sender_pct
-      );
+      pushWalletObj({
+        wallet: fc.funder || fc.sender,
+        pct_supply: fc.funder_pct != null ? fc.funder_pct : fc.sender_pct,
+      });
       const kids = fc.children || fc.child_rows || [];
       for (let j = 0; j < kids.length; j++) pushWalletObj(kids[j]);
     }
     const solMs = v.sol_multi_send_clusters || [];
     for (let i = 0; i < solMs.length; i++) {
       const mc = solMs[i] || {};
-      pushRow(
-        mc.sender || mc.funder,
-        mc.sender_pct != null ? mc.sender_pct : mc.funder_pct
-      );
+      pushWalletObj({
+        wallet: mc.sender || mc.funder,
+        pct_supply: mc.sender_pct != null ? mc.sender_pct : mc.funder_pct,
+      });
       const recs = mc.receivers || mc.children || [];
       for (let j = 0; j < recs.length; j++) pushWalletObj(recs[j]);
     }
@@ -7434,7 +7415,9 @@ function recomputeTotalBundleFromView(view, summary) {
         for (let j = 0; j < mem.length; j++) pushWalletObj(mem[j]);
       } else {
         const ws = g.wallets || [];
-        for (let j = 0; j < ws.length; j++) pushRow(ws[j], g.avg_pct);
+        for (let j = 0; j < ws.length; j++) {
+          pushWalletObj({ wallet: ws[j], pct_supply: g.avg_pct });
+        }
       }
     }
     const sus = v.suspect_wallets || [];
@@ -7443,16 +7426,14 @@ function recomputeTotalBundleFromView(view, summary) {
 
   const unique = sumUniqueWalletSupplyPct(rows);
   let total = unique != null ? unique : 0;
-  if (total > 100) total = 100;
-  total = Math.round(total * 10000) / 10000;
-
-  // Prefer server unique total when present and higher (full map)
   const server =
     s.total_bundle_pct != null && Number.isFinite(Number(s.total_bundle_pct))
       ? Number(s.total_bundle_pct)
       : null;
-  if (server != null && server > total + 0.0001) return Math.min(100, server);
-  return total;
+  // Prefer server unique total when higher (full map); else client unique
+  if (server != null && server > total + 0.0001) total = server;
+  if (total > 100) total = 100;
+  return Math.round(total * 10000) / 10000;
 }
 
 /**
@@ -8540,17 +8521,41 @@ function mergeLastKnownOptionalStats(cur, lastKnown) {
 }
 
 /** Prefer live optional %, else last known (never force 0 over a real last known). */
+/**
+ * Optional box % when scan is off / cache-only: allow last-known.
+ * Prefer positive live, else positive last-known, else live 0, else known.
+ */
 function resolveOptionalDisplayPct(liveVal, lastKnownObj) {
   const live =
     liveVal != null && Number.isFinite(Number(liveVal)) ? Number(liveVal) : null;
   const known =
-    lastKnownObj && lastKnownObj.pct != null && Number.isFinite(Number(lastKnownObj.pct))
+    lastKnownObj &&
+    lastKnownObj.pct != null &&
+    Number.isFinite(Number(lastKnownObj.pct))
       ? Number(lastKnownObj.pct)
       : null;
   if (live != null && live > 0) return live;
   if (known != null && known > 0) return known;
-  if (live != null) return live; // explicit 0 from live
+  if (live != null) return live;
   return known;
+}
+
+/**
+ * Fresh / Multi-send / Shared SOL top-box value:
+ *  - Live scan (checkbox on this run): only this scan’s % (0 if none).
+ *  - Skipped / last-known: may use last-known for display only (not Total).
+ */
+function resolveOptionalBoxPct(isLive, serverVal, lastKnownObj, deltaFallback) {
+  if (isLive) {
+    return serverVal != null && Number.isFinite(Number(serverVal))
+      ? Number(serverVal)
+      : 0;
+  }
+  const base =
+    serverVal != null && Number.isFinite(Number(serverVal))
+      ? serverVal
+      : deltaFallback;
+  return resolveOptionalDisplayPct(base, lastKnownObj);
 }
 
 function loadBundleDeltaHtmlMap() {
@@ -9460,22 +9465,12 @@ function renderBundlesUi(data) {
     const freshSkipped = /scan off|enable .Fresh|Fresh wallets scan off/i.test(
       freshErr
     );
-    // Live Analyze with Fresh checked: only this scan’s % (never last-known).
-    // Last-known only when skipped / cache-only so Total can stay aligned.
-    let freshPct;
-    if (freshLive) {
-      freshPct =
-        s.fresh_total_pct != null && Number.isFinite(Number(s.fresh_total_pct))
-          ? Number(s.fresh_total_pct)
-          : 0;
-    } else {
-      freshPct = resolveOptionalDisplayPct(
-        s.fresh_total_pct != null
-          ? s.fresh_total_pct
-          : deltaCurStats && deltaCurStats.fresh_total_pct,
-        optKnown.fresh
-      );
-    }
+    const freshPct = resolveOptionalBoxPct(
+      freshLive,
+      s.fresh_total_pct,
+      optKnown.fresh,
+      deltaCurStats && deltaCurStats.fresh_total_pct
+    );
     const freshAt =
       s.fresh_cached_at || (optKnown.fresh && optKnown.fresh.at) || "";
     // Always under % + delta until next Analyze updates the time
@@ -9510,25 +9505,17 @@ function renderBundlesUi(data) {
     const msErr = String(s.multi_send_error || "");
     const msSkipped = /scan off|enable [“"]Multi|Multi-send scan off/i.test(msErr);
     const msCached = !!s.multi_send_from_cache;
-    // Live Multi-send: token multi-send total (match Holds list / clusters).
-    // Do not fall back to last-known Shared-SOL-combined %.
-    let msPct;
-    if (!msSkipped && !msCached) {
-      const resolved = resolveTokenMultiSendTotalPct(view, s);
-      msPct =
-        resolved != null && Number.isFinite(Number(resolved))
-          ? Number(resolved)
-          : 0;
-    } else {
-      const resolved = resolveTokenMultiSendTotalPct(view, s);
-      msPct = resolveOptionalDisplayPct(
-        resolved != null
-          ? resolved
-          : s.multi_send_total_pct != null
-            ? s.multi_send_total_pct
-            : deltaCurStats && deltaCurStats.multi_send_total_pct,
-        optKnown.multi_send
-      );
+    // Live Multi-send: token multi-send only (never Shared SOL last-known).
+    const msResolved = resolveTokenMultiSendTotalPct(view, s);
+    const msLiveBox = !msSkipped && !msCached;
+    let msPct = resolveOptionalBoxPct(
+      msLiveBox,
+      msResolved != null ? msResolved : s.multi_send_total_pct,
+      optKnown.multi_send,
+      deltaCurStats && deltaCurStats.multi_send_total_pct
+    );
+    if (msLiveBox && (msPct == null || !Number.isFinite(Number(msPct)))) {
+      msPct = 0;
     }
     const msAt =
       s.multi_send_cached_at ||
@@ -9568,23 +9555,14 @@ function renderBundlesUi(data) {
       fundErr
     );
     const fundCached = !!s.funding_from_cache;
-    // Live Shared SOL scan: only this scan (0 if none) — not browser last-known
-    let fundPct;
-    if (fundLive) {
-      fundPct =
-        s.funding_total_pct != null && Number.isFinite(Number(s.funding_total_pct))
-          ? Number(s.funding_total_pct)
-          : 0;
-    } else {
-      fundPct = resolveOptionalDisplayPct(
-        s.funding_total_pct != null
-          ? s.funding_total_pct
-          : deltaCurStats && deltaCurStats.funding_total_pct != null
-            ? deltaCurStats.funding_total_pct
-            : prev && prev.funding_total_pct,
-        optKnown.funding
-      );
-    }
+    const fundPct = resolveOptionalBoxPct(
+      fundLive,
+      s.funding_total_pct,
+      optKnown.funding,
+      (deltaCurStats && deltaCurStats.funding_total_pct != null
+        ? deltaCurStats.funding_total_pct
+        : prev && prev.funding_total_pct) || null
+    );
     const fundAt =
       s.funding_cached_at || (optKnown.funding && optKnown.funding.at) || "";
     const fundSubEsc = escHtml(
@@ -10006,26 +9984,19 @@ function renderBundlesUi(data) {
     );
   }
 
-  // Multi-send section = TOKEN multi-send only.
-  // SOL funder wallets/holds belong under Shared SOL. Showing them here made
-  // “Holds” look real while Multi-send total stayed 0% (e.g. 2V11cBst…pump).
-  const msWalletsRaw = view.multi_send_wallets || [];
+  // Multi-send section = token multi-send only (Shared SOL is separate)
   const tokenMs = view.multi_send_clusters || [];
   const solMs = view.sol_multi_send_clusters || [];
   const msCached = !!s.multi_send_from_cache;
-  // Drop pure sol-* roles from flat list (old API mixed them in)
-  const msWallets = msWalletsRaw.filter(function (r) {
+  const msTableRows = (view.multi_send_wallets || []).filter(function (r) {
     const roles = (r && r.roles) || [];
     if (!roles.length) return true;
-    const onlySol = roles.every(function (role) {
+    return !roles.every(function (role) {
       return String(role || "").toLowerCase().indexOf("sol") === 0;
     });
-    return !onlySol;
   });
-  // Total from the same wallets we display (list + token clusters)
   const msTotDisp = resolveTokenMultiSendTotalPct(view, s);
-  // Only open Multi-send detail when there is token multi-send content
-  if (msWallets.length || tokenMs.length) {
+  if (msTableRows.length || tokenMs.length) {
     const shape = String(s.multi_send_hold_shape || "");
     let shapeNote = "";
     if (shape === "mostly_one_wallet_sender") {
@@ -10036,7 +10007,7 @@ function renderBundlesUi(data) {
         "Hold shape: mostly across receiver wallets — not one sender bag.";
     }
     const msWalletN = Math.max(
-      msWallets.length || 0,
+      msTableRows.length || 0,
       s.multi_send_wallet_with_pct != null &&
         Number.isFinite(Number(s.multi_send_wallet_with_pct))
         ? Number(s.multi_send_wallet_with_pct)
@@ -10076,10 +10047,10 @@ function renderBundlesUi(data) {
     if (shapeNote) {
       html += '<p class="bun-sub">' + escHtml(shapeNote) + "</p>";
     }
-    if (msWallets.length) {
+    if (msTableRows.length) {
       html +=
         '<p class="bun-sub">Wallets (by current supply % — same set as total above)</p>';
-      html += bunWalletTable(msWallets, [
+      html += bunWalletTable(msTableRows, [
         { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
         { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
         {
@@ -10339,25 +10310,13 @@ function renderBundlesUi(data) {
       simN
     );
 
-    // Live Fresh: server only. Last-known only when not a live Fresh scan.
-    let freshDisp;
-    if (freshLive) {
-      freshDisp =
-        s.fresh_total_pct != null && Number.isFinite(Number(s.fresh_total_pct))
-          ? Number(s.fresh_total_pct)
-          : 0;
-    } else {
-      freshDisp = resolveOptionalDisplayPct(
-        s.fresh_total_pct != null
-          ? s.fresh_total_pct
-          : deltaCurStats && deltaCurStats.fresh_total_pct,
-        optKnown.fresh
-      );
-    }
     const fp =
-      freshDisp != null && Number.isFinite(Number(freshDisp))
-        ? Number(freshDisp)
-        : 0;
+      resolveOptionalBoxPct(
+        freshLive,
+        s.fresh_total_pct,
+        optKnown.fresh,
+        deltaCurStats && deltaCurStats.fresh_total_pct
+      ) || 0;
     const freshSubPlain = optionalUpdatedPlain([
       s.fresh_cached_at,
       optKnown.fresh && optKnown.fresh.at,
@@ -10373,26 +10332,14 @@ function renderBundlesUi(data) {
       freshSubPlain
     );
 
-    // Live Multi-send: never show last-known Shared-SOL-combined total.
-    let msDisp;
-    const msResolved = resolveTokenMultiSendTotalPct(view, s);
-    if (msLive) {
-      msDisp =
-        msResolved != null && Number.isFinite(Number(msResolved))
-          ? Number(msResolved)
-          : 0;
-    } else {
-      msDisp = resolveOptionalDisplayPct(
-        msResolved != null
-          ? msResolved
-          : s.multi_send_total_pct != null
-            ? s.multi_send_total_pct
-            : deltaCurStats && deltaCurStats.multi_send_total_pct,
-        optKnown.multi_send
-      );
-    }
+    const msResolvedDom = resolveTokenMultiSendTotalPct(view, s);
     const mp =
-      msDisp != null && Number.isFinite(Number(msDisp)) ? Number(msDisp) : 0;
+      resolveOptionalBoxPct(
+        msLive,
+        msResolvedDom != null ? msResolvedDom : s.multi_send_total_pct,
+        optKnown.multi_send,
+        deltaCurStats && deltaCurStats.multi_send_total_pct
+      ) || 0;
     const msSubPlain = optionalUpdatedPlain([
       s.multi_send_cached_at,
       optKnown.multi_send && optKnown.multi_send.at,
@@ -10408,24 +10355,13 @@ function renderBundlesUi(data) {
       msSubPlain
     );
 
-    let fundDisp;
-    if (fundLive) {
-      fundDisp =
-        s.funding_total_pct != null && Number.isFinite(Number(s.funding_total_pct))
-          ? Number(s.funding_total_pct)
-          : 0;
-    } else {
-      fundDisp = resolveOptionalDisplayPct(
-        s.funding_total_pct != null
-          ? s.funding_total_pct
-          : deltaCurStats && deltaCurStats.funding_total_pct,
-        optKnown.funding
-      );
-    }
     const fdp =
-      fundDisp != null && Number.isFinite(Number(fundDisp))
-        ? Number(fundDisp)
-        : 0;
+      resolveOptionalBoxPct(
+        fundLive,
+        s.funding_total_pct,
+        optKnown.funding,
+        deltaCurStats && deltaCurStats.funding_total_pct
+      ) || 0;
     const fundSubPlain = optionalUpdatedPlain([
       s.funding_cached_at,
       optKnown.funding && optKnown.funding.at,

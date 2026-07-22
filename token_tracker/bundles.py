@@ -2592,11 +2592,14 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
             str(r.get("wallet") or ""),
         )
     )
-    # Multi-send total MUST equal sum of flat list Holds (token multi-send only).
-    # Do not prefer a fusion summary that is 0/null while the list still has bags.
+    # Multi-send total = unique Holds on token multi-send list (not Shared SOL).
+    # If wallets are listed but none have %, show 0% (not blank).
     ms_tot, ms_n = _sum_wallets_pct(ms_list)
-    if ms_tot is None and s.get("multi_send_total_pct") is not None and not ms_list:
-        # No token wallets in list — allow fusion total only as empty fallback
+    if ms_list:
+        if ms_tot is None:
+            ms_tot = 0.0
+        ms_n = max(int(ms_n or 0), len(ms_list))
+    elif s.get("multi_send_total_pct") is not None:
         try:
             ms_tot = float(s.get("multi_send_total_pct"))
             ms_n = int(s.get("multi_send_wallet_with_pct") or 0)
