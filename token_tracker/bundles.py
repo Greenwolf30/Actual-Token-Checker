@@ -404,14 +404,18 @@ def format_bundles_text(data: dict[str, Any]) -> str:
     else:
         lines.append(_empty_line("Fresh total"))
 
-    # Multi-send total % (unique senders + receivers across token + SOL clusters)
+    # Multi-send total % = TOKEN multi-send only (not Shared SOL / sol multi)
     ms_pct = s.get("multi_send_total_pct")
     ms_n = s.get("multi_send_wallet_with_pct")
-    if ms_pct is None and (
-        data.get("multi_send_clusters") or data.get("sol_multi_send_clusters")
-    ):
+    if ms_pct is None and data.get("multi_send_clusters"):
         try:
-            ms_pct, ms_n = _multi_send_total_percent(data, {})
+            ms_pct, ms_n = _multi_send_total_percent(
+                {
+                    "multi_send_clusters": data.get("multi_send_clusters") or [],
+                    "sol_multi_send_clusters": [],
+                },
+                {},
+            )
         except Exception:  # noqa: BLE001
             ms_pct, ms_n = None, 0
     ms_f = _num(ms_pct)

@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v116";
+const ADTC_CLIENT_VERSION = "v117";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -9115,33 +9115,33 @@ function renderBundlesUi(data) {
     }
   }
   const optKnown = mint ? loadOptionalLastKnown(mint) : {};
-  // Persist live scan times only when we have a real positive total
-  // (do not overwrite last known with 0 from a failed / empty hold-% snapshot)
+  // Detect live optional scans (not skipped / not cache-only) so we do not
+  // keep showing a poisoned last-known Multi-send % that equaled Shared SOL.
+  const freshErr0 = String(s.fresh_error || "");
+  const msErr0 = String(s.multi_send_error || "");
+  const fundErr0 = String(s.funding_error || "");
+  const freshLive =
+    !s.fresh_from_cache &&
+    !/scan off|enable .Fresh|Fresh wallets scan off/i.test(freshErr0);
+  const msLive =
+    !s.multi_send_from_cache &&
+    !/scan off|enable [“"]Multi|Multi-send scan off/i.test(msErr0);
+  const fundLive =
+    !s.funding_from_cache &&
+    !/scan off|enable .Shared SOL|Shared SOL funder scan off/i.test(fundErr0);
+  // On live scan: always write last known (including 0) to clear old combined totals
   if (!isRestore && mint) {
-    if (
-      !s.fresh_from_cache &&
-      s.fresh_total_pct != null &&
-      Number(s.fresh_total_pct) > 0
-    ) {
+    if (freshLive && s.fresh_total_pct != null && Number.isFinite(Number(s.fresh_total_pct))) {
       saveOptionalLastKnown(mint, "fresh", s.fresh_total_pct, s.fresh_cached_at);
     }
-    if (
-      !s.multi_send_from_cache &&
-      s.multi_send_total_pct != null &&
-      Number(s.multi_send_total_pct) > 0
-    ) {
-      saveOptionalLastKnown(
-        mint,
-        "multi_send",
-        s.multi_send_total_pct,
-        s.multi_send_cached_at
-      );
+    if (msLive) {
+      const msWrite =
+        s.multi_send_total_pct != null && Number.isFinite(Number(s.multi_send_total_pct))
+          ? Number(s.multi_send_total_pct)
+          : 0;
+      saveOptionalLastKnown(mint, "multi_send", msWrite, s.multi_send_cached_at);
     }
-    if (
-      !s.funding_from_cache &&
-      s.funding_total_pct != null &&
-      Number(s.funding_total_pct) > 0
-    ) {
+    if (fundLive && s.funding_total_pct != null && Number.isFinite(Number(s.funding_total_pct))) {
       saveOptionalLastKnown(mint, "funding", s.funding_total_pct, s.funding_cached_at);
     }
   }
@@ -9300,12 +9300,22 @@ function renderBundlesUi(data) {
     const msErr = String(s.multi_send_error || "");
     const msSkipped = /scan off|enable [“"]Multi|Multi-send scan off/i.test(msErr);
     const msCached = !!s.multi_send_from_cache;
-    let msPct = resolveOptionalDisplayPct(
-      s.multi_send_total_pct != null
-        ? s.multi_send_total_pct
-        : deltaCurStats && deltaCurStats.multi_send_total_pct,
-      optKnown.multi_send
-    );
+    // Live Multi-send scan: always use server total (token multi-send only).
+    // Do not fall back to last-known — that was often the old Shared-SOL-combined %.
+    let msPct;
+    if (!msSkipped && !msCached) {
+      msPct =
+        s.multi_send_total_pct != null && Number.isFinite(Number(s.multi_send_total_pct))
+          ? Number(s.multi_send_total_pct)
+          : 0;
+    } else {
+      msPct = resolveOptionalDisplayPct(
+        s.multi_send_total_pct != null
+          ? s.multi_send_total_pct
+          : deltaCurStats && deltaCurStats.multi_send_total_pct,
+        optKnown.multi_send
+      );
+    }
     const msAt =
       s.multi_send_cached_at ||
       (optKnown.multi_send && optKnown.multi_send.at) ||
@@ -10113,12 +10123,21 @@ function renderBundlesUi(data) {
       freshSubPlain
     );
 
-    const msDisp = resolveOptionalDisplayPct(
-      s.multi_send_total_pct != null
-        ? s.multi_send_total_pct
-        : deltaCurStats && deltaCurStats.multi_send_total_pct,
-      optKnown.multi_send
-    );
+    // Live Multi-send: never show last-known Shared-SOL-combined total
+    let msDisp;
+    if (msLive) {
+      msDisp =
+        s.multi_send_total_pct != null && Number.isFinite(Number(s.multi_send_total_pct))
+          ? Number(s.multi_send_total_pct)
+          : 0;
+    } else {
+      msDisp = resolveOptionalDisplayPct(
+        s.multi_send_total_pct != null
+          ? s.multi_send_total_pct
+          : deltaCurStats && deltaCurStats.multi_send_total_pct,
+        optKnown.multi_send
+      );
+    }
     const mp =
       msDisp != null && Number.isFinite(Number(msDisp)) ? Number(msDisp) : 0;
     const msSubPlain = optionalUpdatedPlain([
