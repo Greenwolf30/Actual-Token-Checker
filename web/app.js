@@ -6409,25 +6409,31 @@ function loadBundleStatsPrev(mint) {
 
 /**
  * Change since last live Analyze for this mint.
- * Supply tiles: absolute percentage-points (e.g. 12% → 15% ⇒ ▲ +3.0%).
+ * Supply tiles: absolute percentage-points (e.g. 12% → 15% ⇒ ▲ +3%).
  * Risk: absolute score points (e.g. 40 → 48 ⇒ ▲ +8).
- * Returns HTML with arrow + color, or "".
+ * When both values exist and are equal → muted · 0% (so UI always shows a marker
+ * after the 2nd Analyze). When either side is missing → "".
  *
  * kind: "pct" (default) | "score"
  */
 function formatBundleStatDelta(cur, prev, kind) {
   const c = cur != null && Number.isFinite(Number(cur)) ? Number(cur) : null;
   const p = prev != null && Number.isFinite(Number(prev)) ? Number(prev) : null;
+  // Need both sides; treat only real numbers (null skipped/unknown stays blank)
   if (c == null || p == null) return "";
   const diff = c - p;
-  if (!Number.isFinite(diff) || Math.abs(diff) < 1e-12) return "";
+  if (!Number.isFinite(diff)) return "";
 
   const isScore = kind === "score";
-  // Hide tiny noise: risk < 0.5 pt · supply < 0.05 percentage points
-  if (isScore) {
-    if (Math.abs(diff) < 0.5) return "";
-  } else if (Math.abs(diff) < 0.05) {
-    return "";
+  const flatEps = isScore ? 0.5 : 0.05;
+
+  // Unchanged (or noise) → still show a flat marker so the feature is visible
+  if (Math.abs(diff) < flatEps) {
+    return (
+      '<span class="bun-stat-delta bun-delta-flat" title="No change since last Analyze">' +
+      (isScore ? "· 0" : "· 0%") +
+      "</span>"
+    );
   }
 
   const up = diff > 0;
@@ -6436,7 +6442,6 @@ function formatBundleStatDelta(cur, prev, kind) {
   const mag = Math.abs(diff);
 
   // Color intensity from magnitude (maps into existing 1–25 / 25–50 / … bands)
-  // Risk: 1 pt → ~5, 5 pts → 25 · Supply: 0.5pp → 10, 1.25pp → 25, 5pp → 100
   const colorMag = isScore
     ? Math.min(99, mag * 5)
     : Math.min(99, mag * 20);
@@ -6463,40 +6468,60 @@ function formatBundleStatDelta(cur, prev, kind) {
 }
 
 function extractBundleSummaryStats(s, riskScore) {
+  const num = (v) =>
+    v != null && Number.isFinite(Number(v)) ? Number(v) : null;
   return {
-    risk: riskScore,
-    total_bundle_pct:
-      s.total_bundle_pct != null && Number.isFinite(Number(s.total_bundle_pct))
-        ? Number(s.total_bundle_pct)
-        : null,
-    similar_size_total_pct:
-      s.similar_size_total_pct != null &&
-      Number.isFinite(Number(s.similar_size_total_pct))
-        ? Number(s.similar_size_total_pct)
-        : null,
-    fresh_total_pct:
-      s.fresh_total_pct != null && Number.isFinite(Number(s.fresh_total_pct))
-        ? Number(s.fresh_total_pct)
-        : null,
-    multi_send_total_pct:
-      s.multi_send_total_pct != null &&
-      Number.isFinite(Number(s.multi_send_total_pct))
-        ? Number(s.multi_send_total_pct)
-        : null,
-    funding_total_pct:
-      s.funding_total_pct != null && Number.isFinite(Number(s.funding_total_pct))
-        ? Number(s.funding_total_pct)
-        : null,
-    suspect_total_pct:
-      s.suspect_total_pct != null && Number.isFinite(Number(s.suspect_total_pct))
-        ? Number(s.suspect_total_pct)
-        : null,
-    top10_ex_lp:
-      s.top10_pct_excluding_known_programs != null &&
-      Number.isFinite(Number(s.top10_pct_excluding_known_programs))
-        ? Number(s.top10_pct_excluding_known_programs)
-        : null,
+    risk: riskScore != null && Number.isFinite(Number(riskScore))
+      ? Number(riskScore)
+      : null,
+    total_bundle_pct: num(s.total_bundle_pct),
+    similar_size_total_pct: num(s.similar_size_total_pct),
+    fresh_total_pct: num(s.fresh_total_pct),
+    multi_send_total_pct: num(s.multi_send_total_pct),
+    funding_total_pct: num(s.funding_total_pct),
+    suspect_total_pct: num(s.suspect_total_pct),
+    top10_ex_lp: num(s.top10_pct_excluding_known_programs),
   };
+}
+
+/** Stats from a full analyze/restore payload (for seeding prev baseline). */
+function extractBundleStatsFromData(data) {
+  if (!data || !data.ok) return null;
+  const view = data.bundles_view;
+  if (!view || !view.ok) return null;
+  const s = view.summary || {};
+  const riskScore =
+    s.bundle_risk_score != null && Number.isFinite(Number(s.bundle_risk_score))
+      ? Number(s.bundle_risk_score)
+      : null;
+  return extractBundleSummaryStats(s, riskScore);
+}
+
+/**
+ * Previous stats for delta arrows: browser map first, else last Analyze of same mint.
+ */
+function resolveBundleStatsPrev(mint) {
+  const m = bundleStatsMintKey(mint);
+  if (!m) return null;
+  const fromMap = loadBundleStatsPrev(m);
+  if (fromMap) return fromMap;
+  // Seed from last saved Analyze (survives refresh when map was empty / cleared)
+  try {
+    const cached = loadLastAnalyze();
+    if (!cached || !cached.data) return null;
+    const addr =
+      (cached.data.token && cached.data.token.address) ||
+      (cached.data.market && cached.data.market.address) ||
+      (cached.data.bundles_view && cached.data.bundles_view.token_address) ||
+      "";
+    if (bundleStatsMintKey(addr) !== m) return null;
+    const stats = extractBundleStatsFromData(cached.data);
+    if (!stats) return null;
+    saveBundleStatsPrev(m, stats);
+    return stats;
+  } catch (_) {
+    return null;
+  }
 }
 
 /**
@@ -6544,9 +6569,19 @@ function renderBundlesUi(data) {
     (data.market && data.market.address) ||
     (view.token_address || "") ||
     "";
-  const prev = mint ? loadBundleStatsPrev(mint) : null;
   const curStats = extractBundleSummaryStats(s, riskScore);
   const isRestore = !!(data && data._restoredFromBrowserCache);
+  // Live Analyze: compare to last stored baseline for this mint.
+  // Restore: do not show deltas (same snapshot), but keep baseline seeded.
+  const prev = !isRestore && mint ? resolveBundleStatsPrev(mint) : null;
+  if (isRestore && mint && curStats) {
+    // Ensure next live Analyze has a baseline after refresh
+    try {
+      if (!loadBundleStatsPrev(mint)) saveBundleStatsPrev(mint, curStats);
+    } catch (_) {
+      /* ignore */
+    }
+  }
 
   function stat(label, valueHtml) {
     return (
@@ -6559,11 +6594,17 @@ function renderBundlesUi(data) {
   }
 
   function withDelta(mainHtml, key) {
-    // Deltas only on live Analyze (not page-refresh restore) and only when
-    // we have a previous live run for this mint (2nd+ Analyze).
+    // Deltas only on live Analyze when a previous baseline exists for this mint.
     if (isRestore || !prev) return mainHtml;
     const kind = key === "risk" ? "score" : "pct";
-    const d = formatBundleStatDelta(curStats[key], prev[key], kind);
+    // Align Total tile: display uses 0 when total is null
+    let curVal = curStats[key];
+    let prevVal = prev[key];
+    if (key === "total_bundle_pct") {
+      if (curVal == null) curVal = 0;
+      if (prevVal == null) prevVal = 0;
+    }
+    const d = formatBundleStatDelta(curVal, prevVal, kind);
     return d ? mainHtml + " " + d : mainHtml;
   }
 
@@ -6647,8 +6688,9 @@ function renderBundlesUi(data) {
   );
   html += "</div>";
 
-  // After a live Analyze, store stats as baseline for next run
-  if (!isRestore && mint) {
+  // After a live Analyze, store stats as baseline for the *next* run
+  // (must run after withDelta so this run still compares to the prior baseline)
+  if (!isRestore && mint && curStats) {
     saveBundleStatsPrev(mint, curStats);
   }
 
