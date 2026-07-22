@@ -255,16 +255,18 @@ What people often ask
   coordinated wallets,” not a proof that one person owns those wallets.
 
   The app looks at top-holder snapshots and risk tags, then estimates a
-  total_bundle_pct. On full Analyze that number is the SUM of supply % from
-  PRIMARY risk vectors (multi-account, insider, multi-send, fresh, shared
-  funder) with NO cross-vector wallet dedupe — a wallet in two vectors can
-  contribute twice, so the total can exceed 100%.
+  total_bundle_pct. On full Analyze that number is the SUM of CURRENT supply %
+  of UNIQUE wallets from PRIMARY risk vectors (multi-account, insider,
+  multi-send, fresh, shared funder). Each wallet counts once (max % if it
+  appears in more than one category) — Shared SOL and Multi-send do not
+  double-count the same address. Cap 100%.
 
   FALLBACK only — Similar-size groups and Suspect wallets:
     - Shown in Bundles AND counted in Total bundle % ONLY when every primary
       category above is empty (0) this scan.
     - If multi-account, insider, multi-send, fresh, or shared SOL has any hits,
       similar-size and suspect sections are HIDDEN and not added to Total.
+    - Fallback total is also unique-wallet deduped.
 
   Launch-window is disabled. That number drives Alerts “bundle band” messages.
 

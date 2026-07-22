@@ -543,8 +543,8 @@ def _bundle_pct_alert(bundles_data: dict[str, Any] | None) -> dict[str, Any] | N
     extra = ""
     if flagged_n is not None:
         extra = (
-            f" · {flagged_n} wallet-slot(s) across risk vectors "
-            f"(additive total; wallets in multiple vectors count more than once)"
+            f" · {flagged_n} unique wallet(s) in bundle estimate "
+            f"(deduped across vectors — no double-count)"
         )
 
     if pct >= 50.0:

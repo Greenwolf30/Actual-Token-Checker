@@ -260,10 +260,10 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
         "notes": (
             "Bundle detection is heuristic from a top-holder snapshot only. "
             "Suspect total % = sum of unique suspect wallets' supply %. "
-            "Total bundle % = multi-account + insider + multi-send + fresh + "
-            "shared funder (no cross-vector wallet dedupe). Similar-size and "
-            "suspect only appear / count when those primary categories are all "
-            "empty. Not a full commercial sniper graph."
+            "Total bundle % = unique wallets across multi-account + insider + "
+            "multi-send + fresh + shared funder (each wallet once, max %). "
+            "Similar-size and suspect only appear / count when those primary "
+            "categories are all empty. Not a full commercial sniper graph."
         ),
     }
 
@@ -302,13 +302,13 @@ def format_bundles_text(data: dict[str, Any]) -> str:
         total_line = (
             f"  Total % bundles: {_pct(total_bp)}"
             + (
-                f"  ({s.get('flagged_wallets')} wallet-slot(s) across vectors)"
+                f"  ({s.get('flagged_wallets')} unique wallet(s))"
                 if s.get("flagged_wallets")
                 else ""
             )
         )
-        if s.get("total_bundle_additive"):
-            total_line += "  [additive: no cross-vector dedupe]"
+        if s.get("total_bundle_cross_vector_dedupe"):
+            total_line += "  [unique wallets — no double-count]"
     else:
         total_line = _empty_line("Total % bundles")
     src_list = s.get("sources_used") or []
@@ -1400,11 +1400,10 @@ def recompute_total_bundle_all_vectors(
     data: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """
-    Total bundle % = sum of each risk vector's wallet supply %, with
-    NO cross-vector wallet dedupe.
+    Total bundle % = unique wallets across counted vectors (deduped).
 
-    A wallet in multi-send AND fresh contributes its % twice (once per vector).
-    Within a single vector, each wallet is counted once (max % if listed twice).
+    Each wallet contributes its supply % at most once (max % if it appears in
+    several vectors or lists). Cap display total at 100%.
 
     Primary vectors (always preferred for Total + Bundles display):
       multi_account, insider, multi_send (token only), fresh, shared_funder.
@@ -1415,9 +1414,10 @@ def recompute_total_bundle_all_vectors(
     Never counted: launch_window (disabled).
 
     Token multi-send only for multi_send (not sol_multi_send_clusters) so SOL
-    funder wallets are not double-counted with shared_funder.
+    funder wallets are not double-counted with shared_funder as two vectors.
+    Shared SOL + token multi-send still share one unique wallet set for Total.
 
-    Excludes known LP / program wallets. Does not cap at 100% (additive).
+    Excludes known LP / program wallets.
     """
     data = data if isinstance(data, dict) else {}
     pct_map = _wallet_pct_map(data)
@@ -1613,8 +1613,6 @@ def recompute_total_bundle_all_vectors(
     }
     FALLBACK = ("similar_size", "suspect")
 
-    primary_grand = 0.0
-    primary_slots = 0
     primary_any = False
     for key in PRIMARY:
         meta = by_vector.get(key) or {}
@@ -1625,8 +1623,7 @@ def recompute_total_bundle_all_vectors(
             continue
         if vn > 0 or vp > 0:
             primary_any = True
-        primary_grand += vp
-        primary_slots += vn
+            break
 
     use_fallback = not primary_any
     # Mark similar / suspect for UI: hide unless fallback mode
@@ -1644,48 +1641,48 @@ def recompute_total_bundle_all_vectors(
             by_vector["suspect"]["excluded_from_total"] = True
 
     if use_fallback:
-        grand = 0.0
-        slot_count = 0
-        any_data = False
-        for key in FALLBACK:
-            meta = by_vector.get(key) or {}
-            try:
-                vp = float(meta.get("pct") or 0)
-                vn = int(meta.get("count") or 0)
-            except (TypeError, ValueError):
-                continue
-            if vn > 0 or vp > 0:
-                any_data = True
-            grand += vp
-            slot_count += vn
-            # Count in total when falling back
-            if key in by_vector:
-                by_vector[key]["excluded_from_total"] = False
+        active_keys = list(FALLBACK)
         excluded = ["launch_window"]
         mode = "fallback_similar_suspect"
+        for key in FALLBACK:
+            if key in by_vector:
+                by_vector[key]["excluded_from_total"] = False
     else:
-        grand = primary_grand
-        slot_count = primary_slots
-        any_data = primary_any
+        active_keys = list(PRIMARY)
         excluded = ["similar_size", "suspect", "launch_window"]
         mode = "primary"
 
+    # Unique wallets across active vectors only (no double-count)
+    union: dict[str, float] = {}
+    for key in active_keys:
+        wmap = counted_maps.get(key) or {}
+        if key == "similar_size":
+            wmap = sim_map
+        elif key == "suspect":
+            wmap = sus_map
+        for w, pct in wmap.items():
+            try:
+                pf = float(pct)
+            except (TypeError, ValueError):
+                continue
+            union[w] = max(union.get(w, 0.0), pf)
+
+    any_data = bool(union)
+    grand = round(min(100.0, sum(union.values())), 4) if any_data else 0.0
+    slot_count = len(union)
+
     result: dict[str, Any] = {
         "total_bundle_by_vector": by_vector,
-        "total_bundle_additive": True,
-        "total_bundle_cross_vector_dedupe": False,
+        "total_bundle_additive": False,
+        "total_bundle_cross_vector_dedupe": True,
         "total_bundle_excluded_vectors": list(excluded),
         "total_bundle_mode": mode,
         "total_bundle_show_similar_suspect": use_fallback,
+        "total_bundle_unique_wallets": slot_count,
         "total_bundle_crosslisted_wallets": [],
         "total_bundle_crosslisted_count": 0,
     }
-    if not any_data:
-        result["total_bundle_pct"] = 0.0
-        result["flagged_wallets"] = 0
-        return result
-
-    result["total_bundle_pct"] = round(grand, 4)
+    result["total_bundle_pct"] = grand if any_data else 0.0
     result["flagged_wallets"] = slot_count
     return result
 

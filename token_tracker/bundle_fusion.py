@@ -968,15 +968,15 @@ def comprehensive_bundle_check(
                 }
             )
         base["signals"] = signals
-        # Total bundle % = all risk vectors, additive (no cross-vector dedupe)
+        # Total bundle % = unique wallets across counted vectors (no double-count)
         try:
             tb = bun.recompute_total_bundle_all_vectors(base)
             s = dict(base.get("summary") or {})
             s["total_bundle_pct"] = tb.get("total_bundle_pct")
             s["flagged_wallets"] = tb.get("flagged_wallets")
             s["total_bundle_by_vector"] = tb.get("total_bundle_by_vector")
-            s["total_bundle_additive"] = True
-            s["total_bundle_cross_vector_dedupe"] = False
+            s["total_bundle_additive"] = False
+            s["total_bundle_cross_vector_dedupe"] = True
             s["total_bundle_excluded_vectors"] = tb.get(
                 "total_bundle_excluded_vectors"
             ) or ["similar_size", "suspect", "launch_window"]
@@ -984,6 +984,9 @@ def comprehensive_bundle_check(
             s["total_bundle_show_similar_suspect"] = bool(
                 tb.get("total_bundle_show_similar_suspect")
             )
+            s["total_bundle_unique_wallets"] = tb.get(
+                "total_bundle_unique_wallets"
+            ) or tb.get("flagged_wallets")
             s["total_bundle_crosslisted_count"] = tb.get(
                 "total_bundle_crosslisted_count"
             ) or 0
@@ -1001,9 +1004,10 @@ def comprehensive_bundle_check(
             "Comprehensive bundle check: Helius top holders (owner-resolved) + "
             "Rugcheck insiders/risks + Birdeye (if key) + 1-hop SOL funding + "
             "fresh/sole-token wallets + token multi-send (one sender → many). "
-            "Total bundle % = multi-account + insider + multi-send + fresh + "
-            "shared funder. Similar-size and suspect only show/count when those "
-            "primary categories are all empty. "
+            "Total bundle % = unique wallets across multi-account + insider + "
+            "multi-send + fresh + shared funder (each wallet once). "
+            "Similar-size and suspect only show/count when those primary "
+            "categories are all empty. "
             "Not a full commercial sniper graph. "
             + (base.get("notes") or "")
         ).strip()

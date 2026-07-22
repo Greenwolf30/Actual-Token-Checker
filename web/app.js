@@ -6176,8 +6176,7 @@ function renderBundlesUi(data) {
       "</span>"
   );
   // Summary % tiles — same Holders priority color bands
-  // Total bundle = sum of all risk vectors with NO cross-vector wallet dedupe
-  // (can exceed 100% if the same wallet appears in multiple vectors).
+  // Total bundle = unique wallets across counted vectors (no double-count)
   {
     // Always show a value (0% when none of the counted vectors hit)
     const tbp =
@@ -6249,13 +6248,18 @@ function renderBundlesUi(data) {
       s.total_bundle_mode === "fallback_similar_suspect"
         ? " Fallback mode: only similar-size + suspect (primary categories empty)."
         : " Similar-size and suspect hidden/excluded when primary categories have data.";
+    const uniqN =
+      s.total_bundle_unique_wallets != null
+        ? s.total_bundle_unique_wallets
+        : s.flagged_wallets;
     html +=
-      '<p class="bun-meta">Total bundle = sum of counted vectors (no wallet dedupe' +
-      (Number(s.total_bundle_pct) > 100
-        ? " — can exceed 100%"
+      '<p class="bun-meta">Total bundle = unique wallets across counted vectors ' +
+      "(each wallet once, max hold %; Shared SOL + Multi-send do not double-count)" +
+      (uniqN != null ? " · " + escHtml(String(uniqN)) + " wallet(s)" : "") +
+      (parts.length
+        ? ". Per-vector (for reference, may overlap): " +
+          escHtml(parts.join(" + "))
         : "") +
-      ")" +
-      (parts.length ? ": " + escHtml(parts.join(" + ")) : "") +
       "." +
       modeNote +
       "</p>";
