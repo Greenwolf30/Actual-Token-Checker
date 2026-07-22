@@ -6497,6 +6497,7 @@ const BUNDLE_STAT_KEYS = [
   "multi_send_total_pct",
   "funding_total_pct",
   "suspect_total_pct",
+  "single_holders_total_pct",
   "top10_ex_lp",
 ];
 
@@ -6870,6 +6871,7 @@ function extractBundleSummaryStats(s, riskScore) {
     multi_send_total_pct: num(s.multi_send_total_pct),
     funding_total_pct: num(s.funding_total_pct),
     suspect_total_pct: num(s.suspect_total_pct),
+    single_holders_total_pct: num(s.single_holders_total_pct),
     top10_ex_lp: num(s.top10_pct_excluding_known_programs),
   };
 }
@@ -7200,6 +7202,26 @@ function renderBundlesUi(data) {
     "Suspect total",
     withDelta(bunPctHtml(s.suspect_total_pct), "suspect_total_pct")
   );
+  // Single holders: non-LP bags ≥0.01% not in multi/similar/insider/etc.
+  {
+    let singlePct =
+      s.single_holders_total_pct != null &&
+      Number.isFinite(Number(s.single_holders_total_pct))
+        ? Number(s.single_holders_total_pct)
+        : null;
+    if (
+      singlePct == null &&
+      deltaCurStats &&
+      deltaCurStats.single_holders_total_pct != null
+    ) {
+      singlePct = Number(deltaCurStats.single_holders_total_pct);
+    }
+    const live = singlePct != null ? singlePct : 0;
+    html += stat(
+      "Single holders",
+      withDelta(bunPctHtml(live), "single_holders_total_pct", live)
+    );
+  }
   html += stat(
     "Top10 ex-LP",
     withDelta(

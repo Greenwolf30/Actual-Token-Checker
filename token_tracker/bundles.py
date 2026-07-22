@@ -217,6 +217,15 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
     suspect_pct, suspect_n = _suspect_total_percent(suspect_wallets)
     # Combined % of unique wallets that sit in similar-size groups
     similar_total_pct, similar_wallet_n = _similar_size_total_percent(similar_groups)
+    # Single holders (non-LP, not in any other category) — fusion recomputes too
+    _base_for_single = {
+        "holders": holders,
+        "clusters": multi_clusters,
+        "similar_size_groups": similar_groups,
+        "insider_wallets": insiders,
+        "suspect_wallets": suspect_wallets,
+    }
+    single_pct, single_n = _single_holders_total(_base_for_single)
 
     return {
         "ok": True,
@@ -242,6 +251,9 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
             # Sum of unique suspect wallets' supply %
             "suspect_total_pct": suspect_pct,
             "suspect_wallet_count": suspect_n,
+            # Non-LP holders not in multi/similar/insider/suspect/etc.
+            "single_holders_total_pct": single_pct,
+            "single_holders_wallet_count": single_n,
         },
         "signals": signals,
         "clusters": multi_clusters,
@@ -1220,6 +1232,114 @@ def _sum_wallets_pct(
     return (round(total, 4) if has_any else 0.0), len(by_w)
 
 
+# Same cutoff as Ruggers Single lane (web_server / app.js)
+_SINGLE_HOLDERS_MIN_PCT = 0.01
+
+
+def _collect_bundled_wallet_set(data: dict[str, Any] | None) -> set[str]:
+    """Wallets that sit in any Bundles risk / category list (not Single)."""
+    data = data if isinstance(data, dict) else {}
+    out: set[str] = set()
+
+    def _add(w: Any) -> None:
+        a = (str(w) if w is not None else "").strip()
+        if a:
+            out.add(a)
+
+    for c in data.get("clusters") or []:
+        if isinstance(c, dict):
+            _add(c.get("wallet") or c.get("owner"))
+    for h in data.get("insider_wallets") or []:
+        if isinstance(h, dict):
+            _add(h.get("wallet"))
+        else:
+            _add(h)
+    for s in data.get("suspect_wallets") or []:
+        if isinstance(s, dict):
+            _add(s.get("wallet"))
+        else:
+            _add(s)
+    for g in data.get("similar_size_groups") or []:
+        if not isinstance(g, dict):
+            continue
+        for m in g.get("members") or []:
+            if isinstance(m, dict):
+                _add(m.get("wallet"))
+            else:
+                _add(m)
+        for w in g.get("wallets") or []:
+            _add(w)
+    for fw in data.get("fresh_wallets") or []:
+        if isinstance(fw, dict):
+            _add(fw.get("wallet"))
+        else:
+            _add(fw)
+    for mc in list(data.get("multi_send_clusters") or []) + list(
+        data.get("sol_multi_send_clusters") or []
+    ):
+        if not isinstance(mc, dict):
+            continue
+        _add(mc.get("sender") or mc.get("funder"))
+        for r in list(mc.get("receivers") or mc.get("children") or []):
+            if isinstance(r, dict):
+                _add(r.get("wallet"))
+            else:
+                _add(r)
+        for row in mc.get("child_rows") or []:
+            if isinstance(row, dict):
+                _add(row.get("wallet"))
+    for mw in data.get("multi_send_wallets") or []:
+        if isinstance(mw, dict):
+            _add(mw.get("wallet"))
+        else:
+            _add(mw)
+    for fc in data.get("funding_clusters") or []:
+        if not isinstance(fc, dict):
+            continue
+        _add(fc.get("funder"))
+        for c in list(fc.get("children") or []):
+            if isinstance(c, dict):
+                _add(c.get("wallet"))
+            else:
+                _add(c)
+        for row in fc.get("child_rows") or []:
+            if isinstance(row, dict):
+                _add(row.get("wallet"))
+    return out
+
+
+def _single_holders_total(
+    data: dict[str, Any] | None,
+    *,
+    min_pct: float = _SINGLE_HOLDERS_MIN_PCT,
+) -> tuple[float | None, int]:
+    """
+    Non-LP holders with bag ≥ min_pct that are NOT in any other Bundles category
+    (multi / similar / insider / suspect / fresh / multi-send / shared SOL).
+
+    Matches Ruggers “Single” idea: standalone holders in the top snapshot.
+    """
+    data = data if isinstance(data, dict) else {}
+    excluded = _collect_bundled_wallet_set(data)
+    rows: list[dict[str, Any]] = []
+    for h in data.get("holders") or []:
+        if not isinstance(h, dict):
+            continue
+        if h.get("is_known_program") or is_known_lp_label(h.get("label")):
+            continue
+        w = (h.get("wallet") or "").strip()
+        if not w or w in excluded:
+            continue
+        try:
+            pct = float(h["pct_supply"]) if h.get("pct_supply") is not None else None
+        except (TypeError, ValueError):
+            pct = None
+        if pct is None or pct < min_pct:
+            continue
+        rows.append({"wallet": w, "pct_supply": pct})
+    return _sum_wallets_pct(rows)
+
+
 def _multi_send_total_percent(
     data: dict[str, Any],
     pct_map: dict[str, float] | None = None,
@@ -1696,6 +1816,17 @@ def recompute_total_bundle_all_vectors(
     grand = round(min(100.0, sum(union.values())), 4) if any_data else 0.0
     slot_count = len(union)
 
+    # Single holders: non-LP ≥0.01% not in any category vector
+    single_pct, single_n = _single_holders_total(data)
+    # Write onto data.summary so UI payload / fusion see it
+    try:
+        s_sum = dict(data.get("summary") or {})
+        s_sum["single_holders_total_pct"] = single_pct
+        s_sum["single_holders_wallet_count"] = single_n
+        data["summary"] = s_sum
+    except Exception:  # noqa: BLE001
+        pass
+
     result: dict[str, Any] = {
         "total_bundle_by_vector": by_vector,
         "total_bundle_additive": False,
@@ -1706,6 +1837,8 @@ def recompute_total_bundle_all_vectors(
         "total_bundle_unique_wallets": slot_count,
         "total_bundle_crosslisted_wallets": [],
         "total_bundle_crosslisted_count": 0,
+        "single_holders_total_pct": single_pct,
+        "single_holders_wallet_count": single_n,
     }
     result["total_bundle_pct"] = grand if any_data else 0.0
     result["flagged_wallets"] = slot_count
@@ -2514,6 +2647,8 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
             "sol_multi_send_clusters": s.get("sol_multi_send_clusters") or len(sol_ms),
             "suspect_total_pct": sus_tot,
             "suspect_wallet_count": sus_n if sus_n else len(suspects_out),
+            "single_holders_total_pct": s.get("single_holders_total_pct"),
+            "single_holders_wallet_count": s.get("single_holders_wallet_count"),
             "sources_used": list(s.get("sources_used") or [])[:16],
         },
         "providers": providers,

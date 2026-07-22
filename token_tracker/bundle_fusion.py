@@ -991,6 +991,12 @@ def comprehensive_bundle_check(
             s["total_bundle_crosslisted_count"] = tb.get(
                 "total_bundle_crosslisted_count"
             ) or 0
+            if tb.get("single_holders_total_pct") is not None:
+                s["single_holders_total_pct"] = tb.get("single_holders_total_pct")
+            if tb.get("single_holders_wallet_count") is not None:
+                s["single_holders_wallet_count"] = tb.get(
+                    "single_holders_wallet_count"
+                )
             # recompute mutates base similar/suspect lists + their summary totals
             if base.get("summary"):
                 for k in (
@@ -999,6 +1005,8 @@ def comprehensive_bundle_check(
                     "similar_size_groups",
                     "suspect_total_pct",
                     "suspect_wallet_count",
+                    "single_holders_total_pct",
+                    "single_holders_wallet_count",
                 ):
                     if k in base["summary"]:
                         s[k] = base["summary"][k]
