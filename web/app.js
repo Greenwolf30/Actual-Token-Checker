@@ -20,6 +20,8 @@ const BUNDLE_DELTA_HTML_KEY = "adtc_bundle_delta_html";
  * Refresh restores this blob so arrows cannot “recompute away”.
  */
 const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
+/** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
+const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when Flagged-wallet rules change so sticky junk is wiped once. */
 const RUGGERS_RULES_VERSION = 8;
 /** Sold ≥ this fraction of first-lookup bag → list as seller (99%). */
@@ -7063,14 +7065,89 @@ function renderBundlesUi(data) {
   // Collect HTML deltas this render so we can freeze them for refresh
   const htmlByKeyThisRun = {};
 
-  function stat(label, valueHtml) {
+  function stat(label, valueHtml, subHtml) {
     return (
       '<div class="bun-stat"><span class="bun-stat-label">' +
       escHtml(label) +
       '</span><span class="bun-stat-value">' +
       valueHtml +
-      "</span></div>"
+      "</span>" +
+      (subHtml
+        ? '<span class="bun-stat-sub">' + subHtml + "</span>"
+        : "") +
+      "</div>"
     );
+  }
+
+  /** Format ISO / date for “last known · …” under Fresh / Multi / Shared SOL. */
+  function fmtLastKnownAt(iso) {
+    if (!iso) return "";
+    try {
+      const d = new Date(iso);
+      if (!Number.isFinite(d.getTime())) return String(iso).slice(0, 19);
+      return d.toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      });
+    } catch (_) {
+      return String(iso).slice(0, 16);
+    }
+  }
+
+  function lastKnownSub(fromCache, serverAt, browserAt) {
+    if (!fromCache && !browserAt && !serverAt) return "";
+    const when = fmtLastKnownAt(serverAt || browserAt);
+    if (!when) {
+      return fromCache ? escHtml("last known") : "";
+    }
+    return escHtml("last known · " + when);
+  }
+
+  // Browser timestamps for optional scans (when server cache is gone)
+  function loadOptionalLastKnown(mintKey) {
+    try {
+      const raw = localStorage.getItem(OPTIONAL_LAST_KNOWN_KEY);
+      if (!raw) return {};
+      const o = JSON.parse(raw);
+      const m = bundleStatsMintKey(mintKey);
+      return (o && m && o[m] && typeof o[m] === "object" ? o[m] : {}) || {};
+    } catch (_) {
+      return {};
+    }
+  }
+  function saveOptionalLastKnown(mintKey, kind, pct, atIso) {
+    const m = bundleStatsMintKey(mintKey);
+    if (!m || !kind) return;
+    try {
+      const raw = localStorage.getItem(OPTIONAL_LAST_KNOWN_KEY);
+      const map = raw ? JSON.parse(raw) : {};
+      if (!map || typeof map !== "object") return;
+      if (!map[m] || typeof map[m] !== "object") map[m] = {};
+      if (pct != null && Number.isFinite(Number(pct))) {
+        map[m][kind] = {
+          pct: Number(pct),
+          at: atIso || new Date().toISOString(),
+        };
+      }
+      localStorage.setItem(OPTIONAL_LAST_KNOWN_KEY, JSON.stringify(map));
+    } catch (_) {
+      /* ignore */
+    }
+  }
+  const optKnown = mint ? loadOptionalLastKnown(mint) : {};
+  // Persist live scan times (not last-known/cache) for later off-box display
+  if (!isRestore && mint) {
+    if (!s.fresh_from_cache && s.fresh_total_pct != null) {
+      saveOptionalLastKnown(mint, "fresh", s.fresh_total_pct);
+    }
+    if (!s.multi_send_from_cache && s.multi_send_total_pct != null) {
+      saveOptionalLastKnown(mint, "multi_send", s.multi_send_total_pct);
+    }
+    if (!s.funding_from_cache && s.funding_total_pct != null) {
+      saveOptionalLastKnown(mint, "funding", s.funding_total_pct);
+    }
   }
 
   function withDelta(mainHtml, key, curOverride) {
@@ -7127,13 +7204,61 @@ function renderBundlesUi(data) {
     "Similar-size",
     withDelta(bunPctHtml(s.similar_size_total_pct), "similar_size_total_pct")
   );
-  html += stat(
-    "Fresh total",
-    withDelta(bunPctHtml(s.fresh_total_pct), "fresh_total_pct")
-  );
+  // ── Fresh (optional) — last known + timestamp when not live ────────
+  {
+    const freshCached = !!s.fresh_from_cache;
+    const freshErr = String(s.fresh_error || "");
+    const freshSkipped = /scan off|enable .Fresh|Fresh wallets scan off/i.test(
+      freshErr
+    );
+    let freshPct =
+      s.fresh_total_pct != null && Number.isFinite(Number(s.fresh_total_pct))
+        ? Number(s.fresh_total_pct)
+        : null;
+    if (freshPct == null && deltaCurStats && deltaCurStats.fresh_total_pct != null) {
+      freshPct = Number(deltaCurStats.fresh_total_pct);
+    }
+    if (
+      freshPct == null &&
+      optKnown.fresh &&
+      optKnown.fresh.pct != null
+    ) {
+      freshPct = Number(optKnown.fresh.pct);
+    }
+    const freshAt =
+      s.fresh_cached_at ||
+      (optKnown.fresh && optKnown.fresh.at) ||
+      "";
+    const showFreshLast =
+      freshCached ||
+      (freshSkipped && freshPct != null) ||
+      (freshPct != null && !freshCached && freshSkipped);
+    const freshSub = showFreshLast
+      ? lastKnownSub(true, freshAt, optKnown.fresh && optKnown.fresh.at)
+      : "";
+    if (freshSkipped && freshPct == null && !freshCached) {
+      html += stat(
+        "Fresh total",
+        withDelta(
+          '<span style="color:var(--text-muted)">skipped</span>',
+          "fresh_total_pct",
+          0
+        ),
+        ""
+      );
+    } else {
+      const live = freshPct != null ? freshPct : 0;
+      html += stat(
+        "Fresh total",
+        withDelta(bunPctHtml(live), "fresh_total_pct", live),
+        freshSub
+      );
+    }
+  }
   {
     const msErr = String(s.multi_send_error || "");
     const msSkipped = /scan off|enable [“"]Multi|Multi-send scan off/i.test(msErr);
+    const msCached = !!s.multi_send_from_cache;
     let msPct =
       s.multi_send_total_pct != null && Number.isFinite(Number(s.multi_send_total_pct))
         ? Number(s.multi_send_total_pct)
@@ -7141,20 +7266,38 @@ function renderBundlesUi(data) {
     if (msPct == null && deltaCurStats && deltaCurStats.multi_send_total_pct != null) {
       msPct = Number(deltaCurStats.multi_send_total_pct);
     }
-    if (msSkipped && msPct == null) {
+    if (
+      msPct == null &&
+      optKnown.multi_send &&
+      optKnown.multi_send.pct != null
+    ) {
+      msPct = Number(optKnown.multi_send.pct);
+    }
+    const msAt =
+      s.multi_send_cached_at ||
+      (optKnown.multi_send && optKnown.multi_send.at) ||
+      "";
+    const showMsLast =
+      msCached || (msSkipped && msPct != null);
+    const msSub = showMsLast
+      ? lastKnownSub(true, msAt, optKnown.multi_send && optKnown.multi_send.at)
+      : "";
+    if (msSkipped && msPct == null && !msCached) {
       html += stat(
         "Multi-send total",
         withDelta(
           '<span style="color:var(--text-muted)">skipped</span>',
           "multi_send_total_pct",
           0
-        )
+        ),
+        ""
       );
     } else {
       const live = msPct != null ? msPct : 0;
       html += stat(
         "Multi-send total",
-        withDelta(bunPctHtml(live), "multi_send_total_pct", live)
+        withDelta(bunPctHtml(live), "multi_send_total_pct", live),
+        msSub
       );
     }
   }
@@ -7175,6 +7318,22 @@ function renderBundlesUi(data) {
     if (fundPct == null && prev && prev.funding_total_pct != null) {
       fundPct = Number(prev.funding_total_pct);
     }
+    if (
+      fundPct == null &&
+      optKnown.funding &&
+      optKnown.funding.pct != null
+    ) {
+      fundPct = Number(optKnown.funding.pct);
+    }
+    const fundAt =
+      s.funding_cached_at ||
+      (optKnown.funding && optKnown.funding.at) ||
+      "";
+    const showFundLast =
+      fundCached || (fundSkipped && fundPct != null);
+    const fundSub = showFundLast
+      ? lastKnownSub(true, fundAt, optKnown.funding && optKnown.funding.at)
+      : "";
     let sharedSolVal;
     if (fundSkipped && !fundCached && fundPct == null) {
       // Truly never scanned — still show flat delta vs 0 if baseline exists
@@ -7196,7 +7355,7 @@ function renderBundlesUi(data) {
             : 0;
       sharedSolVal = withDelta(bunPctHtml(live), "funding_total_pct", live);
     }
-    html += stat("Shared SOL total", sharedSolVal);
+    html += stat("Shared SOL total", sharedSolVal, fundSub);
   }
   html += stat(
     "Suspect total",

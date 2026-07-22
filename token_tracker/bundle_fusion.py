@@ -282,6 +282,7 @@ def comprehensive_bundle_check(
                 ],
                 "from_cache": True,
                 "txs_scanned": cached_ss.get("txs_scanned") or 0,
+                "scanned_at": cached_ss.get("scanned_at"),
             }
             # Prefer already-enriched clusters from cache
             if base.get("ok") and cached_ss.get("funding_clusters"):
@@ -290,6 +291,8 @@ def comprehensive_bundle_check(
                 s0 = dict(base.get("summary") or {})
                 s0["funding_clusters"] = len(base["funding_clusters"])
                 s0["funding_from_cache"] = True
+                if cached_ss.get("scanned_at"):
+                    s0["funding_cached_at"] = cached_ss.get("scanned_at")
                 s0.pop("funding_error", None)
                 try:
                     fund_rows_c: list[dict[str, Any]] = []
@@ -440,6 +443,8 @@ def comprehensive_bundle_check(
                     pass
                 if shared_sol_from_cache:
                     s0["funding_from_cache"] = True
+                    if funding_report.get("scanned_at"):
+                        s0["funding_cached_at"] = funding_report.get("scanned_at")
                 base["summary"] = s0
                 if include_shared_sol and enriched_fc:
                     osc.put_slice(
@@ -528,6 +533,7 @@ def comprehensive_bundle_check(
                 "wallets": list(cached_fr.get("wallets") or []),
                 "wallets_scanned": cached_fr.get("wallets_scanned") or 0,
                 "from_cache": True,
+                "scanned_at": cached_fr.get("scanned_at"),
             }
         else:
             fresh_report = {
@@ -555,6 +561,7 @@ def comprehensive_bundle_check(
                 "clusters": list(cached_ms.get("clusters") or []),
                 "txs_scanned": cached_ms.get("txs_scanned") or 0,
                 "from_cache": True,
+                "scanned_at": cached_ms.get("scanned_at"),
             }
             # Stash sol multi for later if Multi-send box is off
             multi_send_report["_cached_sol_multi"] = list(
@@ -853,6 +860,8 @@ def comprehensive_bundle_check(
         s0["fresh_wallet_with_pct"] = fn
         if fresh_from_cache:
             s0["fresh_from_cache"] = True
+            if fresh_report.get("scanned_at"):
+                s0["fresh_cached_at"] = fresh_report.get("scanned_at")
         # Unique multi-send wallets (token + SOL) total supply %
         ms_shell = {
             "multi_send_clusters": multi_clusters,
@@ -894,6 +903,8 @@ def comprehensive_bundle_check(
             base["sol_multi_send_clusters"] = []
         elif multi_send_from_cache:
             s0["multi_send_from_cache"] = True
+            if multi_send_report.get("scanned_at"):
+                s0["multi_send_cached_at"] = multi_send_report.get("scanned_at")
             s0.pop("multi_send_error", None)
         elif multi_send_error and not multi_clusters and not sol_multi:
             s0["multi_send_error"] = str(multi_send_error)[:240]

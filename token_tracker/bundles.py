@@ -2642,6 +2642,9 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
             "fresh_from_cache": s.get("fresh_from_cache"),
             "multi_send_from_cache": s.get("multi_send_from_cache"),
             "funding_from_cache": s.get("funding_from_cache"),
+            "fresh_cached_at": s.get("fresh_cached_at"),
+            "multi_send_cached_at": s.get("multi_send_cached_at"),
+            "funding_cached_at": s.get("funding_cached_at"),
             "token_multi_send_clusters": s.get("token_multi_send_clusters")
             or len(token_ms),
             "sol_multi_send_clusters": s.get("sol_multi_send_clusters") or len(sol_ms),

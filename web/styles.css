@@ -1413,6 +1413,16 @@ a.copy-mint:hover,
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
+/* Last known · timestamp under Fresh / Multi-send / Shared SOL when not live */
+.bun-stat-sub {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--text-muted, #8a8f98);
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+}
 /* Since-last-Analyze relative change (1–25 green · 25–50 yellow · 50–75 orange · 75–99 red) */
 .bun-stat-delta {
   display: inline-block;
