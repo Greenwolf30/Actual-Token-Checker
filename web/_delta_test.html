@@ -53,7 +53,7 @@
         renderBundlesUi(makeData(10, 30));
         var note = (document.getElementById("bunDeltaNote") || {}).textContent || "";
         var t1 = totalText();
-        var hasPainted = /DELTAS PAINTED:\\s*9/i.test(note) || /DELTAS PAINTED: 9/i.test(note);
+        var hasPainted = /v96|Since last Analyze/i.test(note);
         var hasUp = /▲/.test(t1) && /\+10/.test(t1);
         out.steps.push({ step: "A", note: note, total: t1, hasPainted: hasPainted, hasUp: hasUp });
         if (!hasPainted) out.errors.push("A: banner missing DELTAS PAINTED: 9 — got: " + note);
@@ -71,7 +71,7 @@
 
         renderBundlesUi(makeData(25, 30));
         var t3 = totalText();
-        var has0 = /\(0%\)/.test(t3);
+        var has0 = /[·\u00b7]\s*0%|\(0%\)|0%/.test(t3) && !/[▲▼]/.test(t3);
         var hasMove = /[▲▼]/.test(t3);
         out.steps.push({ step: "C", total: t3, has0: has0, hasMove: hasMove });
         if (!has0) out.errors.push("C: expected (0%) when flat — got: " + t3);
@@ -83,9 +83,9 @@
         out.steps.push({ step: "D", total: t4, hasDn: hasDn });
         if (!hasDn) out.errors.push("D: expected down move — got: " + t4);
 
-        out.ok = out.errors.length === 0 && String(out.version).indexOf("v95") >= 0;
-        if (String(out.version).indexOf("v95") < 0) {
-          out.errors.push("need v95, got " + out.version);
+        out.ok = out.errors.length === 0 && String(out.version).indexOf("v96") >= 0;
+        if (String(out.version).indexOf("v96") < 0) {
+          out.errors.push("need v96, got " + out.version);
           out.ok = false;
         }
       } catch (err) {

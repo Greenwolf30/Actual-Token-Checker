@@ -1478,17 +1478,18 @@ a.copy-mint:hover,
   opacity: 1 !important;
 }
 
+/* Classic: arrow sits inline after the % */
 .bun-stat-value .bun-stat-delta {
-  display: block !important;
-  margin-left: 0 !important;
-  margin-top: 6px !important;
-  padding: 3px 8px !important;
-  border-radius: 6px !important;
-  background: rgba(0, 0, 0, 0.35) !important;
-  border: 1px solid rgba(230, 208, 122, 0.4) !important;
-  width: fit-content;
-  max-width: 100%;
-  font-size: 0.8rem !important;
+  display: inline !important;
+  margin-left: 6px !important;
+  margin-top: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  width: auto !important;
+  font-size: 0.85rem !important;
+  font-weight: 700 !important;
+  vertical-align: baseline !important;
 }
 
 .bun-client-ver {

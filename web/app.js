@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v95";
+const ADTC_CLIENT_VERSION = "v96";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -6423,93 +6423,68 @@ function mountBundleStatsBar(mountEl, items, version) {
   note.className = "bun-delta-note";
   note.id = "bunDeltaNote";
   note.textContent =
-    "Since last Analyze · " +
-    (version || "?") +
-    " · deltas on every box";
+    "Since last Analyze · " + (version || "?");
   mountEl.appendChild(note);
 
   const grid = document.createElement("div");
   grid.className = "bun-stats";
   grid.setAttribute("data-adtc-deltas", "1");
 
-  let painted = 0;
   (items || []).forEach((it) => {
     if (!it) return;
     const box = document.createElement("div");
     box.className = "bun-stat";
     box.setAttribute("data-bun-stat", String(it.label || ""));
 
-    // Normalize delta text — always present
-    // Risk score uses points (0 / +8); other boxes use percent (0% / +3%)
     const isScoreBox =
       it.isScore === true ||
       String(it.label || "").toLowerCase() === "risk" ||
       it.key === "risk";
+
+    // Classic marker text from compute: "▲ +3%" / "▼ −1%" / "· 0%"
     let dText = it.deltaText != null ? String(it.deltaText).trim() : "";
-    if (!dText || /no change/i.test(dText)) dText = isScoreBox ? "0" : "0%";
-    dText = dText.replace(/^\(|\)$/g, "");
-    // Strip accidental % on risk deltas
-    if (isScoreBox) dText = dText.replace(/%/g, "").trim();
-    const isFlat =
-      dText === "0%" ||
-      dText === "0" ||
-      dText === "+0" ||
-      dText === "-0" ||
-      /^[+\-]?0(\.0+)?%?$/.test(dText);
-    // Normalize legacy UP/DN text → arrows
-    dText = dText.replace(/^UP\s*/i, "▲ ").replace(/^DN\s*/i, "▼ ");
-    const isUp = /^▲/.test(dText) || /\bUP\b/i.test(dText);
-    const isDn = /^▼/.test(dText) || /\bDN\b/i.test(dText);
-    // Human-facing chip: arrows for movement, green 0 / 0% when flat
-    let chip = dText;
-    if (isFlat) chip = isScoreBox ? "0" : "0%";
-    // Ensure arrow is present on non-flat (in case only "+3%" arrived)
-    if (!isFlat && !/[▲▼]/.test(chip)) {
-      if (/^\s*\+/.test(chip) || isUp) chip = "▲ " + chip.replace(/^\s*\+/, "+");
-      else if (/^\s*-|^\s*−|^\s*–/.test(chip) || isDn)
-        chip = "▼ " + chip.replace(/^\s*[-−–]/, "-");
+    dText = dText.replace(/^\(|\)$/g, "").trim();
+    // Normalize legacy UP/DN
+    dText = dText.replace(/^UP\s*/i, "\u25B2 ").replace(/^DN\s*/i, "\u25BC ");
+    if (!dText || /no change/i.test(dText)) {
+      dText = isScoreBox ? "· 0" : "· 0%";
     }
-    const chipParen = "(" + chip + ")";
+    if (isScoreBox) {
+      // Risk: points only — strip any %
+      dText = dText.replace(/%/g, "").replace(/\u00b7\s*0%?/, "· 0");
+    }
+    const isFlat =
+      /^\u00b7/.test(dText) ||
+      dText === "0" ||
+      dText === "0%" ||
+      /^[+\-\u2212]?\s*0(\.0+)?%?$/.test(dText);
+    const isUp = /[\u25B2▲]/.test(dText);
+    const isDn = /\u25BC|^▼/.test(dText);
+
+    let dCls = String(it.deltaCls || "");
+    if (isFlat) dCls = "bun-delta-green";
+    else if (isDn) dCls = dCls || "bun-delta-red";
+    else if (isUp) dCls = dCls || "bun-delta-green";
+    else dCls = dCls || "bun-delta-green";
 
     const lab = document.createElement("span");
     lab.className = "bun-stat-label";
-    // Put delta in the LABEL too so it cannot be missed
-    lab.textContent =
-      String(it.label || "") + "  " + chipParen;
+    lab.textContent = String(it.label || "");
 
     const val = document.createElement("span");
     val.className = "bun-stat-value";
 
-    // Single line: "12% (▲ +3%)" — delta is plain text next to %, not a fragile chip-only UI
     const main = document.createElement("span");
     if (it.valueClass) main.className = String(it.valueClass);
-    const base = String(it.valueText != null ? it.valueText : "—");
-    main.textContent = base + " " + chipParen;
+    main.textContent = String(it.valueText != null ? it.valueText : "—");
 
-    // Second, high-contrast chip with INLINE STYLES (survives any stylesheet)
+    // Classic: 12% ▲ +3%  (value then space then arrow delta — no parens)
     const dlt = document.createElement("span");
-    dlt.className =
-      "bun-stat-delta " +
-      (isFlat
-        ? "bun-delta-green"
-        : isDn
-          ? "bun-delta-red"
-          : isUp
-            ? "bun-delta-green"
-            : String(it.deltaCls || "bun-delta-green"));
-    dlt.textContent = chipParen;
-    dlt.setAttribute(
-      "style",
-      "display:block!important;visibility:visible!important;opacity:1!important;" +
-        "margin-top:6px!important;padding:4px 8px!important;" +
-        "font-size:0.9rem!important;font-weight:800!important;" +
-        "border-radius:6px!important;width:fit-content!important;" +
-        "background:rgba(0,0,0,0.45)!important;" +
-        "border:1px solid rgba(110,231,168,0.55)!important;" +
-        "color:" +
-        (isDn ? "#f87171" : "#6ee7a8") +
-        "!important;"
-    );
+    dlt.className = "bun-stat-delta " + dCls;
+    dlt.textContent = " " + dText;
+    dlt.title = isScoreBox
+      ? "Risk score change (points)"
+      : "Change since last Analyze";
 
     val.appendChild(main);
     val.appendChild(dlt);
@@ -6523,25 +6498,9 @@ function mountBundleStatsBar(mountEl, items, version) {
       box.appendChild(sub);
     }
     grid.appendChild(box);
-    painted++;
   });
 
   mountEl.appendChild(grid);
-  // Visible proof deltas were painted
-  try {
-    note.textContent =
-      "Since last Analyze · " +
-      (version || "?") +
-      " · DELTAS PAINTED: " +
-      painted +
-      " boxes";
-    note.setAttribute(
-      "style",
-      "display:block!important;color:#fde68a!important;font-weight:800!important;" +
-        "padding:8px 10px!important;border:1px solid #fde68a!important;" +
-        "background:rgba(253,230,138,0.12)!important;margin-bottom:10px!important;"
-    );
-  } catch (_) {}
 }
 
 function summaryOnlyBundlesView(bv) {
@@ -7580,7 +7539,8 @@ function computeBundleStatDeltaParts(cur, prev, kind, opts) {
   }
   // Always return a visible marker.
   // Flat / missing → green 0 (score points) or 0% (supply %)
-  const flatText = isScore ? "0" : "0%";
+  // Classic flat: · 0% (green). Risk score: · 0 (points)
+  const flatText = isScore ? "· 0" : "· 0%";
   if (c == null || p == null || !Number.isFinite(c - p)) {
     return {
       text: flatText,
@@ -7602,26 +7562,24 @@ function computeBundleStatDeltaParts(cur, prev, kind, opts) {
     };
   }
   const up = diff > 0;
-  const sign = up ? "+" : "-";
+  // Classic style: ▲ +3% / ▼ −1.2%
+  const sign = up ? "+" : "−";
   const mag = Math.abs(diff);
   const colorMag = isScore ? Math.min(99, mag * 5) : Math.min(99, mag * 20);
   const cls = bundleChangeDeltaClass(Math.max(1, colorMag));
   let label;
   if (isScore) {
-    // Risk score is 0–100 points, never a percent delta
     label = Math.round(mag).toString();
   } else {
-    if (mag >= 100) label = mag.toFixed(0) + "%";
-    else if (mag >= 10) label = mag.toFixed(1).replace(/\.0$/, "") + "%";
+    if (mag >= 10) label = mag.toFixed(0) + "%";
     else label = mag.toFixed(1).replace(/\.0$/, "") + "%";
   }
-  // Arrows are the delta UI (▲ up / ▼ down) — not UP/DN text
   const arrow = up ? "▲" : "▼";
   return {
     text: arrow + " " + sign + label,
     cls: cls,
     title: isScore
-      ? "Risk score change since last Analyze (points, not %)"
+      ? "Risk score change since last Analyze (points)"
       : "Change since last Analyze of this mint",
     flat: false,
     isScore: isScore,
@@ -7632,22 +7590,28 @@ function computeBundleStatDeltaParts(cur, prev, kind, opts) {
 function formatBundleStatDelta(cur, prev, kind, opts) {
   const isScore = kind === "score";
   const parts = computeBundleStatDeltaParts(cur, prev, kind, opts) || {
-    text: isScore ? "0" : "0%",
+    text: isScore ? "· 0" : "· 0%",
     cls: "bun-delta-green",
     title: "No change since last Analyze",
     isScore: isScore,
+    flat: true,
   };
-  const text = parts.text || (isScore ? "0" : "0%");
+  let text = parts.text || (isScore ? "· 0" : "· 0%");
+  // Classic flat marker
+  if (parts.flat) {
+    text = isScore ? "· 0" : "· 0%";
+  }
   const cls = parts.cls || "bun-delta-green";
   const title = parts.title || "Change since last Analyze";
+  // Classic: no extra parentheses around the whole marker
   return (
     '<span class="bun-stat-delta ' +
     cls +
     '" title="' +
     title +
-    '">(' +
+    '">' +
     text +
-    ")</span>"
+    "</span>"
   );
 }
 
@@ -8094,30 +8058,25 @@ function renderBundlesUi(data) {
     }
     if (!parts || !parts.text) {
       parts = {
-        text: kind === "score" ? "0" : "0%",
+        text: kind === "score" ? "· 0" : "· 0%",
         cls: "bun-delta-green",
         title: "No change since last Analyze",
         flat: true,
         isScore: kind === "score",
       };
     }
-    const plain = "(" + parts.text + ")";
+    // Classic: 12% ▲ +3%  (space + marker, no parentheses)
+    const plain = parts.text;
     const dHtml =
       '<span class="bun-stat-delta ' +
       parts.cls +
       '" title="' +
-      parts.title +
+      (parts.title || "") +
       '">' +
       plain +
       "</span>";
     htmlByKeyThisRun[key] = dHtml;
-    // Bake plain text INTO the same colored span as the % so it cannot disappear
-    const main = String(mainHtml);
-    const m = main.match(/^(<span\b[^>]*>)([\s\S]*)(<\/span>)\s*$/i);
-    if (m) {
-      return m[1] + m[2] + " " + plain + m[3];
-    }
-    return main + " " + plain;
+    return String(mainHtml) + " " + dHtml;
   }
 
   let html = "";
@@ -8899,7 +8858,7 @@ function renderBundlesUi(data) {
     function pushStat(label, valueText, valueClass, key, curOverride, sub) {
       const kind = key === "risk" ? "score" : "pct";
       const isScore = kind === "score";
-      const flatDefault = isScore ? "(0)" : "(0%)";
+      const flatDefault = isScore ? "· 0" : "· 0%";
       let deltaText = null;
       let deltaCls = "bun-delta-green";
       // Restore: prefer exact frozen marker from last live Analyze
@@ -8934,16 +8893,17 @@ function renderBundlesUi(data) {
           { coalesceNull: true }
         );
         if (parts && parts.text) {
-          deltaText = "(" + parts.text + ")";
+          // Classic: "▲ +3%" or "· 0%" — no wrapping parens
+          deltaText = parts.text;
           deltaCls = parts.cls || "bun-delta-green";
           if (parts.flat) deltaCls = "bun-delta-green";
         } else {
-          deltaText = flatDefault;
+          deltaText = isScore ? "· 0" : "· 0%";
           deltaCls = "bun-delta-green";
         }
       }
       if (!deltaText) {
-        deltaText = flatDefault;
+        deltaText = isScore ? "· 0" : "· 0%";
         deltaCls = "bun-delta-green";
       }
       htmlByKeyThisRun[key] =
@@ -9217,11 +9177,10 @@ function renderBundlesUi(data) {
       const key = DELTA_LABEL_TO_KEY[lab];
       let html = htmlByKey && key ? htmlByKey[key] : "";
       if (!html || /no change/i.test(String(html))) {
-        const flat =
+        html =
           key === "risk"
-            ? '<span class="bun-stat-delta bun-delta-green">(0)</span>'
-            : '<span class="bun-stat-delta bun-delta-green">(0%)</span>';
-        html = flat;
+            ? '<span class="bun-stat-delta bun-delta-green">· 0</span>'
+            : '<span class="bun-stat-delta bun-delta-green">· 0%</span>';
       }
       valEl.insertAdjacentHTML("beforeend", " ");
       valEl.insertAdjacentHTML("beforeend", html);
@@ -9302,8 +9261,8 @@ function renderBundlesUi(data) {
           (el.querySelector(".bun-stat-label") || {}).textContent ||
           ""
         ).toLowerCase();
-        // Risk is score points; other boxes are supply %
-        s.textContent = lab.indexOf("risk") === 0 ? "(0)" : "(0%)";
+        // Classic flat: · 0 (risk points) / · 0% (supply)
+        s.textContent = lab.indexOf("risk") === 0 ? "· 0" : "· 0%";
         s.setAttribute(
           "style",
           "display:block!important;color:#6ee7a8!important;font-weight:800!important;" +
