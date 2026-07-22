@@ -42,6 +42,9 @@
     function totalChunk(text) {
       return (String(text).split("TOTAL BUNDLE")[1] || "").split("SIMILAR")[0] || "";
     }
+    function countDeltas() {
+      return document.querySelectorAll(".bun-stat-delta").length;
+    }
     window.__runDeltaTest = function () {
       var out = { ok: false, errors: [], version: window.__ADTC_CLIENT__ || null, steps: [] };
       try {
@@ -49,61 +52,46 @@
         try { localStorage.clear(); sessionStorage.clear(); } catch (e) {}
         if (typeof migrateBundleDeltaBaselines === "function") migrateBundleDeltaBaselines();
 
-        // A: first run 10% → UP, no "no change" on total
+        // A: 10% first → UP +10%, every box has a delta
         renderBundlesUi(makeData(10, 30));
         var t1 = document.getElementById("bundlesUi").innerText;
         var c1 = totalChunk(t1);
-        var up1 = /UP \+10/.test(c1);
-        var flat1 = /no change/i.test(c1);
-        out.steps.push({ step: "A_10pct", hasUp: up1, hasNoChange: flat1, sample: c1.slice(0, 120) });
-        if (!up1) out.errors.push("A: expected UP +10% on total when change vs zeros");
-        if (flat1) out.errors.push("A: total should not say no change");
+        var n1 = countDeltas();
+        out.steps.push({ step: "A", up: /UP \+10/.test(c1), n: n1, sample: c1.slice(0, 80) });
+        if (!/UP \+10/.test(c1)) out.errors.push("A: expected UP +10% on total");
+        if (n1 < 9) out.errors.push("A: expected delta on every box, got " + n1);
 
-        // B: 10→25 → UP +15
+        // B: 10→25 → UP +15%
         renderBundlesUi(makeData(25, 30));
-        var t2 = document.getElementById("bundlesUi").innerText;
-        var c2 = totalChunk(t2);
-        var up2 = /UP \+15/.test(c2);
-        out.steps.push({ step: "B_25pct", hasUp15: up2, sample: c2.slice(0, 120) });
-        if (!up2) out.errors.push("B: expected UP +15% when total 10→25");
+        var c2 = totalChunk(document.getElementById("bundlesUi").innerText);
+        var n2 = countDeltas();
+        out.steps.push({ step: "B", up15: /UP \+15/.test(c2), n: n2, sample: c2.slice(0, 80) });
+        if (!/UP \+15/.test(c2)) out.errors.push("B: expected UP +15%");
+        if (n2 < 9) out.errors.push("B: expected 9 deltas, got " + n2);
 
-        // C: 25→25 → no marker at all (not "no change")
+        // C: 25→25 → green (0%) on total, still all boxes have deltas
         renderBundlesUi(makeData(25, 30));
-        var t3 = document.getElementById("bundlesUi").innerText;
-        var c3 = totalChunk(t3);
-        var up3 = /UP |DN /.test(c3);
-        var flat3 = /no change/i.test(c3);
-        var hasDeltaSpan = !!document.querySelector(
-          '.bun-stat[data-bun-stat="Total bundle"] .bun-stat-delta'
-        );
-        out.steps.push({
-          step: "C_25pct_flat",
-          hasMovement: up3,
-          hasNoChangeText: flat3,
-          hasDeltaSpan: hasDeltaSpan,
-          sample: c3.slice(0, 120)
-        });
-        if (up3) out.errors.push("C: should not show UP/DN when unchanged");
-        if (flat3) out.errors.push("C: should not show 'no change' text");
-        if (hasDeltaSpan) out.errors.push("C: should not render delta span when flat");
+        var c3 = totalChunk(document.getElementById("bundlesUi").innerText);
+        var n3 = countDeltas();
+        var flat3 = /\(0%\)/.test(c3) && !/UP |DN /.test(c3);
+        var totalEl = document.querySelector('.bun-stat[data-bun-stat="Total bundle"] .bun-stat-delta');
+        var green = totalEl && /bun-delta-green/.test(totalEl.className);
+        out.steps.push({ step: "C", flat0: flat3, green: !!green, n: n3, sample: c3.slice(0, 80) });
+        if (!flat3) out.errors.push("C: expected (0%) when unchanged, got: " + c3.slice(0, 60));
+        if (!green) out.errors.push("C: expected green class on flat 0%");
+        if (n3 < 9) out.errors.push("C: expected 9 deltas, got " + n3);
 
         // D: 25→12 → DN
         renderBundlesUi(makeData(12, 30));
-        var t4 = document.getElementById("bundlesUi").innerText;
-        var c4 = totalChunk(t4);
-        var dn = /DN /.test(c4);
-        out.steps.push({ step: "D_12pct", hasDn: dn, sample: c4.slice(0, 120) });
-        if (!dn) out.errors.push("D: expected DN when total 25→12");
+        var c4 = totalChunk(document.getElementById("bundlesUi").innerText);
+        var n4 = countDeltas();
+        out.steps.push({ step: "D", dn: /DN /.test(c4), n: n4, sample: c4.slice(0, 80) });
+        if (!/DN /.test(c4)) out.errors.push("D: expected DN when 25→12");
+        if (n4 < 9) out.errors.push("D: expected 9 deltas, got " + n4);
 
-        // Whole page should never show "no change" string
-        var all = document.getElementById("bundlesUi").innerText;
-        if (/no change/i.test(all)) {
-          out.errors.push("page still contains 'no change' text");
-        }
-
-        out.ok = out.errors.length === 0 && String(out.version).indexOf("v91") >= 0;
-        if (String(out.version).indexOf("v91") < 0) {
-          out.errors.push("need v91 got " + out.version);
+        out.ok = out.errors.length === 0 && String(out.version).indexOf("v92") >= 0;
+        if (String(out.version).indexOf("v92") < 0) {
+          out.errors.push("need v92 got " + out.version);
           out.ok = false;
         }
       } catch (err) {

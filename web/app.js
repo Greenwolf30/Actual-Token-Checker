@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v91";
+const ADTC_CLIENT_VERSION = "v92";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -6425,7 +6425,7 @@ function mountBundleStatsBar(mountEl, items, version) {
   note.textContent =
     "Since last Analyze · " +
     (version || "?") +
-    " · deltas show only when values change";
+    " · delta under each % (0% green if unchanged)";
   mountEl.appendChild(note);
 
   const grid = document.createElement("div");
@@ -6450,21 +6450,17 @@ function mountBundleStatsBar(mountEl, items, version) {
     main.textContent = String(it.valueText != null ? it.valueText : "—");
 
     val.appendChild(main);
+    // Always show a delta under the %: UP/DN when moved, green 0% when flat
     let dText = it.deltaText != null ? String(it.deltaText).trim() : "";
-    // Hide flat / empty markers entirely
-    if (
-      dText &&
-      !/^\(?no change\)?$/i.test(dText) &&
-      !/^\(?d\s*=0%?\)?$/i.test(dText)
-    ) {
-      if (dText.charAt(0) !== "(") dText = "(" + dText + ")";
-      const dlt = document.createElement("span");
-      dlt.className =
-        "bun-stat-delta " + String(it.deltaCls || "bun-delta-green");
-      dlt.textContent = dText;
-      val.appendChild(document.createElement("br"));
-      val.appendChild(dlt);
-    }
+    if (!dText || /^\(?no change\)?$/i.test(dText)) dText = "0%";
+    if (dText.charAt(0) !== "(") dText = "(" + dText + ")";
+    let dCls = String(it.deltaCls || "");
+    if (!dCls || /flat/i.test(dCls) || dText === "(0%)") dCls = "bun-delta-green";
+    const dlt = document.createElement("span");
+    dlt.className = "bun-stat-delta " + dCls;
+    dlt.textContent = dText;
+    val.appendChild(document.createElement("br"));
+    val.appendChild(dlt);
     box.appendChild(lab);
     box.appendChild(val);
 
@@ -7496,11 +7492,11 @@ function loadBundleStatsPrev(mint) {
 /** True if text already includes a since-last-Analyze marker. */
 function hasBundleDeltaMarker(text) {
   const t = String(text || "");
-  // Only real movement counts as a delta marker (not flat / no change)
   return (
     /\bUP\s+[+\-]/.test(t) ||
     /\bDN\s+[+\-]/.test(t) ||
-    (/bun-stat-delta/.test(t) && !/no change/i.test(t))
+    /\(0%\)/.test(t) ||
+    /bun-stat-delta/.test(t)
   );
 }
 
@@ -7513,14 +7509,24 @@ function computeBundleStatDeltaParts(cur, prev, kind, opts) {
     if (c == null) c = 0;
     if (p == null) p = 0;
   }
-  // No marker when there is nothing meaningful to show (missing or flat)
+  // Always return a visible marker. Flat / missing → green 0%
   if (c == null || p == null || !Number.isFinite(c - p)) {
-    return { text: "", cls: "", title: "", flat: true };
+    return {
+      text: "0%",
+      cls: "bun-delta-green",
+      title: "No change since last Analyze",
+      flat: true,
+    };
   }
   const diff = c - p;
   const flatEps = isScore ? 0.5 : 0.05;
   if (Math.abs(diff) < flatEps) {
-    return { text: "", cls: "", title: "", flat: true };
+    return {
+      text: "0%",
+      cls: "bun-delta-green",
+      title: "No change since last Analyze",
+      flat: true,
+    };
   }
   const up = diff > 0;
   const sign = up ? "+" : "-";
@@ -7531,7 +7537,6 @@ function computeBundleStatDeltaParts(cur, prev, kind, opts) {
   if (isScore) {
     label = Math.round(mag).toString();
   } else {
-    // Keep one decimal under 10 so 18.5 does not become "19%"
     if (mag >= 100) label = mag.toFixed(0) + "%";
     else if (mag >= 10) label = mag.toFixed(1).replace(/\.0$/, "") + "%";
     else label = mag.toFixed(1).replace(/\.0$/, "") + "%";
@@ -7541,20 +7546,27 @@ function computeBundleStatDeltaParts(cur, prev, kind, opts) {
     text: arrow + " " + sign + label,
     cls: cls,
     title: "Change since last Analyze of this mint",
+    flat: false,
   };
 }
 
 /** HTML span for a delta (always non-empty). Shown as: (d +12%) */
 function formatBundleStatDelta(cur, prev, kind, opts) {
-  const parts = computeBundleStatDeltaParts(cur, prev, kind, opts);
-  if (!parts || !parts.text || parts.flat) return "";
+  const parts = computeBundleStatDeltaParts(cur, prev, kind, opts) || {
+    text: "0%",
+    cls: "bun-delta-green",
+    title: "No change since last Analyze",
+  };
+  const text = parts.text || "0%";
+  const cls = parts.cls || "bun-delta-green";
+  const title = parts.title || "Change since last Analyze";
   return (
     '<span class="bun-stat-delta ' +
-    parts.cls +
+    cls +
     '" title="' +
-    parts.title +
+    title +
     '">(' +
-    parts.text +
+    text +
     ")</span>"
   );
 }
@@ -7998,9 +8010,13 @@ function renderBundlesUi(data) {
       console.warn("[withDelta]", key, err);
       parts = null;
     }
-    if (!parts || !parts.text || parts.flat) {
-      htmlByKeyThisRun[key] = "";
-      return String(mainHtml);
+    if (!parts || !parts.text) {
+      parts = {
+        text: "0%",
+        cls: "bun-delta-green",
+        title: "No change since last Analyze",
+        flat: true,
+      };
     }
     const plain = "(" + parts.text + ")";
     const dHtml =
@@ -8825,31 +8841,34 @@ function renderBundlesUi(data) {
           kind,
           { coalesceNull: true }
         );
-        if (parts && parts.text && !parts.flat) {
+        if (parts && parts.text) {
           deltaText = "(" + parts.text + ")";
-          deltaCls = parts.cls || "bun-delta-green";
+          deltaCls =
+            parts.cls ||
+            (parts.flat ? "bun-delta-green" : "bun-delta-green");
+          if (parts.flat) deltaCls = "bun-delta-green";
         } else {
-          deltaText = "";
-          deltaCls = "";
+          deltaText = "(0%)";
+          deltaCls = "bun-delta-green";
         }
       }
-      // Skip flat / empty — only store real UP/DN markers
-      if (deltaText) {
-        htmlByKeyThisRun[key] =
-          '<span class="bun-stat-delta ' +
-          deltaCls +
-          '">' +
-          deltaText +
-          "</span>";
-      } else {
-        htmlByKeyThisRun[key] = "";
+      // On restore, if frozen had no UP/DN, still show green 0%
+      if (!deltaText) {
+        deltaText = "(0%)";
+        deltaCls = "bun-delta-green";
       }
+      htmlByKeyThisRun[key] =
+        '<span class="bun-stat-delta ' +
+        deltaCls +
+        '">' +
+        deltaText +
+        "</span>";
       items.push({
         label: label,
         valueText: valueText,
         valueClass: valueClass || "",
-        deltaText: deltaText || "",
-        deltaCls: deltaCls || "",
+        deltaText: deltaText,
+        deltaCls: deltaCls,
         sub: sub || "",
       });
     }
@@ -9105,8 +9124,11 @@ function renderBundlesUi(data) {
           ""
       ).trim();
       const key = DELTA_LABEL_TO_KEY[lab];
-      const html = htmlByKey && key ? htmlByKey[key] : "";
-      if (!html || /no change/i.test(String(html))) return;
+      let html = htmlByKey && key ? htmlByKey[key] : "";
+      if (!html || /no change/i.test(String(html))) {
+        html =
+          '<span class="bun-stat-delta bun-delta-green">(0%)</span>';
+      }
       valEl.insertAdjacentHTML("beforeend", " ");
       valEl.insertAdjacentHTML("beforeend", html);
     });
@@ -9172,7 +9194,17 @@ function renderBundlesUi(data) {
       {};
     injectFrozenDeltasIntoDom(root, map);
     try {
-      // Do not invent "(no change)" — only real UP/DN markers remain in the DOM
+      // Guarantee every stats box has a delta chip (green 0% if missing)
+      root.querySelectorAll(".bun-stat").forEach((el) => {
+        const valEl = el.querySelector(".bun-stat-value");
+        if (!valEl) return;
+        if (valEl.querySelector(".bun-stat-delta")) return;
+        const s = document.createElement("span");
+        s.className = "bun-stat-delta bun-delta-green";
+        s.textContent = "(0%)";
+        valEl.appendChild(document.createElement("br"));
+        valEl.appendChild(s);
+      });
       const n = root.querySelectorAll(".bun-stat-delta").length;
       console.info(
         "[bundles deltas]",

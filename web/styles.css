@@ -2007,3 +2007,9 @@ code {
   .nav-links { width: 100%; }
   .nav-link { padding: 6px 10px; font-size: 0.78rem; }
 }
+
+/* Always-visible flat delta (green 0%) */
+.bun-stat-delta.bun-delta-green {
+  color: #7dba8a !important;
+  font-weight: 800 !important;
+}
