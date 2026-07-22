@@ -110,8 +110,19 @@ def pool_to_dex_pair(pool: dict[str, Any], *, focus_mint: str | None = None) -> 
         price_usd = _f(pool.get("price"))
 
     day = pool.get("day") if isinstance(pool.get("day"), dict) else {}
-    vol = _f(day.get("volume"))
-    tvl = _f(pool.get("tvl"))
+    # Raydium day.volume is typically USD notional for the pool
+    vol = _f(
+        day.get("volume")
+        or day.get("volumeQuote")
+        or day.get("volume_usd")
+        or day.get("volumeUsd")
+    )
+    tvl = _f(
+        pool.get("tvl")
+        or pool.get("tvlUsd")
+        or pool.get("liquidity")
+        or pool.get("liquidityUsd")
+    )
     pool_id = str(pool.get("id") or "")
     ptype = str(pool.get("type") or pool.get("pooltype") or "raydium")
 

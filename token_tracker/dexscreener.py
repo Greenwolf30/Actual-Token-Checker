@@ -441,18 +441,124 @@ def _url_from_handle(platform: str, handle: str) -> str:
     return ""
 
 
+def _f(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def pair_liquidity_usd(pair: dict[str, Any] | None) -> float | None:
+    """Extract USD liquidity from DexScreener-shaped or alt-provider pair dicts."""
+    if not isinstance(pair, dict):
+        return None
+    liq = pair.get("liquidity")
+    if isinstance(liq, dict):
+        for k in ("usd", "USD", "usdValue", "value"):
+            v = _f(liq.get(k))
+            if v is not None:
+                return v
+        # Some payloads nest {quote: {usd: N}}
+        q = liq.get("quote") if isinstance(liq.get("quote"), dict) else None
+        if q:
+            v = _f(q.get("usd") or q.get("USD"))
+            if v is not None:
+                return v
+        return None
+    # Bare number on pair
+    for k in ("liquidity_usd", "liquidityUsd", "tvl", "tvlUsd"):
+        v = _f(pair.get(k))
+        if v is not None:
+            return v
+    return _f(liq)
+
+
+def pair_volume_h24_usd(pair: dict[str, Any] | None) -> float | None:
+    """Extract 24h USD volume from DexScreener-shaped or alt-provider pair dicts."""
+    if not isinstance(pair, dict):
+        return None
+    vol = pair.get("volume")
+    if isinstance(vol, dict):
+        for k in ("h24", "h24USD", "usd24h", "usd_24h", "day", "d24"):
+            v = _f(vol.get(k))
+            if v is not None:
+                return v
+        # Avoid m5/h1 as stand-ins for 24h
+        return None
+    for k in (
+        "volume_h24_usd",
+        "volume_h24",
+        "volume24h",
+        "volume24hUsd",
+        "v24hUSD",
+        "v24h",
+    ):
+        v = _f(pair.get(k))
+        if v is not None:
+            return v
+    return _f(vol)
+
+
+def enrich_summary_liquidity_volume(
+    summary: dict[str, Any],
+    pairs: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """
+    Fill missing/zero liquidity or 24h volume on the primary summary from
+    other pairs for the same token (Raydium/Birdeye/DexScreener alts).
+    """
+    if not isinstance(summary, dict):
+        return summary
+    liq = summary.get("liquidity_usd")
+    vol = summary.get("volume_h24_usd")
+    need_liq = liq is None or (isinstance(liq, (int, float)) and float(liq) <= 0)
+    need_vol = vol is None or (isinstance(vol, (int, float)) and float(vol) <= 0)
+    if not need_liq and not need_vol:
+        return summary
+
+    best_liq = float(liq or 0)
+    best_vol = float(vol or 0)
+    sum_vol = 0.0
+    for p in pairs or []:
+        if not isinstance(p, dict):
+            continue
+        pl = pair_liquidity_usd(p)
+        pv = pair_volume_h24_usd(p)
+        if pl is not None and pl > best_liq:
+            best_liq = pl
+        if pv is not None and pv > 0:
+            sum_vol += pv
+            if pv > best_vol:
+                best_vol = pv
+
+    if need_liq and best_liq > 0:
+        summary["liquidity_usd"] = best_liq
+    if need_vol:
+        # Token-wide 24h volume ≈ sum of pool volumes when primary was empty
+        fill = sum_vol if sum_vol > 0 else best_vol
+        if fill > 0:
+            summary["volume_h24_usd"] = fill
+    return summary
+
+
 def summarize_pair(pair: dict[str, Any]) -> dict[str, Any]:
     base = pair.get("baseToken") or {}
     quote = pair.get("quoteToken") or {}
     info = pair.get("info") or {}
-    price_usd = _f(pair.get("priceUsd"))
-    mcap = _f(pair.get("marketCap"))
-    fdv = _f(pair.get("fdv"))
-    liq = _f((pair.get("liquidity") or {}).get("usd"))
-    vol = pair.get("volume") or {}
-    chg = pair.get("priceChange") or {}
+    price_usd = _f(pair.get("priceUsd") or pair.get("price_usd") or pair.get("price"))
+    mcap = _f(pair.get("marketCap") or pair.get("market_cap_usd") or pair.get("mc"))
+    fdv = _f(pair.get("fdv") or pair.get("fdv_usd"))
+    liq = pair_liquidity_usd(pair)
+    vol_h24 = pair_volume_h24_usd(pair)
+    chg = pair.get("priceChange") or pair.get("price_change_pct") or {}
+    if not isinstance(chg, dict):
+        chg = {}
     txns = pair.get("txns") or {}
-    h24 = txns.get("h24") or {}
+    h24 = txns.get("h24") if isinstance(txns, dict) else {}
+    if not isinstance(h24, dict):
+        h24 = {}
     image_url = (
         info.get("imageUrl")
         or pair.get("imageUrl")
@@ -462,10 +568,10 @@ def summarize_pair(pair: dict[str, Any]) -> dict[str, Any]:
     )
 
     return {
-        "chain_id": pair.get("chainId"),
-        "dex_id": pair.get("dexId"),
-        "pair_address": pair.get("pairAddress"),
-        "pair_url": pair.get("url"),
+        "chain_id": pair.get("chainId") or pair.get("chain_id"),
+        "dex_id": pair.get("dexId") or pair.get("dex_id"),
+        "pair_address": pair.get("pairAddress") or pair.get("pair_address"),
+        "pair_url": pair.get("url") or pair.get("pair_url"),
         "base_token": {
             "address": base.get("address"),
             "name": base.get("name"),
@@ -481,7 +587,7 @@ def summarize_pair(pair: dict[str, Any]) -> dict[str, Any]:
         "market_cap_usd": mcap,
         "fdv_usd": fdv,
         "liquidity_usd": liq,
-        "volume_h24_usd": _f(vol.get("h24")),
+        "volume_h24_usd": vol_h24,
         "price_change_pct": {
             "m5": _f(chg.get("m5")),
             "h1": _f(chg.get("h1")),
@@ -496,13 +602,5 @@ def summarize_pair(pair: dict[str, Any]) -> dict[str, Any]:
         "labels": pair.get("labels") or [],
         "boosts_active": ((pair.get("boosts") or {}).get("active")),
         "image_url": image_url,
+        "_source": pair.get("_source"),
     }
-
-
-def _f(value: Any) -> float | None:
-    if value is None or value == "":
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None

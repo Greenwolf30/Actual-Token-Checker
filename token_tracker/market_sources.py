@@ -70,13 +70,29 @@ def birdeye_pairs_for_mint(mint: str) -> list[dict[str, Any]]:
 
     price = _f(body.get("price") or body.get("priceUsd") or body.get("value"))
     mc = _f(body.get("mc") or body.get("marketCap") or body.get("market_cap"))
-    liq = _f(body.get("liquidity") or body.get("liquidityUsd"))
+    liq = _f(
+        body.get("liquidity")
+        or body.get("liquidityUsd")
+        or body.get("liquidity_usd")
+        or body.get("totalLiquidity")
+        or body.get("realLiquidity")
+    )
+    # Prefer explicit USD volume fields; avoid v24h alone (sometimes % change)
     vol = _f(
         body.get("v24hUSD")
-        or body.get("v24h")
+        or body.get("volume24hUSD")
+        or body.get("volumeUSD24h")
         or body.get("volume24h")
         or body.get("volume_24h_usd")
+        or body.get("trade24h")
     )
+    if vol is None:
+        v24 = _f(body.get("v24h"))
+        # Only treat v24h as USD volume when it looks like dollars, not a % change
+        if v24 is not None and abs(v24) > 100:
+            vol = v24
+    if vol is None and not isinstance(body.get("volume"), dict):
+        vol = _f(body.get("volume"))
     name = str(body.get("name") or "")
     symbol = str(body.get("symbol") or "")
     if price is None and mc is None and liq is None:

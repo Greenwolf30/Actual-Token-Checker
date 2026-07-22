@@ -433,11 +433,47 @@ def analyze_token(
         return {"ok": False, "error": "Could not select a primary pair.", "query": query}
 
     pair_summary = dx.summarize_pair(primary)
+    # Primary pool (esp. Raydium price-only / Rugcheck / Pump synthetic) often
+    # lacks liquidity or 24h volume — fill from other pairs for this token.
+    try:
+        pair_summary = dx.enrich_summary_liquidity_volume(pair_summary, pairs)
+    except Exception:  # noqa: BLE001
+        pass
     socials = dx.extract_socials(primary)
 
     network = gt.network_id(pair_summary.get("chain_id"))
     token_addr = (pair_summary.get("base_token") or {}).get("address")
     base = pair_summary.get("base_token") or {}
+
+    # Last-resort: GeckoTerminal token endpoint (reserve + 24h volume)
+    try:
+        need_liq = not pair_summary.get("liquidity_usd")
+        need_vol = not pair_summary.get("volume_h24_usd")
+        if (need_liq or need_vol) and network and token_addr:
+            gtok = gt.fetch_token(network, token_addr)
+            attrs = (
+                ((gtok or {}).get("data") or {}).get("attributes")
+                if isinstance(gtok, dict)
+                else None
+            )
+            if isinstance(attrs, dict):
+                if need_liq:
+                    res = dx._f(  # noqa: SLF001 — shared float parser
+                        attrs.get("total_reserve_in_usd")
+                        or attrs.get("reserve_in_usd")
+                    )
+                    if res is not None and res > 0:
+                        pair_summary["liquidity_usd"] = res
+                if need_vol:
+                    vol_obj = attrs.get("volume_usd") or {}
+                    if isinstance(vol_obj, dict):
+                        gv = dx._f(vol_obj.get("h24"))  # noqa: SLF001
+                    else:
+                        gv = dx._f(vol_obj)
+                    if gv is not None and gv > 0:
+                        pair_summary["volume_h24_usd"] = gv
+    except Exception:  # noqa: BLE001
+        pass
 
     # Pump.fun bonding vs graduated is local (no network) — cheap
     pump_meta = pf.classify_graduation(

@@ -6092,9 +6092,30 @@ function renderSummary(data) {
     }
   }
   $("sumPrice").textContent = fmtUsd(m.price_usd);
-  $("sumMc").textContent = fmtUsd(m.market_cap_usd);
-  $("sumLiq").textContent = fmtUsd(m.liquidity_usd);
-  $("sumVol").textContent = fmtUsd(m.volume_h24_usd);
+  $("sumMc").textContent = fmtUsd(
+    m.market_cap_usd != null ? m.market_cap_usd : m.fdv_usd
+  );
+  // Defensive: some providers use alternate keys; never leave Liq/Vol blank if present
+  const liq =
+    m.liquidity_usd != null
+      ? m.liquidity_usd
+      : m.liquidityUsd != null
+        ? m.liquidityUsd
+        : m.liquidity != null && typeof m.liquidity === "object"
+          ? m.liquidity.usd
+          : m.liquidity;
+  const vol =
+    m.volume_h24_usd != null
+      ? m.volume_h24_usd
+      : m.volume24h != null
+        ? m.volume24h
+        : m.volume_h24 != null
+          ? m.volume_h24
+          : m.volume != null && typeof m.volume === "object"
+            ? m.volume.h24
+            : m.volume;
+  $("sumLiq").textContent = fmtUsd(liq);
+  $("sumVol").textContent = fmtUsd(vol);
   const chg = (m.price_change_pct || {}).h24;
   const chgEl = $("sumChg");
   chgEl.textContent = fmtPct(chg);
