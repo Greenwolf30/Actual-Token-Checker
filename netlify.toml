@@ -17,12 +17,12 @@
 [[headers]]
   for = "/*.js"
   [headers.values]
-    Cache-Control = "public, max-age=300"
+    Cache-Control = "no-cache, must-revalidate"
 
 [[headers]]
   for = "/*.css"
   [headers.values]
-    Cache-Control = "public, max-age=300"
+    Cache-Control = "no-cache, must-revalidate"
 
 [[headers]]
   for = "/logo.svg"

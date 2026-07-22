@@ -1435,26 +1435,39 @@ a.copy-mint:hover,
   letter-spacing: 0.01em;
 }
 /* Since-last-Analyze relative change (1–25 green · 25–50 yellow · 50–75 orange · 75–99 red) */
+/* Delta sits on its own row under the % so it cannot be clipped/hidden */
+.bun-stat-delta-row {
+  display: block;
+  margin-top: 4px;
+  line-height: 1.2;
+  min-height: 1.1em;
+}
 .bun-stat-delta {
   display: inline-block;
-  margin-left: 6px;
-  font-size: 0.82rem;
-  font-weight: 700;
-  letter-spacing: 0.02em;
+  margin-left: 0;
+  font-size: 0.85rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
   white-space: nowrap;
   vertical-align: baseline;
   line-height: 1.2;
   opacity: 1;
   visibility: visible;
+  font-variant-numeric: tabular-nums;
 }
 .bun-stat-delta.bun-delta-green { color: #6a9e78; }
 .bun-stat-delta.bun-delta-yellow { color: #b8a85c; }
 .bun-stat-delta.bun-delta-orange { color: #c47a4a; }
 .bun-stat-delta.bun-delta-red { color: #c45c5c; }
 .bun-stat-delta.bun-delta-flat {
-  color: #9aa3b2;
-  font-weight: 700;
+  color: #a8b0bd;
+  font-weight: 800;
   opacity: 1;
+}
+.bun-client-ver {
+  color: var(--text-muted, #8a8f98);
+  font-size: 0.72rem;
+  font-weight: 600;
 }
 /* Supply % bands inside stats / section totals (class may be on child span) */
 .bun-stat-value .pct-low,

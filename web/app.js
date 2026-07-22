@@ -24,6 +24,10 @@ const BUNDLE_DELTA_HTML_KEY = "adtc_bundle_delta_html";
 const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
+/** Bump when shipping UI delta/persist fixes (shown in Bundles). */
+const ADTC_CLIENT_VERSION = "v84";
+try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
+
 /** Bump when Flagged-wallet rules change so sticky junk is wiped once. */
 const RUGGERS_RULES_VERSION = 8;
 /** Sold ≥ this fraction of first-lookup bag → list as seller (99%). */
@@ -6325,6 +6329,90 @@ function summaryOnlyBundlesView(bv) {
  * Write payload to localStorage + sessionStorage for one or more keys.
  * Returns true if at least one write succeeded.
  */
+
+/** IndexedDB fallback when localStorage quota fails (survives refresh). */
+const ADTC_IDB_NAME = "adtc_persist_v1";
+const ADTC_IDB_STORE = "kv";
+
+function openAdtcIdb() {
+  return new Promise((resolve, reject) => {
+    try {
+      if (!window.indexedDB) {
+        reject(new Error("no idb"));
+        return;
+      }
+      const req = indexedDB.open(ADTC_IDB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(ADTC_IDB_STORE)) {
+          db.createObjectStore(ADTC_IDB_STORE);
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error || new Error("idb open failed"));
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+function idbSet(key, value) {
+  return openAdtcIdb()
+    .then(
+      (db) =>
+        new Promise((resolve) => {
+          try {
+            const tx = db.transaction(ADTC_IDB_STORE, "readwrite");
+            tx.objectStore(ADTC_IDB_STORE).put(value, key);
+            tx.oncomplete = () => {
+              try {
+                db.close();
+              } catch (_) {}
+              resolve(true);
+            };
+            tx.onerror = () => {
+              try {
+                db.close();
+              } catch (_) {}
+              resolve(false);
+            };
+          } catch (_) {
+            resolve(false);
+          }
+        })
+    )
+    .catch(() => false);
+}
+
+function idbGet(key) {
+  return openAdtcIdb()
+    .then(
+      (db) =>
+        new Promise((resolve) => {
+          try {
+            const tx = db.transaction(ADTC_IDB_STORE, "readonly");
+            const req = tx.objectStore(ADTC_IDB_STORE).get(key);
+            req.onsuccess = () => {
+              const v = req.result;
+              try {
+                db.close();
+              } catch (_) {}
+              resolve(v == null ? null : v);
+            };
+            req.onerror = () => {
+              try {
+                db.close();
+              } catch (_) {}
+              resolve(null);
+            };
+          } catch (_) {
+            resolve(null);
+          }
+        })
+    )
+    .catch(() => null);
+}
+
 function persistAnalyzePayload(keys, obj) {
   let raw;
   try {
@@ -6338,6 +6426,19 @@ function persistAnalyzePayload(keys, obj) {
   for (const k of keys) {
     if (safeLocalStorageSet(k, raw)) ok = true;
     if (safeSessionStorageSet(k, raw)) ok = true;
+    // IndexedDB (async) — best-effort; survives when localStorage is full
+    try {
+      idbSet(k, raw);
+    } catch (_) {
+      /* ignore */
+    }
+  }
+  // Always also store under primary key in IDB for restoreLastAnalyzeAsync
+  try {
+    idbSet(LAST_ANALYZE_KEY, raw);
+    idbSet(LAST_BUNDLES_ONLY_KEY, raw);
+  } catch (_) {
+    /* ignore */
   }
   return ok;
 }
@@ -6605,35 +6706,36 @@ function saveLastBundlesAnalyze(data, query) {
   saveLastAnalyze(data, query);
 }
 
+function parseLastAnalyzeRaw(raw) {
+  if (!raw) return null;
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!parsed || !parsed.data || !parsed.data.ok) return null;
+    const d = parsed.data;
+    if (!d.bundles_view && !(d.sections && d.sections.bundles) && !d.market) {
+      return null;
+    }
+    return parsed;
+  } catch (_) {
+    return null;
+  }
+}
+
 function loadLastAnalyze() {
   const keys = [
     LAST_ANALYZE_KEY,
     LAST_BUNDLES_ANALYZE_KEY,
     LAST_BUNDLES_ONLY_KEY,
   ];
-  const tryParse = (raw) => {
-    if (!raw) return null;
-    try {
-      const parsed = JSON.parse(raw);
-      if (!parsed || !parsed.data || !parsed.data.ok) return null;
-      const d = parsed.data;
-      if (!d.bundles_view && !(d.sections && d.sections.bundles) && !d.market) {
-        return null;
-      }
-      return parsed;
-    } catch (_) {
-      return null;
-    }
-  };
   try {
     for (const k of keys) {
-      const hit = tryParse(localStorage.getItem(k));
+      const hit = parseLastAnalyzeRaw(localStorage.getItem(k));
       if (hit) return hit;
     }
     // sessionStorage survives refresh in the same tab
     for (const k of keys) {
       try {
-        const hit = tryParse(sessionStorage.getItem(k));
+        const hit = parseLastAnalyzeRaw(sessionStorage.getItem(k));
         if (hit) return hit;
       } catch (_) {
         /* ignore */
@@ -6641,6 +6743,38 @@ function loadLastAnalyze() {
     }
   } catch (_) {
     /* ignore */
+  }
+  return null;
+}
+
+/** Async load including IndexedDB (used on page boot). */
+async function loadLastAnalyzeAsync() {
+  const sync = loadLastAnalyze();
+  if (sync) return sync;
+  const keys = [
+    LAST_ANALYZE_KEY,
+    LAST_BUNDLES_ANALYZE_KEY,
+    LAST_BUNDLES_ONLY_KEY,
+  ];
+  for (const k of keys) {
+    try {
+      const raw = await idbGet(k);
+      const hit = parseLastAnalyzeRaw(raw);
+      if (hit) {
+        // Re-seed session/local so subsequent sync loads work
+        try {
+          const s =
+            typeof raw === "string" ? raw : JSON.stringify(raw);
+          safeSessionStorageSet(k, s);
+          safeLocalStorageSet(k, s);
+        } catch (_) {
+          /* ignore */
+        }
+        return hit;
+      }
+    } catch (_) {
+      /* ignore */
+    }
   }
   return null;
 }
@@ -6653,8 +6787,8 @@ function loadLastBundlesAnalyze() {
  * Restore all Analyze tabs from browser last-known result after refresh.
  * Does not re-log History or re-process Ruggers (lookup_count).
  */
-function restoreLastAnalyze() {
-  const cached = loadLastAnalyze();
+function restoreLastAnalyze(cachedOpt) {
+  const cached = cachedOpt || loadLastAnalyze();
   if (!cached || !cached.data) {
     // Still show Ruggers / History from their own stores
     try {
@@ -7182,28 +7316,42 @@ function formatBundleStatDelta(cur, prev, kind, opts) {
   const coalesce = !opts || opts.coalesceNull !== false;
   let c = cur != null && Number.isFinite(Number(cur)) ? Number(cur) : null;
   let p = prev != null && Number.isFinite(Number(prev)) ? Number(prev) : null;
-  if (!isScore && coalesce) {
+  if (coalesce) {
     if (c == null) c = 0;
     if (p == null) p = 0;
   }
-  if (c == null || p == null) return "";
+  if (c == null || p == null) {
+    // Still emit a visible marker so the UI never looks "delta-less"
+    return (
+      '<span class="bun-stat-delta bun-delta-flat" title="No baseline yet">' +
+      (isScore ? "=0" : "=0%") +
+      "</span>"
+    );
+  }
   const diff = c - p;
-  if (!Number.isFinite(diff)) return "";
+  if (!Number.isFinite(diff)) {
+    return (
+      '<span class="bun-stat-delta bun-delta-flat" title="No baseline yet">' +
+      (isScore ? "=0" : "=0%") +
+      "</span>"
+    );
+  }
 
   const flatEps = isScore ? 0.5 : 0.05;
 
   // Unchanged (or noise) → still show a flat marker so the feature is visible
+  // ASCII-only (=0%) so encoding never strips the glyph
   if (Math.abs(diff) < flatEps) {
     return (
       '<span class="bun-stat-delta bun-delta-flat" title="No change since last Analyze">' +
-      (isScore ? "· 0" : "· 0%") +
+      (isScore ? "=0" : "=0%") +
       "</span>"
     );
   }
 
   const up = diff > 0;
-  const arrow = up ? "▲" : "▼";
-  const sign = up ? "+" : "−";
+  const arrow = up ? "^" : "v";
+  const sign = up ? "+" : "-";
   const mag = Math.abs(diff);
 
   // Color intensity from magnitude (maps into existing 1–25 / 25–50 / … bands)
@@ -7515,13 +7663,37 @@ function renderBundlesUi(data) {
   // Collect HTML deltas this render so we can freeze them for refresh
   const htmlByKeyThisRun = {};
 
-  function stat(label, valueHtml, subHtml) {
+  /**
+   * Stats box. Delta is a *sibling row* under the % (not nested in the value)
+   * so it cannot be clipped/hidden by value styling.
+   * valueHtml may already include a delta from withDelta — we also accept
+   * explicit deltaHtml as 4th arg.
+   */
+  function stat(label, valueHtml, subHtml, deltaHtml) {
+    let val = valueHtml == null ? "" : String(valueHtml);
+    let delta = deltaHtml == null ? "" : String(deltaHtml);
+    // If withDelta already appended a delta span inside value, pull it out
+    // onto its own row for reliable visibility.
+    if (!delta && val.indexOf("bun-stat-delta") >= 0) {
+      const m = val.match(
+        /(<span class="bun-stat-delta[\s\S]*?<\/span>)\s*$/i
+      );
+      if (m) {
+        delta = m[1];
+        val = val.slice(0, m.index).replace(/\s+$/, "");
+      }
+    }
     return (
-      '<div class="bun-stat"><span class="bun-stat-label">' +
+      '<div class="bun-stat" data-bun-stat="' +
+      escHtml(label) +
+      '"><span class="bun-stat-label">' +
       escHtml(label) +
       '</span><span class="bun-stat-value">' +
-      valueHtml +
+      val +
       "</span>" +
+      (delta
+        ? '<span class="bun-stat-delta-row">' + delta + "</span>"
+        : "") +
       (subHtml
         ? '<span class="bun-stat-sub">' + subHtml + "</span>"
         : "") +
@@ -7634,44 +7806,32 @@ function renderBundlesUi(data) {
             : deltaCurStats
               ? deltaCurStats[key]
               : null;
-        const prevVal = prev ? prev[key] : kind === "pct" ? 0 : 0;
-        if (kind === "pct") {
-          d = formatBundleStatDelta(
-            curVal != null && Number.isFinite(Number(curVal))
-              ? Number(curVal)
-              : 0,
-            prevVal != null && Number.isFinite(Number(prevVal))
-              ? Number(prevVal)
-              : 0,
-            "pct",
-            { coalesceNull: true }
-          );
-        } else {
-          d = formatBundleStatDelta(
-            curVal != null && Number.isFinite(Number(curVal))
-              ? Number(curVal)
-              : 0,
-            prevVal != null && Number.isFinite(Number(prevVal))
-              ? Number(prevVal)
-              : 0,
-            "score",
-            { coalesceNull: true }
-          );
-        }
+        const prevVal = prev ? prev[key] : 0;
+        d = formatBundleStatDelta(
+          curVal != null && Number.isFinite(Number(curVal))
+            ? Number(curVal)
+            : 0,
+          prevVal != null && Number.isFinite(Number(prevVal))
+            ? Number(prevVal)
+            : 0,
+          kind === "score" ? "score" : "pct",
+          { coalesceNull: true }
+        );
       }
     } catch (err) {
       console.warn("[withDelta]", key, err);
       d = "";
     }
-    // 3) Hard fallback so the feature never goes blank
+    // 3) Hard fallback so the feature never goes blank (ASCII only)
     if (!d || d.indexOf("bun-stat-delta") < 0) {
       d =
         kind === "score"
-          ? '<span class="bun-stat-delta bun-delta-flat" title="No change since last Analyze">· 0</span>'
-          : '<span class="bun-stat-delta bun-delta-flat" title="No change since last Analyze">· 0%</span>';
+          ? '<span class="bun-stat-delta bun-delta-flat" title="No change since last Analyze">=0</span>'
+          : '<span class="bun-stat-delta bun-delta-flat" title="No change since last Analyze">=0%</span>';
     }
     htmlByKeyThisRun[key] = d;
-    return mainHtml + " " + d;
+    // Append so stat() can peel the delta onto its own row
+    return String(mainHtml) + " " + d;
   }
 
   let html = "";
@@ -7911,7 +8071,10 @@ function renderBundlesUi(data) {
   html +=
     '<p class="bun-meta">Sources: ' +
     escHtml(src) +
-    " · Heuristic only — not proof of identity</p>";
+    " · Heuristic only — not proof of identity" +
+    ' · <span class="bun-client-ver" title="Client build for cache checks">' +
+    escHtml(typeof ADTC_CLIENT_VERSION !== "undefined" ? ADTC_CLIENT_VERSION : "?") +
+    "</span></p>";
   // Total bundle = counted risk vectors only (similar-size + suspect excluded)
   if (s.total_bundle_additive || s.total_bundle_by_vector) {
     const bv = s.total_bundle_by_vector || {};
@@ -8478,14 +8641,23 @@ function renderBundlesUi(data) {
   function injectFrozenDeltasIntoDom(rootEl, htmlByKey) {
     if (!rootEl || !htmlByKey) return;
     rootEl.querySelectorAll(".bun-stat").forEach((el) => {
+      // Already has a delta row or nested delta
+      if (el.querySelector(".bun-stat-delta")) return;
       const labEl = el.querySelector(".bun-stat-label");
       const valEl = el.querySelector(".bun-stat-value");
       if (!labEl || !valEl) return;
-      if (valEl.querySelector(".bun-stat-delta")) return; // already has delta
-      const lab = String(labEl.textContent || "").trim();
+      const lab = String(
+        el.getAttribute("data-bun-stat") || labEl.textContent || ""
+      ).trim();
       const key = DELTA_LABEL_TO_KEY[lab];
       if (!key || !htmlByKey[key]) return;
-      valEl.insertAdjacentHTML("beforeend", " " + htmlByKey[key]);
+      const row = document.createElement("span");
+      row.className = "bun-stat-delta-row";
+      row.innerHTML = htmlByKey[key];
+      // Insert after value, before sub if any
+      const sub = el.querySelector(".bun-stat-sub");
+      if (sub) el.insertBefore(row, sub);
+      else el.appendChild(row);
     });
   }
 
@@ -9097,6 +9269,17 @@ async function analyze(ev) {
           "[analyze] last Analyze may not fully persist; Bundles backup attempted"
         );
       }
+      // Explicit IDB write of current payload snapshot (await so refresh is safe)
+      try {
+        const snap = loadLastAnalyze();
+        if (snap) {
+          const raw = JSON.stringify(snap);
+          await idbSet(LAST_ANALYZE_KEY, raw);
+          await idbSet(LAST_BUNDLES_ONLY_KEY, raw);
+        }
+      } catch (idbErr) {
+        console.warn("[analyze] idb persist", idbErr);
+      }
     } catch (err) {
       console.error("[saveLastAnalyze]", err);
     }
@@ -9136,7 +9319,7 @@ function initSettings() {
   });
 }
 
-function init() {
+async function init() {
   initTabs();
   initSettings();
   initHistory();
@@ -9149,17 +9332,35 @@ function init() {
   checkHealth();
   recordAndLoadStats();
 
-  // Deep link: ?q=mint or #mint
+  // Deep link: ?q=mint or #mint — still restore last Analyze unless auto-run
   const params = new URLSearchParams(location.search);
   const q = params.get("q") || params.get("query");
   if (q) {
     $("query").value = q;
     if (params.get("chain")) $("chain").value = params.get("chain");
-    if (params.get("auto") === "1") analyze();
-  } else {
-    // No auto-analyze: restore last Analyze (all tabs) after page refresh
-    restoreLastAnalyze();
+  }
+  if (params.get("auto") === "1" && q) {
+    analyze();
+    return;
+  }
+  // Restore from localStorage / sessionStorage / IndexedDB
+  try {
+    const cached = await loadLastAnalyzeAsync();
+    if (cached) {
+      restoreLastAnalyze(cached);
+    } else {
+      restoreLastAnalyze();
+    }
+  } catch (err) {
+    console.warn("[init restore]", err);
+    try {
+      restoreLastAnalyze();
+    } catch (_) {
+      /* ignore */
+    }
   }
 }
 
-document.addEventListener("DOMContentLoaded", init);
+document.addEventListener("DOMContentLoaded", () => {
+  init().catch((err) => console.error("[init]", err));
+});
