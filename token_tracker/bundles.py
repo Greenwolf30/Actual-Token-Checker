@@ -1670,7 +1670,8 @@ def recompute_total_bundle_all_vectors(
         "excluded_from_total": True,  # counted via unified similar_size key below
     }
 
-    # Unified Suspect map for Total (unique wallets across similar + insider)
+    # Unified Suspect map for Total (unique wallets across similar + insider).
+    # Same Total rules as old similar-size + old suspect: fallback-only.
     sus_map: dict[str, float] = dict(sim_map)
     for w, pct in ins_map.items():
         sus_map[w] = max(sus_map.get(w, 0.0), float(pct))
@@ -1681,10 +1682,10 @@ def recompute_total_bundle_all_vectors(
         "fallback_only": True,
         "shown": True,
         "includes": ["similar_size", "insider"],
-        "excluded_from_total": True,  # active via similar_size key → sus_map
     }
-    # Active Total key "similar_size" uses full Suspect union (sim + insider)
-    counted_maps["similar_size"] = sus_map
+    # Keep similar_size map as similar-only for reference chips
+    counted_maps["similar_size"] = sim_map
+    counted_maps["insider"] = ins_map
 
     # 4) Token multi-send only (not SOL re-label — that is shared_funder)
     ms_rows: list[tuple[str, Any]] = []
@@ -1786,9 +1787,12 @@ def recompute_total_bundle_all_vectors(
         "disabled": True,
     }
 
-    # Always: multi-account.
-    # Optionals: Fresh / Multi-send / Shared SOL when checkbox ON.
-    # Suspect (= similar-size + Rugcheck insider): only when ALL three optionals off.
+    # Total rules (same as old similar-size + old suspect fallback):
+    #   Always: multi-account
+    #   Optionals (Fresh / Multi-send / Shared SOL): only when that checkbox is ON
+    #   Suspect (= similar-size + Rugcheck insider): only when ALL three optionals
+    #     are OFF — same fallback rule previously applied to similar AND suspect
+    # Unique wallets only (max % per wallet). Unchecked optionals never enter Total.
     ALWAYS = ("multi_account",)
     OPTIONAL_FLAGS = {
         "multi_send": bool(include_multi_send),
@@ -1802,15 +1806,19 @@ def recompute_total_bundle_all_vectors(
         if on:
             active_keys.append(key)
 
+    # Full Suspect union map for Total (similar-size ∪ Rugcheck insider)
+    counted_maps["suspect"] = sus_map
+
     if not any_optional_on:
-        active_keys.append("similar_size")  # counted_maps → full Suspect union
+        # Classic similar + suspect fallback → one Suspect key in Total
+        active_keys.append("suspect")
         mode = "multi_plus_suspect"
         use_sim_sus_in_total = True
     else:
         mode = "primary"
         use_sim_sus_in_total = False
 
-    excluded = ["launch_window", "insider", "suspect"]
+    excluded = ["launch_window"]
     for key, on in OPTIONAL_FLAGS.items():
         if not on:
             excluded.append(key)
@@ -1826,32 +1834,43 @@ def recompute_total_bundle_all_vectors(
     if "multi_account" in by_vector:
         by_vector["multi_account"] = dict(by_vector["multi_account"])
         by_vector["multi_account"]["excluded_from_total"] = False
+
+    # similar_size / insider are UI parts of Suspect — never double-count in Total
     if "similar_size" in by_vector:
         by_vector["similar_size"] = dict(by_vector["similar_size"])
         by_vector["similar_size"]["fallback_only"] = True
         by_vector["similar_size"]["shown"] = True
         by_vector["similar_size"]["ui_label"] = "suspect"
-        by_vector["similar_size"]["excluded_from_total"] = not use_sim_sus_in_total
-        # Display pct for the vector chip = full Suspect union
-        by_vector["similar_size"]["pct"] = p_sus
-        by_vector["similar_size"]["count"] = n_sus
-    if "suspect" in by_vector:
-        by_vector["suspect"] = dict(by_vector["suspect"])
-        by_vector["suspect"]["excluded_from_total"] = not use_sim_sus_in_total
-        by_vector["suspect"]["includes"] = ["similar_size", "insider"]
+        by_vector["similar_size"]["part_of"] = "suspect"
+        by_vector["similar_size"]["excluded_from_total"] = True
+        by_vector["similar_size"]["pct"] = p_sim
+        by_vector["similar_size"]["count"] = n_sim
     if "insider" in by_vector:
         by_vector["insider"] = dict(by_vector["insider"])
-        by_vector["insider"]["excluded_from_total"] = True  # via Suspect union
+        by_vector["insider"]["fallback_only"] = True
+        by_vector["insider"]["shown"] = True
+        by_vector["insider"]["part_of"] = "suspect"
+        by_vector["insider"]["excluded_from_total"] = True
+    if "suspect" in by_vector:
+        by_vector["suspect"] = dict(by_vector["suspect"])
+        by_vector["suspect"]["fallback_only"] = True
+        by_vector["suspect"]["shown"] = True
+        by_vector["suspect"]["includes"] = ["similar_size", "insider"]
+        by_vector["suspect"]["pct"] = p_sus
+        by_vector["suspect"]["count"] = n_sus
+        by_vector["suspect"]["excluded_from_total"] = not use_sim_sus_in_total
 
     if not use_sim_sus_in_total:
-        excluded.append("similar_size")
+        excluded.extend(["similar_size", "insider", "suspect"])
+    else:
+        excluded.extend(["similar_size", "insider"])  # counted via unified suspect
 
     # Total = unique wallets across active vectors only (no double-count).
     union: dict[str, float] = {}
     appear_in: dict[str, list[str]] = {}
     for key in active_keys:
         wmap = counted_maps.get(key) or {}
-        if key == "similar_size":
+        if key == "suspect":
             wmap = sus_map  # similar-size + Rugcheck insiders
         for w, pct in wmap.items():
             try:

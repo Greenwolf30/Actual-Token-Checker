@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v131";
+const ADTC_CLIENT_VERSION = "v132";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -7332,8 +7332,13 @@ function resolveTokenMultiSendTotalPct(view, summary) {
 }
 
 /**
- * Total bundle = unique wallets across counted lists only (no double-count).
- * Only checked Fresh / Multi-send / Shared SOL enter Total.
+ * Total bundle % = unique wallets (no double-count).
+ *
+ * Same rules as old similar-size + old suspect for the Total (bundle %) box:
+ *   • Multi-account always counts
+ *   • Fresh / Multi-send / Shared SOL only when that Analyze checkbox was ON
+ *   • Suspect (similar-size + Rugcheck insider) only when ALL three optionals
+ *     are OFF (classic similar + suspect fallback)
  */
 function recomputeTotalBundleFromView(view, summary) {
   const s = summary || {};
@@ -7356,6 +7361,11 @@ function recomputeTotalBundleFromView(view, summary) {
     useSharedSolEnabled
   );
   const anyOptionalOn = countFresh || countMs || countSol;
+  // Prefer server fallback flag when present (from last Analyze)
+  const countSuspect =
+    s.total_bundle_show_similar_suspect != null
+      ? !!s.total_bundle_show_similar_suspect
+      : !anyOptionalOn;
 
   const rows = [];
   function pushWalletObj(r) {
@@ -7401,8 +7411,9 @@ function recomputeTotalBundleFromView(view, summary) {
       for (let j = 0; j < recs.length; j++) pushWalletObj(recs[j]);
     }
   }
-  // Suspect (= similar-size + Rugcheck insider) only when all optionals off
-  if (!anyOptionalOn) {
+  // Suspect (= similar-size + Rugcheck insider) — same fallback as old
+  // similar-size AND old suspect: only when all optionals off
+  if (countSuspect) {
     const sims = v.similar_size_groups || [];
     for (let i = 0; i < sims.length; i++) {
       const g = sims[i] || {};
@@ -7423,8 +7434,18 @@ function recomputeTotalBundleFromView(view, summary) {
     s.total_bundle_pct != null && Number.isFinite(Number(s.total_bundle_pct))
       ? Number(s.total_bundle_pct)
       : null;
-  // Prefer server unique total when higher (full map); else client unique
-  if (server != null && server > total + 0.0001) total = server;
+  // Only lift from server when its optional/Suspect flags match what we counted
+  // (avoids pulling Fresh into Total while checkboxes/flags say fallback mode)
+  const flagsAlign =
+    (s.total_bundle_include_fresh == null ||
+      s.total_bundle_include_fresh === countFresh) &&
+    (s.total_bundle_include_multi_send == null ||
+      s.total_bundle_include_multi_send === countMs) &&
+    (s.total_bundle_include_shared_sol == null ||
+      s.total_bundle_include_shared_sol === countSol) &&
+    (s.total_bundle_show_similar_suspect == null ||
+      !!s.total_bundle_show_similar_suspect === countSuspect);
+  if (server != null && flagsAlign && server > total + 0.0001) total = server;
   if (total > 100) total = 100;
   return Math.round(total * 10000) / 10000;
 }
@@ -9665,20 +9686,29 @@ function renderBundlesUi(data) {
     const parts = [];
     const labels = {
       multi_account: "multi-account",
+      suspect: "suspect",
+      // similar_size / insider are parts of suspect — only use if no suspect vector
       similar_size: "suspect",
       multi_send: "multi-send",
       fresh: "fresh",
       shared_funder: "shared SOL",
     };
+    const seenLab = {};
     for (const [k, lab] of Object.entries(labels)) {
       const m = bv[k];
       if (!m || m.excluded_from_total) continue;
+      // Prefer unified "suspect" chip over similar_size alias
+      if (k === "similar_size" && bv.suspect && !bv.suspect.excluded_from_total)
+        continue;
+      if (seenLab[lab]) continue;
       const p = m.pct != null && Number.isFinite(Number(m.pct)) ? Number(m.pct) : null;
       const n = m.count != null ? Number(m.count) : 0;
       if (p != null && p > 0) {
         parts.push(lab + " " + p.toFixed(2) + "%");
+        seenLab[lab] = true;
       } else if (n > 0) {
         parts.push(lab + " n/a%");
+        seenLab[lab] = true;
       }
     }
     const uniqN =
