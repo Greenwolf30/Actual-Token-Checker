@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v109";
+const ADTC_CLIENT_VERSION = "v110";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -984,15 +984,33 @@ function findRuggersRecForMint(store, address, chain) {
 function getSummaryBarMintAddr() {
   try {
     const addrEl = $("sumAddr");
-    if (!addrEl) return "";
-    const link = addrEl.querySelector("a.sum-mint-link, a[href*='solscan'], a");
-    const raw = link
-      ? String(link.textContent || "").trim()
-      : String(addrEl.textContent || "").trim();
-    return bareMintAddr(raw);
+    if (addrEl) {
+      const link = addrEl.querySelector(
+        "a.sum-mint-link, a[href*='solscan'], a[href*='token'], a"
+      );
+      if (link) {
+        // Prefer href mint (full CA) over visible text
+        const href = String(link.getAttribute("href") || "");
+        const hm = href.match(
+          /(?:token|account)\/([1-9A-HJ-NP-Za-km-z]{32,44})/i
+        );
+        if (hm && hm[1]) return bareMintAddr(hm[1]);
+        const t = bareMintAddr(link.textContent || "");
+        if (t.length >= 32) return t;
+      }
+      const raw = bareMintAddr(addrEl.textContent || "");
+      if (raw.length >= 32) return raw;
+    }
+    // Fallback: query input
+    const q = $("query");
+    if (q && q.value) {
+      const v = bareMintAddr(normalizeCaQuery(q.value));
+      if (v.length >= 32) return v;
+    }
   } catch (_) {
-    return "";
+    /* ignore */
   }
+  return "";
 }
 
 /**
@@ -5017,57 +5035,118 @@ function _refreshRuggersPanelImpl(focusKey) {
 
   const focusHint = String(focusKey || "").trim();
   const summaryMint = getSummaryBarMintAddr();
-  const expectedBare = bareMintAddr(focusHint) || summaryMint || "";
+  // Explicit focus (Analyze result key or dropdown pick) wins over summary bar.
+  // Summary bar only used when opening the tab with no focusKey.
+  const focusBare = bareMintAddr(focusHint);
+  const wantBare = focusBare || summaryMint || "";
 
   let activeKey = "";
   let rec = null;
 
-  // 1) Direct key from Analyze
+  // 1) Explicit store key (Analyze rugKey or dropdown data-value)
   if (focusHint && store[focusHint] && typeof store[focusHint] === "object") {
     activeKey = focusHint;
     rec = store[focusHint];
   }
 
-  // 2) Lookup by mint address
-  if (!rec && expectedBare) {
-    const found = findRuggersRecForMint(store, expectedBare, "solana");
+  // 2) Resolve by the mint we want (focus CA or summary CA) — never another mint
+  if (!rec && wantBare) {
+    const found = findRuggersRecForMint(store, wantBare, "solana");
     if (found.rec) {
-      activeKey = found.key || mintKeyFromToken(expectedBare, "solana");
+      activeKey = found.key || mintKeyFromToken(wantBare, "solana");
       rec = found.rec;
     }
   }
 
-  // 3) Always fall back to most recent tracked mint so the tab never goes blank
-  //    when the store has data (dropdown can switch mint).
-  if (!rec && keys.length) {
+  // 3) Only if we have NO target mint at all (no Analyze, no summary CA),
+  //    show most recent track. Never use this when viewing a specific CA.
+  if (!rec && !wantBare && keys.length) {
     activeKey = keys[0];
     rec = store[activeKey];
+  }
+
+  // Hard guard: if we wanted mint B, never display mint A's rec
+  if (
+    rec &&
+    wantBare &&
+    !sameMintAddr(rec.address || activeKey, wantBare) &&
+    !sameMintAddr(activeKey, wantBare)
+  ) {
+    console.warn(
+      "[ruggers] blocked wrong mint",
+      rec.address || activeKey,
+      "want",
+      wantBare
+    );
+    rec = null;
+    activeKey = "";
   }
 
   if (!rec || typeof rec !== "object" || !activeKey) {
     _lastRuggersBuckets = null;
     _lastRuggersRec = null;
     _lastRuggersKey = "";
-    const emptyMsg =
-      "No Ruggers tracking yet.\n\n" +
-      "Run a full Analyze (Quick off) on a mint. The first successful holder snapshot " +
-      "is frozen as a baseline (top holders + similar-size wallets + creator).\n\n" +
-      "Re-analyze later: wallets that sold ≥99% of their first bag (or disappeared " +
-      "from the holder list) appear here as seller. If they buy back, they are labeled swing.\n\n" +
-      "When sellers appear, use Export on Creator / Similar / Single sections, " +
-      "then import the file in RugWatch → Upload tab.";
-    if (body) {
-      body.innerHTML =
-        '<p class="logs-empty">' + emptyMsg.replace(/\n/g, "<br/>") + "</p>";
+    // Still show mint picker so user can open a tracked mint
+    let html =
+      '<div class="rug-header"><div class="rug-title">Ruggers</div>';
+    if (keys.length) {
+      html +=
+        '<div class="rug-mint-search-row"><div class="rug-mint-pick-wrap">' +
+        '<span class="rug-mint-pick-label">Tracked mint</span>' +
+        '<div class="rug-mint-dd" id="ruggersMintDropdown">' +
+        '<button type="button" class="rug-mint-dd-btn" id="ruggersMintDdBtn" ' +
+        'aria-haspopup="listbox" aria-expanded="false">' +
+        '<span class="rug-mint-dd-label mono" id="ruggersMintDdLabel">Pick a tracked mint…</span>' +
+        '<span class="rug-mint-dd-caret" aria-hidden="true">▾</span></button>' +
+        '<ul class="rug-mint-dd-list" id="ruggersMintDdList" role="listbox" hidden>';
+      for (const k of keys) {
+        const r = store[k] || {};
+        const lab =
+          (r.symbol ? "$" + r.symbol + " " : "") +
+          bareMintAddr(r.address || k).slice(0, 14) +
+          "…";
+        html +=
+          '<li role="option" class="rug-mint-dd-opt" data-value="' +
+          escHtml(k) +
+          '" tabindex="-1">' +
+          escHtml(lab) +
+          "</li>";
+      }
+      html += "</ul></div></div></div>";
     }
-    if (dump) dump.textContent = emptyMsg;
+    html += "</div>";
+    if (wantBare) {
+      html +=
+        '<p class="logs-empty">No Ruggers baseline for this mint yet:<br/>' +
+        '<span class="mono">' +
+        escHtml(wantBare) +
+        "</span><br/><br/>" +
+        "Run a <strong>full Analyze</strong> (not Quick) on <em>this</em> CA. " +
+        "Sellers only appear after a later re-Analyze of the <strong>same</strong> mint. " +
+        "Other mints’ sellers will not show here." +
+        (keys.length
+          ? "<br/><br/>Or pick a different mint from <strong>Tracked mint</strong> above."
+          : "") +
+        "</p>";
+    } else {
+      html +=
+        '<p class="logs-empty">No Ruggers tracking yet.<br/><br/>' +
+        "Run a full Analyze (Quick off) on a mint to freeze a holder baseline.</p>";
+    }
+    if (body) body.innerHTML = html;
+    if (dump) {
+      dump.textContent = wantBare
+        ? "No Ruggers baseline for " + wantBare
+        : "No Ruggers tracking yet.";
+    }
+    try {
+      wireRuggersMintDropdown();
+    } catch (_) {}
     return;
   }
 
-  // Normalize address field
-  if (!rec.address) {
-    rec.address = bareMintAddr(rec.address || activeKey || expectedBare) || "";
-  }
+  // Normalize address field to bare CA for this track only
+  rec.address = bareMintAddr(rec.address || activeKey || wantBare) || rec.address;
 
   try {
     purgeFalseRuggersUploadMarks(rec);
@@ -5110,7 +5189,7 @@ function _refreshRuggersPanelImpl(focusKey) {
   _lastRuggersBuckets = buckets;
   _lastRuggersRec = rec;
   _lastRuggersKey = activeKey;
-  const mintAddr = String(rec.address || "").trim() || "";
+  const mintAddr = bareMintAddr(rec.address || activeKey) || "";
   const titleLeft =
     (rec.symbol ? "$" + rec.symbol + " · " : "") +
     (rec.name ? rec.name + " · " : "");
@@ -5140,6 +5219,9 @@ function _refreshRuggersPanelImpl(focusKey) {
     (rec.lookup_count || 1) +
     " · Tracked wallets: " +
     Object.keys(rec.first_wallets || {}).length +
+    (wantBare && mintAddr
+      ? " · Showing mint " + escHtml(mintAddr.slice(0, 6) + "…" + mintAddr.slice(-4))
+      : "") +
     "</div>";
   html +=
     '<p class="rug-rules">Rules: first full Analyze freezes a holder baseline; ' +
@@ -5764,7 +5846,13 @@ function initRuggers() {
   } catch (_) {
     /* ignore */
   }
-  refreshRuggersPanel();
+  // Prefer mint in summary/query — do not open a random other mint's track
+  try {
+    const ca = getSummaryBarMintAddr();
+    refreshRuggersPanel(ca ? mintKeyFromToken(ca, "solana") : "");
+  } catch (_) {
+    refreshRuggersPanel();
+  }
   wireRuggersCaSearch();
 }
 
@@ -10578,7 +10666,13 @@ function initTabs() {
     b.addEventListener("click", () => {
       switchTab(b.dataset.tab);
       if (b.dataset.tab === "history") refreshHistoryPanel();
-      if (b.dataset.tab === "ruggers") refreshRuggersPanel();
+      if (b.dataset.tab === "ruggers") {
+        // Prefer the mint currently in the summary / query box — never another mint
+        const ca = getSummaryBarMintAddr();
+        refreshRuggersPanel(
+          ca ? mintKeyFromToken(ca, "solana") : _lastRuggersKey || ""
+        );
+      }
     });
   });
 }
