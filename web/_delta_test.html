@@ -17,64 +17,91 @@
       el.textContent += s + "\n";
       console.log(s);
     }
+    function makeData(totalPct, risk) {
+      return {
+        ok: true,
+        token: { address: "So11111111111111111111111111111111111111112", chain_id: "solana" },
+        market: { address: "So11111111111111111111111111111111111111112", chain_id: "solana" },
+        bundles_view: {
+          ok: true,
+          method: "test",
+          source: "test",
+          token_address: "So11111111111111111111111111111111111111112",
+          summary: {
+            bundle_risk: "elevated",
+            bundle_risk_score: risk,
+            total_bundle_pct: totalPct,
+            similar_size_total_pct: 1,
+            fresh_total_pct: 0,
+            multi_send_total_pct: 0,
+            funding_total_pct: 0,
+            suspect_total_pct: 0,
+            single_holders_total_pct: 10,
+            top10_pct_excluding_known_programs: 20,
+            sources_used: ["test"],
+            total_bundle_mode: "primary"
+          },
+          clusters: [],
+          signals: [],
+          similar_size_groups: [],
+          insider_wallets: [],
+          funding_clusters: [],
+          fresh_wallets: [],
+          multi_send_wallets: [],
+          multi_send_clusters: [],
+          sol_multi_send_clusters: [],
+          suspect_wallets: []
+        },
+        sections: { bundles: "test" }
+      };
+    }
     window.__runDeltaTest = function () {
-      var out = { ok: false, errors: [], text: "", deltaCount: 0, version: window.__ADTC_CLIENT__ || null, hasMount: false, sample: "" };
+      var out = {
+        ok: false,
+        errors: [],
+        version: window.__ADTC_CLIENT__ || null,
+        steps: []
+      };
       try {
         if (typeof renderBundlesUi !== "function") {
-          out.errors.push("renderBundlesUi missing — app.js did not load");
+          out.errors.push("renderBundlesUi missing");
           return out;
         }
-        var data = {
-          ok: true,
-          token: { address: "So11111111111111111111111111111111111111112", chain_id: "solana" },
-          market: { address: "So11111111111111111111111111111111111111112", chain_id: "solana" },
-          bundles_view: {
-            ok: true,
-            method: "test",
-            source: "test",
-            token_address: "So11111111111111111111111111111111111111112",
-            summary: {
-              bundle_risk: "elevated",
-              bundle_risk_score: 42,
-              total_bundle_pct: 18.5,
-              similar_size_total_pct: 5.2,
-              fresh_total_pct: 1.1,
-              multi_send_total_pct: 3.3,
-              funding_total_pct: 2.2,
-              suspect_total_pct: 0.5,
-              single_holders_total_pct: 40,
-              top10_pct_excluding_known_programs: 55,
-              sources_used: ["test"],
-              total_bundle_mode: "primary"
-            },
-            clusters: [],
-            signals: [],
-            similar_size_groups: [],
-            insider_wallets: [],
-            funding_clusters: [],
-            fresh_wallets: [],
-            multi_send_wallets: [],
-            multi_send_clusters: [],
-            sol_multi_send_clusters: [],
-            suspect_wallets: []
-          },
-          sections: { bundles: "test bundles text" }
-        };
-        // Clear prev baseline so first run compares vs zeros
-        try { localStorage.removeItem("adtc_bundle_stats_prev"); } catch (e) {}
-        try { localStorage.removeItem("adtc_bundle_delta_html"); } catch (e) {}
-        renderBundlesUi(data);
-        var root = document.getElementById("bundlesUi");
-        out.text = root ? root.innerText : "";
-        out.hasMount = !!(root && root.querySelector("#bunStatsMount, .bun-stats, .bun-delta-note"));
-        out.deltaCount = (out.text.match(/\((?:UP |DN |no change)/g) || []).length;
-        out.sample = out.text.slice(0, 500);
-        out.ok = out.deltaCount >= 5 && /v88|v87/.test(String(out.version || ""));
-        if (!out.ok) out.errors.push("expected >=5 UP/DN/no-change markers, got " + out.deltaCount + " ver=" + out.version);
-        // Second render should still show deltas (flat or change)
-        renderBundlesUi(data);
-        out.text2 = root.innerText.slice(0, 500);
-        out.deltaCount2 = (root.innerText.match(/\((?:UP |DN |no change)/g) || []).length;
+        try { localStorage.clear(); sessionStorage.clear(); } catch (e) {}
+
+        // Step A: first analyze 10% → expect UP from zeros
+        renderBundlesUi(makeData(10, 30));
+        var t1 = document.getElementById("bundlesUi").innerText;
+        var up1 = /\(UP \+10/.test(t1) || /\(UP \+10%/.test(t1) || t1.indexOf("UP +10") >= 0;
+        out.steps.push({ step: "A_10pct", hasUp: up1, sample: t1.slice(0, 280) });
+        if (!up1) out.errors.push("A: expected UP +10% on first run vs zeros");
+
+        // Step B: second analyze 25% → expect UP (change from 10)
+        renderBundlesUi(makeData(25, 30));
+        var t2 = document.getElementById("bundlesUi").innerText;
+        var up2 = /UP \+15/.test(t2) || /\(UP \+15/.test(t2);
+        var wrongFlat = false;
+        // Total line should not be "no change" when 10→25
+        var totalChunk = t2.split("TOTAL BUNDLE")[1] || "";
+        totalChunk = totalChunk.split("SIMILAR")[0] || totalChunk;
+        if (/no change/i.test(totalChunk) && !/UP /.test(totalChunk)) wrongFlat = true;
+        out.steps.push({ step: "B_25pct", hasUp15: up2, wrongFlat: wrongFlat, sample: t2.slice(0, 280) });
+        if (!up2) out.errors.push("B: expected UP +15% when total 10→25");
+        if (wrongFlat) out.errors.push("B: Total showed no change for 10→25");
+
+        // Step C: third analyze still 25% → expect no change on total
+        renderBundlesUi(makeData(25, 30));
+        var t3 = document.getElementById("bundlesUi").innerText;
+        var totalChunk3 = (t3.split("TOTAL BUNDLE")[1] || "").split("SIMILAR")[0] || "";
+        var flat3 = /no change/i.test(totalChunk3);
+        out.steps.push({ step: "C_25pct_again", flat: flat3, sample: t3.slice(0, 280) });
+        if (!flat3) out.errors.push("C: expected no change when total stays 25");
+
+        out.ok = out.errors.length === 0 && /v89|v88/.test(String(out.version || ""));
+        if (!/v89/.test(String(out.version || ""))) {
+          out.errors.push("expected client v89, got " + out.version);
+          out.ok = false;
+        }
       } catch (err) {
         out.errors.push(String(err && err.stack ? err.stack : err));
       }
