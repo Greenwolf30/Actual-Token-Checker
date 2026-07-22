@@ -603,20 +603,75 @@ def analyze_fresh_wallets(
     }
 
 
+def _fetch_tx_json(url: str, sig: str) -> dict[str, Any] | None:
+    """getTransaction jsonParsed; None on miss/error."""
+    try:
+        tx = _rpc(
+            url,
+            "getTransaction",
+            [
+                sig,
+                {
+                    "encoding": "jsonParsed",
+                    "maxSupportedTransactionVersion": 0,
+                    "commitment": "confirmed",
+                },
+            ],
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    return tx if isinstance(tx, dict) else None
+
+
+def _merge_mint_edges(
+    edges: dict[str, set[str]],
+    tx: dict[str, Any],
+    mint: str,
+    *,
+    prefer_senders: set[str] | None = None,
+) -> int:
+    """
+    Merge sender→receivers for this mint into edges.
+    Returns new receiver-link count added.
+    """
+    added = 0
+    for sender, receivers in _extract_mint_send_edges(tx, mint).items():
+        if not sender or len(sender) < 32:
+            continue
+        # When scanning a specific wallet's history, prefer edges from that wallet
+        # (and any true batch 1→many in the same tx).
+        if prefer_senders is not None:
+            if sender not in prefer_senders and len(receivers) < 2:
+                continue
+        recs = {r for r in receivers if r and r != sender and len(str(r)) >= 32}
+        if not recs:
+            continue
+        before_n = len(edges.get(sender) or ())
+        edges.setdefault(sender, set()).update(recs)
+        added += max(0, len(edges[sender]) - before_n)
+    return added
+
+
 def analyze_token_multi_sends(
     mint: str,
     holder_wallets: list[str] | None = None,
     *,
-    max_sigs: int = 80,
-    max_tx_fetch: int = 40,
+    max_sigs: int = 48,
+    max_tx_fetch: int = 20,
     min_receivers: int = 2,
+    max_holder_wallets: int = 10,
+    sigs_per_holder: int = 8,
+    txs_per_holder: int = 5,
 ) -> dict[str, Any]:
     """
     Detect multi-sends of THIS mint: one owner sent the token to many wallets.
 
-    Paginate mint signatures (newest → older) and fetch a mix of recent + older
-    txs. Looking only at the latest ~20 swaps missed real fan-outs that sit
-    earlier in mint history (common on pump tokens after launch distribute).
+    Primary: scan top holder wallets' recent txs (same approach as Shared SOL
+    funding — real distributes are wallet-level transfers, often missing from
+    mint-address history which is dominated by AMM swaps).
+
+    Secondary: sample mint-address history (newest + older) as backup for
+    transferChecked / program paths that still reference the mint.
     """
     url = helius_url()
     mint = (mint or "").strip()
@@ -628,19 +683,60 @@ def analyze_token_multi_sends(
             "clusters": [],
         }
 
-    holder_set = {
-        (w or "").strip()
-        for w in (holder_wallets or [])
-        if w and len(str(w).strip()) >= 32
-    }
+    holders_clean: list[str] = []
+    seen_h: set[str] = set()
+    for w in holder_wallets or []:
+        a = (w or "").strip()
+        if not a or a in seen_h or len(a) < 32:
+            continue
+        seen_h.add(a)
+        holders_clean.append(a)
+        if len(holders_clean) >= max_holder_wallets:
+            break
+    holder_set = set(holders_clean)
 
-    # Paginate toward older activity (same pattern as launch-window scan)
+    edges: dict[str, set[str]] = {}
+    txs_ok = 0
+    txs_fail = 0
+    edge_hits = 0
+    holders_scanned = 0
+    mint_sigs_n = 0
+
+    # ── Primary: holder wallet histories (catches wallet→wallet distributes) ──
+    for w in holders_clean:
+        try:
+            sigs = _rpc(
+                url,
+                "getSignaturesForAddress",
+                [w, {"limit": sigs_per_holder}],
+            )
+        except Exception:  # noqa: BLE001
+            continue
+        if not isinstance(sigs, list):
+            continue
+        holders_scanned += 1
+        for row in sigs[:txs_per_holder]:
+            if not isinstance(row, dict):
+                continue
+            sig = row.get("signature")
+            if not sig:
+                continue
+            tx = _fetch_tx_json(url, str(sig))
+            if not tx:
+                txs_fail += 1
+                continue
+            txs_ok += 1
+            edge_hits += _merge_mint_edges(
+                edges, tx, mint, prefer_senders={w}
+            )
+
+    # ── Secondary: mint-address history (backup / transferChecked / pools) ──
     all_sigs: list[dict[str, Any]] = []
     before: str | None = None
     pages = 0
     try:
-        while len(all_sigs) < max_sigs and pages < 4:
-            params: dict[str, Any] = {"limit": min(50, max_sigs - len(all_sigs))}
+        while len(all_sigs) < max_sigs and pages < 3:
+            params: dict[str, Any] = {"limit": min(40, max_sigs - len(all_sigs))}
             if before:
                 params["before"] = before
             batch = _rpc(url, "getSignaturesForAddress", [mint, params])
@@ -654,81 +750,38 @@ def analyze_token_multi_sends(
             if not last_sig or last_sig == before:
                 break
             before = str(last_sig)
-            if len(batch) < 20:
+            if len(batch) < 15:
                 break
-    except Exception as exc:  # noqa: BLE001
-        return {
-            "ok": False,
-            "error": str(exc),
-            "method": "helius_mint_token_multi_send",
-            "clusters": [],
-        }
+    except Exception:  # noqa: BLE001
+        pass
 
-    if not all_sigs:
-        return {
-            "ok": True,
-            "method": "helius_mint_token_multi_send",
-            "clusters": [],
-            "txs_scanned": 0,
-            "sigs_available": 0,
-            "notes": "No mint signatures — cannot scan multi-send.",
-        }
-
-    # Newest-first from RPC. Sample BOTH ends:
-    #  - recent: ongoing distributes
-    #  - older tail: launch / early fan-out (often the real multi-send)
-    n_fetch = max(8, min(max_tx_fetch, len(all_sigs)))
-    half = max(4, n_fetch // 2)
-    newest = all_sigs[:half]
-    older = list(reversed(all_sigs[-half:]))
-    # Dedupe while preserving order (newest first, then older unique)
-    seen_sig: set[str] = set()
-    to_fetch: list[dict[str, Any]] = []
-    for row in newest + older:
-        sig = str(row.get("signature") or "")
-        if not sig or sig in seen_sig:
-            continue
-        seen_sig.add(sig)
-        to_fetch.append(row)
-        if len(to_fetch) >= n_fetch:
-            break
-
-    # sender -> set of receivers (owners), aggregated across txs
-    edges: dict[str, set[str]] = {}
-    txs_ok = 0
-    txs_fail = 0
-    edge_hits = 0
-    for row in to_fetch:
-        sig = (row or {}).get("signature")
-        if not sig:
-            continue
-        try:
-            tx = _rpc(
-                url,
-                "getTransaction",
-                [
-                    sig,
-                    {
-                        "encoding": "jsonParsed",
-                        "maxSupportedTransactionVersion": 0,
-                    },
-                ],
-            )
-        except Exception:  # noqa: BLE001
-            txs_fail += 1
-            continue
-        if not tx:
-            txs_fail += 1
-            continue
-        txs_ok += 1
-        for sender, receivers in _extract_mint_send_edges(tx, mint).items():
-            if not sender or len(sender) < 32:
+    mint_sigs_n = len(all_sigs)
+    if all_sigs:
+        n_fetch = max(6, min(max_tx_fetch, len(all_sigs)))
+        half = max(3, n_fetch // 2)
+        newest = all_sigs[:half]
+        older = list(reversed(all_sigs[-half:]))
+        seen_sig: set[str] = set()
+        to_fetch: list[dict[str, Any]] = []
+        for row in newest + older:
+            sig = str(row.get("signature") or "")
+            if not sig or sig in seen_sig:
                 continue
-            before_n = len(edges.get(sender) or ())
-            edges.setdefault(sender, set()).update(
-                r for r in receivers if r and r != sender and len(str(r)) >= 32
-            )
-            edge_hits += max(0, len(edges[sender]) - before_n)
+            seen_sig.add(sig)
+            to_fetch.append(row)
+            if len(to_fetch) >= n_fetch:
+                break
+        for row in to_fetch:
+            sig = (row or {}).get("signature")
+            if not sig:
+                continue
+            tx = _fetch_tx_json(url, str(sig))
+            if not tx:
+                txs_fail += 1
+                continue
+            txs_ok += 1
+            # Mint path: keep all edges (LP filtered later in fusion)
+            edge_hits += _merge_mint_edges(edges, tx, mint, prefer_senders=None)
 
     clusters: list[dict[str, Any]] = []
     for sender, recs in edges.items():
@@ -738,8 +791,7 @@ def analyze_token_multi_sends(
         in_holders = (
             [r for r in uniq if r in holder_set] if holder_set else list(uniq)
         )
-        # Prefer current holders when enough still hold; else keep full fan-out
-        # so historical multi-sends still track even if bags moved.
+        # Prefer current holders when enough still hold; else full fan-out
         focus = in_holders if len(in_holders) >= min_receivers else uniq
         if len(focus) < min_receivers:
             continue
@@ -762,19 +814,19 @@ def analyze_token_multi_sends(
     )
     return {
         "ok": True,
-        "method": "helius_mint_token_multi_send",
+        "method": "helius_holder_and_mint_token_multi_send",
         "clusters": clusters[:12],
         "txs_scanned": txs_ok,
         "txs_failed": txs_fail,
-        "sigs_available": len(all_sigs),
-        "txs_fetched": len(to_fetch),
+        "sigs_available": mint_sigs_n,
+        "holders_scanned": holders_scanned,
         "edge_senders": len(edges),
         "edge_receiver_links": edge_hits,
         "notes": (
-            "One wallet sent this mint to multiple receivers (token multi-send). "
-            f"Scanned {txs_ok}/{len(to_fetch)} txs across {len(all_sigs)} sigs "
-            f"({len(edges)} sender(s) with outflows). "
-            "Not a full chain archive."
+            "Token multi-send (one wallet → many) via holder histories + mint sample. "
+            f"Scanned {txs_ok} txs · {holders_scanned} holder(s) · "
+            f"{mint_sigs_n} mint sigs · {len(edges)} sender outflow(s) · "
+            f"{len(clusters)} cluster(s). LP senders filtered in Bundles UI."
         ),
     }
 
@@ -863,20 +915,25 @@ def _extract_mint_send_edges(tx: dict[str, Any], mint: str) -> dict[str, set[str
             receivers.append(o)
 
     out: dict[str, set[str]] = {}
-    # Attribute multi-receive to each sender that lost tokens in the same tx
-    # (common batch distribute pattern).
     if not senders or not receivers:
         return out
-    # One sender → many receivers is the multi-send signal.
-    # Skip pure 1↔1 swaps when that is the only edge in the tx unless there
-    # are multiple receivers (batch distribute / airdrop).
-    if len(receivers) < 2 and len(senders) == 1:
-        # Still record 1→1 so aggregation across txs can build 1→many
-        pass
-    for s in senders:
-        outs = {r for r in receivers if r != s}
-        if outs:
-            out[s] = outs
+    # Batch distribute: one sender, 2+ receivers in the same tx (strong signal)
+    if len(receivers) >= 2:
+        # Prefer the single largest outflow as the multi-send sender when several
+        # accounts decrease (avoids tagging every side of a complex swap).
+        if len(senders) == 1:
+            out[senders[0]] = {r for r in receivers if r != senders[0]}
+        else:
+            best_s = max(
+                senders,
+                key=lambda o: float(pre_own.get(o, 0) or 0)
+                - float(post_own.get(o, 0) or 0),
+            )
+            out[best_s] = {r for r in receivers if r != best_s}
+        return out
+    # 1→1: record so aggregation across txs can build 1→many for the same sender
+    if len(senders) == 1 and len(receivers) >= 1:
+        out[senders[0]] = {r for r in receivers if r != senders[0]}
     return out
 
 
