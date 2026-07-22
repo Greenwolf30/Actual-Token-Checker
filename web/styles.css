@@ -1755,6 +1755,32 @@ pre.report a.wallet-hold-lp:hover {
 .report::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 /* ── Footer ─────────────────────────────────────────────── */
+/* Helius Fresh + Multi-send warning (always visible; stronger when both on) */
+.helius-warn-banner {
+  margin: 8px 0 4px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(196, 122, 74, 0.55);
+  background: rgba(196, 122, 74, 0.16);
+  color: #e0b48a;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  font-weight: 500;
+}
+.helius-warn-banner strong {
+  color: #f0c49a;
+  font-weight: 700;
+}
+.helius-warn-banner.helius-warn-active {
+  border-color: rgba(255, 159, 10, 0.75);
+  background: rgba(255, 159, 10, 0.22);
+  color: #ffc078;
+  box-shadow: 0 0 0 1px rgba(255, 159, 10, 0.2);
+}
+.helius-warn-banner.helius-warn-active strong {
+  color: #ffd4a0;
+}
+
 .foot {
   display: flex;
   flex-wrap: wrap;

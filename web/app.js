@@ -6863,6 +6863,17 @@ function initFreshMultiPref() {
     MULTI_SEND_PREF_KEY,
     FRESH_MULTI_PREF_KEY_LEGACY
   );
+  const fresh = $("useFresh");
+  const multi = $("useMultiSend");
+  const banner = $("heliusFreshMultiWarn");
+  function syncHeliusWarnBanner() {
+    if (!banner) return;
+    const both = !!(fresh && multi && fresh.checked && multi.checked);
+    banner.classList.toggle("helius-warn-active", both);
+  }
+  if (fresh) fresh.addEventListener("change", syncHeliusWarnBanner);
+  if (multi) multi.addEventListener("change", syncHeliusWarnBanner);
+  syncHeliusWarnBanner();
 }
 
 function initRugwatchNav() {
