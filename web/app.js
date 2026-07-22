@@ -8,6 +8,18 @@ const TOKEN_KEY = "adtc_site_token";
 const HISTORY_KEY = "adtc_history_log";
 const HISTORY_MAX = 200;
 const RUGGERS_KEY = "adtc_ruggers_track";
+/** Last Analyze full payload (all tabs). */
+const LAST_ANALYZE_KEY = "adtc_last_analyze";
+const LAST_BUNDLES_ANALYZE_KEY = "adtc_last_bundles_analyze";
+/** Per-mint baseline + frozen delta pair for Bundles arrows. */
+const BUNDLE_STATS_PREV_KEY = "adtc_bundle_stats_prev";
+/** Per-mint precomputed delta HTML snippets. */
+const BUNDLE_DELTA_HTML_KEY = "adtc_bundle_delta_html";
+/**
+ * Exact .bun-stats bar HTML from last live Analyze (mint + html).
+ * Refresh restores this blob so arrows cannot “recompute away”.
+ */
+const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Bump when Flagged-wallet rules change so sticky junk is wiped once. */
 const RUGGERS_RULES_VERSION = 8;
 /** Sold ≥ this fraction of first-lookup bag → list as seller (99%). */
@@ -6171,12 +6183,14 @@ function saveLastAnalyze(data, query) {
         const e = mint ? getBundleStatsEntry(mint) : null;
         const htmlByKey = mint ? loadBundleDeltaHtml(mint) : null;
         if (e || htmlByKey) {
+          const barSnap = loadBundleStatsBarSnap(mint);
           bundleDelta = {
             mint: bundleStatsMintKey(mint),
             forNext: e && e.forNext,
             deltaFrom: e && e.deltaFrom,
             deltaCur: e && e.deltaCur,
             htmlByKey: htmlByKey || null,
+            barHtml: (barSnap && barSnap.html) || (htmlByKey && htmlByKey.barHtml) || null,
           };
         }
       } catch (_) {
@@ -6448,12 +6462,6 @@ function zeroBundleStats() {
   return out;
 }
 
-/**
- * Precomputed delta HTML per stat key (survives refresh even if pair math fails).
- * Keyed by bare mint.
- */
-const BUNDLE_DELTA_HTML_KEY = "adtc_bundle_delta_html";
-
 function loadBundleDeltaHtmlMap() {
   try {
     const raw = localStorage.getItem(BUNDLE_DELTA_HTML_KEY);
@@ -6492,6 +6500,55 @@ function loadBundleDeltaHtml(mint) {
   if (row && typeof row === "object") return row;
   for (const k of Object.keys(map)) {
     if (bundleStatsMintKey(k) === m && map[k]) return map[k];
+  }
+  return null;
+}
+
+/** Save exact Bundles summary bar HTML (includes arrows) for refresh replay. */
+function saveBundleStatsBarSnap(mint, barHtml) {
+  const m = bundleStatsMintKey(mint);
+  const html = String(barHtml || "").trim();
+  if (!html || html.indexOf("bun-stats") < 0) return;
+  try {
+    const payload = {
+      mint: m || "",
+      html,
+      savedAt: Date.now(),
+    };
+    localStorage.setItem(BUNDLE_STATS_BAR_SNAP_KEY, JSON.stringify(payload));
+    // Also mint-keyed copy inside delta html map for multi-mint
+    if (m) {
+      const map = loadBundleDeltaHtmlMap();
+      map[m] = { ...(map[m] || {}), barHtml: html, savedAt: Date.now() };
+      localStorage.setItem(BUNDLE_DELTA_HTML_KEY, JSON.stringify(map));
+    }
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+function loadBundleStatsBarSnap(mint) {
+  try {
+    const raw = localStorage.getItem(BUNDLE_STATS_BAR_SNAP_KEY);
+    if (raw) {
+      const o = JSON.parse(raw);
+      if (o && o.html) {
+        const m = bundleStatsMintKey(mint);
+        // Prefer exact mint match; if mint unknown, still use last snap
+        if (!m || !o.mint || bundleStatsMintKey(o.mint) === m) return o;
+      }
+    }
+  } catch (_) {
+    /* ignore */
+  }
+  // Fallback: mint map
+  try {
+    const row = mint ? loadBundleDeltaHtml(mint) : null;
+    if (row && row.barHtml) {
+      return { mint: bundleStatsMintKey(mint), html: row.barHtml, savedAt: row.savedAt };
+    }
+  } catch (_) {
+    /* ignore */
   }
   return null;
 }
@@ -6899,17 +6956,16 @@ function renderBundlesUi(data) {
   function withDelta(mainHtml, key, curOverride) {
     const kind = key === "risk" ? "score" : "pct";
     let d = "";
-    if (prev) {
+    // On refresh: prefer exact frozen delta HTML first (what user saw last live run)
+    if (isRestore && frozenHtml && frozenHtml[key]) {
+      d = frozenHtml[key];
+    } else if (prev) {
       const curVal =
         curOverride !== undefined ? curOverride : deltaCurStats[key];
       const prevVal = prev[key];
       d = formatBundleStatDelta(curVal, prevVal, kind, {
         coalesceNull: kind === "pct",
       });
-    }
-    // Restore fallback: use last frozen HTML if recompute produced nothing
-    if (!d && isRestore && frozenHtml && frozenHtml[key]) {
-      d = frozenHtml[key];
     }
     if (d) htmlByKeyThisRun[key] = d;
     return d ? mainHtml + " " + d : mainHtml;
@@ -6958,12 +7014,29 @@ function renderBundlesUi(data) {
   {
     const msErr = String(s.multi_send_error || "");
     const msSkipped = /scan off|enable [“"]Multi|Multi-send scan off/i.test(msErr);
-    html += stat(
-      "Multi-send total",
-      msSkipped
-        ? '<span style="color:var(--text-muted)">skipped</span>'
-        : withDelta(bunPctHtml(s.multi_send_total_pct), "multi_send_total_pct")
-    );
+    let msPct =
+      s.multi_send_total_pct != null && Number.isFinite(Number(s.multi_send_total_pct))
+        ? Number(s.multi_send_total_pct)
+        : null;
+    if (msPct == null && deltaCurStats && deltaCurStats.multi_send_total_pct != null) {
+      msPct = Number(deltaCurStats.multi_send_total_pct);
+    }
+    if (msSkipped && msPct == null) {
+      html += stat(
+        "Multi-send total",
+        withDelta(
+          '<span style="color:var(--text-muted)">skipped</span>',
+          "multi_send_total_pct",
+          0
+        )
+      );
+    } else {
+      const live = msPct != null ? msPct : 0;
+      html += stat(
+        "Multi-send total",
+        withDelta(bunPctHtml(live), "multi_send_total_pct", live)
+      );
+    }
   }
   {
     const fundErr = String(s.funding_error || "");
@@ -7586,6 +7659,48 @@ function renderBundlesUi(data) {
   }
 
   root.innerHTML = html;
+
+  // ── Exact stats-bar snapshot (nuclear refresh fix) ─────────────────
+  // Live: freeze the rendered .bun-stats HTML (arrows included).
+  // Restore: swap in that exact bar so recompute cannot drop deltas.
+  try {
+    const bar = root.querySelector(".bun-stats");
+    if (!isRestore && bar && mint) {
+      saveBundleStatsBarSnap(mint, bar.outerHTML);
+      // Keep html-by-key map in sync for partial fallbacks
+      if (Object.keys(htmlByKeyThisRun).length) {
+        saveBundleDeltaHtml(mint, {
+          ...htmlByKeyThisRun,
+          barHtml: bar.outerHTML,
+        });
+      }
+      if (data && data._bundleDeltaPair) {
+        data._bundleDeltaPair.barHtml = bar.outerHTML;
+        data._bundleDeltaPair.htmlByKey = {
+          ...(data._bundleDeltaPair.htmlByKey || {}),
+          ...htmlByKeyThisRun,
+        };
+      }
+    } else if (isRestore) {
+      const snap =
+        loadBundleStatsBarSnap(mint) ||
+        (data &&
+          data.bundleDelta &&
+          data.bundleDelta.barHtml && {
+            mint: data.bundleDelta.mint,
+            html: data.bundleDelta.barHtml,
+          });
+      if (snap && snap.html && bar) {
+        // Replace recomputed bar with last live bar (keeps ▲/▼/%)
+        bar.outerHTML = snap.html;
+      } else if (snap && snap.html && !bar) {
+        // Stats grid missing — prepend frozen bar
+        root.insertAdjacentHTML("afterbegin", snap.html);
+      }
+    }
+  } catch (err) {
+    console.warn("[bundles delta snap]", err);
+  }
 }
 
 function renderSections(data, query) {
@@ -7790,11 +7905,6 @@ const RUGWATCH_PREF_KEY = "adtc_use_rugwatch";
 const FRESH_PREF_KEY = "adtc_use_fresh";
 const MULTI_SEND_PREF_KEY = "adtc_use_multi_send";
 const SHARED_SOL_PREF_KEY = "adtc_use_shared_sol";
-/** Last full Analyze payload (all tabs; survives page refresh until next Analyze). */
-const LAST_BUNDLES_ANALYZE_KEY = "adtc_last_bundles_analyze";
-const LAST_ANALYZE_KEY = "adtc_last_analyze";
-/** Previous Bundles summary stats per mint (for since-last-Analyze deltas). */
-const BUNDLE_STATS_PREV_KEY = "adtc_bundle_stats_prev";
 /** Legacy combined pref — migrate once if present */
 const FRESH_MULTI_PREF_KEY_LEGACY = "adtc_use_fresh_multi";
 
