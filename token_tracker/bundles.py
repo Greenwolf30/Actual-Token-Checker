@@ -2312,6 +2312,8 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
             or ms_split.get("hold_shape"),
             "multi_send_error": s.get("multi_send_error"),
             "funding_error": s.get("funding_error"),
+            "funding_total_pct": s.get("funding_total_pct"),
+            "funding_wallet_count": s.get("funding_wallet_count"),
             "fresh_from_cache": s.get("fresh_from_cache"),
             "multi_send_from_cache": s.get("multi_send_from_cache"),
             "funding_from_cache": s.get("funding_from_cache"),

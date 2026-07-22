@@ -6342,12 +6342,64 @@ function renderBundlesUi(data) {
   );
   const fundCached = !!s.funding_from_cache;
   if (fund.length) {
+    // Total % across unique wallets (funders + children) in all Shared SOL clusters
+    const fundPctByW = {};
+    for (const fc of fund) {
+      const funder = String((fc && fc.funder) || "").trim();
+      if (funder) {
+        const fp = Number(fc.funder_pct);
+        if (Number.isFinite(fp)) {
+          fundPctByW[funder] = Math.max(fundPctByW[funder] || 0, fp);
+        } else if (fundPctByW[funder] == null) {
+          fundPctByW[funder] = null;
+        }
+      }
+      const kids = Array.isArray(fc.child_rows) && fc.child_rows.length
+        ? fc.child_rows
+        : fc.children || [];
+      for (const row of kids) {
+        let w;
+        let p = null;
+        if (row && typeof row === "object") {
+          w = String(row.wallet || "").trim();
+          p = row.pct_supply != null ? Number(row.pct_supply) : null;
+        } else {
+          w = String(row || "").trim();
+        }
+        if (!w) continue;
+        if (Number.isFinite(p)) {
+          fundPctByW[w] = Math.max(fundPctByW[w] || 0, p);
+        } else if (fundPctByW[w] == null) {
+          fundPctByW[w] = null;
+        }
+      }
+    }
+    let fundTotalPct = s.funding_total_pct;
+    if (fundTotalPct == null) {
+      let sum = 0;
+      let any = false;
+      for (const p of Object.values(fundPctByW)) {
+        if (p != null && Number.isFinite(Number(p)) && Number(p) > 0) {
+          sum += Number(p);
+          any = true;
+        }
+      }
+      fundTotalPct = any ? Math.min(100, sum) : null;
+    }
+    const fundWalletN =
+      s.funding_wallet_count != null
+        ? Number(s.funding_wallet_count)
+        : Object.keys(fundPctByW).length;
     html +=
       '<section class="bun-section"><div class="bun-section-head">' +
       '<span class="bun-section-title">Shared SOL funder' +
       (fundCached ? " (last known)" : "") +
       "</span>" +
-      '<span class="bun-section-total">' +
+      '<span class="bun-section-total">total ' +
+      bunPctHtml(fundTotalPct) +
+      " · " +
+      escHtml(String(Number.isFinite(fundWalletN) ? fundWalletN : 0)) +
+      " wallet(s) · " +
       escHtml(String(fund.length)) +
       " cluster(s)" +
       (fundCached ? " · no re-scan" : "") +
@@ -6367,7 +6419,16 @@ function renderBundlesUi(data) {
         " wallets" +
         (fc.total_pct != null ? " · sum " + bunPctHtml(fc.total_pct) : "") +
         "</div>";
-      html += bunWalletTable(fc.children || [], [
+      // Prefer child_rows (with %) when present
+      const childTable =
+        Array.isArray(fc.child_rows) && fc.child_rows.length
+          ? fc.child_rows
+          : (fc.children || []).map((c) =>
+              typeof c === "object" && c
+                ? c
+                : { wallet: c, pct_supply: null }
+            );
+      html += bunWalletTable(childTable, [
         { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
         { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
       ]);

@@ -291,6 +291,27 @@ def comprehensive_bundle_check(
                 s0["funding_clusters"] = len(base["funding_clusters"])
                 s0["funding_from_cache"] = True
                 s0.pop("funding_error", None)
+                try:
+                    fund_rows_c: list[dict[str, Any]] = []
+                    for efc in base["funding_clusters"]:
+                        if not isinstance(efc, dict):
+                            continue
+                        fund_rows_c.append(
+                            {
+                                "wallet": efc.get("funder"),
+                                "pct_supply": efc.get("funder_pct")
+                                if efc.get("funder_pct") is not None
+                                else pct_by_w.get(str(efc.get("funder") or "").strip()),
+                            }
+                        )
+                        for cr in list(efc.get("child_rows") or []):
+                            if isinstance(cr, dict):
+                                fund_rows_c.append(cr)
+                    ft_c, fn_c = bun._sum_wallets_pct(fund_rows_c)  # type: ignore[attr-defined]
+                    s0["funding_total_pct"] = ft_c
+                    s0["funding_wallet_count"] = fn_c
+                except Exception:  # noqa: BLE001
+                    pass
                 base["summary"] = s0
         else:
             funding_report = {
@@ -397,6 +418,26 @@ def comprehensive_bundle_check(
                 s0["suspect_total_pct"] = spct
                 s0["suspect_wallet_count"] = sn
                 s0["funding_clusters"] = len(f_clusters)
+                # Unique wallet total % across funders + children (for Bundles header)
+                try:
+                    fund_rows: list[dict[str, Any]] = []
+                    for efc in enriched_fc:
+                        if not isinstance(efc, dict):
+                            continue
+                        fund_rows.append(
+                            {
+                                "wallet": efc.get("funder"),
+                                "pct_supply": efc.get("funder_pct"),
+                            }
+                        )
+                        for cr in list(efc.get("child_rows") or []):
+                            if isinstance(cr, dict):
+                                fund_rows.append(cr)
+                    ft_ss, fn_ss = bun._sum_wallets_pct(fund_rows)  # type: ignore[attr-defined]
+                    s0["funding_total_pct"] = ft_ss
+                    s0["funding_wallet_count"] = fn_ss
+                except Exception:  # noqa: BLE001
+                    pass
                 if shared_sol_from_cache:
                     s0["funding_from_cache"] = True
                 base["summary"] = s0
