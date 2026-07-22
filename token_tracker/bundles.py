@@ -1866,19 +1866,27 @@ def recompute_total_bundle_all_vectors(
         excluded.extend(["similar_size", "insider"])  # counted via unified suspect
 
     # Total = unique wallets across active vectors only (no double-count).
+    # Each address contributes its supply % at most once (max if listed in
+    # several categories: multi + suspect + fresh + multi-send + shared SOL).
     union: dict[str, float] = {}
     appear_in: dict[str, list[str]] = {}
     for key in active_keys:
         wmap = counted_maps.get(key) or {}
         if key == "suspect":
             wmap = sus_map  # similar-size + Rugcheck insiders
-        for w, pct in wmap.items():
+        for w_raw, pct in wmap.items():
+            w = _norm(w_raw)
+            if not w or len(w) < 20 or _is_lp(w):
+                continue
             try:
                 pf = float(pct)
             except (TypeError, ValueError):
                 continue
+            if pf <= 0:
+                continue
             union[w] = max(union.get(w, 0.0), pf)
-            appear_in.setdefault(w, []).append(key)
+            if key not in appear_in.setdefault(w, []):
+                appear_in[w].append(key)
 
     any_data = bool(union)
     grand = round(min(100.0, sum(union.values())), 4) if any_data else 0.0
@@ -1894,6 +1902,29 @@ def recompute_total_bundle_all_vectors(
             str(r.get("wallet") or ""),
         )
     )
+
+    # Exclusive % per active vector for UI breakdown (priority = active_keys
+    # order). Sum of exclusive pcts == Total (no duplicate wallets in chips).
+    exclusive_pct: dict[str, float] = {k: 0.0 for k in active_keys}
+    exclusive_n: dict[str, int] = {k: 0 for k in active_keys}
+    for w, pct in union.items():
+        home = None
+        vecs = appear_in.get(w) or []
+        for key in active_keys:
+            if key in vecs:
+                home = key
+                break
+        if home is None:
+            continue
+        exclusive_pct[home] = exclusive_pct.get(home, 0.0) + float(pct)
+        exclusive_n[home] = exclusive_n.get(home, 0) + 1
+    for key in active_keys:
+        if key not in by_vector:
+            continue
+        by_vector[key] = dict(by_vector[key])
+        by_vector[key]["pct_in_total"] = round(exclusive_pct.get(key, 0.0), 4)
+        by_vector[key]["count_in_total"] = int(exclusive_n.get(key, 0))
+        by_vector[key]["unique_in_total"] = True
 
     # Align optional vector display % with summary when maps under-count
     # (does not change Total — Total stays unique-wallet only).

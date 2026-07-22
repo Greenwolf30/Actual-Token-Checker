@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v132";
+const ADTC_CLIENT_VERSION = "v133";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -7270,12 +7270,20 @@ function sumUniqueWalletSupplyPct(rows) {
   const by = Object.create(null);
   for (let i = 0; i < (rows || []).length; i++) {
     const row = rows[i] || {};
-    const w = String(row.wallet || row.owner || "").trim();
-    if (!w) continue;
+    // Normalize address so the same bag is never counted twice
+    const w = String(row.wallet || row.owner || row.funder || row.sender || "")
+      .trim();
+    if (!w || w.length < 20) continue;
     const p = Number(
-      row.pct_supply != null ? row.pct_supply : row.combined_pct
+      row.pct_supply != null
+        ? row.pct_supply
+        : row.combined_pct != null
+          ? row.combined_pct
+          : row.funder_pct != null
+            ? row.funder_pct
+            : row.sender_pct
     );
-    if (!Number.isFinite(p)) continue;
+    if (!Number.isFinite(p) || p <= 0) continue;
     by[w] = Math.max(by[w] || 0, p);
   }
   const keys = Object.keys(by);
@@ -7428,14 +7436,12 @@ function recomputeTotalBundleFromView(view, summary) {
     for (let i = 0; i < ins.length; i++) pushWalletObj(ins[i]);
   }
 
+  // Unique wallets only — never sum category boxes (that double-counts)
   const unique = sumUniqueWalletSupplyPct(rows);
-  let total = unique != null ? unique : 0;
   const server =
     s.total_bundle_pct != null && Number.isFinite(Number(s.total_bundle_pct))
       ? Number(s.total_bundle_pct)
       : null;
-  // Only lift from server when its optional/Suspect flags match what we counted
-  // (avoids pulling Fresh into Total while checkboxes/flags say fallback mode)
   const flagsAlign =
     (s.total_bundle_include_fresh == null ||
       s.total_bundle_include_fresh === countFresh) &&
@@ -7445,8 +7451,23 @@ function recomputeTotalBundleFromView(view, summary) {
       s.total_bundle_include_shared_sol === countSol) &&
     (s.total_bundle_show_similar_suspect == null ||
       !!s.total_bundle_show_similar_suspect === countSuspect);
-  if (server != null && flagsAlign && server > total + 0.0001) total = server;
+
+  let total;
+  if (unique != null && rows.length > 0) {
+    // Client unique from listed bags is the truth (no duplicate wallets)
+    total = unique;
+    // Server may know wallets not in the slim UI lists — only lift when higher
+    // and still unique (server already unique-deduped) and flags match
+    if (server != null && flagsAlign && server > total + 0.0001) {
+      total = server;
+    }
+  } else if (server != null) {
+    total = server;
+  } else {
+    total = 0;
+  }
   if (total > 100) total = 100;
+  if (total < 0) total = 0;
   return Math.round(total * 10000) / 10000;
 }
 
@@ -9686,12 +9707,11 @@ function renderBundlesUi(data) {
     const parts = [];
     const labels = {
       multi_account: "multi-account",
-      suspect: "suspect",
-      // similar_size / insider are parts of suspect — only use if no suspect vector
-      similar_size: "suspect",
       multi_send: "multi-send",
       fresh: "fresh",
       shared_funder: "shared SOL",
+      suspect: "suspect",
+      similar_size: "suspect",
     };
     const seenLab = {};
     for (const [k, lab] of Object.entries(labels)) {
@@ -9701,8 +9721,23 @@ function renderBundlesUi(data) {
       if (k === "similar_size" && bv.suspect && !bv.suspect.excluded_from_total)
         continue;
       if (seenLab[lab]) continue;
-      const p = m.pct != null && Number.isFinite(Number(m.pct)) ? Number(m.pct) : null;
-      const n = m.count != null ? Number(m.count) : 0;
+      // Prefer exclusive-in-Total % (no duplicate wallets across chips)
+      const pEx =
+        m.pct_in_total != null && Number.isFinite(Number(m.pct_in_total))
+          ? Number(m.pct_in_total)
+          : null;
+      const p =
+        pEx != null
+          ? pEx
+          : m.pct != null && Number.isFinite(Number(m.pct))
+            ? Number(m.pct)
+            : null;
+      const n =
+        m.count_in_total != null
+          ? Number(m.count_in_total)
+          : m.count != null
+            ? Number(m.count)
+            : 0;
       if (p != null && p > 0) {
         parts.push(lab + " " + p.toFixed(2) + "%");
         seenLab[lab] = true;
@@ -9717,15 +9752,15 @@ function renderBundlesUi(data) {
         : s.flagged_wallets;
     const crossN = s.total_bundle_crosslisted_count;
     html +=
-      '<p class="bun-meta">Total = unique wallets (no double-count). ' +
-      "Multi-account always counts. Suspect (similar-size + Rugcheck insider) counts only when Fresh / Multi-send / Shared SOL are all off. " +
+      '<p class="bun-meta">Total = unique wallets only (each address once at max hold % — no double-count across multi / suspect / optionals). ' +
+      "Multi-account always counts. Suspect (similar-size + Rugcheck insider) only when Fresh / Multi-send / Shared SOL are all off. " +
       "Checked optionals enter Total; last-known under an unchecked box does not. " +
       (uniqN != null ? " · " + escHtml(String(uniqN)) + " unique wallet(s)" : "") +
       (crossN != null && Number(crossN) > 0
-        ? " · " + escHtml(String(crossN)) + " cross-listed (deduped)"
+        ? " · " + escHtml(String(crossN)) + " cross-listed (deduped into Total once)"
         : "") +
       (parts.length
-        ? " In total: " + escHtml(parts.join(" + "))
+        ? " · exclusive in Total: " + escHtml(parts.join(" + "))
         : "") +
       ".</p>";
   }
