@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v105";
+const ADTC_CLIENT_VERSION = "v106";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -85,7 +85,8 @@ function statsAlmostEqual(a, b) {
 
 
 /** Bump when Flagged-wallet rules change so sticky junk is wiped once. */
-const RUGGERS_RULES_VERSION = 8;
+/** v9: Upload marks only from Ruggers Upload button on THAT mint (no cloud bleed). */
+const RUGGERS_RULES_VERSION = 9;
 /** Sold ≥ this fraction of first-lookup bag → list as seller (99%). */
 const RUGGERS_SOLD_FRAC = 0.99;
 /** Remaining bag must be ≤ (1 - RUGGERS_SOLD_FRAC) of first_pct to count as sold. */
@@ -794,6 +795,36 @@ function migrateRuggersStore(store) {
       copy.flagged_known = {};
       copy.flagged_sellers = {};
       copy.rugwatch_known = {};
+      // v9: wipe false Upload marks (cloud bleed treated as this-mint upload)
+      // Keep permanent Similar-Upload pins only
+      if (ver < 9) {
+        const keepSim = {};
+        if (copy.uploaded_similar && typeof copy.uploaded_similar === "object") {
+          for (const [w, meta] of Object.entries(copy.uploaded_similar)) {
+            if (w && meta) keepSim[w] = meta;
+          }
+        }
+        copy.uploaded_similar = keepSim;
+        const keepUp = {};
+        for (const w of Object.keys(keepSim)) {
+          keepUp[w] = {
+            via: "button",
+            mint: copy.address || null,
+            section: "similar",
+            uploaded_at: (keepSim[w] && keepSim[w].uploaded_at) || null,
+            last_update: new Date().toISOString(),
+          };
+        }
+        copy.ruggers_uploaded = keepUp;
+        if (copy.status && typeof copy.status === "object") {
+          for (const st of Object.values(copy.status)) {
+            if (!st || typeof st !== "object") continue;
+            delete st.ruggers_uploaded;
+            delete st.ruggers_uploaded_section;
+          }
+        }
+        changed = true;
+      }
       // v8: map legacy "excluded" / re-resolve multi·funding·insider·launch·suspect lanes
       if (copy.first_wallets && typeof copy.first_wallets === "object") {
         for (const fw of Object.values(copy.first_wallets)) {
@@ -814,6 +845,8 @@ function migrateRuggersStore(store) {
             delete nextRow.origin_lane;
             changed = true;
           }
+          delete nextRow.ruggers_uploaded;
+          delete nextRow.ruggers_uploaded_section;
           st[w] = nextRow;
         }
         copy.status = st;
@@ -1623,7 +1656,8 @@ function processRuggersFromAnalyze(data) {
     !rec || !rec.first_wallets || !Object.keys(rec.first_wallets).length;
 
   if (isFirstLookup) {
-    // First lookup baseline — all Ruggers sections stay empty until later sells
+    // First lookup baseline — all Ruggers sections stay empty until later sells.
+    // Never inherit upload marks from other mints / cloud.
     rec = {
       address: snap.address,
       chain: snap.chain,
@@ -1642,10 +1676,11 @@ function processRuggersFromAnalyze(data) {
       flagged_sellers: {},
       // Similar section Upload on this mint — stay under Similar (not Flagged here)
       uploaded_similar: {},
-      // Wallets successfully Uploaded via Ruggers (any section) on this mint
+      // Wallets successfully Uploaded via Ruggers Upload button on THIS mint only
       ruggers_uploaded: {},
       // Similar/Single/Creator sellers who never buy back — stay forever until swing
       sticky_lane_sellers: {},
+      rules_version: RUGGERS_RULES_VERSION,
     };
     for (const [w, info] of Object.entries(snap.wallets || {})) {
       rec.first_wallets[w] = {
@@ -1697,44 +1732,12 @@ function processRuggersFromAnalyze(data) {
     if (!rec.sticky_lane_sellers || typeof rec.sticky_lane_sellers !== "object") {
       rec.sticky_lane_sellers = {};
     }
-    // Backfill upload marks from similar pins / legacy uploaded flags
+    // Similar-Upload pins → re-stamp as button marks for this mint only
     for (const w of Object.keys(rec.uploaded_similar || {})) {
       markRuggersWalletUploaded(rec, w, "similar");
     }
-    // Legacy: origin "uploaded" on flagged_sellers — only if THIS mint was the
-    // source of that upload. Never backfill from cloud-known / other-mint flags
-    // (that zeroed Upload (N) on brand-new mints the user never uploaded from).
-    const thisMintAddr = String(rec.address || "").trim().toLowerCase();
-    for (const [w, meta] of Object.entries(rec.flagged_sellers || {})) {
-      if (!meta || String(meta.origin || "") !== "uploaded") continue;
-      const fromMint = String(
-        meta.flagged_from_mint ||
-          (Array.isArray(meta.flagged_from_mints) && meta.flagged_from_mints[0]) ||
-          ""
-      )
-        .trim()
-        .toLowerCase();
-      // Skip if we cannot prove upload originated on this mint
-      if (!thisMintAddr || !fromMint || fromMint !== thisMintAddr) continue;
-      // Already marked — keep
-      if (rec.ruggers_uploaded && rec.ruggers_uploaded[w]) continue;
-      const sec =
-        (meta.uploaded_section && String(meta.uploaded_section)) ||
-        (meta.origin_lane &&
-        RUGGERS_STICKY_LANES.has(String(meta.origin_lane)) &&
-        String(meta.origin_lane) !== "creator"
-          ? String(meta.origin_lane)
-          : null) ||
-        "single";
-      // Only real mint creator may keep section "creator"
-      const secFinal =
-        sec === "creator" &&
-        rec.creator &&
-        String(w).toLowerCase() !== String(rec.creator).toLowerCase()
-          ? "single"
-          : sec;
-      markRuggersWalletUploaded(rec, w, secFinal);
-    }
+    // Hard purge: cloud / other-mint / sold-while-flagged never count as Upload
+    purgeFalseRuggersUploadMarks(rec);
     // Repair: ruggers_uploaded.section "creator" for non-creator addresses
     if (rec.ruggers_uploaded && typeof rec.ruggers_uploaded === "object") {
       const cKnown = rec.creator ? String(rec.creator).toLowerCase() : "";
@@ -1743,90 +1746,6 @@ function processRuggersFromAnalyze(data) {
         if (cKnown && String(w).toLowerCase() === cKnown) continue;
         meta.section = "single";
         meta.repaired_from_false_creator = true;
-      }
-    }
-    // Repair: drop false "already uploaded" marks that came from cloud / other mints
-    // (old builds treated rugwatch origin "uploaded" as this-mint Upload).
-    if (rec.ruggers_uploaded && typeof rec.ruggers_uploaded === "object" && thisMintAddr) {
-      const cleanedUp = {};
-      for (const [w, meta] of Object.entries(rec.ruggers_uploaded)) {
-        if (!w) continue;
-        // Always keep permanent Similar-Upload pins
-        if (isUploadedSimilarOnThisMint(rec, w)) {
-          cleanedUp[w] = meta;
-          continue;
-        }
-        const rk = rec.rugwatch_known && rec.rugwatch_known[w];
-        const fs = rec.flagged_sellers && rec.flagged_sellers[w];
-        const fromRk = String(
-          (rk && rk.flagged_from_mint) ||
-            (rk &&
-              Array.isArray(rk.flagged_from_mints) &&
-              rk.flagged_from_mints[0]) ||
-            ""
-        )
-          .trim()
-          .toLowerCase();
-        const fromFs = String(
-          (fs && fs.flagged_from_mint) ||
-            (fs &&
-              Array.isArray(fs.flagged_from_mints) &&
-              fs.flagged_from_mints[0]) ||
-            ""
-        )
-          .trim()
-          .toLowerCase();
-        // Keep only if we can prove upload was from this mint
-        // (status.ruggers_uploaded alone is not enough — old builds set it
-        // from cloud origin and poisoned Upload (0) on new mints)
-        if (fromRk === thisMintAddr || fromFs === thisMintAddr) {
-          cleanedUp[w] = meta;
-          continue;
-        }
-        // Drop poisoned mark (no this-mint proof) + clear sticky status
-        if (rec.status && rec.status[w]) {
-          delete rec.status[w].ruggers_uploaded;
-          delete rec.status[w].ruggers_uploaded_section;
-        }
-      }
-      rec.ruggers_uploaded = cleanedUp;
-      // Also clear status flags for wallets no longer in ruggers_uploaded
-      if (rec.status && typeof rec.status === "object") {
-        for (const [sw, st] of Object.entries(rec.status)) {
-          if (!st) continue;
-          if (st.ruggers_uploaded && !cleanedUp[sw] && !isUploadedSimilarOnThisMint(rec, sw)) {
-            let keep = false;
-            const wl = String(sw).toLowerCase();
-            for (const k of Object.keys(cleanedUp)) {
-              if (String(k).toLowerCase() === wl) {
-                keep = true;
-                break;
-              }
-            }
-            if (!keep) {
-              delete st.ruggers_uploaded;
-              delete st.ruggers_uploaded_section;
-            }
-          }
-        }
-      }
-    }
-    // Never let cloud-known wallets carry origin "uploaded" onto this mint
-    // unless flagged_from_mint is this mint (breaks Upload (0) on new mints).
-    if (rec.rugwatch_known && typeof rec.rugwatch_known === "object" && thisMintAddr) {
-      for (const [w, meta] of Object.entries(rec.rugwatch_known)) {
-        if (!meta || String(meta.origin || "") !== "uploaded") continue;
-        const from = String(
-          meta.flagged_from_mint ||
-            (Array.isArray(meta.flagged_from_mints) && meta.flagged_from_mints[0]) ||
-            ""
-        )
-          .trim()
-          .toLowerCase();
-        if (from !== thisMintAddr) {
-          meta.origin = "rugwatch";
-          delete meta.uploaded_section;
-        }
       }
     }
     // Repair: older builds moved Similar-Uploads into Flagged — pin permanently
@@ -2358,17 +2277,26 @@ function processRuggersFromAnalyze(data) {
 
     if (soldWhileFlaggedPath) {
       const prior = flaggedSellers[w] || prev.flagged_meta || {};
-      // Only the first mint they were flagged on — never append later mints
-      // Keep first mint only — do not add this mint if already flagged elsewhere
+      // Only the first mint they were flagged on — never append later mints.
+      // Do NOT pass rec.address as fallback here before we know if they had a prior mint.
       const sealed = withSingleFlaggedFromMint(
         { ...(rwKnown[w] || {}), ...prior },
         prior,
         rwKnown[w],
-        prev,
-        rec.address
+        prev
       );
+      // First time ever flagged: attribute to THIS mint for display only
+      if (!sealed.flagged_from_mint && rec.address) {
+        sealed.flagged_from_mint = rec.address;
+        sealed.flagged_from_mints = [rec.address];
+      }
       flaggedSellers[w] = {
         ...sealed,
+        // Never inherit cloud "uploaded" — that is NOT Ruggers Upload on this mint
+        origin:
+          sealed.origin && String(sealed.origin) !== "uploaded"
+            ? sealed.origin
+            : "sold_while_flagged",
         entered_at: prior.entered_at || now,
         last_update: now,
         phase: "sold",
@@ -2403,11 +2331,18 @@ function processRuggersFromAnalyze(data) {
         { ...prior, ...(rwKnown[w] || {}) },
         prior,
         rwKnown[w],
-        prev,
-        rec.address
+        prev
       );
+      if (!sealed.flagged_from_mint && rec.address) {
+        sealed.flagged_from_mint = rec.address;
+        sealed.flagged_from_mints = [rec.address];
+      }
       flaggedSellers[w] = {
         ...sealed,
+        origin:
+          sealed.origin && String(sealed.origin) !== "uploaded"
+            ? sealed.origin
+            : "sold_while_flagged",
         entered_at: prior.entered_at || now,
         last_update: now,
         phase: "swing",
@@ -2837,6 +2772,9 @@ function processRuggersFromAnalyze(data) {
   // Keep legacy key in sync for any old UI paths (sellers-only, not full watchlist)
   rec.flagged_known = { ...flaggedSellers };
   rec.status = status;
+  // Final pass: Upload (N) only for real this-mint Upload button marks
+  purgeFalseRuggersUploadMarks(rec);
+  rec.rules_version = RUGGERS_RULES_VERSION;
 
   store[key] = rec;
   saveRuggersStore(store);
@@ -2932,50 +2870,121 @@ function isUploadedSimilarOnThisMint(rec, wallet) {
 }
 
 /**
- * True if this wallet was successfully Uploaded from Ruggers on THIS mint
- * (any section). Used so Upload (N) only counts not-yet-uploaded wallets.
- *
- * Per-mint only: being on RugWatch / cloud from another mint must NOT zero
- * the count on a new mint the user has never uploaded from.
+ * True if wallet was marked by the Ruggers Upload button on THIS mint only.
+ * Cloud-known / other-mint / sold-while-flagged must never count.
  */
 function isRuggersAlreadyUploaded(rec, wallet) {
   if (!rec || !wallet) return false;
   const w = String(wallet).trim();
   if (!w) return false;
-  // Permanent Similar-Upload pin on this mint
   if (isUploadedSimilarOnThisMint(rec, w)) return true;
-  // Explicit Ruggers Upload button success on this mint
+  const up = rec.ruggers_uploaded;
+  if (!up || typeof up !== "object") return false;
+  const mint = String(rec.address || "").trim().toLowerCase();
+  const hit = up[w]
+    ? up[w]
+    : (function () {
+        const wl = w.toLowerCase();
+        for (const k of Object.keys(up)) {
+          if (String(k).toLowerCase() === wl) return up[k];
+        }
+        return null;
+      })();
+  if (!hit || typeof hit !== "object") return false;
+  // Only explicit Upload-button marks (v106+) count
+  if (hit.via === "button") return true;
+  // Legacy keep: must prove same mint address was stored on the mark
+  if (
+    mint &&
+    hit.mint &&
+    String(hit.mint).trim().toLowerCase() === mint
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Drop false "already uploaded" marks (cloud bleed / other mints / old builds).
+ * Only keeps Upload-button marks for THIS mint + Similar-Upload pins.
+ */
+function purgeFalseRuggersUploadMarks(rec) {
+  if (!rec || typeof rec !== "object") return;
+  const mint = String(rec.address || "").trim().toLowerCase();
+  const cleaned = {};
   const up = rec.ruggers_uploaded;
   if (up && typeof up === "object") {
-    if (up[w]) return true;
-    const wl = w.toLowerCase();
-    for (const k of Object.keys(up)) {
-      if (String(k).toLowerCase() === wl) return true;
+    for (const [w, meta] of Object.entries(up)) {
+      if (!w || !meta || typeof meta !== "object") continue;
+      if (isUploadedSimilarOnThisMint(rec, w)) {
+        cleaned[w] = { ...meta, via: meta.via || "button", mint: meta.mint || rec.address };
+        continue;
+      }
+      if (meta.via === "button") {
+        cleaned[w] = meta;
+        continue;
+      }
+      if (
+        mint &&
+        meta.mint &&
+        String(meta.mint).trim().toLowerCase() === mint
+      ) {
+        cleaned[w] = { ...meta, via: "button" };
+        continue;
+      }
+      // Drop — no proof this mint's Upload button wrote it
     }
   }
-  // Legacy: only count flagged_sellers origin "uploaded" when the upload
-  // was from THIS mint (flagged_from_mint matches). Never treat cloud-known
-  // wallets as already-uploaded on a brand-new mint.
-  const mint = String(rec.address || "").trim().toLowerCase();
-  if (mint) {
-    const fs =
-      (rec.flagged_sellers && rec.flagged_sellers[w]) ||
-      (rec.flagged_sellers &&
-        Object.entries(rec.flagged_sellers).find(
-          ([k]) => String(k).toLowerCase() === w.toLowerCase()
-        )?.[1]);
-    if (fs && String(fs.origin || "") === "uploaded") {
+  rec.ruggers_uploaded = cleaned;
+  // Clear sticky status flags that are not in cleaned
+  if (rec.status && typeof rec.status === "object") {
+    for (const [sw, st] of Object.entries(rec.status)) {
+      if (!st) continue;
+      if (!st.ruggers_uploaded && !st.ruggers_uploaded_section) continue;
+      let keep = !!(cleaned[sw] || isUploadedSimilarOnThisMint(rec, sw));
+      if (!keep) {
+        const wl = String(sw).toLowerCase();
+        for (const k of Object.keys(cleaned)) {
+          if (String(k).toLowerCase() === wl) {
+            keep = true;
+            break;
+          }
+        }
+      }
+      if (!keep) {
+        delete st.ruggers_uploaded;
+        delete st.ruggers_uploaded_section;
+      }
+    }
+  }
+  // Cloud origin "uploaded" is not a this-mint button upload
+  if (rec.rugwatch_known && typeof rec.rugwatch_known === "object") {
+    for (const [w, meta] of Object.entries(rec.rugwatch_known)) {
+      if (!meta || String(meta.origin || "") !== "uploaded") continue;
+      if (cleaned[w] || isUploadedSimilarOnThisMint(rec, w)) continue;
       const from = String(
-        fs.flagged_from_mint ||
-          (Array.isArray(fs.flagged_from_mints) && fs.flagged_from_mints[0]) ||
+        meta.flagged_from_mint ||
+          (Array.isArray(meta.flagged_from_mints) && meta.flagged_from_mints[0]) ||
           ""
       )
         .trim()
         .toLowerCase();
-      if (from && from === mint) return true;
+      if (!mint || from !== mint) {
+        meta.origin = "rugwatch";
+        delete meta.uploaded_section;
+      }
     }
   }
-  return false;
+  // flagged_sellers: sold-while-flagged is never an Upload-button mark
+  if (rec.flagged_sellers && typeof rec.flagged_sellers === "object") {
+    for (const [w, meta] of Object.entries(rec.flagged_sellers)) {
+      if (!meta || typeof meta !== "object") continue;
+      if (String(meta.origin || "") !== "uploaded") continue;
+      if (cleaned[w] || isUploadedSimilarOnThisMint(rec, w)) continue;
+      meta.origin = "sold_while_flagged";
+      delete meta.uploaded_section;
+    }
+  }
 }
 
 function markRuggersWalletUploaded(rec, wallet, section) {
@@ -2991,6 +3000,9 @@ function markRuggersWalletUploaded(rec, wallet, section) {
     uploaded_at: (rec.ruggers_uploaded[w] && rec.ruggers_uploaded[w].uploaded_at) || now,
     last_update: now,
     section: section || (rec.ruggers_uploaded[w] && rec.ruggers_uploaded[w].section) || "unknown",
+    // Proof: only Upload button / Similar pin paths call this
+    via: "button",
+    mint: rec.address || (rec.ruggers_uploaded[w] && rec.ruggers_uploaded[w].mint) || null,
   };
 }
 
@@ -4825,10 +4837,26 @@ function refreshRuggersPanel(focusKey) {
   let activeKey = resolveRuggersKey(focusKey);
   if (!activeKey) {
     const addrEl = $("sumAddr");
-    const addr = addrEl ? String(addrEl.textContent || "").trim() : "";
+    // Prefer the mint link address over plain text (logo/summary bar)
+    let addr = "";
+    try {
+      const link = addrEl && addrEl.querySelector("a.sum-mint-link, a");
+      addr = link
+        ? String(link.textContent || "").trim()
+        : addrEl
+          ? String(addrEl.textContent || "").trim()
+          : "";
+    } catch (_) {
+      addr = addrEl ? String(addrEl.textContent || "").trim() : "";
+    }
     activeKey = resolveRuggersKey(addr);
   }
-  if (!activeKey && keys.length) activeKey = keys[0];
+  // Never fall back to a *different* mint's track when the user is looking at
+  // a specific CA — that made Upload (0) from mint A appear on mint B.
+  const focusHint = String(focusKey || "").trim();
+  if (!activeKey && keys.length && !focusHint) {
+    activeKey = keys[0];
+  }
 
   if (!keys.length) {
     _lastRuggersBuckets = null;
@@ -4852,22 +4880,39 @@ function refreshRuggersPanel(focusKey) {
     return;
   }
 
-  // Defensive: keys is non-empty; still never assume store[activeKey] exists
-  let rec = store[activeKey];
-  if (!rec || typeof rec !== "object") {
+  // Defensive: never swap in another mint when focus was given
+  let rec = activeKey ? store[activeKey] : null;
+  if ((!rec || typeof rec !== "object") && !focusHint && keys.length) {
     activeKey = keys[0];
     rec = store[activeKey];
   }
-  if (!rec || typeof rec !== "object") {
+  if (!rec || typeof rec !== "object" || !activeKey) {
     _lastRuggersBuckets = null;
     _lastRuggersRec = null;
     _lastRuggersKey = "";
     if (body) {
       body.innerHTML =
-        '<p class="logs-empty">Ruggers track data is missing or corrupt. Run a full Analyze again.</p>';
+        '<p class="logs-empty">' +
+        (focusHint
+          ? "No Ruggers baseline for this mint yet. Run a full Analyze (not Quick), then re-analyze after sells to see sellers and Upload counts."
+          : "Ruggers track data is missing or corrupt. Run a full Analyze again.") +
+        "</p>";
     }
-    if (dump) dump.textContent = "Ruggers track data is missing or corrupt.";
+    if (dump) {
+      dump.textContent = focusHint
+        ? "No Ruggers baseline for this mint yet."
+        : "Ruggers track data is missing or corrupt.";
+    }
     return;
+  }
+
+  // Live-purge poisoned upload marks when rendering (even before next Analyze)
+  try {
+    purgeFalseRuggersUploadMarks(rec);
+    store[activeKey] = rec;
+    saveRuggersStore(store);
+  } catch (_) {
+    /* ignore */
   }
 
   const buckets = ruggersBuckets(rec);
