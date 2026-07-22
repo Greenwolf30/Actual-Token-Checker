@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v111";
+const ADTC_CLIENT_VERSION = "v112";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -1740,25 +1740,44 @@ function enrollRuggersBaselineWallet(rec, w, info, now) {
  */
 function ensureRuggersMintTrack(address, meta) {
   const mintBare = bareMintAddr(address);
-  if (!mintBare || mintBare.length < 32) return null;
+  // Solana mints are typically 32–44 base58 chars (pump mints often 44)
+  if (!mintBare || mintBare.length < 30) {
+    console.warn("[ruggers] ensure: address too short", mintBare);
+    return null;
+  }
   const chain = (meta && meta.chain) || "solana";
   const storeKey = mintKeyFromToken(mintBare, chain);
-  const store = loadRuggersStore();
+  let store = {};
+  try {
+    store = loadRuggersStore() || {};
+  } catch (_) {
+    store = {};
+  }
   const found = findRuggersRecForMint(store, mintBare, chain);
-  if (found.rec && sameMintAddr(found.rec.address || found.key, mintBare)) {
+  if (found.rec && typeof found.rec === "object") {
     // Keep existing track; ensure address/key normalized
-    found.rec.address = mintBare;
-    found.rec.mint_key = storeKey;
-    if (meta && meta.symbol) found.rec.symbol = meta.symbol;
-    if (meta && meta.name) found.rec.name = meta.name;
-    store[storeKey] = found.rec;
-    if (found.key && found.key !== storeKey) {
+    const rec0 = found.rec;
+    rec0.address = mintBare;
+    rec0.mint_key = storeKey;
+    if (!rec0.first_wallets || typeof rec0.first_wallets !== "object") {
+      rec0.first_wallets = {};
+    }
+    if (meta && meta.symbol) rec0.symbol = meta.symbol;
+    if (meta && meta.name) rec0.name = meta.name;
+    store[storeKey] = rec0;
+    // Also write bare key so old resolvers find it
+    store[mintBare] = rec0;
+    if (found.key && found.key !== storeKey && found.key !== mintBare) {
       try {
         delete store[found.key];
       } catch (_) {}
     }
-    saveRuggersStore(store);
-    return { key: storeKey, rec: found.rec };
+    try {
+      saveRuggersStore(store);
+    } catch (e) {
+      console.warn("[ruggers] ensure save failed", e);
+    }
+    return { key: storeKey, rec: rec0 };
   }
   const now = new Date().toISOString();
   const rec = {
@@ -1783,7 +1802,13 @@ function ensureRuggersMintTrack(address, meta) {
     seeded_empty: true,
   };
   store[storeKey] = rec;
-  saveRuggersStore(store);
+  store[mintBare] = rec; // dual-key so lookup never misses
+  try {
+    saveRuggersStore(store);
+  } catch (e) {
+    console.warn("[ruggers] ensure save failed", e);
+    // Still return in-memory so this page session can show the panel
+  }
   return { key: storeKey, rec };
 }
 
@@ -5116,8 +5141,22 @@ function _refreshRuggersPanelImpl(focusKey) {
     }
   }
 
-  // 3) Only if we have NO target mint at all (no Analyze, no summary CA),
-  //    show most recent track. Never use this when viewing a specific CA.
+  // 3) Auto-seed THIS mint so the panel is never blank when we know the CA
+  //    (Analyze may have skipped holders / track — still open Ruggers for this mint)
+  if (!rec && wantBare && wantBare.length >= 32) {
+    try {
+      const seeded = ensureRuggersMintTrack(wantBare, { chain: "solana" });
+      if (seeded && seeded.rec) {
+        rec = seeded.rec;
+        activeKey = seeded.key;
+        store = loadRuggersStore() || store;
+      }
+    } catch (seedErr) {
+      console.warn("[ruggers] auto-seed on open failed", seedErr);
+    }
+  }
+
+  // 4) Only if we have NO target mint at all, show most recent track
   if (!rec && !wantBare && keys.length) {
     activeKey = keys[0];
     rec = store[activeKey];
@@ -5136,70 +5175,41 @@ function _refreshRuggersPanelImpl(focusKey) {
       "want",
       wantBare
     );
-    rec = null;
-    activeKey = "";
+    // Prefer re-seed for the wanted mint instead of showing wrong hardware
+    try {
+      const seeded = ensureRuggersMintTrack(wantBare, { chain: "solana" });
+      if (seeded && seeded.rec) {
+        rec = seeded.rec;
+        activeKey = seeded.key;
+        store = loadRuggersStore() || store;
+      } else {
+        rec = null;
+        activeKey = "";
+      }
+    } catch (_) {
+      rec = null;
+      activeKey = "";
+    }
   }
 
   if (!rec || typeof rec !== "object" || !activeKey) {
     _lastRuggersBuckets = null;
     _lastRuggersRec = null;
     _lastRuggersKey = "";
-    // Still show mint picker so user can open a tracked mint
     let html =
-      '<div class="rug-header"><div class="rug-title">Ruggers</div>';
-    if (keys.length) {
-      html +=
-        '<div class="rug-mint-search-row"><div class="rug-mint-pick-wrap">' +
-        '<span class="rug-mint-pick-label">Tracked mint</span>' +
-        '<div class="rug-mint-dd" id="ruggersMintDropdown">' +
-        '<button type="button" class="rug-mint-dd-btn" id="ruggersMintDdBtn" ' +
-        'aria-haspopup="listbox" aria-expanded="false">' +
-        '<span class="rug-mint-dd-label mono" id="ruggersMintDdLabel">Pick a tracked mint…</span>' +
-        '<span class="rug-mint-dd-caret" aria-hidden="true">▾</span></button>' +
-        '<ul class="rug-mint-dd-list" id="ruggersMintDdList" role="listbox" hidden>';
-      for (const k of keys) {
-        const r = store[k] || {};
-        const lab =
-          (r.symbol ? "$" + r.symbol + " " : "") +
-          bareMintAddr(r.address || k).slice(0, 14) +
-          "…";
-        html +=
-          '<li role="option" class="rug-mint-dd-opt" data-value="' +
-          escHtml(k) +
-          '" tabindex="-1">' +
-          escHtml(lab) +
-          "</li>";
-      }
-      html += "</ul></div></div></div>";
-    }
-    html += "</div>";
-    if (wantBare) {
-      html +=
-        '<p class="logs-empty">No Ruggers baseline for this mint yet:<br/>' +
-        '<span class="mono">' +
-        escHtml(wantBare) +
-        "</span><br/><br/>" +
-        "Run a <strong>full Analyze</strong> (not Quick) on <em>this</em> CA. " +
-        "Sellers only appear after a later re-Analyze of the <strong>same</strong> mint. " +
-        "Other mints’ sellers will not show here." +
-        (keys.length
-          ? "<br/><br/>Or pick a different mint from <strong>Tracked mint</strong> above."
-          : "") +
-        "</p>";
-    } else {
-      html +=
-        '<p class="logs-empty">No Ruggers tracking yet.<br/><br/>' +
-        "Run a full Analyze (Quick off) on a mint to freeze a holder baseline.</p>";
-    }
+      '<div class="rug-header"><div class="rug-title">Ruggers</div></div>';
+    html +=
+      '<p class="logs-empty">Could not open a Ruggers track.<br/><br/>' +
+      "Paste the mint CA in the search box and run a <strong>full Analyze</strong> (not Quick), " +
+      "then open Ruggers again." +
+      (wantBare
+        ? "<br/><br/>Looking for:<br/><span class=\"mono\">" +
+          escHtml(wantBare) +
+          "</span>"
+        : "") +
+      "</p>";
     if (body) body.innerHTML = html;
-    if (dump) {
-      dump.textContent = wantBare
-        ? "No Ruggers baseline for " + wantBare
-        : "No Ruggers tracking yet.";
-    }
-    try {
-      wireRuggersMintDropdown();
-    } catch (_) {}
+    if (dump) dump.textContent = "No Ruggers track.";
     return;
   }
 
@@ -5268,6 +5278,7 @@ function _refreshRuggersPanelImpl(focusKey) {
   }
   html += "</div>";
   // CA/mint shown once in the title above — do not repeat "Mint:" here
+  const nTracked = Object.keys(rec.first_wallets || {}).length;
   html +=
     '<div class="rug-sub">First lookup: ' +
     escHtml(shortWhen(rec.first_ts)) +
@@ -5276,11 +5287,20 @@ function _refreshRuggersPanelImpl(focusKey) {
     " · Lookups: " +
     (rec.lookup_count || 1) +
     " · Tracked wallets: " +
-    Object.keys(rec.first_wallets || {}).length +
-    (wantBare && mintAddr
-      ? " · Showing mint " + escHtml(mintAddr.slice(0, 6) + "…" + mintAddr.slice(-4))
+    nTracked +
+    (mintAddr
+      ? " · CA " + escHtml(mintAddr.slice(0, 6) + "…" + mintAddr.slice(-4))
       : "") +
     "</div>";
+  if (nTracked === 0 || rec.seeded_empty) {
+    html +=
+      '<p class="rug-rules" style="border-color:rgba(230,208,122,0.4)">' +
+      "<strong>Baseline open for this mint</strong> — holder bag list is empty or thin. " +
+      "Run a <strong>full Analyze</strong> (not Quick) so top holders freeze. " +
+      "Seller sections stay empty until a <strong>later</strong> full Analyze of the same mint " +
+      "after wallets sell ≥99% of their first bag." +
+      "</p>";
+  }
   html +=
     '<p class="rug-rules">Rules: first full Analyze freezes a holder baseline; ' +
     "seller lists start <strong>empty</strong>. " +
@@ -10201,17 +10221,36 @@ function renderSections(data, query) {
         console.error("[ruggers] process threw", procErr);
         result = null;
       }
-      if (!result && mintAddr) {
-        // Force-seed empty baseline so the panel shows THIS mint (not blank)
+      // Resolve mint from multiple sources (token, query arg, search box)
+      let seedAddr = mintAddr;
+      if (!seedAddr || seedAddr.length < 32) {
         try {
-          result = ensureRuggersMintTrack(mintAddr, {
-            chain: (data.token && data.token.chain_id) || "solana",
-            symbol: (data.token && data.token.symbol) || null,
-            name: (data.token && data.token.name) || null,
-          });
-        } catch (seedErr) {
-          console.warn("[ruggers] seed failed", seedErr);
+          seedAddr =
+            bareMintAddr(
+              (data.token && data.token.address) ||
+                data.query ||
+                (typeof query === "string" ? query : "") ||
+                ($("query") && $("query").value) ||
+                ""
+            ) || "";
+        } catch (_) {
+          seedAddr = mintAddr;
         }
+      }
+      // Always ensure a track exists for this CA after Analyze
+      try {
+        const seeded = ensureRuggersMintTrack(seedAddr || mintAddr, {
+          chain: (data.token && data.token.chain_id) || "solana",
+          symbol: (data.token && data.token.symbol) || null,
+          name: (data.token && data.token.name) || null,
+        });
+        if (seeded && seeded.key) {
+          // Prefer process result (has wallets) but keep seed key as fallback
+          if (!result) result = seeded;
+          else rugKey = result.key || seeded.key;
+        }
+      } catch (seedErr) {
+        console.warn("[ruggers] seed failed", seedErr);
       }
       if (result && result.key) {
         rugKey = result.key;
@@ -10227,9 +10266,9 @@ function renderSections(data, query) {
           "baseline_wallets=" + nBase,
           holdersOk ? "holders_ok" : "holders_thin"
         );
-      } else if (mintAddr) {
+      } else if (seedAddr || mintAddr) {
         rugKey = mintKeyFromToken(
-          mintAddr,
+          seedAddr || mintAddr,
           (data.token && data.token.chain_id) || "solana"
         );
       }
