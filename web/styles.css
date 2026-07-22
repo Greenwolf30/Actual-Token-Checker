@@ -1413,6 +1413,17 @@ a.copy-mint:hover,
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
+/* Hold-% colors inside top boxes must win over .bun-stat-value color */
+.bun-stat-value .pct-low,
+.bun-stat-value .pct-medium,
+.bun-stat-value .pct-high,
+.bun-stat-value .pct-critical {
+  font-weight: 700;
+}
+.bun-stat-value .bun-pct-zero {
+  color: var(--text-muted, #8a8f98);
+  font-weight: 600;
+}
 /* Last known · timestamp under Fresh / Multi-send / Shared SOL when not live */
 .bun-stat-sub {
   display: block;

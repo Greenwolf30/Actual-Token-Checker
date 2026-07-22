@@ -6117,6 +6117,26 @@ function bunPctHtml(n) {
 }
 
 /**
+ * Hold-% colors for Bundles top boxes (Multi-send / Shared SOL / etc.).
+ * Same bands as Holders, but any positive bag gets at least green so small
+ * multi-send / shared SOL totals still show the scheme.
+ *   >0 green · >5 yellow · ≥10 orange · ≥15 red
+ */
+function bunPctHtmlBox(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return escHtml("—");
+  const label = fmtSupplyPct(n) || "—";
+  let cls = "";
+  if (x >= 15) cls = "pct-critical";
+  else if (x >= 10) cls = "pct-high";
+  else if (x > 5) cls = "pct-medium";
+  else if (x > 0) cls = "pct-low";
+  return cls
+    ? '<span class="' + cls + '">' + escHtml(label) + "</span>"
+    : '<span class="bun-pct-zero">' + escHtml(label) + "</span>";
+}
+
+/**
  * Bundle risk score color bands (user scheme):
  *   1–25 green · 25–50 yellow · 50–75 orange · 75–100 red
  * Boundaries: ≤25 green, ≤50 yellow, ≤75 orange, else red.
@@ -7296,7 +7316,7 @@ function renderBundlesUi(data) {
       const live = msPct != null ? msPct : 0;
       html += stat(
         "Multi-send total",
-        withDelta(bunPctHtml(live), "multi_send_total_pct", live),
+        withDelta(bunPctHtmlBox(live), "multi_send_total_pct", live),
         msSub
       );
     }
@@ -7343,8 +7363,8 @@ function renderBundlesUi(data) {
         0
       );
     } else if (fundSkipped && !fundCached && s.funding_total_pct == null && fundPct != null) {
-      // Scan off but we have last-known % — keep number + delta
-      sharedSolVal = withDelta(bunPctHtml(fundPct), "funding_total_pct", fundPct);
+      // Scan off but we have last-known % — keep number + hold color + delta
+      sharedSolVal = withDelta(bunPctHtmlBox(fundPct), "funding_total_pct", fundPct);
     } else {
       // Live or cached Shared SOL value (including 0%)
       const live =
@@ -7353,7 +7373,7 @@ function renderBundlesUi(data) {
           : fundPct != null
             ? fundPct
             : 0;
-      sharedSolVal = withDelta(bunPctHtml(live), "funding_total_pct", live);
+      sharedSolVal = withDelta(bunPctHtmlBox(live), "funding_total_pct", live);
     }
     html += stat("Shared SOL total", sharedSolVal, fundSub);
   }
@@ -7971,7 +7991,11 @@ function renderBundlesUi(data) {
   } else {
     html += bunEmptySection(
       "Suspect wallets",
-      "None tagged this scan (Suspect = multi-account + insider only)."
+      "None tagged this scan.<br/><br/>" +
+        "<strong>Suspect sources</strong> (all must miss for an empty list):<br/>" +
+        "· <strong>Multi-account</strong> — one owner with several large Associated Token Accounts<br/>" +
+        "· <strong>Insider-flagged</strong> — Rugcheck insider marks on top holders<br/><br/>" +
+        "Similar-size wallets are <strong>not</strong> folded into Suspect (they stay under Similar-size only)."
     );
   }
 
