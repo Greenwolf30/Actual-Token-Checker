@@ -2592,14 +2592,11 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
             str(r.get("wallet") or ""),
         )
     )
-    # Multi-send total = sum of unique token multi-send Holds (never blank when
-    # wallets are listed — use 0% if bags exist but supply % is unknown).
+    # Multi-send total MUST equal sum of flat list Holds (token multi-send only).
+    # Do not prefer a fusion summary that is 0/null while the list still has bags.
     ms_tot, ms_n = _sum_wallets_pct(ms_list)
-    if ms_list:
-        if ms_tot is None:
-            ms_tot = 0.0
-        ms_n = max(int(ms_n or 0), len(ms_list))
-    elif s.get("multi_send_total_pct") is not None:
+    if ms_tot is None and s.get("multi_send_total_pct") is not None and not ms_list:
+        # No token wallets in list — allow fusion total only as empty fallback
         try:
             ms_tot = float(s.get("multi_send_total_pct"))
             ms_n = int(s.get("multi_send_wallet_with_pct") or 0)
@@ -2777,7 +2774,6 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
             "multi_send_error": s.get("multi_send_error"),
             "multi_send_txs_scanned": s.get("multi_send_txs_scanned"),
             "multi_send_sigs_available": s.get("multi_send_sigs_available"),
-            "multi_send_holders_scanned": s.get("multi_send_holders_scanned"),
             "multi_send_edge_senders": s.get("multi_send_edge_senders"),
             "multi_send_scan_notes": s.get("multi_send_scan_notes"),
             "funding_error": s.get("funding_error"),

@@ -560,15 +560,9 @@ def comprehensive_bundle_check(
             }
     if include_multi_send:
         try:
-            # Holder histories (primary) + mint sample (backup) — not mint-only swaps
+            # Wider history: newest + older mint txs (not only last ~20 swaps)
             multi_send_report = src.analyze_token_multi_sends(
-                mint,
-                holder_seed_u,
-                max_sigs=48,
-                max_tx_fetch=20,
-                max_holder_wallets=10,
-                sigs_per_holder=8,
-                txs_per_holder=5,
+                mint, holder_seed_u, max_sigs=80, max_tx_fetch=40
             )
         except Exception as exc:  # noqa: BLE001
             multi_send_report = {"ok": False, "error": str(exc), "clusters": []}
@@ -913,26 +907,6 @@ def comprehensive_bundle_check(
             mt, mn = bun._multi_send_total_percent(ms_shell_token, pct_by_w)  # type: ignore[attr-defined]
         except Exception:  # noqa: BLE001
             mt, mn = None, 0
-        # Explicit 0 when clusters exist but no current hold % (was blank total)
-        if mt is None and multi_clusters:
-            mt, mn = 0.0, 0
-            for mc in multi_clusters:
-                for row in list(mc.get("child_rows") or []) + [
-                    {"wallet": mc.get("sender"), "pct_supply": mc.get("sender_pct")}
-                ]:
-                    if isinstance(row, dict) and row.get("wallet"):
-                        mn += 1
-            # unique-ish count later in UI; keep wallet_with_pct as holders with %
-            try:
-                mt2, mn2 = bun._multi_send_total_percent(  # type: ignore[attr-defined]
-                    ms_shell_token, pct_by_w
-                )
-                if mt2 is not None:
-                    mt, mn = mt2, mn2
-                else:
-                    mt, mn = 0.0, int(mn or 0)
-            except Exception:  # noqa: BLE001
-                mt, mn = 0.0, int(mn or 0)
         s0["multi_send_total_pct"] = mt
         s0["multi_send_wallet_with_pct"] = mn
         # Scan diagnostics (helps explain "none found")
@@ -941,10 +915,6 @@ def comprehensive_bundle_check(
         if multi_send_report.get("sigs_available") is not None:
             s0["multi_send_sigs_available"] = multi_send_report.get(
                 "sigs_available"
-            )
-        if multi_send_report.get("holders_scanned") is not None:
-            s0["multi_send_holders_scanned"] = multi_send_report.get(
-                "holders_scanned"
             )
         if multi_send_report.get("edge_senders") is not None:
             s0["multi_send_edge_senders"] = multi_send_report.get("edge_senders")

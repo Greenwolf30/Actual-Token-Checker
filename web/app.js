@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v127";
+const ADTC_CLIENT_VERSION = "v126";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -10143,15 +10143,12 @@ function renderBundlesUi(data) {
     } else if (heliusRan) {
       const txsN = s.multi_send_txs_scanned;
       const sigsN = s.multi_send_sigs_available;
-      const holdN = s.multi_send_holders_scanned;
       const edgeN = s.multi_send_edge_senders;
       const scanBit =
-        txsN != null || holdN != null
+        txsN != null || sigsN != null
           ? " Scanned " +
             escHtml(String(txsN != null ? txsN : "?")) +
-            " txs · " +
-            escHtml(String(holdN != null ? holdN : "?")) +
-            " holder(s) · " +
+            " txs / " +
             escHtml(String(sigsN != null ? sigsN : "?")) +
             " mint sigs" +
             (edgeN != null
@@ -10160,9 +10157,10 @@ function renderBundlesUi(data) {
             "."
           : "";
       emptyMsg =
-        "None this scan — token multi-send looks at top holders’ histories + mint sample." +
+        "None this scan — Helius ran token multi-send (this mint one→many)." +
         scanBit +
-        " No non-LP fan-out with ≥2 receivers. Shared SOL funders are a different check.";
+        " No fan-out with ≥2 receivers found (LP/bonding-curve senders excluded). " +
+        "Shared SOL funders are a different check.";
     } else {
       emptyMsg =
         "None found — multi-send needs HELIUS_API_KEY on the API (Render) + full Analyze (not Quick). " +
