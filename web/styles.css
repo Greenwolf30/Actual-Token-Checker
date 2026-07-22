@@ -573,10 +573,24 @@ button, .ghost, .primary {
   margin-bottom: 3px;
 }
 .sum-stats .v {
+  display: block;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   font-size: 0.95rem;
   letter-spacing: -0.01em;
+}
+.sum-stats .sum-updated {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.62rem;
+  font-weight: 500;
+  color: var(--text-muted, #8a8f98);
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.sum-stats .sum-updated[hidden] {
+  display: none !important;
 }
 .sum-stats .up { color: var(--good); }
 .sum-stats .down { color: var(--bad); }

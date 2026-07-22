@@ -5422,6 +5422,61 @@ function fmtUsd(n) {
   return "$" + x.toPrecision(4);
 }
 
+/** Format Analyze time for MC / Liq / Vol “last updated” lines. */
+function fmtMarketUpdatedAt(isoOrMs) {
+  if (isoOrMs == null || isoOrMs === "") return "";
+  try {
+    const d =
+      typeof isoOrMs === "number"
+        ? new Date(isoOrMs)
+        : new Date(String(isoOrMs));
+    if (!Number.isFinite(d.getTime())) return String(isoOrMs).slice(0, 19);
+    return d.toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  } catch (_) {
+    return String(isoOrMs).slice(0, 16);
+  }
+}
+
+/**
+ * MC, Liq, Vol 24h — show last-updated under each box.
+ * Live Analyze: "Updated · …"
+ * Page refresh restore: "Last updated · …" until next Analyze.
+ */
+function setPrimaryMarketUpdatedStamps(data) {
+  const ids = ["sumMcAt", "sumLiqAt", "sumVolAt"];
+  const whenRaw =
+    (data && data.generated_at) ||
+    (data && data._marketUpdatedAt) ||
+    (data && data._restoredSavedAt) ||
+    null;
+  const when = fmtMarketUpdatedAt(whenRaw);
+  const isRestore = !!(data && data._restoredFromBrowserCache);
+  const label = when
+    ? (isRestore ? "Last updated · " : "Updated · ") + when
+    : isRestore
+      ? "Last updated · previous Analyze"
+      : "";
+  for (const id of ids) {
+    const el = $(id);
+    if (!el) continue;
+    if (!label) {
+      el.textContent = "";
+      el.hidden = true;
+      continue;
+    }
+    el.textContent = label;
+    el.hidden = false;
+    el.title = isRestore
+      ? "From last Analyze — run Analyze again for a live update"
+      : "Market figures from this Analyze";
+  }
+}
+
 function fmtPct(n) {
   if (n == null || n === "") return "—";
   const x = Number(n);
@@ -6123,6 +6178,13 @@ function renderSummary(data) {
   if (Number(chg) > 0) chgEl.classList.add("up");
   if (Number(chg) < 0) chgEl.classList.add("down");
 
+  // MC / Liq / Vol 24h — last updated stamp (survives refresh until next Analyze)
+  try {
+    setPrimaryMarketUpdatedStamps(data);
+  } catch (_) {
+    /* ignore */
+  }
+
   const linkBar = $("linkBar");
   linkBar.innerHTML = "";
   const links = data.links || {};
@@ -6756,6 +6818,8 @@ function saveLastAnalyze(data, query) {
         data: {
           ok: true,
           _restoredFromBrowserCache: true,
+          generated_at: data.generated_at || new Date().toISOString(),
+          _marketUpdatedAt: data.generated_at || new Date().toISOString(),
           quick: !!(data.quick || data._phase === "quick"),
           _phase: data._phase || null,
           market: marketSlim,
@@ -6807,6 +6871,8 @@ function saveLastAnalyze(data, query) {
         data: {
           ok: true,
           _restoredFromBrowserCache: true,
+          generated_at: data.generated_at || new Date().toISOString(),
+          _marketUpdatedAt: data.generated_at || new Date().toISOString(),
           market: marketSlim,
           token: tokenSlim,
           bundles_view: bundlesView,
@@ -6833,6 +6899,8 @@ function saveLastAnalyze(data, query) {
           data: {
             ok: true,
             _restoredFromBrowserCache: true,
+            generated_at: data.generated_at || new Date().toISOString(),
+            _marketUpdatedAt: data.generated_at || new Date().toISOString(),
             market: marketSlim,
             token: tokenSlim,
             bundles_view: summaryOnlyBundlesView(bundlesView || data.bundles_view),
@@ -7060,6 +7128,17 @@ function restoreLastAnalyze(cachedOpt) {
       }
     }
     try {
+      // Stamp restore time so MC / Liq / Vol show “Last updated · …”
+      if (cached.savedAt) data._restoredSavedAt = cached.savedAt;
+      if (!data.generated_at && cached.savedAt) {
+        try {
+          data.generated_at = new Date(cached.savedAt).toISOString();
+        } catch (_) {
+          data.generated_at = data.generated_at || null;
+        }
+      }
+      data._marketUpdatedAt =
+        data.generated_at || data._restoredSavedAt || null;
       renderSummary(data);
     } catch (err) {
       console.error("[restore summary]", err);
@@ -9840,6 +9919,9 @@ async function analyze(ev) {
       $("summaryBar").hidden = true;
       return;
     }
+    // Ensure market stamp exists for MC/Liq/Vol “last updated”
+    if (!data.generated_at) data.generated_at = new Date().toISOString();
+    data._marketUpdatedAt = data.generated_at;
     renderSummary(data);
     try {
       renderSections(data, query);
