@@ -83,7 +83,8 @@ Analyze options (next to the search form)
   Shared SOL ON, those results are remembered for that mint on the server.
   If you turn a box OFF and Analyze again, Bundles still shows the last known
   values for that box labeled “(last known) · no re-scan” — zero new Helius
-  pings for that scan. Turn the box ON again to refresh live.
+  pings for that scan. They keep showing until you check the box again to
+  re-scan live. (Also noted in the site bottom warning banner.)
 
   Shared SOL is usually the largest Helius cost on a full Analyze. Prefer
   unchecking it when you only need Fresh / Multi-send / holders.
