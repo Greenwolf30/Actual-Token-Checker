@@ -86,14 +86,14 @@ Analyze options (next to the search form)
   pings for that scan. They keep showing until you check the box again to
   re-scan live. (Also noted in the site bottom warning banner.)
 
-  Prefer to uncheck Shared SOL unless you need funder/funded wallets — it is
-  usually the largest Helius cost. Use Fresh / Multi-send / holders without it
-  for lighter Analyzes.
-
-  One Analyze with Fresh + Multi-send + Shared SOL together uses FEWER total
-  Helius pings than three separate Analyzes (holders base ~6 paid once).
-  Checking one category per Analyze costs more overall. 429 rate limits
-  (free ~10 RPS) are separate from total credit cost — wait 30–60s if limited.
+  Optimal use:
+    - Day-to-day: prefer Shared SOL unchecked (heaviest cost) unless you need
+      funder/funded wallets; use Fresh and/or Multi-send as needed.
+    - First time you need all three for a mint: check Fresh + Multi-send +
+      Shared SOL together on ONE Analyze (fewer total pings than three runs).
+    - After that: uncheck what you do not need; last known still shows until
+      you check the box again for a live re-scan.
+    - 429s (free ~10 RPS): wait 30–60s — rate limit ≠ monthly credit burn.
   Full ping tables: §6.3g.
 
 
