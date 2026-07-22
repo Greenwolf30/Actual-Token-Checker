@@ -369,94 +369,110 @@ def comprehensive_bundle_check(
                 extra_score += min(
                     28, 12 + int(best_f.get("child_count") or 0) * 4
                 )
-            if base.get("ok"):
-                # Funding stays ONLY on Shared SOL funder + multi-send (SOL fan-out).
-                enriched_fc = []
-                for fc in f_clusters[:8]:
-                    ff = dict(fc)
-                    kids = list(fc.get("children") or [])
-                    child_rows = [
-                        {"wallet": c, "pct_supply": pct_by_w.get(c)} for c in kids
-                    ]
-                    funder = (fc.get("funder") or "").strip()
-                    tot, n = bun._sum_wallets_pct(child_rows)  # type: ignore[attr-defined]
-                    if funder and funder in pct_by_w:
-                        try:
-                            tot = min(
-                                100.0, float(tot or 0) + float(pct_by_w[funder])
-                            )
-                        except (TypeError, ValueError):
-                            pass
-                    ff["child_rows"] = child_rows
-                    ff["funder_pct"] = pct_by_w.get(funder)
-                    ff["total_pct"] = tot
-                    ff["wallets_with_pct"] = n
-                    enriched_fc.append(ff)
+            # Always attach Shared SOL clusters (even if multi-account base failed)
+            # so Total can count them when Shared SOL is checked.
+            enriched_fc = []
+            for fc in f_clusters[:8]:
+                ff = dict(fc)
+                kids = list(fc.get("children") or [])
+                child_rows = [
+                    {"wallet": c, "pct_supply": pct_by_w.get(c)} for c in kids
+                ]
+                funder = (fc.get("funder") or "").strip()
+                tot, n = bun._sum_wallets_pct(child_rows)  # type: ignore[attr-defined]
+                if funder and funder in pct_by_w:
+                    try:
+                        tot = min(
+                            100.0, float(tot or 0) + float(pct_by_w[funder])
+                        )
+                    except (TypeError, ValueError):
+                        pass
+                ff["child_rows"] = child_rows
+                ff["funder_pct"] = pct_by_w.get(funder)
+                ff["total_pct"] = tot
+                ff["wallets_with_pct"] = n
+                enriched_fc.append(ff)
+            if not base.get("ok"):
+                base = {
+                    "ok": True,
+                    "method": "funding_fresh_multi_shell",
+                    "source": "helius",
+                    "summary": dict(base.get("summary") or {}),
+                    "signals": list(base.get("signals") or []),
+                    "holders": list(holders_data.get("holders") or [])[:80]
+                    if isinstance(holders_data, dict)
+                    else [],
+                    "clusters": [],
+                    "similar_size_groups": [],
+                    "suspect_wallets": [],
+                    "insider_wallets": [],
+                }
+            else:
                 base = dict(base)
-                cleaned_suspects: list[dict[str, Any]] = []
-                for s in list(base.get("suspect_wallets") or [])[:40]:
-                    if not isinstance(s, dict):
-                        continue
-                    orig = list(s.get("reasons") or [])
+            cleaned_suspects: list[dict[str, Any]] = []
+            for s in list(base.get("suspect_wallets") or [])[:40]:
+                if not isinstance(s, dict):
+                    continue
+                orig = list(s.get("reasons") or [])
 
-                    def _is_funding_reason(r: Any) -> bool:
-                        if not isinstance(r, str):
-                            return False
-                        low = r.lower()
-                        return (
-                            low.startswith("funded by ")
-                            or "common funder" in low
-                        )
-
-                    kept = [r for r in orig if not _is_funding_reason(r)]
-                    if orig and not kept:
-                        continue
-                    row = dict(s)
-                    row["reasons"] = kept
-                    cleaned_suspects.append(row)
-                base["suspect_wallets"] = cleaned_suspects[:40]
-                base["funding_clusters"] = enriched_fc
-                spct, sn = bun._suspect_total_percent(cleaned_suspects[:40])  # type: ignore[attr-defined]
-                s0 = dict(base.get("summary") or {})
-                s0["suspect_total_pct"] = spct
-                s0["suspect_wallet_count"] = sn
-                s0["funding_clusters"] = len(f_clusters)
-                # Unique wallet total % across funders + children (for Bundles header)
-                try:
-                    fund_rows: list[dict[str, Any]] = []
-                    for efc in enriched_fc:
-                        if not isinstance(efc, dict):
-                            continue
-                        fund_rows.append(
-                            {
-                                "wallet": efc.get("funder"),
-                                "pct_supply": efc.get("funder_pct"),
-                            }
-                        )
-                        for cr in list(efc.get("child_rows") or []):
-                            if isinstance(cr, dict):
-                                fund_rows.append(cr)
-                    ft_ss, fn_ss = bun._sum_wallets_pct(fund_rows)  # type: ignore[attr-defined]
-                    s0["funding_total_pct"] = ft_ss
-                    s0["funding_wallet_count"] = fn_ss
-                except Exception:  # noqa: BLE001
-                    pass
-                if shared_sol_from_cache:
-                    s0["funding_from_cache"] = True
-                    if funding_report.get("scanned_at"):
-                        s0["funding_cached_at"] = funding_report.get("scanned_at")
-                base["summary"] = s0
-                if include_shared_sol and enriched_fc:
-                    osc.put_slice(
-                        mint,
-                        "shared_sol",
-                        {
-                            "ok": True,
-                            "funding_clusters": enriched_fc,
-                            "raw_clusters": f_clusters[:8],
-                            "txs_scanned": funding_report.get("txs_scanned") or 0,
-                        },
+                def _is_funding_reason(r: Any) -> bool:
+                    if not isinstance(r, str):
+                        return False
+                    low = r.lower()
+                    return (
+                        low.startswith("funded by ")
+                        or "common funder" in low
                     )
+
+                kept = [r for r in orig if not _is_funding_reason(r)]
+                if orig and not kept:
+                    continue
+                row = dict(s)
+                row["reasons"] = kept
+                cleaned_suspects.append(row)
+            base["suspect_wallets"] = cleaned_suspects[:40]
+            base["funding_clusters"] = enriched_fc
+            spct, sn = bun._suspect_total_percent(cleaned_suspects[:40])  # type: ignore[attr-defined]
+            s0 = dict(base.get("summary") or {})
+            s0["suspect_total_pct"] = spct
+            s0["suspect_wallet_count"] = sn
+            s0["funding_clusters"] = len(f_clusters)
+            # Unique wallet total % across funders + children (for Bundles header)
+            try:
+                fund_rows: list[dict[str, Any]] = []
+                for efc in enriched_fc:
+                    if not isinstance(efc, dict):
+                        continue
+                    fund_rows.append(
+                        {
+                            "wallet": efc.get("funder"),
+                            "pct_supply": efc.get("funder_pct"),
+                        }
+                    )
+                    for cr in list(efc.get("child_rows") or []):
+                        if isinstance(cr, dict):
+                            fund_rows.append(cr)
+                ft_ss, fn_ss = bun._sum_wallets_pct(fund_rows)  # type: ignore[attr-defined]
+                s0["funding_total_pct"] = ft_ss
+                s0["funding_wallet_count"] = fn_ss
+            except Exception:  # noqa: BLE001
+                pass
+            if shared_sol_from_cache:
+                s0["funding_from_cache"] = True
+                if funding_report.get("scanned_at"):
+                    s0["funding_cached_at"] = funding_report.get("scanned_at")
+            base["summary"] = s0
+            if include_shared_sol and enriched_fc:
+                osc.put_slice(
+                    mint,
+                    "shared_sol",
+                    {
+                        "ok": True,
+                        "funding_clusters": enriched_fc,
+                        "raw_clusters": f_clusters[:8],
+                        "txs_scanned": funding_report.get("txs_scanned") or 0,
+                    },
+                )
         elif shared_sol_from_cache:
             fusion_signals.append(
                 {
@@ -825,7 +841,9 @@ def comprehensive_bundle_check(
 
     if base.get("ok") or fresh_rows or multi_clusters or sol_multi:
         if not base.get("ok"):
-            # Heuristics failed but fresh/multi-send still useful — minimal shell
+            # Heuristics failed but fresh/multi-send/funding still useful
+            keep_fund = list(base.get("funding_clusters") or [])
+            keep_sum = dict(base.get("summary") or {})
             base = {
                 "ok": True,
                 "method": "fresh_multi_send_only",
@@ -834,12 +852,26 @@ def comprehensive_bundle_check(
                     "bundle_risk_score": min(100, extra_score),
                     "bundle_risk": _risk_label(min(100, extra_score)),
                     "sources_used": list(sources_used),
+                    **{
+                        k: keep_sum[k]
+                        for k in (
+                            "funding_total_pct",
+                            "funding_wallet_count",
+                            "funding_clusters",
+                            "funding_from_cache",
+                            "funding_cached_at",
+                        )
+                        if k in keep_sum
+                    },
                 },
                 "signals": list(fusion_signals),
-                "holders": [],
+                "holders": list(holders_data.get("holders") or [])[:80]
+                if isinstance(holders_data, dict)
+                else [],
                 "clusters": [],
                 "similar_size_groups": [],
                 "suspect_wallets": [],
+                "funding_clusters": keep_fund,
             }
         else:
             base = dict(base)

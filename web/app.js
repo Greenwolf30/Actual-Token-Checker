@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v123";
+const ADTC_CLIENT_VERSION = "v124";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -7330,16 +7330,65 @@ function resolveTokenMultiSendTotalPct(view, summary) {
 }
 
 /**
- * Total bundle from listed wallets, gated by Fresh / Multi-send / Shared SOL
- * checkboxes (same rules as server):
- *  - Always: multi-account + insider
- *  - Optional vector only if THAT checkbox is ON (not merely last-known shown)
- *  - All three unchecked → also similar + suspect
- * Last-known / “Last updated” under an unchecked box must NOT enter Total.
+ * Total bundle when Fresh / Multi-send / Shared SOL are gated by checkboxes:
+ *  - Checked optional → its live total enters Total (sum of primaries)
+ *  - Unchecked → out of Total even if last-known is shown
+ *  - All three unchecked → multi + insider + similar + suspect
+ * Total = multi-account + insider + each checked primary’s live box %
+ * (vector sum; same numbers as the three top boxes when those scans are live).
  */
 function recomputeTotalBundleFromView(view, summary) {
   const s = summary || {};
   const v = view || {};
+  const bv = s.total_bundle_by_vector || {};
+
+  function flagOn(serverKey, checkboxFn) {
+    if (s[serverKey] === true) return true;
+    if (s[serverKey] === false) return false;
+    try {
+      return typeof checkboxFn === "function" ? !!checkboxFn() : false;
+    } catch (_) {
+      return false;
+    }
+  }
+  function vecPct(key) {
+    const m = bv[key];
+    if (!m) return 0;
+    if (m.excluded_from_total) return 0;
+    const p = Number(m.pct);
+    return Number.isFinite(p) && p > 0 ? p : 0;
+  }
+  function livePct(serverVal, vecKey) {
+    if (serverVal != null && Number.isFinite(Number(serverVal))) {
+      return Math.max(0, Number(serverVal));
+    }
+    return vecPct(vecKey);
+  }
+
+  const countFresh = flagOn("total_bundle_include_fresh", useFreshEnabled);
+  const countMs = flagOn("total_bundle_include_multi_send", useMultiSendEnabled);
+  const countSol = flagOn(
+    "total_bundle_include_shared_sol",
+    useSharedSolEnabled
+  );
+  const anyOptionalOn = countFresh || countMs || countSol;
+
+  const ma = vecPct("multi_account");
+  const ins = vecPct("insider");
+  // Checked primaries: use THIS scan’s box totals (not browser last-known)
+  const f = countFresh ? livePct(s.fresh_total_pct, "fresh") : 0;
+  const m = countMs ? livePct(s.multi_send_total_pct, "multi_send") : 0;
+  const sol = countSol ? livePct(s.funding_total_pct, "shared_funder") : 0;
+
+  let total;
+  if (anyOptionalOn) {
+    // Sum multi + insider + each checked primary (Fresh / Multi-send / Shared SOL)
+    total = ma + ins + f + m + sol;
+  } else {
+    total = ma + ins + vecPct("similar_size") + vecPct("suspect");
+  }
+
+  // Wallet-union floor so we never show less than unique bags on lists
   const rows = [];
   function pushRow(w, pct) {
     if (w == null || w === "") return;
@@ -7354,41 +7403,14 @@ function recomputeTotalBundleFromView(view, summary) {
         r.pct_supply != null ? r.pct_supply : r.combined_pct
       );
   }
-  // Prefer this Analyze’s server flags; fall back to current UI checkboxes
-  function flagOn(serverKey, checkboxFn) {
-    if (s[serverKey] === true) return true;
-    if (s[serverKey] === false) return false;
-    try {
-      return typeof checkboxFn === "function" ? !!checkboxFn() : false;
-    } catch (_) {
-      return false;
-    }
-  }
-  const countFresh = flagOn("total_bundle_include_fresh", useFreshEnabled);
-  const countMs = flagOn("total_bundle_include_multi_send", useMultiSendEnabled);
-  const countSol = flagOn(
-    "total_bundle_include_shared_sol",
-    useSharedSolEnabled
-  );
-  const anyOptionalOn = countFresh || countMs || countSol;
-
-  // multi-account
   const clusters = v.clusters || [];
   for (let i = 0; i < clusters.length; i++) pushWalletObj(clusters[i]);
-  // insider
-  const ins = v.insider_wallets || [];
-  for (let i = 0; i < ins.length; i++) pushWalletObj(ins[i]);
-
-  // Fresh — only when Fresh checkbox was ON for this scan
+  const insW = v.insider_wallets || [];
+  for (let i = 0; i < insW.length; i++) pushWalletObj(insW[i]);
   if (countFresh) {
     const fresh = v.fresh_wallets || [];
-    // Skip pure last-known rows when server marked scan off / from_cache-only
-    // with checkbox off is already handled by countFresh=false.
-    // If from_cache but checkbox ON (reuse last known intentionally), count.
     for (let i = 0; i < fresh.length; i++) pushWalletObj(fresh[i]);
   }
-
-  // Token multi-send — only when Multi-send checkbox ON
   if (countMs) {
     const msW = v.multi_send_wallets || [];
     for (let i = 0; i < msW.length; i++) {
@@ -7409,8 +7431,6 @@ function recomputeTotalBundleFromView(view, summary) {
       for (let j = 0; j < recs.length; j++) pushWalletObj(recs[j]);
     }
   }
-
-  // Shared SOL — only when Shared SOL checkbox ON
   if (countSol) {
     const fund = v.funding_clusters || [];
     for (let i = 0; i < fund.length; i++) {
@@ -7433,8 +7453,6 @@ function recomputeTotalBundleFromView(view, summary) {
       for (let j = 0; j < recs.length; j++) pushWalletObj(recs[j]);
     }
   }
-
-  // All three unchecked → similar + suspect enter Total
   if (!anyOptionalOn) {
     const sims = v.similar_size_groups || [];
     for (let i = 0; i < sims.length; i++) {
@@ -7450,18 +7468,19 @@ function recomputeTotalBundleFromView(view, summary) {
     const sus = v.suspect_wallets || [];
     for (let i = 0; i < sus.length; i++) pushWalletObj(sus[i]);
   }
+  const unique = sumUniqueWalletSupplyPct(rows);
+  // Prefer the larger of vector-sum (matches three boxes) vs unique bags
+  if (unique != null && unique > total) total = unique;
 
-  const recomputed = sumUniqueWalletSupplyPct(rows);
+  if (total > 100) total = 100;
+  total = Math.round(total * 10000) / 10000;
+
   const server =
     s.total_bundle_pct != null && Number.isFinite(Number(s.total_bundle_pct))
       ? Number(s.total_bundle_pct)
       : null;
-  // Prefer client only when it counts checked vectors and server is low/missing
-  if (recomputed != null && (server == null || recomputed > server + 0.0001)) {
-    return recomputed;
-  }
-  if (server != null) return server;
-  return recomputed != null ? recomputed : 0;
+  if (server != null && server > total + 0.0001) return server;
+  return total;
 }
 
 /**
@@ -9332,10 +9351,15 @@ function renderBundlesUi(data) {
   const fundLive =
     !s.funding_from_cache &&
     !/scan off|enable .Shared SOL|Shared SOL funder scan off/i.test(fundErr0);
-  // On live scan: always write last known (including 0) to clear old combined totals
+  // On live scan: always write last known (including 0) so boxes match Total
+  // and stale last-known cannot outrank this scan’s 0%.
   if (!isRestore && mint) {
-    if (freshLive && s.fresh_total_pct != null && Number.isFinite(Number(s.fresh_total_pct))) {
-      saveOptionalLastKnown(mint, "fresh", s.fresh_total_pct, s.fresh_cached_at);
+    if (freshLive) {
+      const frWrite =
+        s.fresh_total_pct != null && Number.isFinite(Number(s.fresh_total_pct))
+          ? Number(s.fresh_total_pct)
+          : 0;
+      saveOptionalLastKnown(mint, "fresh", frWrite, s.fresh_cached_at);
     }
     if (msLive) {
       const msWrite =
@@ -9344,8 +9368,12 @@ function renderBundlesUi(data) {
           : 0;
       saveOptionalLastKnown(mint, "multi_send", msWrite, s.multi_send_cached_at);
     }
-    if (fundLive && s.funding_total_pct != null && Number.isFinite(Number(s.funding_total_pct))) {
-      saveOptionalLastKnown(mint, "funding", s.funding_total_pct, s.funding_cached_at);
+    if (fundLive) {
+      const fundWrite =
+        s.funding_total_pct != null && Number.isFinite(Number(s.funding_total_pct))
+          ? Number(s.funding_total_pct)
+          : 0;
+      saveOptionalLastKnown(mint, "funding", fundWrite, s.funding_cached_at);
     }
   }
 
@@ -9460,12 +9488,22 @@ function renderBundlesUi(data) {
     const freshSkipped = /scan off|enable .Fresh|Fresh wallets scan off/i.test(
       freshErr
     );
-    let freshPct = resolveOptionalDisplayPct(
-      s.fresh_total_pct != null
-        ? s.fresh_total_pct
-        : deltaCurStats && deltaCurStats.fresh_total_pct,
-      optKnown.fresh
-    );
+    // Live Analyze with Fresh checked: only this scan’s % (never last-known).
+    // Last-known only when skipped / cache-only so Total can stay aligned.
+    let freshPct;
+    if (freshLive) {
+      freshPct =
+        s.fresh_total_pct != null && Number.isFinite(Number(s.fresh_total_pct))
+          ? Number(s.fresh_total_pct)
+          : 0;
+    } else {
+      freshPct = resolveOptionalDisplayPct(
+        s.fresh_total_pct != null
+          ? s.fresh_total_pct
+          : deltaCurStats && deltaCurStats.fresh_total_pct,
+        optKnown.fresh
+      );
+    }
     const freshAt =
       s.fresh_cached_at || (optKnown.fresh && optKnown.fresh.at) || "";
     // Always under % + delta until next Analyze updates the time
@@ -9558,14 +9596,23 @@ function renderBundlesUi(data) {
       fundErr
     );
     const fundCached = !!s.funding_from_cache;
-    let fundPct = resolveOptionalDisplayPct(
-      s.funding_total_pct != null
-        ? s.funding_total_pct
-        : deltaCurStats && deltaCurStats.funding_total_pct != null
-          ? deltaCurStats.funding_total_pct
-          : prev && prev.funding_total_pct,
-      optKnown.funding
-    );
+    // Live Shared SOL scan: only this scan (0 if none) — not browser last-known
+    let fundPct;
+    if (fundLive) {
+      fundPct =
+        s.funding_total_pct != null && Number.isFinite(Number(s.funding_total_pct))
+          ? Number(s.funding_total_pct)
+          : 0;
+    } else {
+      fundPct = resolveOptionalDisplayPct(
+        s.funding_total_pct != null
+          ? s.funding_total_pct
+          : deltaCurStats && deltaCurStats.funding_total_pct != null
+            ? deltaCurStats.funding_total_pct
+            : prev && prev.funding_total_pct,
+        optKnown.funding
+      );
+    }
     const fundAt =
       s.funding_cached_at || (optKnown.funding && optKnown.funding.at) || "";
     const fundSubEsc = escHtml(
@@ -9676,11 +9723,9 @@ function renderBundlesUi(data) {
         ? s.total_bundle_unique_wallets
         : s.flagged_wallets;
     html +=
-      '<p class="bun-meta">Total bundle = multi-account + insider + only Fresh / Multi-send / Shared SOL ' +
-      "that were <strong>checked</strong> for this Analyze " +
-      "(last-known under an unchecked box does not count). " +
-      "All three unchecked → multi + similar/suspect. " +
-      "Each wallet once at max hold %." +
+      '<p class="bun-meta">Total bundle = multi-account + insider + sum of checked Fresh / Multi-send / Shared SOL ' +
+      "for this Analyze (unchecked boxes are display-only if last-known). " +
+      "All three unchecked → multi + similar/suspect." +
       (uniqN != null ? " · " + escHtml(String(uniqN)) + " wallet(s)" : "") +
       (parts.length
         ? " In total: " + escHtml(parts.join(" + "))
@@ -10301,13 +10346,21 @@ function renderBundlesUi(data) {
       simN
     );
 
-    // Recompute optional display % (block-locals from HTML build are out of scope)
-    const freshDisp = resolveOptionalDisplayPct(
-      s.fresh_total_pct != null
-        ? s.fresh_total_pct
-        : deltaCurStats && deltaCurStats.fresh_total_pct,
-      optKnown.fresh
-    );
+    // Live Fresh: server only. Last-known only when not a live Fresh scan.
+    let freshDisp;
+    if (freshLive) {
+      freshDisp =
+        s.fresh_total_pct != null && Number.isFinite(Number(s.fresh_total_pct))
+          ? Number(s.fresh_total_pct)
+          : 0;
+    } else {
+      freshDisp = resolveOptionalDisplayPct(
+        s.fresh_total_pct != null
+          ? s.fresh_total_pct
+          : deltaCurStats && deltaCurStats.fresh_total_pct,
+        optKnown.fresh
+      );
+    }
     const fp =
       freshDisp != null && Number.isFinite(Number(freshDisp))
         ? Number(freshDisp)
@@ -10328,7 +10381,6 @@ function renderBundlesUi(data) {
     );
 
     // Live Multi-send: never show last-known Shared-SOL-combined total.
-    // Prefer sum of token multi-send Holds so top box matches list.
     let msDisp;
     const msResolved = resolveTokenMultiSendTotalPct(view, s);
     if (msLive) {
@@ -10354,7 +10406,6 @@ function renderBundlesUi(data) {
       data && data.generated_at,
       data && data._restoredSavedAt,
     ]);
-    // Match Multi-send list at bottom: ≥15 red · ≥10 orange · >5 yellow · ≥2 green
     pushStat(
       "Multi-send total",
       fmtSupplyPct(mp) || "0%",
@@ -10364,12 +10415,20 @@ function renderBundlesUi(data) {
       msSubPlain
     );
 
-    const fundDisp = resolveOptionalDisplayPct(
-      s.funding_total_pct != null
-        ? s.funding_total_pct
-        : deltaCurStats && deltaCurStats.funding_total_pct,
-      optKnown.funding
-    );
+    let fundDisp;
+    if (fundLive) {
+      fundDisp =
+        s.funding_total_pct != null && Number.isFinite(Number(s.funding_total_pct))
+          ? Number(s.funding_total_pct)
+          : 0;
+    } else {
+      fundDisp = resolveOptionalDisplayPct(
+        s.funding_total_pct != null
+          ? s.funding_total_pct
+          : deltaCurStats && deltaCurStats.funding_total_pct,
+        optKnown.funding
+      );
+    }
     const fdp =
       fundDisp != null && Number.isFinite(Number(fundDisp))
         ? Number(fundDisp)

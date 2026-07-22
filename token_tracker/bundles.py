@@ -1848,7 +1848,7 @@ def recompute_total_bundle_all_vectors(
     else:
         excluded.extend(["similar_size", "suspect"])
 
-    # Unique wallets across active vectors only (no double-count)
+    # Unique wallets across active vectors (deduped floor)
     union: dict[str, float] = {}
     for key in active_keys:
         wmap = counted_maps.get(key) or {}
@@ -1864,8 +1864,62 @@ def recompute_total_bundle_all_vectors(
             union[w] = max(union.get(w, 0.0), pf)
 
     any_data = bool(union)
-    grand = round(min(100.0, sum(union.values())), 4) if any_data else 0.0
+    grand_unique = round(min(100.0, sum(union.values())), 4) if any_data else 0.0
     slot_count = len(union)
+
+    # Vector-sum Total when optionals are checked: multi + insider + each
+    # checked primary’s bag total (Fresh / Multi-send / Shared SOL). Matches
+    # “sum of the three” in the top boxes. Unique is a floor if higher.
+    grand_sum = 0.0
+    for key in active_keys:
+        wmap = counted_maps.get(key) or {}
+        if key == "similar_size":
+            wmap = sim_map
+        elif key == "suspect":
+            wmap = sus_map
+        p, _n = _sum_map(wmap)
+        grand_sum += float(p or 0)
+    # Prefer summary totals for optionals when maps under-count (UI boxes)
+    s_sum = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+    if include_fresh:
+        try:
+            ft = float(s_sum.get("fresh_total_pct"))  # type: ignore[arg-type]
+            if ft > float((by_vector.get("fresh") or {}).get("pct") or 0):
+                grand_sum += ft - float((by_vector.get("fresh") or {}).get("pct") or 0)
+                by_vector["fresh"] = dict(by_vector.get("fresh") or {})
+                by_vector["fresh"]["pct"] = ft
+        except (TypeError, ValueError):
+            pass
+    if include_multi_send:
+        try:
+            mt = float(s_sum.get("multi_send_total_pct"))  # type: ignore[arg-type]
+            if mt > float((by_vector.get("multi_send") or {}).get("pct") or 0):
+                grand_sum += mt - float(
+                    (by_vector.get("multi_send") or {}).get("pct") or 0
+                )
+                by_vector["multi_send"] = dict(by_vector.get("multi_send") or {})
+                by_vector["multi_send"]["pct"] = mt
+        except (TypeError, ValueError):
+            pass
+    if include_shared_sol:
+        try:
+            st = float(s_sum.get("funding_total_pct"))  # type: ignore[arg-type]
+            if st > float((by_vector.get("shared_funder") or {}).get("pct") or 0):
+                grand_sum += st - float(
+                    (by_vector.get("shared_funder") or {}).get("pct") or 0
+                )
+                by_vector["shared_funder"] = dict(
+                    by_vector.get("shared_funder") or {}
+                )
+                by_vector["shared_funder"]["pct"] = st
+        except (TypeError, ValueError):
+            pass
+    grand_sum = round(min(100.0, grand_sum), 4)
+    if any_optional_on:
+        grand = max(grand_unique, grand_sum)
+    else:
+        grand = max(grand_unique, grand_sum)
+    any_data = any_data or grand > 0
 
     # Single holders: non-LP ≥0.01% not in any category vector
     single_pct, single_n = _single_holders_total(data)
@@ -1880,8 +1934,8 @@ def recompute_total_bundle_all_vectors(
 
     result: dict[str, Any] = {
         "total_bundle_by_vector": by_vector,
-        "total_bundle_additive": False,
-        "total_bundle_cross_vector_dedupe": True,
+        "total_bundle_additive": bool(any_optional_on),
+        "total_bundle_cross_vector_dedupe": not bool(any_optional_on),
         "total_bundle_excluded_vectors": list(excluded),
         "total_bundle_mode": mode,
         "total_bundle_show_similar_suspect": use_sim_sus_in_total,
