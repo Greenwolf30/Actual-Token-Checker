@@ -18,5 +18,10 @@ services:
         value: "https://rugwatch.onrender.com"
       - key: HELIUS_API_KEY
         sync: false
+      # Free Helius ~10 RPS — stay under with throttle (default 8 in code)
+      - key: HELIUS_MAX_RPS
+        value: "8"
+      - key: HELIUS_RPC_RETRIES
+        value: "4"
       - key: BIRDEYE_API_KEY
         sync: false

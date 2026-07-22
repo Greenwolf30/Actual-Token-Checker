@@ -142,27 +142,18 @@ def fetch_all_bundle_sources(
 
 
 def _rpc(url: str, method: str, params: list[Any] | dict[str, Any]) -> Any:
-    payload = json.dumps(
-        {"jsonrpc": "2.0", "id": "leonidas-bundle", "method": method, "params": params}
-    ).encode()
-    req = urllib.request.Request(
-        url,
-        data=payload,
-        headers={**DEFAULT_HEADERS, "Content-Type": "application/json"},
-        method="POST",
+    from .helius_rpc import rpc_call
+
+    return rpc_call(
+        url, method, params, timeout=25.0, req_id="adtc-bundle"
     )
-    with urllib.request.urlopen(req, timeout=25, context=_ssl_context()) as resp:
-        data = json.loads(resp.read().decode("utf-8", errors="replace"))
-    if data.get("error"):
-        raise RuntimeError(str(data["error"]))
-    return data.get("result")
 
 
 def _helius_same_slot_snipes(
     mint: str,
     *,
-    max_sigs: int = 120,
-    max_tx_fetch: int = 60,
+    max_sigs: int = 80,
+    max_tx_fetch: int = 40,
 ) -> dict[str, Any]:
     """
     Detect early multi-wallet same-slot activity (atomic / Jito-style snipes).
@@ -608,8 +599,8 @@ def analyze_token_multi_sends(
     mint: str,
     holder_wallets: list[str] | None = None,
     *,
-    max_sigs: int = 36,
-    max_tx_fetch: int = 28,
+    max_sigs: int = 28,
+    max_tx_fetch: int = 20,
     min_receivers: int = 2,
 ) -> dict[str, Any]:
     """

@@ -286,6 +286,10 @@ def _expand_pool_token_accounts(
         return {}
 
     def _rpc_one(url: str, method: str, params: list[Any]) -> Any:
+        from .helius_rpc import is_helius_url, rpc_call
+
+        if is_helius_url(url):
+            return rpc_call(url, method, params, timeout=12.0, req_id=1)
         body = json.dumps(
             {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
         ).encode("utf-8")
@@ -1461,7 +1465,13 @@ def _rugcheck_meta(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _rpc(url: str, method: str, params: list[Any]) -> Any:
-    payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
+    from .helius_rpc import is_helius_url, rpc_call
+
+    if is_helius_url(url):
+        return rpc_call(url, method, params, timeout=25.0, req_id=1)
+    payload = json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    ).encode()
     req = urllib.request.Request(
         url,
         data=payload,

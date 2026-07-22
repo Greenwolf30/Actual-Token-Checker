@@ -489,12 +489,13 @@ def comprehensive_bundle_check(
     fresh_report: dict[str, Any] = {"ok": False, "wallets": []}
     multi_send_report: dict[str, Any] = {"ok": False, "clusters": []}
     try:
-        fresh_report = src.analyze_fresh_wallets(mint, holder_seed_u, max_wallets=16)
+        # Cap wallets for free Helius ~10 RPS (fresh = 2+ RPCs each)
+        fresh_report = src.analyze_fresh_wallets(mint, holder_seed_u, max_wallets=12)
     except Exception as exc:  # noqa: BLE001
         fresh_report = {"ok": False, "error": str(exc), "wallets": []}
     try:
         multi_send_report = src.analyze_token_multi_sends(
-            mint, holder_seed_u, max_sigs=32, max_tx_fetch=24
+            mint, holder_seed_u, max_sigs=28, max_tx_fetch=20
         )
     except Exception as exc:  # noqa: BLE001
         multi_send_report = {"ok": False, "error": str(exc), "clusters": []}
