@@ -6524,6 +6524,35 @@ function zeroBundleStats() {
   return out;
 }
 
+/**
+ * Optional Helius scans (Shared SOL / Multi-send / Fresh) may be null when the
+ * checkbox is off. Carry forward the last known % into the baseline so the next
+ * live scan with the box ON compares against last known, not 0.
+ */
+const OPTIONAL_BUNDLE_PCT_KEYS = [
+  "funding_total_pct",
+  "multi_send_total_pct",
+  "fresh_total_pct",
+];
+
+function mergeLastKnownOptionalStats(cur, lastKnown) {
+  const out = cloneBundleStats(cur);
+  const prev = lastKnown && typeof lastKnown === "object" ? lastKnown : null;
+  if (!prev) return out;
+  for (const k of OPTIONAL_BUNDLE_PCT_KEYS) {
+    const c = out[k];
+    const p = prev[k];
+    if (
+      (c == null || !Number.isFinite(Number(c))) &&
+      p != null &&
+      Number.isFinite(Number(p))
+    ) {
+      out[k] = Number(p);
+    }
+  }
+  return out;
+}
+
 function loadBundleDeltaHtmlMap() {
   try {
     const raw = localStorage.getItem(BUNDLE_DELTA_HTML_KEY);
@@ -7184,10 +7213,18 @@ function renderBundlesUi(data) {
   if (!isRestore && mint && curStats) {
     // prev is always set on live (real baseline or zeros)
     const baseline = prev || zeroBundleStats();
+    // Carry last-known Shared SOL / Multi-send / Fresh into forNext when this
+    // Analyze left them null (box off / skipped). Next ON scan deltas vs that
+    // last known %, not vs 0.
+    const carrySrc =
+      (stored && (stored.deltaCur || stored.forNext)) || baseline;
+    const statsForNext = mergeLastKnownOptionalStats(curStats, carrySrc);
+    // Also keep optional fields on deltaCur so frozen bar matches last known
+    const statsForCur = mergeLastKnownOptionalStats(curStats, carrySrc);
     saveBundleStatsEntry(mint, {
-      forNext: curStats,
+      forNext: statsForNext,
       deltaFrom: baseline,
-      deltaCur: curStats,
+      deltaCur: statsForCur,
     });
     if (Object.keys(htmlByKeyThisRun).length) {
       saveBundleDeltaHtml(mint, htmlByKeyThisRun);
@@ -7195,9 +7232,9 @@ function renderBundlesUi(data) {
     try {
       data._bundleDeltaPair = {
         mint: bundleStatsMintKey(mint),
-        forNext: curStats,
+        forNext: statsForNext,
         deltaFrom: baseline,
-        deltaCur: curStats,
+        deltaCur: statsForCur,
         htmlByKey: { ...htmlByKeyThisRun },
       };
     } catch (_) {
