@@ -6194,7 +6194,7 @@ function saveLastAnalyze(data, query) {
   if (!data || !data.ok) return;
   try {
     const sections = data.sections || {};
-    // Embed delta pair + exact stats bar HTML so refresh never loses arrows
+    // Embed delta pair so refresh can restore arrows (not full bar HTML)
     let bundleDelta = data._bundleDeltaPair || null;
     if (!bundleDelta) {
       try {
@@ -6253,14 +6253,11 @@ function saveLastAnalyze(data, query) {
         links: data.links || null,
         holders: data.holders || null,
         bundles: data.bundles || null,
-        // Includes summary._ui_stats_bar_html when set above
         bundles_view: data.bundles_view || null,
         alerts: data.alerts || null,
         alerts_meta: data.alerts_meta || null,
         history_meta: data.history_meta || null,
         bundleDelta: bundleDelta,
-        _bundlesStatsBarHtml:
-          (bundleDelta && bundleDelta.barHtml) || barFromView || null,
         sections: {
           overview: sections.overview || null,
           holders: sections.holders || null,
@@ -6272,7 +6269,7 @@ function saveLastAnalyze(data, query) {
       },
     };
     let raw = JSON.stringify(slim);
-    // Trim heavy fields if over ~4MB
+    // Trim heavy fields if over ~4MB (never drop bundles_view)
     if (raw.length > 4 * 1024 * 1024) {
       slim.data.history_meta = null;
       slim.data.alerts = null;
@@ -6285,16 +6282,25 @@ function saveLastAnalyze(data, query) {
       }
       raw = JSON.stringify(slim);
     }
-    if (raw.length > 4 * 1024 * 1024) return;
+    if (raw.length > 4 * 1024 * 1024) {
+      // Last resort: keep market + bundles_view + sections essentials only
+      slim.data.holders = null;
+      slim.data.bundles = null;
+      slim.data.alerts_meta = null;
+      raw = JSON.stringify(slim);
+    }
+    if (raw.length > 4 * 1024 * 1024) {
+      console.warn("[saveLastAnalyze] payload still too large; not saved");
+      return;
+    }
     localStorage.setItem(LAST_ANALYZE_KEY, raw);
-    // Keep legacy key in sync for older code paths
     try {
       localStorage.setItem(LAST_BUNDLES_ANALYZE_KEY, raw);
     } catch (_) {
       /* ignore */
     }
-  } catch (_) {
-    /* quota / private mode */
+  } catch (err) {
+    console.error("[saveLastAnalyze] failed", err);
   }
 }
 
@@ -6336,33 +6342,38 @@ function loadLastBundlesAnalyze() {
  */
 function restoreLastAnalyze() {
   const cached = loadLastAnalyze();
-  if (!cached || !cached.data) return false;
+  if (!cached || !cached.data) {
+    // Still show Ruggers / History from their own stores
+    try {
+      refreshRuggersPanel();
+    } catch (_) {
+      /* ignore */
+    }
+    try {
+      refreshHistoryPanel();
+    } catch (_) {
+      /* ignore */
+    }
+    return false;
+  }
   try {
     const data = cached.data;
     data._restoredFromBrowserCache = true;
-    // Carry frozen delta pair + stats bar HTML onto the payload
     if (cached.bundleDelta) {
       data.bundleDelta = cached.bundleDelta;
     }
-    // Promote baked bar HTML to easy-to-find fields
-    const bakedBar =
-      (cached.bundleDelta && cached.bundleDelta.barHtml) ||
-      (data.bundleDelta && data.bundleDelta.barHtml) ||
-      data._bundlesStatsBarHtml ||
-      (data.bundles_view &&
-        data.bundles_view.summary &&
-        data.bundles_view.summary._ui_stats_bar_html) ||
-      null;
-    if (bakedBar) {
-      data._bundlesStatsBarHtml = bakedBar;
-      if (data.bundles_view && data.bundles_view.summary) {
-        data.bundles_view.summary._ui_stats_bar_html = bakedBar;
-      }
+    if (
+      data.bundles_view &&
+      data.bundles_view.summary &&
+      cached.bundleDelta &&
+      cached.bundleDelta.htmlByKey
+    ) {
+      data.bundles_view.summary._ui_delta_html = cached.bundleDelta.htmlByKey;
     }
     if (cached.query && $("query") && !$("query").value.trim()) {
       $("query").value = cached.query;
     }
-    // Ensure mint address exists for delta map lookup (token may be sparse)
+    // Ensure mint address exists for Ruggers / delta map lookup
     try {
       const q = String(cached.query || data.query || "").trim();
       const tok = data.token && typeof data.token === "object" ? data.token : {};
@@ -6380,12 +6391,14 @@ function restoreLastAnalyze() {
         /* ignore */
       }
     }
-    renderSummary(data);
+    try {
+      renderSummary(data);
+    } catch (err) {
+      console.error("[restore summary]", err);
+    }
     const when = cached.savedAt
       ? new Date(cached.savedAt).toLocaleString()
       : "previous Analyze";
-    // Prepend last-known marker to RAW text BEFORE setPanelText so green
-    // section titles / hold colors still run (never overwrite innerHTML via textContent).
     const lastKnownLine =
       "── Last known (page refresh) · " +
       when +
@@ -6394,18 +6407,31 @@ function restoreLastAnalyze() {
     for (const tab of TABS) {
       if (tab === "history" || tab === "ruggers" || tab === "bundles") continue;
       if (sections[tab]) {
-        setPanelText(tab, lastKnownLine + String(sections[tab]));
+        try {
+          setPanelText(tab, lastKnownLine + String(sections[tab]));
+        } catch (_) {
+          /* ignore */
+        }
       }
     }
+    // Bundles UI (cards)
     try {
-      renderBundlesUi(data);
-    } catch (err) {
-      console.error("[bundles ui restore]", err);
-      if (sections.bundles) {
+      if (data.bundles_view) {
+        renderBundlesUi(data);
+      } else if (sections.bundles) {
         setPanelText("bundles", lastKnownLine + String(sections.bundles));
       }
+    } catch (err) {
+      console.error("[bundles ui restore]", err);
+      try {
+        if (sections.bundles) {
+          setPanelText("bundles", lastKnownLine + String(sections.bundles));
+        }
+      } catch (_) {
+        /* ignore */
+      }
     }
-    // Ruggers: show existing browser track for this mint (do not re-process)
+    // Ruggers (separate localStorage track — always try to show)
     try {
       const mint =
         (data.token && data.token.address) ||
@@ -6416,17 +6442,23 @@ function restoreLastAnalyze() {
         (data.market && data.market.chain_id) ||
         "solana";
       if (mint) {
-        const key = mintKeyFromToken(mint, chain);
-        refreshRuggersPanel(key);
+        refreshRuggersPanel(mintKeyFromToken(mint, chain));
       } else {
         refreshRuggersPanel();
       }
-    } catch (_) {
+    } catch (err) {
+      console.error("[ruggers restore]", err);
       try {
         refreshRuggersPanel();
       } catch (_) {
         /* ignore */
       }
+    }
+    // History logs (separate store)
+    try {
+      refreshHistoryPanel();
+    } catch (err) {
+      console.error("[history restore]", err);
     }
     const noteHtml =
       '<div class="bun-hint" style="margin-bottom:10px"><strong>Last known result</strong> (page refresh) — showing Analyze from ' +
@@ -6439,10 +6471,19 @@ function restoreLastAnalyze() {
       note.innerHTML = noteHtml;
       if (note.firstChild) root.insertBefore(note.firstChild, root.firstChild);
     }
-    // Do not re-inject full stats bar HTML (caused empty Suspect to show old %)
     return true;
   } catch (err) {
     console.error("[restore analyze]", err);
+    try {
+      refreshRuggersPanel();
+    } catch (_) {
+      /* ignore */
+    }
+    try {
+      refreshHistoryPanel();
+    } catch (_) {
+      /* ignore */
+    }
     return false;
   }
 }
@@ -8731,4 +8772,12 @@ function init() {
   const q = params.get("q") || params.get("query");
   if (q) {
     $("query").value = q;
-    if (params.get("chain")) $("chai
+    if (params.get("chain")) $("chain").value = params.get("chain");
+    if (params.get("auto") === "1") analyze();
+  } else {
+    // No auto-analyze: restore last Analyze (all tabs) after page refresh
+    restoreLastAnalyze();
+  }
+}
+
+document.addEventListener("DOMContentLoaded", init);
