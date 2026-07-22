@@ -6372,7 +6372,12 @@ function renderBundlesUi(data) {
       s.total_bundle_pct != null && Number.isFinite(Number(s.total_bundle_pct))
         ? Number(s.total_bundle_pct)
         : 0;
-    html += stat("Total bundle", bunPctHtml(tbp));
+    const showSimSus =
+      s.total_bundle_mode === "fallback_similar_suspect" ||
+      s.total_bundle_show_similar_suspect === true;
+    // Fallback only: short label, no extra wording
+    const totalLabel = showSimSus ? "showing Similar/suspect" : "Total bundle";
+    html += stat(totalLabel, bunPctHtml(tbp));
   }
   html += stat("Similar-size", bunPctHtml(s.similar_size_total_pct));
   html += stat("Fresh total", bunPctHtml(s.fresh_total_pct));
