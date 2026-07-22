@@ -969,6 +969,7 @@ def comprehensive_bundle_check(
             )
         base["signals"] = signals
         # Total bundle % = unique wallets across counted vectors (no double-count)
+        # Also partitions similar vs suspect (no shared wallets; suspect ≠ similar).
         try:
             tb = bun.recompute_total_bundle_all_vectors(base)
             s = dict(base.get("summary") or {})
@@ -990,6 +991,17 @@ def comprehensive_bundle_check(
             s["total_bundle_crosslisted_count"] = tb.get(
                 "total_bundle_crosslisted_count"
             ) or 0
+            # recompute mutates base similar/suspect lists + their summary totals
+            if base.get("summary"):
+                for k in (
+                    "similar_size_total_pct",
+                    "similar_size_wallet_count",
+                    "similar_size_groups",
+                    "suspect_total_pct",
+                    "suspect_wallet_count",
+                ):
+                    if k in base["summary"]:
+                        s[k] = base["summary"][k]
             if s.get("total_bundle_pct") is None:
                 s["total_bundle_pct"] = 0.0
             base["summary"] = s
@@ -1007,7 +1019,8 @@ def comprehensive_bundle_check(
             "Total bundle % = unique wallets across multi-account + insider + "
             "multi-send + fresh + shared funder (each wallet once). "
             "Similar-size and suspect only show/count when those primary "
-            "categories are all empty. "
+            "categories are all empty. Suspect = multi-account + insider only "
+            "(not similar-size); no wallet is listed in both Similar and Suspect. "
             "Not a full commercial sniper graph. "
             + (base.get("notes") or "")
         ).strip()

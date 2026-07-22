@@ -198,7 +198,12 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
             }
         )
 
-    suspect_wallets = _suspect_wallets(multi_clusters, similar_groups, insiders)
+    # Suspect = multi-account + insider ONLY (never fold similar-size in).
+    # Then partition vs similar so no wallet appears in both lists.
+    suspect_wallets = _suspect_wallets(multi_clusters, insiders)
+    similar_groups, suspect_wallets = _partition_similar_and_suspect(
+        similar_groups, suspect_wallets
+    )
     # Baseline: primary vectors only. Similar/suspect only if primary empty
     # (fusion recomputes with fresh / multi-send / shared funder).
     primary_empty = not multi_clusters and not insiders
@@ -1420,6 +1425,26 @@ def recompute_total_bundle_all_vectors(
     Excludes known LP / program wallets.
     """
     data = data if isinstance(data, dict) else {}
+    # Partition similar vs suspect (no shared wallets; suspect = multi/insider only)
+    try:
+        sim_g, sus_w = _partition_similar_and_suspect(
+            list(data.get("similar_size_groups") or []),
+            list(data.get("suspect_wallets") or []),
+        )
+        data["similar_size_groups"] = sim_g
+        data["suspect_wallets"] = sus_w
+        s_fix = dict(data.get("summary") or {})
+        sim_pct, sim_n = _similar_size_total_percent(sim_g)
+        sus_pct, sus_n = _suspect_total_percent(sus_w)
+        s_fix["similar_size_total_pct"] = sim_pct
+        s_fix["similar_size_wallet_count"] = sim_n
+        s_fix["similar_size_groups"] = len(sim_g)
+        s_fix["suspect_total_pct"] = sus_pct
+        s_fix["suspect_wallet_count"] = sus_n
+        data["summary"] = s_fix
+    except Exception:  # noqa: BLE001
+        pass
+
     pct_map = _wallet_pct_map(data)
 
     lp_wallets: set[str] = set()
@@ -1890,36 +1915,208 @@ def _similar(a: dict[str, Any], b: dict[str, Any], tol: float = 0.12) -> bool:
 
 def _suspect_wallets(
     clusters: list[dict[str, Any]],
-    groups: list[dict[str, Any]],
     insiders: list[dict[str, Any]],
+    groups: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
+    """
+    Suspect wallets from non-similar signals only:
+      - multi Associated Token Account clusters
+      - insider-flagged accounts
+
+    Similar-size wallets are NOT folded in (they stay under Similar-size only).
+    The optional ``groups`` arg is accepted for call-site compatibility but ignored.
+    """
     bag: dict[str, dict[str, Any]] = {}
 
     def _add(wallet: str | None, reason: str, pct: Any = None) -> None:
         if not wallet:
             return
-        row = bag.setdefault(wallet, {"wallet": wallet, "reasons": [], "pct_supply": pct})
+        w = str(wallet).strip()
+        if not w:
+            return
+        row = bag.setdefault(w, {"wallet": w, "reasons": [], "pct_supply": pct})
         if reason not in row["reasons"]:
             row["reasons"].append(reason)
         if pct is not None and row.get("pct_supply") is None:
             row["pct_supply"] = pct
+        elif pct is not None:
+            try:
+                old = float(row["pct_supply"]) if row.get("pct_supply") is not None else None
+                new = float(pct)
+                if old is None or new > old:
+                    row["pct_supply"] = pct
+            except (TypeError, ValueError):
+                pass
 
-    for c in clusters:
+    for c in clusters or []:
+        if not isinstance(c, dict):
+            continue
         _add(
-            c.get("wallet"),
+            c.get("wallet") or c.get("owner"),
             "multi Associated Token Account cluster",
-            c.get("pct_supply"),
+            c.get("pct_supply")
+            if c.get("pct_supply") is not None
+            else c.get("combined_pct"),
         )
-    for g in groups:
-        for w in g.get("wallets") or []:
-            _add(w, "similar-size group", g.get("avg_pct"))
-    for h in insiders:
+    # Intentionally do NOT add similar-size group wallets here.
+    _ = groups  # legacy kw; similar stays in its own category
+    for h in insiders or []:
+        if not isinstance(h, dict):
+            continue
         _add(h.get("wallet"), "insider flag", h.get("pct_supply"))
 
     return sorted(
         bag.values(),
-        key=lambda x: (-len(x.get("reasons") or []), -(float(x["pct_supply"]) if x.get("pct_supply") is not None else 0)),
+        key=lambda x: (
+            -len(x.get("reasons") or []),
+            -(
+                float(x["pct_supply"])
+                if x.get("pct_supply") is not None
+                else 0
+            ),
+        ),
     )
+
+
+def _similar_wallet_set(groups: list[dict[str, Any]] | None) -> set[str]:
+    out: set[str] = set()
+    for g in groups or []:
+        if not isinstance(g, dict):
+            continue
+        for w in g.get("wallets") or []:
+            a = (str(w) if w is not None else "").strip()
+            if a:
+                out.add(a)
+        for m in g.get("members") or []:
+            if isinstance(m, dict):
+                a = (str(m.get("wallet") or "")).strip()
+            else:
+                a = (str(m) if m is not None else "").strip()
+            if a:
+                out.add(a)
+    return out
+
+
+def _filter_similar_groups_excluding(
+    groups: list[dict[str, Any]] | None,
+    exclude: set[str],
+) -> list[dict[str, Any]]:
+    """Drop excluded wallets from similar-size groups; omit empty groups."""
+    if not groups:
+        return []
+    if not exclude:
+        return list(groups)
+    out: list[dict[str, Any]] = []
+    for g in groups:
+        if not isinstance(g, dict):
+            continue
+        gg = dict(g)
+        wallets = []
+        for w in g.get("wallets") or []:
+            a = (str(w) if w is not None else "").strip()
+            if a and a not in exclude:
+                wallets.append(w if isinstance(w, str) else a)
+        members = []
+        for m in g.get("members") or []:
+            if isinstance(m, dict):
+                a = (str(m.get("wallet") or "")).strip()
+                if a and a not in exclude:
+                    members.append(m)
+            else:
+                a = (str(m) if m is not None else "").strip()
+                if a and a not in exclude:
+                    members.append(m)
+        if not wallets and not members:
+            continue
+        if wallets:
+            gg["wallets"] = wallets
+        elif "wallets" in gg:
+            gg["wallets"] = []
+        if members:
+            gg["members"] = members
+        elif "members" in gg:
+            gg["members"] = []
+        # Recount if present
+        n = len(wallets) or len(members)
+        if n:
+            gg["wallet_count"] = n
+            gg["count"] = n
+        out.append(gg)
+    return out
+
+
+def _partition_similar_and_suspect(
+    similar_groups: list[dict[str, Any]] | None,
+    suspect_wallets: list[dict[str, Any]] | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """
+    Ensure no wallet appears in both Similar-size and Suspect.
+
+    Priority when a wallet would be in both (e.g. multi-ATA + similar bag):
+      keep on Suspect (multi / insider), strip from Similar-size groups.
+
+    Suspect list itself is already unique-by-wallet and multi/insider only.
+    """
+    suspects = list(suspect_wallets or [])
+    # Unique by wallet inside suspect (keep richest reasons / max pct)
+    bag: dict[str, dict[str, Any]] = {}
+    for s in suspects:
+        if not isinstance(s, dict):
+            continue
+        w = (str(s.get("wallet") or "")).strip()
+        if not w:
+            continue
+        # Drop legacy similar-size-only rows if any residual still present
+        reasons = [
+            r
+            for r in (s.get("reasons") or [])
+            if "similar-size" not in str(r).lower()
+            and "similar size" not in str(r).lower()
+        ]
+        if not reasons and s.get("reasons"):
+            # Was only similar-size tagged — not a real suspect anymore
+            continue
+        row = dict(s)
+        if reasons:
+            row["reasons"] = reasons
+        if w not in bag:
+            bag[w] = row
+            continue
+        # Merge
+        prev = bag[w]
+        prev_reasons = list(prev.get("reasons") or [])
+        for r in reasons or []:
+            if r not in prev_reasons:
+                prev_reasons.append(r)
+        prev["reasons"] = prev_reasons
+        try:
+            p0 = float(prev["pct_supply"]) if prev.get("pct_supply") is not None else None
+            p1 = float(row["pct_supply"]) if row.get("pct_supply") is not None else None
+            if p1 is not None and (p0 is None or p1 > p0):
+                prev["pct_supply"] = row["pct_supply"]
+        except (TypeError, ValueError):
+            pass
+        bag[w] = prev
+
+    suspects_u = sorted(
+        bag.values(),
+        key=lambda x: (
+            -len(x.get("reasons") or []),
+            -(
+                float(x["pct_supply"])
+                if x.get("pct_supply") is not None
+                else 0
+            ),
+        ),
+    )
+    suspect_set = {
+        (str(s.get("wallet") or "")).strip()
+        for s in suspects_u
+        if (str(s.get("wallet") or "")).strip()
+    }
+    # Strip suspect wallets out of similar groups so lists never overlap
+    similar_f = _filter_similar_groups_excluding(similar_groups, suspect_set)
+    return similar_f, suspects_u
 
 
 def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
