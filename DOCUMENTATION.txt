@@ -246,8 +246,7 @@ What people often ask
   shown in their own sections). Exception: if a wallet is multi-send (or
   multi-account / insider / fresh / shared funder / launch-window) and also
   appears under similar-size or suspect, it is still counted via the counted
-  group and listed alone in “Still in Total bundle”. That number drives Alerts
-  “bundle band” messages.
+  group. That number drives Alerts “bundle band” messages.
 
   This is NOT:
     - A professional sniper-graph product

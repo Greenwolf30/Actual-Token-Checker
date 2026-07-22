@@ -1006,39 +1006,6 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             "  (none — no suspect wallets tagged this scan)"
         )
 
-    # Cross-listed: in multi-send / other counted groups AND similar-size or suspect
-    cross = list(data.get("total_bundle_crosslisted_wallets") or [])
-    lines.append("")
-    lines.append("── STILL IN TOTAL BUNDLE (also under similar-size / suspect) ──")
-    if cross:
-        lines.append(
-            f"  {len(cross)} wallet(s) also appear under similar-size and/or "
-            "suspect, but are still counted in Total bundle % via multi-send "
-            "or another counted group (listed alone here):"
-        )
-        for row in cross[:24]:
-            if not isinstance(row, dict):
-                continue
-            w = (row.get("wallet") or "").strip()
-            if not w:
-                continue
-            labs = ", ".join(row.get("counted_in_labels") or row.get("counted_in") or [])
-            excl = ", ".join(
-                row.get("also_in_excluded_labels") or row.get("also_in_excluded") or []
-            )
-            lines.append(
-                f"    • {w}  holds {_pct(row.get('pct_supply'))}"
-                + (f"  via {labs}" if labs else "")
-                + (f"  (also {excl})" if excl else "")
-            )
-        if len(cross) > 24:
-            lines.append(f"    … +{len(cross) - 24} more")
-    else:
-        lines.append(
-            "  (none — no multi-send / other counted wallets also under "
-            "similar-size or suspect this scan)"
-        )
-
     if data.get("notes"):
         lines.append("")
         lines.append(f"  Note: {data['notes']}")
@@ -2351,7 +2318,4 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
         "sol_multi_send_clusters": sol_ms,
         "same_slot_groups": [],  # launch-window disabled
         "suspect_wallets": suspects_out,
-        "total_bundle_crosslisted_wallets": list(
-            data.get("total_bundle_crosslisted_wallets") or []
-        )[:48],
     }
