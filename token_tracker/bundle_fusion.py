@@ -905,7 +905,14 @@ def comprehensive_bundle_check(
             s["total_bundle_excluded_vectors"] = tb.get(
                 "total_bundle_excluded_vectors"
             ) or ["similar_size", "suspect"]
+            s["total_bundle_crosslisted_count"] = tb.get(
+                "total_bundle_crosslisted_count"
+            ) or 0
             base["summary"] = s
+            # Alone list for Bundles report (also under similar/suspect but counted)
+            base["total_bundle_crosslisted_wallets"] = list(
+                tb.get("total_bundle_crosslisted_wallets") or []
+            )
         except Exception:  # noqa: BLE001
             pass
         base["notes"] = (

@@ -242,8 +242,12 @@ What people often ask
   counted risk vectors (multi-account, insider, multi-send, fresh, shared
   funder, launch-window) with NO cross-vector wallet dedupe — a wallet in two
   vectors contributes twice, so the total can exceed 100%. Similar-size groups
-  and suspect wallets are EXCLUDED from Total bundle % (still shown in their
-  own sections). That single number drives the Alerts “bundle band” messages.
+  and suspect wallets are EXCLUDED as categories from Total bundle % (still
+  shown in their own sections). Exception: if a wallet is multi-send (or
+  multi-account / insider / fresh / shared funder / launch-window) and also
+  appears under similar-size or suspect, it is still counted via the counted
+  group and listed alone in “Still in Total bundle”. That number drives Alerts
+  “bundle band” messages.
 
   This is NOT:
     - A professional sniper-graph product

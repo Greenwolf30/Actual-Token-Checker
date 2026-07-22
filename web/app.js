@@ -6248,7 +6248,46 @@ function renderBundlesUi(data) {
         : "") +
       ")" +
       (parts.length ? ": " + escHtml(parts.join(" + ")) : "") +
-      ". Similar-size and suspect wallets excluded.</p>";
+      ". Similar-size and suspect categories excluded (pure members only).</p>";
+  }
+
+  // Wallets also under similar-size/suspect but still counted via multi-send etc.
+  const crosslisted = view.total_bundle_crosslisted_wallets || [];
+  if (crosslisted.length) {
+    html +=
+      '<section class="bun-section"><div class="bun-section-head">' +
+      '<span class="bun-section-title">Still in Total bundle (also similar-size / suspect)</span>' +
+      '<span class="bun-section-total">' +
+      escHtml(String(crosslisted.length)) +
+      " wallet(s)</span></div><div class=\"bun-section-body\">";
+    html +=
+      '<p class="bun-sub">These sit under similar-size and/or suspect, but also ' +
+      "appear in multi-send or another counted group — still included in Total " +
+      "bundle % via those groups (listed alone here).</p>";
+    html += bunWalletTable(
+      crosslisted.map((r) => ({
+        wallet: r.wallet,
+        pct_supply: r.pct_supply,
+        roles: []
+          .concat(r.counted_in_labels || r.counted_in || [])
+          .concat(
+            (r.also_in_excluded_labels || r.also_in_excluded || []).map(
+              (x) => "also " + x
+            )
+          ),
+      })),
+      [
+        { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
+        { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
+        {
+          key: "roles",
+          label: "Via / also",
+          render: (v) =>
+            escHtml(Array.isArray(v) ? v.join(", ") : v || "—"),
+        },
+      ]
+    );
+    html += "</div></section>";
   }
 
   // Signals chips

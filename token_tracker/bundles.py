@@ -1111,6 +1111,39 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             "  (none — no suspect wallets tagged this scan)"
         )
 
+    # Cross-listed: in multi-send / other counted groups AND similar-size or suspect
+    cross = list(data.get("total_bundle_crosslisted_wallets") or [])
+    lines.append("")
+    lines.append("── STILL IN TOTAL BUNDLE (also under similar-size / suspect) ──")
+    if cross:
+        lines.append(
+            f"  {len(cross)} wallet(s) also appear under similar-size and/or "
+            "suspect, but are still counted in Total bundle % via multi-send "
+            "or another counted group (listed alone here):"
+        )
+        for row in cross[:24]:
+            if not isinstance(row, dict):
+                continue
+            w = (row.get("wallet") or "").strip()
+            if not w:
+                continue
+            labs = ", ".join(row.get("counted_in_labels") or row.get("counted_in") or [])
+            excl = ", ".join(
+                row.get("also_in_excluded_labels") or row.get("also_in_excluded") or []
+            )
+            lines.append(
+                f"    • {w}  holds {_pct(row.get('pct_supply'))}"
+                + (f"  via {labs}" if labs else "")
+                + (f"  (also {excl})" if excl else "")
+            )
+        if len(cross) > 24:
+            lines.append(f"    … +{len(cross) - 24} more")
+    else:
+        lines.append(
+            "  (none — no multi-send / other counted wallets also under "
+            "similar-size or suspect this scan)"
+        )
+
     if data.get("notes"):
         lines.append("")
         lines.append(f"  Note: {data['notes']}")
@@ -1481,8 +1514,13 @@ def recompute_total_bundle_all_vectors(
       multi_account, insider, multi_send (token only), fresh,
       shared_funder (funding clusters), launch_window (same-slot).
 
-    EXCLUDED from Total bundle % (still shown in Bundles sections):
-      similar_size groups, suspect wallets.
+    EXCLUDED as categories from Total bundle %:
+      similar_size groups, suspect wallets (pure members only).
+
+    Exception: if a wallet is multi-send (or multi-account / insider / fresh /
+    shared funder / launch-window) AND also appears under similar-size or
+    suspect, it is STILL counted via the counted group(s). Those wallets are
+    listed alone in total_bundle_crosslisted_wallets for the report.
 
     Token multi-send only for multi_send (not sol_multi_send_clusters) so SOL
     funder wallets are not double-counted with shared_funder.
@@ -1520,7 +1558,7 @@ def recompute_total_bundle_all_vectors(
             return float(pct_map[w])
         return None
 
-    def _sum_vector(rows: list[tuple[str, Any]]) -> tuple[float, int]:
+    def _wallet_map(rows: list[tuple[str, Any]]) -> dict[str, float]:
         """Unique within vector; skip LP / missing %."""
         best: dict[str, float] = {}
         for w_raw, p_raw in rows:
@@ -1531,11 +1569,16 @@ def recompute_total_bundle_all_vectors(
             if p is None:
                 continue
             best[w] = max(best.get(w, 0.0), float(p))
+        return best
+
+    def _sum_map(best: dict[str, float]) -> tuple[float, int]:
         if not best:
             return 0.0, 0
         return round(sum(best.values()), 4), len(best)
 
     by_vector: dict[str, dict[str, Any]] = {}
+    # Per counted vector: wallet → pct (for cross-list + totals)
+    counted_maps: dict[str, dict[str, float]] = {}
 
     # 1) Multi-account clusters
     ma_rows: list[tuple[str, Any]] = []
@@ -1545,13 +1588,17 @@ def recompute_total_bundle_all_vectors(
         ma_rows.append(
             (
                 c.get("wallet") or c.get("owner"),
-                c.get("pct_supply") if c.get("pct_supply") is not None else c.get("combined_pct"),
+                c.get("pct_supply")
+                if c.get("pct_supply") is not None
+                else c.get("combined_pct"),
             )
         )
-    p, n = _sum_vector(ma_rows)
+    ma_map = _wallet_map(ma_rows)
+    p, n = _sum_map(ma_map)
     by_vector["multi_account"] = {"pct": p, "count": n}
+    counted_maps["multi_account"] = ma_map
 
-    # 2) Similar-size groups — EXCLUDED from Total bundle % (tracked only)
+    # 2) Similar-size groups — EXCLUDED as a category (unless also in counted)
     sim_rows: list[tuple[str, Any]] = []
     for g in data.get("similar_size_groups") or []:
         if not isinstance(g, dict):
@@ -1566,7 +1613,8 @@ def recompute_total_bundle_all_vectors(
         else:
             for w in g.get("wallets") or []:
                 sim_rows.append((w, g.get("avg_pct")))
-    p, n = _sum_vector(sim_rows)
+    sim_map = _wallet_map(sim_rows)
+    p, n = _sum_map(sim_map)
     by_vector["similar_size"] = {
         "pct": p,
         "count": n,
@@ -1578,8 +1626,10 @@ def recompute_total_bundle_all_vectors(
     for h in data.get("insider_wallets") or []:
         if isinstance(h, dict):
             in_rows.append((h.get("wallet"), h.get("pct_supply")))
-    p, n = _sum_vector(in_rows)
+    in_map = _wallet_map(in_rows)
+    p, n = _sum_map(in_map)
     by_vector["insider"] = {"pct": p, "count": n}
+    counted_maps["insider"] = in_map
 
     # 4) Token multi-send only (not SOL re-label — that is shared_funder)
     ms_rows: list[tuple[str, Any]] = []
@@ -1597,8 +1647,16 @@ def recompute_total_bundle_all_vectors(
                 ms_rows.append((r.get("wallet"), r.get("pct_supply")))
             else:
                 ms_rows.append((r, None))
-    p, n = _sum_vector(ms_rows)
+    # Flat multi_send_wallets list (if present) — never drop multi-send bags
+    for mw in data.get("multi_send_wallets") or []:
+        if isinstance(mw, dict):
+            ms_rows.append((mw.get("wallet"), mw.get("pct_supply")))
+        else:
+            ms_rows.append((mw, None))
+    ms_map = _wallet_map(ms_rows)
+    p, n = _sum_map(ms_map)
     by_vector["multi_send"] = {"pct": p, "count": n}
+    counted_maps["multi_send"] = ms_map
 
     # 5) Fresh wallets
     fr_rows: list[tuple[str, Any]] = []
@@ -1607,8 +1665,10 @@ def recompute_total_bundle_all_vectors(
             fr_rows.append((fw.get("wallet"), fw.get("pct_supply")))
         else:
             fr_rows.append((fw, None))
-    p, n = _sum_vector(fr_rows)
+    fr_map = _wallet_map(fr_rows)
+    p, n = _sum_map(fr_map)
     by_vector["fresh"] = {"pct": p, "count": n}
+    counted_maps["fresh"] = fr_map
 
     # 6) Shared funder (funding clusters — funder + children)
     fund_rows: list[tuple[str, Any]] = []
@@ -1626,8 +1686,10 @@ def recompute_total_bundle_all_vectors(
                 fund_rows.append((c.get("wallet"), c.get("pct_supply")))
             else:
                 fund_rows.append((c, None))
-    p, n = _sum_vector(fund_rows)
+    fund_map = _wallet_map(fund_rows)
+    p, n = _sum_map(fund_map)
     by_vector["shared_funder"] = {"pct": p, "count": n}
+    counted_maps["shared_funder"] = fund_map
 
     # 7) Launch-window same-slot multi-buys
     lw_rows: list[tuple[str, Any]] = []
@@ -1644,17 +1706,20 @@ def recompute_total_bundle_all_vectors(
                 lw_rows.append((w.get("wallet"), w.get("pct_supply")))
             else:
                 lw_rows.append((w, None))
-    p, n = _sum_vector(lw_rows)
+    lw_map = _wallet_map(lw_rows)
+    p, n = _sum_map(lw_map)
     by_vector["launch_window"] = {"pct": p, "count": n}
+    counted_maps["launch_window"] = lw_map
 
-    # Suspect wallets — EXCLUDED from Total bundle % (tracked only)
+    # Suspect wallets — EXCLUDED as a category (unless also in counted)
     sus_rows: list[tuple[str, Any]] = []
     for sw in data.get("suspect_wallets") or []:
         if isinstance(sw, dict):
             sus_rows.append((sw.get("wallet"), sw.get("pct_supply")))
         else:
             sus_rows.append((sw, None))
-    p, n = _sum_vector(sus_rows)
+    sus_map = _wallet_map(sus_rows)
+    p, n = _sum_map(sus_map)
     by_vector["suspect"] = {
         "pct": p,
         "count": n,
@@ -1671,41 +1736,103 @@ def recompute_total_bundle_all_vectors(
         "launch_window",
     }
     EXCLUDED = ("similar_size", "suspect")
+    VECTOR_LABEL = {
+        "multi_account": "multi-account",
+        "insider": "insider",
+        "multi_send": "multi-send",
+        "fresh": "fresh",
+        "shared_funder": "shared funder",
+        "launch_window": "launch-window",
+        "similar_size": "similar-size",
+        "suspect": "suspect",
+    }
+
+    # Union of all wallets in counted groups (with which vectors + max %)
+    counted_union: dict[str, dict[str, Any]] = {}
+    for vkey, wmap in counted_maps.items():
+        for w, pct in wmap.items():
+            row = counted_union.setdefault(
+                w, {"wallet": w, "pct_supply": pct, "counted_in": []}
+            )
+            if vkey not in row["counted_in"]:
+                row["counted_in"].append(vkey)
+            try:
+                row["pct_supply"] = max(float(row.get("pct_supply") or 0), float(pct))
+            except (TypeError, ValueError):
+                pass
+
+    # Wallets that sit in similar-size and/or suspect AND also in multi-send
+    # (or any other counted group) — still counted via those groups; list alone
+    # in the bundle report so they are not "lost" under excluded categories.
+    crosslisted: list[dict[str, Any]] = []
+    for w, info in counted_union.items():
+        in_similar = w in sim_map
+        in_suspect = w in sus_map
+        if not in_similar and not in_suspect:
+            continue
+        excluded_in: list[str] = []
+        if in_similar:
+            excluded_in.append("similar_size")
+        if in_suspect:
+            excluded_in.append("suspect")
+        counted_in = list(info.get("counted_in") or [])
+        crosslisted.append(
+            {
+                "wallet": w,
+                "pct_supply": info.get("pct_supply"),
+                "counted_in": counted_in,
+                "counted_in_labels": [
+                    VECTOR_LABEL.get(k, k) for k in counted_in
+                ],
+                "also_in_excluded": excluded_in,
+                "also_in_excluded_labels": [
+                    VECTOR_LABEL.get(k, k) for k in excluded_in
+                ],
+            }
+        )
+    crosslisted.sort(
+        key=lambda r: (
+            -(
+                float(r["pct_supply"])
+                if r.get("pct_supply") is not None
+                else -1.0
+            ),
+            str(r.get("wallet") or ""),
+        )
+    )
 
     grand = 0.0
     slot_count = 0
     any_data = False
-    for key, meta in by_vector.items():
+    for key in COUNTED:
+        meta = by_vector.get(key) or {}
         try:
             vp = float(meta.get("pct") or 0)
             vn = int(meta.get("count") or 0)
         except (TypeError, ValueError):
-            continue
-        if key not in COUNTED:
             continue
         if vn > 0 or vp > 0:
             any_data = True
         grand += vp
         slot_count += vn
 
-    if not any_data:
-        return {
-            "total_bundle_pct": None,
-            "flagged_wallets": 0,
-            "total_bundle_by_vector": by_vector,
-            "total_bundle_additive": True,
-            "total_bundle_cross_vector_dedupe": False,
-            "total_bundle_excluded_vectors": list(EXCLUDED),
-        }
-
-    return {
-        "total_bundle_pct": round(grand, 4),
-        "flagged_wallets": slot_count,
+    result: dict[str, Any] = {
         "total_bundle_by_vector": by_vector,
         "total_bundle_additive": True,
         "total_bundle_cross_vector_dedupe": False,
         "total_bundle_excluded_vectors": list(EXCLUDED),
+        # Wallets also under similar-size/suspect but still in Total via multi-send etc.
+        "total_bundle_crosslisted_wallets": crosslisted[:48],
+        "total_bundle_crosslisted_count": len(crosslisted),
     }
+    if not any_data:
+        result["total_bundle_pct"] = None
+        result["flagged_wallets"] = 0
+        return result
+
+    result["total_bundle_pct"] = round(grand, 4)
+    result["flagged_wallets"] = slot_count
+    return result
 
 
 def _risk_label(score: int) -> str:
@@ -2288,6 +2415,9 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
             "total_bundle_excluded_vectors": s.get(
                 "total_bundle_excluded_vectors"
             ),
+            "total_bundle_crosslisted_count": s.get(
+                "total_bundle_crosslisted_count"
+            ),
             "multi_account_clusters": s.get("multi_account_clusters") or len(clusters_out),
             "similar_size_groups": s.get("similar_size_groups") or len(similar_out),
             "similar_size_total_pct": s.get("similar_size_total_pct"),
@@ -2339,4 +2469,7 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
         "sol_multi_send_clusters": sol_ms,
         "same_slot_groups": slots_out,
         "suspect_wallets": suspects_out,
+        "total_bundle_crosslisted_wallets": list(
+            data.get("total_bundle_crosslisted_wallets") or []
+        )[:48],
     }
