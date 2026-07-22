@@ -6197,7 +6197,16 @@ function renderBundlesUi(data) {
   html += stat("Total bundle", bunPctHtml(s.total_bundle_pct));
   html += stat("Similar-size", bunPctHtml(s.similar_size_total_pct));
   html += stat("Fresh total", bunPctHtml(s.fresh_total_pct));
-  html += stat("Multi-send total", bunPctHtml(s.multi_send_total_pct));
+  {
+    const msErr = String(s.multi_send_error || "");
+    const msSkipped = /scan off|enable [“"]Multi|Multi-send scan off/i.test(msErr);
+    html += stat(
+      "Multi-send total",
+      msSkipped
+        ? '<span style="color:var(--text-muted)">skipped</span>'
+        : bunPctHtml(s.multi_send_total_pct)
+    );
+  }
   html += stat("Suspect total", bunPctHtml(s.suspect_total_pct));
   html += stat("Top10 ex-LP", bunPctHtml(s.top10_pct_excluding_known_programs));
   html += "</div>";

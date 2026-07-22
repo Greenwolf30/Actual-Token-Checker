@@ -349,7 +349,8 @@ def analyze_token(
     Skips slow OHLCV history, social scrape, holders, and bundles.
     include_rugwatch=False: skip RugWatch flagged-wallet merge on holders.
     include_fresh=False: skip Fresh wallets Helius scan.
-    include_multi_send=False: skip Multi-send Helius scan.
+    include_multi_send=False: skip Multi-send (token Helius scan + SOL
+    multi-send re-label from funding; no Multi-send totals/section).
     include_fresh_multi_send=False (legacy): skip both.
     """
     if include_fresh_multi_send is False:

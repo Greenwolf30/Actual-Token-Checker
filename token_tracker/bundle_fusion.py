@@ -28,6 +28,8 @@ def comprehensive_bundle_check(
 
     include_fresh / include_multi_send control optional Helius scans
     (saves credits / RPS when off; other bundle signals still run).
+    include_multi_send=False skips token multi-send AND does not re-label
+    funding clusters as SOL multi-send (no Multi-send totals / section data).
     include_fresh_multi_send=False (legacy) turns both off.
     """
     if include_fresh_multi_send is False:
@@ -675,77 +677,88 @@ def comprehensive_bundle_check(
             "notes"
         )
 
-    # Also surface SOL multi-send = funding clusters (one funder → many children)
+    # SOL multi-send = funding clusters re-labeled (one funder → many children).
+    # Only when Multi-send is on — otherwise funding stays under Shared funder only
+    # and Bundles Multi-send stays empty / "Skipped".
     sol_multi: list[dict[str, Any]] = []
-    for fc in list((base.get("funding_clusters") if base.get("ok") else None) or [])[:8]:
-        if not isinstance(fc, dict):
-            continue
-        funder = (fc.get("funder") or "").strip()
-        if funder and funder in lp_wallets:
-            continue
-        kids_raw = list(fc.get("children") or [])[:24]
-        kids = []
-        for c in kids_raw:
-            w = c if isinstance(c, str) else (c or {}).get("wallet")
-            ws = (str(w) if w is not None else "").strip()
-            if ws and ws not in lp_wallets:
-                kids.append(c if isinstance(c, str) else ws)
-        child_rows = []
-        for row in list(fc.get("child_rows") or []):
-            if not isinstance(row, dict):
+    if include_multi_send:
+        for fc in list((base.get("funding_clusters") if base.get("ok") else None) or [])[:8]:
+            if not isinstance(fc, dict):
                 continue
-            w = (row.get("wallet") or "").strip()
-            if not w or w in lp_wallets:
+            funder = (fc.get("funder") or "").strip()
+            if funder and funder in lp_wallets:
                 continue
-            child_rows.append(row)
-        if not child_rows and kids:
-            child_rows = [
+            kids_raw = list(fc.get("children") or [])[:24]
+            kids = []
+            for c in kids_raw:
+                w = c if isinstance(c, str) else (c or {}).get("wallet")
+                ws = (str(w) if w is not None else "").strip()
+                if ws and ws not in lp_wallets:
+                    kids.append(c if isinstance(c, str) else ws)
+            child_rows = []
+            for row in list(fc.get("child_rows") or []):
+                if not isinstance(row, dict):
+                    continue
+                w = (row.get("wallet") or "").strip()
+                if not w or w in lp_wallets:
+                    continue
+                child_rows.append(row)
+            if not child_rows and kids:
+                child_rows = [
+                    {
+                        "wallet": (k if isinstance(k, str) else str(k)),
+                        "pct_supply": pct_by_w.get(
+                            k if isinstance(k, str) else str(k)
+                        ),
+                    }
+                    for k in kids
+                ]
+            if len(child_rows) < 2 and len(kids) < 2:
+                continue
+            recv_tot, recv_n = bun._sum_wallets_pct(child_rows)  # type: ignore[attr-defined]
+            sp = (
+                fc.get("funder_pct")
+                if fc.get("funder_pct") is not None
+                else pct_by_w.get(funder)
+            )
+            sum_rows = list(child_rows)
+            if funder:
+                sum_rows.append({"wallet": funder, "pct_supply": sp})
+            tot, n = bun._sum_wallets_pct(sum_rows)  # type: ignore[attr-defined]
+            try:
+                sp_f = float(sp) if sp is not None else 0.0
+            except (TypeError, ValueError):
+                sp_f = 0.0
+            try:
+                rt_f = float(recv_tot) if recv_tot is not None else 0.0
+            except (TypeError, ValueError):
+                rt_f = 0.0
+            if sp_f <= 0 and rt_f <= 0:
+                hold_shape = "unknown"
+            elif sp_f >= rt_f and sp_f > 0:
+                hold_shape = "mostly_one_wallet_sender"
+            else:
+                hold_shape = "mostly_across_receivers"
+            sol_multi.append(
                 {
-                    "wallet": (k if isinstance(k, str) else str(k)),
-                    "pct_supply": pct_by_w.get(
-                        k if isinstance(k, str) else str(k)
-                    ),
+                    "kind": "sol_multi_send",
+                    "sender": funder,
+                    "sender_pct": sp,
+                    "receivers": kids[:24],
+                    "receiver_count": fc.get("child_count")
+                    or len(child_rows)
+                    or len(kids),
+                    "child_rows": child_rows,
+                    "receivers_total_pct": recv_tot,
+                    "receivers_with_pct": recv_n,
+                    "total_pct": tot if tot is not None else fc.get("total_pct"),
+                    "wallets_with_pct": n,
+                    "hold_shape": hold_shape,
+                    "severity": fc.get("severity") or "high",
                 }
-                for k in kids
-            ]
-        if len(child_rows) < 2 and len(kids) < 2:
-            continue
-        recv_tot, recv_n = bun._sum_wallets_pct(child_rows)  # type: ignore[attr-defined]
-        sp = fc.get("funder_pct") if fc.get("funder_pct") is not None else pct_by_w.get(funder)
-        sum_rows = list(child_rows)
-        if funder:
-            sum_rows.append({"wallet": funder, "pct_supply": sp})
-        tot, n = bun._sum_wallets_pct(sum_rows)  # type: ignore[attr-defined]
-        try:
-            sp_f = float(sp) if sp is not None else 0.0
-        except (TypeError, ValueError):
-            sp_f = 0.0
-        try:
-            rt_f = float(recv_tot) if recv_tot is not None else 0.0
-        except (TypeError, ValueError):
-            rt_f = 0.0
-        if sp_f <= 0 and rt_f <= 0:
-            hold_shape = "unknown"
-        elif sp_f >= rt_f and sp_f > 0:
-            hold_shape = "mostly_one_wallet_sender"
-        else:
-            hold_shape = "mostly_across_receivers"
-        sol_multi.append(
-            {
-                "kind": "sol_multi_send",
-                "sender": funder,
-                "sender_pct": sp,
-                "receivers": kids[:24],
-                "receiver_count": fc.get("child_count") or len(child_rows) or len(kids),
-                "child_rows": child_rows,
-                "receivers_total_pct": recv_tot,
-                "receivers_with_pct": recv_n,
-                "total_pct": tot if tot is not None else fc.get("total_pct"),
-                "wallets_with_pct": n,
-                "hold_shape": hold_shape,
-                "severity": fc.get("severity") or "high",
-            }
-        )
+            )
+    elif multi_send_error is None:
+        multi_send_error = "Multi-send scan off (enable “Multi-send” to run)."
 
     if base.get("ok") or fresh_rows or multi_clusters or sol_multi:
         if not base.get("ok"):
@@ -803,7 +816,25 @@ def comprehensive_bundle_check(
         s0["multi_send_receiver_total_pct"] = split.get("receiver_total_pct")
         s0["multi_send_receiver_count"] = split.get("receiver_count")
         s0["multi_send_hold_shape"] = split.get("hold_shape")
-        if multi_send_error and not multi_clusters and not sol_multi:
+        # When Multi-send is off, never leave residual totals (token + SOL empty).
+        if not include_multi_send:
+            multi_send_error = (
+                multi_send_error
+                or "Multi-send scan off (enable “Multi-send” to run)."
+            )
+            s0["multi_send_total_pct"] = None
+            s0["multi_send_wallet_with_pct"] = 0
+            s0["multi_send_sender_total_pct"] = None
+            s0["multi_send_sender_count"] = 0
+            s0["multi_send_receiver_total_pct"] = None
+            s0["multi_send_receiver_count"] = 0
+            s0["multi_send_hold_shape"] = None
+            s0["token_multi_send_clusters"] = 0
+            s0["sol_multi_send_clusters"] = 0
+            s0["multi_send_error"] = str(multi_send_error)[:240]
+            base["multi_send_clusters"] = []
+            base["sol_multi_send_clusters"] = []
+        elif multi_send_error and not multi_clusters and not sol_multi:
             s0["multi_send_error"] = str(multi_send_error)[:240]
         base["summary"] = s0
 
