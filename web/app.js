@@ -6372,19 +6372,100 @@ function bundleStatsMintKey(mint) {
   return m.includes(":") ? m.split(":").pop() : m;
 }
 
-function saveBundleStatsPrev(mint, stats) {
+/** Stat field keys used for delta compare (exclude storage meta). */
+const BUNDLE_STAT_KEYS = [
+  "risk",
+  "total_bundle_pct",
+  "similar_size_total_pct",
+  "fresh_total_pct",
+  "multi_send_total_pct",
+  "funding_total_pct",
+  "suspect_total_pct",
+  "top10_ex_lp",
+];
+
+function isBundleStatsBlob(o) {
+  if (!o || typeof o !== "object") return false;
+  return BUNDLE_STAT_KEYS.some((k) => o[k] != null && Number.isFinite(Number(o[k])));
+}
+
+/** Normalize map entry → { forNext, deltaFrom, deltaCur, savedAt }. */
+function normalizeBundleStatsEntry(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  // New shape: nested forNext / deltaFrom / deltaCur
+  if (
+    raw.forNext ||
+    raw.deltaFrom ||
+    raw.deltaCur ||
+    raw._v === 2
+  ) {
+    return {
+      _v: 2,
+      forNext: isBundleStatsBlob(raw.forNext) ? raw.forNext : null,
+      deltaFrom: isBundleStatsBlob(raw.deltaFrom) ? raw.deltaFrom : null,
+      deltaCur: isBundleStatsBlob(raw.deltaCur) ? raw.deltaCur : null,
+      savedAt: raw.savedAt || 0,
+    };
+  }
+  // Legacy flat: { risk, total_bundle_pct, ..., savedAt }
+  if (isBundleStatsBlob(raw)) {
+    const stats = {};
+    for (const k of BUNDLE_STAT_KEYS) {
+      stats[k] =
+        raw[k] != null && Number.isFinite(Number(raw[k]))
+          ? Number(raw[k])
+          : null;
+    }
+    return {
+      _v: 2,
+      forNext: stats,
+      deltaFrom: null,
+      deltaCur: stats,
+      savedAt: raw.savedAt || 0,
+    };
+  }
+  return null;
+}
+
+function getBundleStatsEntry(mint) {
   const m = bundleStatsMintKey(mint);
-  if (!m || !stats) return;
+  if (!m) return null;
+  const map = loadBundleStatsPrevMap();
+  if (map[m]) {
+    const e = normalizeBundleStatsEntry(map[m]);
+    if (e) return e;
+  }
+  for (const k of Object.keys(map)) {
+    if (bundleStatsMintKey(k) === m) {
+      const e = normalizeBundleStatsEntry(map[k]);
+      if (e) return e;
+    }
+  }
+  return null;
+}
+
+/**
+ * Persist baseline + last-shown delta pair for a mint.
+ * forNext   = baseline for the *next* live Analyze
+ * deltaFrom = left side of last shown deltas (kept across page refresh)
+ * deltaCur  = right side of last shown deltas (matches last live result)
+ */
+function saveBundleStatsEntry(mint, entry) {
+  const m = bundleStatsMintKey(mint);
+  if (!m || !entry) return;
   try {
     const map = loadBundleStatsPrevMap();
-    map[m] = { ...stats, savedAt: Date.now() };
-    // Cap map size
+    map[m] = {
+      _v: 2,
+      forNext: entry.forNext || null,
+      deltaFrom: entry.deltaFrom || null,
+      deltaCur: entry.deltaCur || null,
+      savedAt: Date.now(),
+    };
     const keys = Object.keys(map);
     if (keys.length > 80) {
       keys
-        .sort(
-          (a, b) => (map[a].savedAt || 0) - (map[b].savedAt || 0)
-        )
+        .sort((a, b) => (map[a].savedAt || 0) - (map[b].savedAt || 0))
         .slice(0, keys.length - 80)
         .forEach((k) => delete map[k]);
     }
@@ -6394,17 +6475,22 @@ function saveBundleStatsPrev(mint, stats) {
   }
 }
 
+/** @deprecated use saveBundleStatsEntry — kept for seed paths */
+function saveBundleStatsPrev(mint, stats) {
+  if (!stats) return;
+  const existing = getBundleStatsEntry(mint) || {};
+  saveBundleStatsEntry(mint, {
+    forNext: stats,
+    deltaFrom: existing.deltaFrom || null,
+    deltaCur: existing.deltaCur || stats,
+  });
+}
+
+/** Baseline stats for *next* live compare (forNext), or null. */
 function loadBundleStatsPrev(mint) {
-  const m = bundleStatsMintKey(mint);
-  if (!m) return null;
-  const map = loadBundleStatsPrevMap();
-  if (map[m] && typeof map[m] === "object") return map[m];
-  // Legacy keys may have been full "solana:mint" or mixed forms
-  for (const k of Object.keys(map)) {
-    const bare = bundleStatsMintKey(k);
-    if (bare === m && map[k] && typeof map[k] === "object") return map[k];
-  }
-  return null;
+  const e = getBundleStatsEntry(mint);
+  if (!e) return null;
+  return e.forNext || null;
 }
 
 /**
@@ -6498,14 +6584,14 @@ function extractBundleStatsFromData(data) {
 }
 
 /**
- * Previous stats for delta arrows: browser map first, else last Analyze of same mint.
+ * Baseline for a *new* live Analyze compare (forNext).
+ * Falls back to last Analyze snapshot when map empty.
  */
 function resolveBundleStatsPrev(mint) {
   const m = bundleStatsMintKey(mint);
   if (!m) return null;
   const fromMap = loadBundleStatsPrev(m);
   if (fromMap) return fromMap;
-  // Seed from last saved Analyze (survives refresh when map was empty / cleared)
   try {
     const cached = loadLastAnalyze();
     if (!cached || !cached.data) return null;
@@ -6517,7 +6603,12 @@ function resolveBundleStatsPrev(mint) {
     if (bundleStatsMintKey(addr) !== m) return null;
     const stats = extractBundleStatsFromData(cached.data);
     if (!stats) return null;
-    saveBundleStatsPrev(m, stats);
+    // Seed forNext only — do not invent deltaFrom (no arrows until 2nd live run)
+    saveBundleStatsEntry(m, {
+      forNext: stats,
+      deltaFrom: null,
+      deltaCur: stats,
+    });
     return stats;
   } catch (_) {
     return null;
@@ -6571,16 +6662,35 @@ function renderBundlesUi(data) {
     "";
   const curStats = extractBundleSummaryStats(s, riskScore);
   const isRestore = !!(data && data._restoredFromBrowserCache);
-  // Live Analyze: compare to last stored baseline for this mint.
-  // Restore: do not show deltas (same snapshot), but keep baseline seeded.
-  const prev = !isRestore && mint ? resolveBundleStatsPrev(mint) : null;
-  if (isRestore && mint && curStats) {
-    // Ensure next live Analyze has a baseline after refresh
-    try {
-      if (!loadBundleStatsPrev(mint)) saveBundleStatsPrev(mint, curStats);
-    } catch (_) {
-      /* ignore */
+  const stored = mint ? getBundleStatsEntry(mint) : null;
+
+  // Live: compare new result → previous forNext baseline.
+  // Restore: keep last shown deltas (deltaFrom → deltaCur) until next Analyze.
+  let prev = null;
+  let deltaCurStats = curStats;
+  if (isRestore) {
+    if (stored && stored.deltaFrom) {
+      prev = stored.deltaFrom;
+      // Prefer frozen last-shown current so refresh matches last live deltas
+      deltaCurStats = stored.deltaCur || curStats;
+    } else {
+      prev = null;
     }
+    // Keep forNext seeded for the next live run; never wipe deltaFrom on refresh
+    if (mint && curStats && (!stored || !stored.forNext)) {
+      try {
+        saveBundleStatsEntry(mint, {
+          forNext: curStats,
+          deltaFrom: (stored && stored.deltaFrom) || null,
+          deltaCur: (stored && stored.deltaCur) || curStats,
+        });
+      } catch (_) {
+        /* ignore */
+      }
+    }
+  } else if (mint) {
+    prev = resolveBundleStatsPrev(mint);
+    deltaCurStats = curStats;
   }
 
   function stat(label, valueHtml) {
@@ -6594,12 +6704,12 @@ function renderBundlesUi(data) {
   }
 
   function withDelta(mainHtml, key) {
-    // Deltas only on live Analyze when a previous baseline exists for this mint.
-    if (isRestore || !prev) return mainHtml;
+    // Show deltas whenever we have a compare baseline (live or restored last pair)
+    if (!prev) return mainHtml;
     const kind = key === "risk" ? "score" : "pct";
-    // Align Total tile: display uses 0 when total is null
-    let curVal = curStats[key];
+    let curVal = deltaCurStats[key];
     let prevVal = prev[key];
+    // Align Total tile: display uses 0 when total is null
     if (key === "total_bundle_pct") {
       if (curVal == null) curVal = 0;
       if (prevVal == null) prevVal = 0;
@@ -6688,10 +6798,15 @@ function renderBundlesUi(data) {
   );
   html += "</div>";
 
-  // After a live Analyze, store stats as baseline for the *next* run
-  // (must run after withDelta so this run still compares to the prior baseline)
+  // After a live Analyze: freeze this run's delta pair (survives refresh)
+  // and set forNext so the *next* Analyze compares against these numbers.
   if (!isRestore && mint && curStats) {
-    saveBundleStatsPrev(mint, curStats);
+    saveBundleStatsEntry(mint, {
+      forNext: curStats,
+      // Only lock a delta pair when we actually had a baseline to compare
+      deltaFrom: prev || null,
+      deltaCur: curStats,
+    });
   }
 
   const src = (s.sources_used || []).join(", ") || view.method || view.source || "—";
