@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v115";
+const ADTC_CLIENT_VERSION = "v116";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -167,9 +167,50 @@ function trimHistoryDropOldest(items, maxKeep) {
   return list.slice(0, max);
 }
 
+/** Clone entry without heavy text (used only on older rows when quota is tight). */
+function historyEntryWithoutSnapshots(e) {
+  if (!e || typeof e !== "object") return e;
+  const c = { ...e };
+  delete c.holders_snapshot;
+  delete c.bundles_snapshot;
+  delete c.ruggers_track;
+  return c;
+}
+
+/** Compact market-only row (last resort for oldest entries). */
+function historyEntryCompact(e) {
+  if (!e || typeof e !== "object") return e;
+  return {
+    ts: e.ts,
+    query: e.query,
+    symbol: e.symbol,
+    name: e.name,
+    address: e.address,
+    chain: e.chain,
+    dex_id: e.dex_id,
+    price_usd: e.price_usd,
+    market_cap_usd: e.market_cap_usd,
+    liquidity_usd: e.liquidity_usd,
+    volume_h24_usd: e.volume_h24_usd,
+    price_change_h24_pct: e.price_change_h24_pct,
+    holders_ok: e.holders_ok,
+    bundle_risk: e.bundle_risk,
+    bundle_pct: e.bundle_pct,
+    alerts_priority_count: e.alerts_priority_count,
+    // Keep short previews if present (not full dumps)
+    holders_snapshot: e.holders_snapshot
+      ? clipSnap(e.holders_snapshot, 2500)
+      : null,
+    bundles_snapshot: e.bundles_snapshot
+      ? clipSnap(e.bundles_snapshot, 2000)
+      : null,
+  };
+}
+
 /**
- * Persist Logs. On quota errors: strip snapshots, then drop earliest entries
- * until the write succeeds. Newest Analyze is always kept.
+ * Persist Logs. Prefer keeping Holders + Bundles on the newest entries.
+ * On quota: drop earliest mints first; only strip snapshots from older rows.
+ * Newest Analyze always keeps snapshots when possible.
  */
 function saveHistoryLog(items) {
   let list = trimHistoryDropOldest(items, HISTORY_MAX);
@@ -177,69 +218,73 @@ function saveHistoryLog(items) {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(arr));
     return true;
   };
+
+  // Attempt 1: full entries (with holders/bundles)
   try {
     return tryWrite(list);
   } catch (e1) {
-    console.warn("[logs] full save failed, stripping snapshots", e1 && e1.name);
+    console.warn(
+      "[logs] full save failed — drop earliest mints first (keep snapshots on newest)",
+      e1 && e1.name
+    );
   }
-  // Retry 1: drop holders/bundles text snapshots (largest fields)
-  try {
-    list = list.map((e) => {
-      if (!e || typeof e !== "object") return e;
-      const c = { ...e };
-      delete c.holders_snapshot;
-      delete c.bundles_snapshot;
-      delete c.ruggers_track;
-      return c;
-    });
-    return tryWrite(list);
-  } catch (e2) {
-    console.warn("[logs] slim save failed, dropping earliest entries", e2 && e2.name);
-  }
-  // Retry 2: compact fields only
-  list = list.map((e) => {
-    if (!e || typeof e !== "object") return e;
-    return {
-      ts: e.ts,
-      query: e.query,
-      symbol: e.symbol,
-      name: e.name,
-      address: e.address,
-      chain: e.chain,
-      dex_id: e.dex_id,
-      price_usd: e.price_usd,
-      market_cap_usd: e.market_cap_usd,
-      liquidity_usd: e.liquidity_usd,
-      volume_h24_usd: e.volume_h24_usd,
-      price_change_h24_pct: e.price_change_h24_pct,
-      holders_ok: e.holders_ok,
-      bundle_risk: e.bundle_risk,
-      bundle_pct: e.bundle_pct,
-      alerts_priority_count: e.alerts_priority_count,
-    };
-  });
+
+  // Attempt 2: drop earliest full entries until it fits (newest keep Holders/Bundles)
   list = sortHistoryNewestFirst(list);
-  // Drop earliest (tail) until it fits — never drop list[0] (newest) first
-  while (list.length > 0) {
-    try {
-      return tryWrite(list);
-    } catch (_) {
-      if (list.length <= 1) {
-        try {
-          return tryWrite(list); // only the newest left
-        } catch (e3) {
-          console.error("[logs] save failed completely", e3);
-          return false;
-        }
+  {
+    let attempt = list.slice();
+    while (attempt.length > 0) {
+      try {
+        return tryWrite(attempt);
+      } catch (_) {
+        if (attempt.length <= 1) break;
+        // Remove earliest (tail), never the newest head
+        attempt = attempt.slice(0, attempt.length - 1);
+        console.info(
+          "[logs] dropped earliest mint to free space; keeping",
+          attempt.length,
+          "newest with snapshots"
+        );
       }
-      // Remove earliest known mint (last index), keep latest
-      list = list.slice(0, list.length - 1);
-      console.info(
-        "[logs] dropped earliest entry; keeping",
-        list.length,
-        "newest"
-      );
     }
+    list = attempt.length ? attempt : list.slice(0, 1);
+  }
+
+  // Attempt 3: keep full snapshots on newest 15; strip only older rows
+  try {
+    const KEEP_FULL = 15;
+    list = sortHistoryNewestFirst(list).map((e, i) =>
+      i < KEEP_FULL ? e : historyEntryWithoutSnapshots(e)
+    );
+    return tryWrite(list);
+  } catch (e3) {
+    console.warn("[logs] partial-snapshot save failed", e3 && e3.name);
+  }
+
+  // Attempt 4: compact all but keep short previews on newest 5
+  try {
+    list = sortHistoryNewestFirst(list).map((e, i) =>
+      i < 5 ? historyEntryCompact(e) : historyEntryWithoutSnapshots(e)
+    );
+    // Drop earliest until fits
+    while (list.length > 0) {
+      try {
+        return tryWrite(list);
+      } catch (_) {
+        if (list.length <= 1) {
+          // Last: newest only, short snapshots
+          try {
+            return tryWrite([historyEntryCompact(list[0])]);
+          } catch (e4) {
+            console.error("[logs] save failed completely", e4);
+            return false;
+          }
+        }
+        list = list.slice(0, list.length - 1);
+      }
+    }
+  } catch (e5) {
+    console.error("[logs] save failed", e5);
   }
   return false;
 }
@@ -307,8 +352,9 @@ function buildHistoryEntry(data, query) {
   if (!bundlesSnap && sections.bundles) {
     bundlesSnap = sections.bundles;
   }
-  holdersSnap = clipSnap(holdersSnap, 10000);
-  bundlesSnap = clipSnap(bundlesSnap, 7000);
+  // Sized to keep Holders + Bundles readable in Logs without blowing storage
+  holdersSnap = clipSnap(holdersSnap, 6000);
+  bundlesSnap = clipSnap(bundlesSnap, 4500);
 
   return {
     ts: new Date().toISOString(),
