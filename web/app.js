@@ -6232,6 +6232,7 @@ function renderBundlesUi(data) {
       multi_send: "multi-send",
       fresh: "fresh",
       shared_funder: "shared funder",
+      suspect: "suspect",
     };
     for (const [k, lab] of Object.entries(labels)) {
       const m = bv[k];
@@ -6244,14 +6245,20 @@ function renderBundlesUi(data) {
         parts.push(lab + " n/a%");
       }
     }
+    const modeNote =
+      s.total_bundle_mode === "fallback_similar_suspect"
+        ? " Fallback mode: only similar-size + suspect (primary categories empty)."
+        : " Similar-size and suspect hidden/excluded when primary categories have data.";
     html +=
-      '<p class="bun-meta">Total bundle = sum of vectors (no wallet dedupe across counted vectors' +
+      '<p class="bun-meta">Total bundle = sum of counted vectors (no wallet dedupe' +
       (Number(s.total_bundle_pct) > 100
         ? " — can exceed 100%"
         : "") +
       ")" +
       (parts.length ? ": " + escHtml(parts.join(" + ")) : "") +
-      ". Suspect wallets excluded from Total (avoids double-count).</p>";
+      "." +
+      modeNote +
+      "</p>";
   }
 
   // Signals chips
@@ -6272,8 +6279,33 @@ function renderBundlesUi(data) {
     html += "</div>";
   }
 
-  // Multi-account
+  // Primary categories (anything other than similar-size / suspect)
   const clusters = view.clusters || [];
+  const ins = view.insider_wallets || [];
+  const fundEarly = view.funding_clusters || [];
+  const freshEarly = view.fresh_wallets || [];
+  const msWalletsEarly = view.multi_send_wallets || [];
+  const tokenMsEarly = view.multi_send_clusters || [];
+  const solMsEarly = view.sol_multi_send_clusters || [];
+  const hasPrimaryCats = !!(
+    clusters.length ||
+    ins.length ||
+    fundEarly.length ||
+    freshEarly.length ||
+    msWalletsEarly.length ||
+    tokenMsEarly.length ||
+    solMsEarly.length ||
+    (s.total_bundle_mode && s.total_bundle_mode === "primary" &&
+      Number(s.total_bundle_pct) > 0 &&
+      !s.total_bundle_show_similar_suspect)
+  );
+  // Prefer server flag when present
+  const showSimilarSuspect =
+    s.total_bundle_show_similar_suspect != null
+      ? !!s.total_bundle_show_similar_suspect
+      : !hasPrimaryCats;
+
+  // Multi-account
   if (clusters.length) {
     html +=
       '<section class="bun-section"><div class="bun-section-head">' +
@@ -6306,40 +6338,43 @@ function renderBundlesUi(data) {
     );
   }
 
-  // Similar-size
+  // Similar-size — only when primary categories are all empty (fallback)
   const sims = view.similar_size_groups || [];
-  if (sims.length) {
-    html +=
-      '<section class="bun-section"><div class="bun-section-head">' +
-      '<span class="bun-section-title">Similar-size groups</span>' +
-      '<span class="bun-section-total">' +
-      bunPctHtml(s.similar_size_total_pct) +
-      " combined</span></div><div class=\"bun-section-body\">";
-    for (const g of sims) {
+  if (showSimilarSuspect) {
+    if (sims.length) {
       html +=
-        '<div class="bun-cluster"><div class="bun-cluster-head">' +
-        escHtml(String(g.count || (g.wallets || []).length || 0)) +
-        " wallets ≈ " +
-        bunPctHtml(g.avg_pct) +
-        " each" +
-        (g.total_pct != null ? " · sum " + bunPctHtml(g.total_pct) : "") +
-        "</div>";
-      html += bunWalletTable(g.wallets || [], [
-        { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
-        { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
-      ]);
-      html += "</div>";
+        '<section class="bun-section"><div class="bun-section-head">' +
+        '<span class="bun-section-title">Similar-size groups</span>' +
+        '<span class="bun-section-total">' +
+        bunPctHtml(s.similar_size_total_pct) +
+        " combined · fallback</span></div><div class=\"bun-section-body\">";
+      html +=
+        '<p class="bun-sub">Shown because multi-account, insider, multi-send, fresh, and shared SOL are all empty this scan.</p>';
+      for (const g of sims) {
+        html +=
+          '<div class="bun-cluster"><div class="bun-cluster-head">' +
+          escHtml(String(g.count || (g.wallets || []).length || 0)) +
+          " wallets ≈ " +
+          bunPctHtml(g.avg_pct) +
+          " each" +
+          (g.total_pct != null ? " · sum " + bunPctHtml(g.total_pct) : "") +
+          "</div>";
+        html += bunWalletTable(g.wallets || [], [
+          { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
+          { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
+        ]);
+        html += "</div>";
+      }
+      html += "</div></section>";
+    } else {
+      html += bunEmptySection(
+        "Similar-size groups",
+        "None found — top wallets with nearly the same bag size."
+      );
     }
-    html += "</div></section>";
-  } else {
-    html += bunEmptySection(
-      "Similar-size groups",
-      "None found — top wallets with nearly the same bag size."
-    );
   }
 
   // Insiders
-  const ins = view.insider_wallets || [];
   if (ins.length) {
     html +=
       '<section class="bun-section"><div class="bun-section-head">' +
@@ -6668,56 +6703,58 @@ function renderBundlesUi(data) {
 
   // Launch-window removed from Bundles (Helius scan disabled).
 
-  // Suspects — total supply % across unique suspect wallets (right of title)
+  // Suspects — only when primary categories are all empty (fallback)
   const sus = view.suspect_wallets || [];
-  // Prefer API total; fall back to client sum of rows
-  let susTot = s.suspect_total_pct;
-  if (susTot == null && sus.length) {
-    let sum = 0;
-    const seen = new Set();
-    for (const r of sus) {
-      const w = String((r && r.wallet) || "").trim();
-      if (!w || seen.has(w)) continue;
-      seen.add(w);
-      const p = Number(r.pct_supply);
-      if (Number.isFinite(p) && p > 0) sum += p;
+  if (showSimilarSuspect) {
+    let susTot = s.suspect_total_pct;
+    if (susTot == null && sus.length) {
+      let sum = 0;
+      const seen = new Set();
+      for (const r of sus) {
+        const w = String((r && r.wallet) || "").trim();
+        if (!w || seen.has(w)) continue;
+        seen.add(w);
+        const p = Number(r.pct_supply);
+        if (Number.isFinite(p) && p > 0) sum += p;
+      }
+      if (sum > 100) sum = 100;
+      susTot = sum > 0 ? sum : null;
     }
-    if (sum > 100) sum = 100;
-    susTot = sum > 0 ? sum : null;
-  }
-  if (sus.length) {
-    html +=
-      '<section class="bun-section"><div class="bun-section-head">' +
-      '<span class="bun-section-title">Suspect wallets</span>' +
-      '<span class="bun-section-total">total ' +
-      bunPctHtml(susTot) +
-      " · " +
-      escHtml(String(s.suspect_wallet_count || sus.length)) +
-      " wallet(s)</span></div><div class=\"bun-section-body\">";
-    html += bunWalletTable(sus, [
-      { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
-      { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
-      {
-        key: "reasons",
-        label: "Why",
-        render: (v) => {
-          // Funding lives under Shared SOL funder / multi-send only
-          const list = (Array.isArray(v) ? v : v ? [v] : []).filter((r) => {
-            const s = String(r || "").toLowerCase();
-            return !(
-              s.startsWith("funded by ") || s.indexOf("common funder") >= 0
-            );
-          });
-          return escHtml(list.length ? list.join("; ") : "—");
+    if (sus.length) {
+      html +=
+        '<section class="bun-section"><div class="bun-section-head">' +
+        '<span class="bun-section-title">Suspect wallets</span>' +
+        '<span class="bun-section-total">total ' +
+        bunPctHtml(susTot) +
+        " · " +
+        escHtml(String(s.suspect_wallet_count || sus.length)) +
+        " wallet(s) · fallback</span></div><div class=\"bun-section-body\">";
+      html +=
+        '<p class="bun-sub">Shown because multi-account, insider, multi-send, fresh, and shared SOL are all empty this scan.</p>';
+      html += bunWalletTable(sus, [
+        { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
+        { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
+        {
+          key: "reasons",
+          label: "Why",
+          render: (v) => {
+            const list = (Array.isArray(v) ? v : v ? [v] : []).filter((r) => {
+              const t = String(r || "").toLowerCase();
+              return !(
+                t.startsWith("funded by ") || t.indexOf("common funder") >= 0
+              );
+            });
+            return escHtml(list.length ? list.join("; ") : "—");
+          },
         },
-      },
-    ]);
-    html += "</div></section>";
-  } else {
-    html += bunEmptySection(
-      "Suspect wallets",
-      "None tagged this scan."
-    );
+      ]);
+      html += "</div></section>";
+    } else {
+      html += bunEmptySection(
+        "Suspect wallets",
+        "None tagged this scan."
+      );
+    }
   }
 
   root.innerHTML = html;

@@ -199,15 +199,15 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
         )
 
     suspect_wallets = _suspect_wallets(multi_clusters, similar_groups, insiders)
-    # Baseline total: multi-account + similar-size + insiders.
-    # Suspects excluded (union would double-count). Fusion recomputes with
-    # fresh / multi-send / shared funder added.
+    # Baseline: primary vectors only. Similar/suspect only if primary empty
+    # (fusion recomputes with fresh / multi-send / shared funder).
+    primary_empty = not multi_clusters and not insiders
     total_pct, flagged_n = _total_bundle_percent(
         holders=holders,
         clusters=multi_clusters,
-        similar_groups=similar_groups,
+        similar_groups=similar_groups if primary_empty else [],
         insiders=insiders,
-        suspects=[],  # excluded from Total bundle %
+        suspects=suspect_wallets if primary_empty else [],
     )
     suspect_pct, suspect_n = _suspect_total_percent(suspect_wallets)
     # Combined % of unique wallets that sit in similar-size groups
@@ -260,12 +260,10 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
         "notes": (
             "Bundle detection is heuristic from a top-holder snapshot only. "
             "Suspect total % = sum of unique suspect wallets' supply %. "
-            "Total bundle % (full Analyze) = sum of each risk vector’s supply % "
-            "with NO cross-vector wallet dedupe (multi-account + similar-size + "
-            "insider + multi-send + fresh + shared funder). "
-            "Suspect and launch-window are EXCLUDED from Total bundle %. "
-            "A wallet in two counted vectors counts twice. "
-            "Not a full commercial sniper graph."
+            "Total bundle % = multi-account + insider + multi-send + fresh + "
+            "shared funder (no cross-vector wallet dedupe). Similar-size and "
+            "suspect only appear / count when those primary categories are all "
+            "empty. Not a full commercial sniper graph."
         ),
     }
 
@@ -480,8 +478,27 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             "  (none — no multi Associated Token Account clusters this scan)"
         )
 
+    # Similar-size + suspect only when primary categories are all empty
+    _has_primary = bool(
+        list(data.get("clusters") or [])
+        or list(data.get("insider_wallets") or [])
+        or list(data.get("multi_send_clusters") or [])
+        or list(data.get("fresh_wallets") or [])
+        or list(data.get("funding_clusters") or [])
+        or list(data.get("sol_multi_send_clusters") or [])
+    )
+    _show_sim_sus = not _has_primary
+    if s.get("total_bundle_show_similar_suspect") is not None:
+        _show_sim_sus = bool(s.get("total_bundle_show_similar_suspect"))
+
     groups = data.get("similar_size_groups") or []
-    if groups:
+    if not _show_sim_sus:
+        lines.append("")
+        lines.append("── SIMILAR-SIZE GROUPS ──")
+        lines.append(
+            "  (hidden — primary categories found; similar-size is fallback-only)"
+        )
+    elif groups:
         lines.append("")
         # Category total across all similar-size wallets (unique)
         all_sim_rows: list[dict[str, Any]] = []
@@ -979,7 +996,11 @@ def format_bundles_text(data: dict[str, Any]) -> str:
     suspects = data.get("suspect_wallets") or []
     lines.append("")
     lines.append("── SUSPECT WALLETS ──")
-    if suspects:
+    if not _show_sim_sus:
+        lines.append(
+            "  (hidden — primary categories found; suspect is fallback-only)"
+        )
+    elif suspects:
         # Prefer summary field; recompute if missing
         suspect_total = s.get("suspect_total_pct")
         suspect_n = s.get("suspect_wallet_count")
@@ -1385,13 +1406,13 @@ def recompute_total_bundle_all_vectors(
     A wallet in multi-send AND fresh contributes its % twice (once per vector).
     Within a single vector, each wallet is counted once (max % if listed twice).
 
-    Counted vectors:
-      multi_account, similar_size, insider, multi_send (token only), fresh,
-      shared_funder (funding clusters).
+    Primary vectors (always preferred for Total + Bundles display):
+      multi_account, insider, multi_send (token only), fresh, shared_funder.
 
-    EXCLUDED as categories from Total bundle %:
-      suspect wallets (union of other tags — would double-count).
-      launch_window (scan disabled; not in Bundles/Ruggers).
+    Fallback only (shown / counted only when ALL primary vectors are 0):
+      similar_size groups, suspect wallets.
+
+    Never counted: launch_window (disabled).
 
     Token multi-send only for multi_send (not sol_multi_send_clusters) so SOL
     funder wallets are not double-counted with shared_funder.
@@ -1487,7 +1508,7 @@ def recompute_total_bundle_all_vectors(
     sim_map = _wallet_map(sim_rows)
     p, n = _sum_map(sim_map)
     by_vector["similar_size"] = {"pct": p, "count": n}
-    counted_maps["similar_size"] = sim_map
+    # similar_size is fallback-only — not always in counted_maps
 
     # 3) Insiders
     in_rows: list[tuple[str, Any]] = []
@@ -1582,30 +1603,20 @@ def recompute_total_bundle_all_vectors(
         "excluded_from_total": True,
     }
 
-    # Vectors that contribute to Total bundle %
-    COUNTED = {
+    # Primary always; similar-size + suspect only if primary is all-zero
+    PRIMARY = {
         "multi_account",
-        "similar_size",
         "insider",
         "multi_send",
         "fresh",
         "shared_funder",
     }
-    EXCLUDED = ("suspect", "launch_window")
-    VECTOR_LABEL = {
-        "multi_account": "multi-account",
-        "similar_size": "similar-size",
-        "insider": "insider",
-        "multi_send": "multi-send",
-        "fresh": "fresh",
-        "shared_funder": "shared funder",
-        "suspect": "suspect",
-    }
+    FALLBACK = ("similar_size", "suspect")
 
-    grand = 0.0
-    slot_count = 0
-    any_data = False
-    for key in COUNTED:
+    primary_grand = 0.0
+    primary_slots = 0
+    primary_any = False
+    for key in PRIMARY:
         meta = by_vector.get(key) or {}
         try:
             vp = float(meta.get("pct") or 0)
@@ -1613,20 +1624,63 @@ def recompute_total_bundle_all_vectors(
         except (TypeError, ValueError):
             continue
         if vn > 0 or vp > 0:
-            any_data = True
-        grand += vp
-        slot_count += vn
+            primary_any = True
+        primary_grand += vp
+        primary_slots += vn
+
+    use_fallback = not primary_any
+    # Mark similar / suspect for UI: hide unless fallback mode
+    if "similar_size" in by_vector:
+        by_vector["similar_size"] = dict(by_vector["similar_size"])
+        by_vector["similar_size"]["fallback_only"] = True
+        by_vector["similar_size"]["shown"] = use_fallback
+        if not use_fallback:
+            by_vector["similar_size"]["excluded_from_total"] = True
+    if "suspect" in by_vector:
+        by_vector["suspect"] = dict(by_vector["suspect"])
+        by_vector["suspect"]["fallback_only"] = True
+        by_vector["suspect"]["shown"] = use_fallback
+        if not use_fallback:
+            by_vector["suspect"]["excluded_from_total"] = True
+
+    if use_fallback:
+        grand = 0.0
+        slot_count = 0
+        any_data = False
+        for key in FALLBACK:
+            meta = by_vector.get(key) or {}
+            try:
+                vp = float(meta.get("pct") or 0)
+                vn = int(meta.get("count") or 0)
+            except (TypeError, ValueError):
+                continue
+            if vn > 0 or vp > 0:
+                any_data = True
+            grand += vp
+            slot_count += vn
+            # Count in total when falling back
+            if key in by_vector:
+                by_vector[key]["excluded_from_total"] = False
+        excluded = ["launch_window"]
+        mode = "fallback_similar_suspect"
+    else:
+        grand = primary_grand
+        slot_count = primary_slots
+        any_data = primary_any
+        excluded = ["similar_size", "suspect", "launch_window"]
+        mode = "primary"
 
     result: dict[str, Any] = {
         "total_bundle_by_vector": by_vector,
         "total_bundle_additive": True,
         "total_bundle_cross_vector_dedupe": False,
-        "total_bundle_excluded_vectors": list(EXCLUDED),
+        "total_bundle_excluded_vectors": list(excluded),
+        "total_bundle_mode": mode,
+        "total_bundle_show_similar_suspect": use_fallback,
         "total_bundle_crosslisted_wallets": [],
         "total_bundle_crosslisted_count": 0,
     }
     if not any_data:
-        # Explicit 0 so the UI shows "0%" instead of a blank "—"
         result["total_bundle_pct"] = 0.0
         result["flagged_wallets"] = 0
         return result
@@ -2215,6 +2269,10 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
             ),
             "total_bundle_excluded_vectors": s.get(
                 "total_bundle_excluded_vectors"
+            ),
+            "total_bundle_mode": s.get("total_bundle_mode"),
+            "total_bundle_show_similar_suspect": s.get(
+                "total_bundle_show_similar_suspect"
             ),
             "total_bundle_crosslisted_count": s.get(
                 "total_bundle_crosslisted_count"

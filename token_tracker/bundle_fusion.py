@@ -979,7 +979,11 @@ def comprehensive_bundle_check(
             s["total_bundle_cross_vector_dedupe"] = False
             s["total_bundle_excluded_vectors"] = tb.get(
                 "total_bundle_excluded_vectors"
-            ) or ["suspect", "launch_window"]
+            ) or ["similar_size", "suspect", "launch_window"]
+            s["total_bundle_mode"] = tb.get("total_bundle_mode") or "primary"
+            s["total_bundle_show_similar_suspect"] = bool(
+                tb.get("total_bundle_show_similar_suspect")
+            )
             s["total_bundle_crosslisted_count"] = tb.get(
                 "total_bundle_crosslisted_count"
             ) or 0
@@ -997,10 +1001,9 @@ def comprehensive_bundle_check(
             "Comprehensive bundle check: Helius top holders (owner-resolved) + "
             "Rugcheck insiders/risks + Birdeye (if key) + 1-hop SOL funding + "
             "fresh/sole-token wallets + token multi-send (one sender → many). "
-            "Launch-window / same-slot multi-buys disabled. "
-            "Total bundle % = sum of multi-account + similar-size + insider + "
-            "multi-send + fresh + shared funder (no cross-vector wallet dedupe; "
-            "can exceed 100%). Suspect wallets excluded from Total. "
+            "Total bundle % = multi-account + insider + multi-send + fresh + "
+            "shared funder. Similar-size and suspect only show/count when those "
+            "primary categories are all empty. "
             "Not a full commercial sniper graph. "
             + (base.get("notes") or "")
         ).strip()
