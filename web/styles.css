@@ -1413,6 +1413,21 @@ a.copy-mint:hover,
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
+/* Since-last-Analyze relative change (1–25 green · 25–50 yellow · 50–75 orange · 75–99 red) */
+.bun-stat-delta {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.bun-stat-delta.bun-delta-green { color: #6a9e78; }
+.bun-stat-delta.bun-delta-yellow { color: #b8a85c; }
+.bun-stat-delta.bun-delta-orange { color: #c47a4a; }
+.bun-stat-delta.bun-delta-red { color: #c45c5c; }
+.bun-stat-delta.bun-delta-flat { color: var(--text-muted); font-weight: 500; }
 /* Supply % bands inside stats / section totals (class may be on child span) */
 .bun-stat-value .pct-low,
 .bun-stat-value.pct-low,

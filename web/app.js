@@ -6301,6 +6301,123 @@ function restoreLastBundlesAnalyze() {
 }
 
 /**
+ * Since-last-Analyze relative change color:
+ * 1–25% green · 25–50% yellow · 50–75% orange · 75–99%+ red
+ */
+function bundleChangeDeltaClass(absPct) {
+  const a = Math.abs(Number(absPct));
+  if (!Number.isFinite(a) || a < 1) return "bun-delta-flat";
+  if (a <= 25) return "bun-delta-green";
+  if (a <= 50) return "bun-delta-yellow";
+  if (a <= 75) return "bun-delta-orange";
+  return "bun-delta-red";
+}
+
+function loadBundleStatsPrevMap() {
+  try {
+    const raw = localStorage.getItem(BUNDLE_STATS_PREV_KEY);
+    if (!raw) return {};
+    const o = JSON.parse(raw);
+    return o && typeof o === "object" ? o : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveBundleStatsPrev(mint, stats) {
+  const m = String(mint || "").trim();
+  if (!m || !stats) return;
+  try {
+    const map = loadBundleStatsPrevMap();
+    map[m] = { ...stats, savedAt: Date.now() };
+    // Cap map size
+    const keys = Object.keys(map);
+    if (keys.length > 80) {
+      keys
+        .sort(
+          (a, b) => (map[a].savedAt || 0) - (map[b].savedAt || 0)
+        )
+        .slice(0, keys.length - 80)
+        .forEach((k) => delete map[k]);
+    }
+    localStorage.setItem(BUNDLE_STATS_PREV_KEY, JSON.stringify(map));
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+/**
+ * Relative % change since last Analyze. Returns HTML with arrow + color, or "".
+ */
+function formatBundleStatDelta(cur, prev) {
+  const c = cur != null && Number.isFinite(Number(cur)) ? Number(cur) : null;
+  const p = prev != null && Number.isFinite(Number(prev)) ? Number(prev) : null;
+  if (c == null || p == null) return "";
+  if (Math.abs(c - p) < 1e-9) return "";
+  let rel;
+  if (Math.abs(p) < 1e-12) {
+    // From ~0: use absolute points as the % magnitude signal
+    rel = c > p ? Math.min(99, Math.abs(c) * 10) : -Math.min(99, Math.abs(c) * 10);
+    if (Math.abs(c) < 0.01) return "";
+  } else {
+    rel = ((c - p) / Math.abs(p)) * 100;
+  }
+  if (!Number.isFinite(rel) || Math.abs(rel) < 1) return "";
+  const abs = Math.min(99, Math.abs(rel));
+  const up = rel > 0;
+  const arrow = up ? "▲" : "▼";
+  const sign = up ? "+" : "−";
+  const cls = bundleChangeDeltaClass(abs);
+  return (
+    '<span class="bun-stat-delta ' +
+    cls +
+    '" title="Since last Analyze">' +
+    arrow +
+    " " +
+    sign +
+    abs.toFixed(0) +
+    "%</span>"
+  );
+}
+
+function extractBundleSummaryStats(s, riskScore) {
+  return {
+    risk: riskScore,
+    total_bundle_pct:
+      s.total_bundle_pct != null && Number.isFinite(Number(s.total_bundle_pct))
+        ? Number(s.total_bundle_pct)
+        : null,
+    similar_size_total_pct:
+      s.similar_size_total_pct != null &&
+      Number.isFinite(Number(s.similar_size_total_pct))
+        ? Number(s.similar_size_total_pct)
+        : null,
+    fresh_total_pct:
+      s.fresh_total_pct != null && Number.isFinite(Number(s.fresh_total_pct))
+        ? Number(s.fresh_total_pct)
+        : null,
+    multi_send_total_pct:
+      s.multi_send_total_pct != null &&
+      Number.isFinite(Number(s.multi_send_total_pct))
+        ? Number(s.multi_send_total_pct)
+        : null,
+    funding_total_pct:
+      s.funding_total_pct != null && Number.isFinite(Number(s.funding_total_pct))
+        ? Number(s.funding_total_pct)
+        : null,
+    suspect_total_pct:
+      s.suspect_total_pct != null && Number.isFinite(Number(s.suspect_total_pct))
+        ? Number(s.suspect_total_pct)
+        : null,
+    top10_ex_lp:
+      s.top10_pct_excluding_known_programs != null &&
+      Number.isFinite(Number(s.top10_pct_excluding_known_programs))
+        ? Number(s.top10_pct_excluding_known_programs)
+        : null,
+  };
+}
+
+/**
  * Card UI for Bundles tab from structured bundles_view.
  * Never dumps raw JSON / monospaced report into the main panel.
  */
@@ -6340,6 +6457,16 @@ function renderBundlesUi(data) {
       : null;
   const riskCls = bundleRiskScoreClass(riskScore != null ? riskScore : 0);
 
+  const mint =
+    (data.token && data.token.address) ||
+    (data.market && data.market.address) ||
+    (view.token_address || "") ||
+    "";
+  const prevMap = loadBundleStatsPrevMap();
+  const prev = (mint && prevMap[mint]) || null;
+  const curStats = extractBundleSummaryStats(s, riskScore);
+  const isRestore = !!(data && data._restoredFromBrowserCache);
+
   function stat(label, valueHtml) {
     return (
       '<div class="bun-stat"><span class="bun-stat-label">' +
@@ -6350,19 +6477,28 @@ function renderBundlesUi(data) {
     );
   }
 
+  function withDelta(mainHtml, key) {
+    if (isRestore || !prev) return mainHtml;
+    const d = formatBundleStatDelta(curStats[key], prev[key]);
+    return d ? mainHtml + " " + d : mainHtml;
+  }
+
   let html = "";
   html += '<div class="bun-stats">';
   // Risk label + score share the 1–25 / 25–50 / 50–75 / 75–100 color scheme
   html += stat(
     "Risk",
-    '<span class="' +
-      riskCls +
-      '">' +
-      escHtml(s.bundle_risk || "—") +
-      (riskScore != null
-        ? " (" + escHtml(String(Math.round(riskScore))) + "/100)"
-        : "") +
-      "</span>"
+    withDelta(
+      '<span class="' +
+        riskCls +
+        '">' +
+        escHtml(s.bundle_risk || "—") +
+        (riskScore != null
+          ? " (" + escHtml(String(Math.round(riskScore))) + "/100)"
+          : "") +
+        "</span>",
+      "risk"
+    )
   );
   // Summary % tiles — same Holders priority color bands
   // Total bundle = unique wallets across counted vectors (no double-count)
@@ -6377,10 +6513,16 @@ function renderBundlesUi(data) {
       s.total_bundle_show_similar_suspect === true;
     // Fallback only: short label, no extra wording
     const totalLabel = showSimSus ? "showing Similar/suspect" : "Total bundle";
-    html += stat(totalLabel, bunPctHtml(tbp));
+    html += stat(totalLabel, withDelta(bunPctHtml(tbp), "total_bundle_pct"));
   }
-  html += stat("Similar-size", bunPctHtml(s.similar_size_total_pct));
-  html += stat("Fresh total", bunPctHtml(s.fresh_total_pct));
+  html += stat(
+    "Similar-size",
+    withDelta(bunPctHtml(s.similar_size_total_pct), "similar_size_total_pct")
+  );
+  html += stat(
+    "Fresh total",
+    withDelta(bunPctHtml(s.fresh_total_pct), "fresh_total_pct")
+  );
   {
     const msErr = String(s.multi_send_error || "");
     const msSkipped = /scan off|enable [“"]Multi|Multi-send scan off/i.test(msErr);
@@ -6388,7 +6530,7 @@ function renderBundlesUi(data) {
       "Multi-send total",
       msSkipped
         ? '<span style="color:var(--text-muted)">skipped</span>'
-        : bunPctHtml(s.multi_send_total_pct)
+        : withDelta(bunPctHtml(s.multi_send_total_pct), "multi_send_total_pct")
     );
   }
   {
@@ -6401,13 +6543,30 @@ function renderBundlesUi(data) {
     if (fundSkipped && !fundCached && s.funding_total_pct == null) {
       sharedSolVal = '<span style="color:var(--text-muted)">skipped</span>';
     } else {
-      sharedSolVal = bunPctHtml(s.funding_total_pct);
+      sharedSolVal = withDelta(
+        bunPctHtml(s.funding_total_pct),
+        "funding_total_pct"
+      );
     }
     html += stat("Shared SOL total", sharedSolVal);
   }
-  html += stat("Suspect total", bunPctHtml(s.suspect_total_pct));
-  html += stat("Top10 ex-LP", bunPctHtml(s.top10_pct_excluding_known_programs));
+  html += stat(
+    "Suspect total",
+    withDelta(bunPctHtml(s.suspect_total_pct), "suspect_total_pct")
+  );
+  html += stat(
+    "Top10 ex-LP",
+    withDelta(
+      bunPctHtml(s.top10_pct_excluding_known_programs),
+      "top10_ex_lp"
+    )
+  );
   html += "</div>";
+
+  // After a live Analyze, store stats as baseline for next run
+  if (!isRestore && mint) {
+    saveBundleStatsPrev(mint, curStats);
+  }
 
   const src = (s.sources_used || []).join(", ") || view.method || view.source || "—";
   html +=
@@ -7156,6 +7315,8 @@ const SHARED_SOL_PREF_KEY = "adtc_use_shared_sol";
 /** Last full Analyze payload (all tabs; survives page refresh until next Analyze). */
 const LAST_BUNDLES_ANALYZE_KEY = "adtc_last_bundles_analyze";
 const LAST_ANALYZE_KEY = "adtc_last_analyze";
+/** Previous Bundles summary stats per mint (for since-last-Analyze deltas). */
+const BUNDLE_STATS_PREV_KEY = "adtc_bundle_stats_prev";
 /** Legacy combined pref — migrate once if present */
 const FRESH_MULTI_PREF_KEY_LEGACY = "adtc_use_fresh_multi";
 
