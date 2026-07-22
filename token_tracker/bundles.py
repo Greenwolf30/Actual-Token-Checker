@@ -773,9 +773,34 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             )
         )
         ms_tot, ms_n = _sum_wallets_pct(ms_list)
-        lines.append(
-            f"  Multi-send wallets — total {_pct(ms_tot)} across {ms_n} wallet(s):"
+        split = _multi_send_split_totals(
+            {
+                "multi_send_clusters": token_ms,
+                "sol_multi_send_clusters": sol_ms,
+            },
+            pct_map,
         )
+        lines.append(
+            f"  Multi-send wallets — combined {_pct(ms_tot)} across {ms_n} wallet(s) "
+            f"(LP/bonding curve excluded):"
+        )
+        lines.append(
+            f"  Senders (each one wallet): {_pct(split.get('sender_total_pct'))} "
+            f"across {split.get('sender_count') or 0} sender(s)"
+        )
+        lines.append(
+            f"  Receivers (across wallets): {_pct(split.get('receiver_total_pct'))} "
+            f"across {split.get('receiver_count') or 0} receiver(s)"
+        )
+        shape = split.get("hold_shape") or "unknown"
+        if shape == "mostly_one_wallet_sender":
+            lines.append(
+                "  Hold shape: mostly still on sender wallet(s) — not spread across receivers"
+            )
+        elif shape == "mostly_across_receivers":
+            lines.append(
+                "  Hold shape: mostly across receiver wallets — not one sender bag"
+            )
         # Flat list by supply % (all senders + receivers)
         lines.append("  All wallets involved (by current supply %):")
         for i, r in enumerate(ms_list[:24], start=1):
@@ -1251,16 +1276,32 @@ def _multi_send_total_percent(
     Unique-wallet total % across token multi-send + SOL multi-send clusters.
     Uses embedded sender_pct / child_rows.pct_supply, then pct_map fallback.
     """
-    pct_map = pct_map or {}
-    rows: list[dict[str, Any]] = []
+    split = _multi_send_split_totals(data, pct_map)
+    return split.get("combined_total_pct"), int(split.get("combined_count") or 0)
 
-    def _add(addr: Any, pct: Any = None) -> None:
+
+def _multi_send_split_totals(
+    data: dict[str, Any],
+    pct_map: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    """
+    Split multi-send current supply into:
+      - sender_total_pct: unique senders (each is one wallet)
+      - receiver_total_pct: unique receivers (across many wallets)
+      - combined_total_pct: unique union (capped 100)
+      - hold_shape: mostly_one_wallet_sender | mostly_across_receivers | unknown
+    """
+    pct_map = pct_map or {}
+    sender_rows: list[dict[str, Any]] = []
+    recv_rows: list[dict[str, Any]] = []
+
+    def _add(bucket: list[dict[str, Any]], addr: Any, pct: Any = None) -> None:
         w = (str(addr) if addr is not None else "").strip()
         if not w or len(w) < 32:
             return
         if pct is None:
             pct = pct_map.get(w)
-        rows.append({"wallet": w, "pct_supply": pct})
+        bucket.append({"wallet": w, "pct_supply": pct})
 
     for mc in list(data.get("multi_send_clusters") or []) + list(
         data.get("sol_multi_send_clusters") or []
@@ -1271,7 +1312,7 @@ def _multi_send_total_percent(
         sp = mc.get("sender_pct")
         if sp is None and sender:
             sp = pct_map.get(str(sender).strip())
-        _add(sender, sp)
+        _add(sender_rows, sender, sp)
         child_rows = list(mc.get("child_rows") or [])
         if child_rows:
             for row in child_rows:
@@ -1280,9 +1321,9 @@ def _multi_send_total_percent(
                     p = row.get("pct_supply")
                     if p is None and w:
                         p = pct_map.get(str(w).strip())
-                    _add(w, p)
+                    _add(recv_rows, w, p)
                 else:
-                    _add(row, pct_map.get(str(row or "").strip()))
+                    _add(recv_rows, row, pct_map.get(str(row or "").strip()))
         else:
             for r in mc.get("receivers") or mc.get("children") or []:
                 if isinstance(r, dict):
@@ -1290,11 +1331,60 @@ def _multi_send_total_percent(
                     p = r.get("pct_supply")
                     if p is None and w:
                         p = pct_map.get(str(w).strip())
-                    _add(w, p)
+                    _add(recv_rows, w, p)
                 else:
-                    _add(r, pct_map.get(str(r or "").strip()))
+                    _add(recv_rows, r, pct_map.get(str(r or "").strip()))
 
-    return _sum_wallets_pct(rows)
+    st, sc = _sum_wallets_pct(sender_rows)
+    rt, rc = _sum_wallets_pct(recv_rows)
+    # Combined unique = senders + receivers (same wallet counted once)
+    combined_map: dict[str, float] = {}
+    for row in sender_rows + recv_rows:
+        w = (row.get("wallet") or "").strip()
+        if not w:
+            continue
+        try:
+            p = float(row["pct_supply"]) if row.get("pct_supply") is not None else None
+        except (TypeError, ValueError):
+            p = None
+        if p is None:
+            combined_map.setdefault(w, combined_map.get(w, 0.0))
+            continue
+        combined_map[w] = max(combined_map.get(w, 0.0), p)
+    if not combined_map:
+        ct, cn = None, 0
+    else:
+        total = sum(combined_map.values())
+        if total > 100.0:
+            total = 100.0
+        has_any = any(v > 0 for v in combined_map.values())
+        ct = round(total, 4) if has_any else 0.0
+        cn = len(combined_map)
+
+    try:
+        sp_f = float(st) if st is not None else 0.0
+    except (TypeError, ValueError):
+        sp_f = 0.0
+    try:
+        rt_f = float(rt) if rt is not None else 0.0
+    except (TypeError, ValueError):
+        rt_f = 0.0
+    if sp_f <= 0 and rt_f <= 0:
+        shape = "unknown"
+    elif sp_f >= rt_f and sp_f > 0:
+        shape = "mostly_one_wallet_sender"
+    else:
+        shape = "mostly_across_receivers"
+
+    return {
+        "sender_total_pct": st,
+        "sender_count": sc,
+        "receiver_total_pct": rt,
+        "receiver_count": rc,
+        "combined_total_pct": ct,
+        "combined_count": cn,
+        "hold_shape": shape,
+    }
 
 
 def _total_bundle_percent(
@@ -1827,6 +1917,13 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
         )
     )
     ms_tot, ms_n = _sum_wallets_pct(ms_list)
+    ms_split = _multi_send_split_totals(
+        {
+            "multi_send_clusters": token_ms,
+            "sol_multi_send_clusters": sol_ms,
+        },
+        {},
+    )
 
     # Launch-window same-slot groups
     slots_out: list[dict[str, Any]] = []
@@ -1938,6 +2035,21 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
             if s.get("multi_send_total_pct") is not None
             else ms_tot,
             "multi_send_wallet_with_pct": s.get("multi_send_wallet_with_pct") or ms_n,
+            "multi_send_sender_total_pct": s.get("multi_send_sender_total_pct")
+            if s.get("multi_send_sender_total_pct") is not None
+            else ms_split.get("sender_total_pct"),
+            "multi_send_sender_count": s.get("multi_send_sender_count")
+            if s.get("multi_send_sender_count") is not None
+            else ms_split.get("sender_count"),
+            "multi_send_receiver_total_pct": s.get("multi_send_receiver_total_pct")
+            if s.get("multi_send_receiver_total_pct") is not None
+            else ms_split.get("receiver_total_pct"),
+            "multi_send_receiver_count": s.get("multi_send_receiver_count")
+            if s.get("multi_send_receiver_count") is not None
+            else ms_split.get("receiver_count"),
+            "multi_send_hold_shape": s.get("multi_send_hold_shape")
+            or ms_split.get("hold_shape"),
+            "multi_send_error": s.get("multi_send_error"),
             "token_multi_send_clusters": s.get("token_multi_send_clusters")
             or len(token_ms),
             "sol_multi_send_clusters": s.get("sol_multi_send_clusters") or len(sol_ms),

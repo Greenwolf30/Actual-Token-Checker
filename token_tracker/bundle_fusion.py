@@ -541,7 +541,10 @@ def comprehensive_bundle_check(
             extra_score += min(18, 6 + len(fresh_rows) * 2)
 
     # Token multi-send clusters + SOL multi-send (from funding clusters)
+    # Exclude LP / bonding-curve / known program wallets so pool % (~30%+) is never
+    # mistaken for a multi-send sender bag.
     multi_clusters: list[dict[str, Any]] = []
+    multi_send_error = None
     if multi_send_report.get("ok"):
         if "token_multi_send" not in sources_used:
             sources_used.append("token_multi_send")
@@ -549,28 +552,53 @@ def comprehensive_bundle_check(
             if not isinstance(mc, dict):
                 continue
             sender = (mc.get("sender") or "").strip()
-            recs = list(mc.get("receivers") or [])
+            if not sender or sender in lp_wallets:
+                continue  # never treat LP/bonding curve as multi-send sender
+            recs = [
+                r
+                for r in list(mc.get("receivers") or [])
+                if r and str(r).strip() not in lp_wallets and str(r).strip() != sender
+            ]
+            if len(recs) < 2:
+                continue
             child_rows = [
                 {"wallet": r, "pct_supply": pct_by_w.get(r)} for r in recs if r
             ]
-            # Cluster total = sender + receivers (unique), sorted by bag later
+            # Split: sender bag (one wallet) vs receivers bag (across wallets)
+            sender_pct = pct_by_w.get(sender)
+            recv_tot, recv_n = bun._sum_wallets_pct(child_rows)  # type: ignore[attr-defined]
             sum_rows = list(child_rows)
-            if sender:
-                sum_rows.append(
-                    {"wallet": sender, "pct_supply": pct_by_w.get(sender)}
-                )
+            sum_rows.append({"wallet": sender, "pct_supply": sender_pct})
             tot, n = bun._sum_wallets_pct(sum_rows)  # type: ignore[attr-defined]
+            # How is supply sitting now?
+            try:
+                sp_f = float(sender_pct) if sender_pct is not None else 0.0
+            except (TypeError, ValueError):
+                sp_f = 0.0
+            try:
+                rt_f = float(recv_tot) if recv_tot is not None else 0.0
+            except (TypeError, ValueError):
+                rt_f = 0.0
+            if sp_f <= 0 and rt_f <= 0:
+                hold_shape = "unknown"
+            elif sp_f >= rt_f and sp_f > 0:
+                hold_shape = "mostly_one_wallet_sender"
+            else:
+                hold_shape = "mostly_across_receivers"
             multi_clusters.append(
                 {
                     "kind": "token_multi_send",
                     "sender": sender,
-                    "sender_pct": pct_by_w.get(sender),
+                    "sender_pct": sender_pct,
                     "receivers": recs,
-                    "receiver_count": mc.get("receiver_count") or len(recs),
+                    "receiver_count": len(recs),
                     "holders_hit": mc.get("holders_hit"),
                     "child_rows": child_rows,
+                    "receivers_total_pct": recv_tot,
+                    "receivers_with_pct": recv_n,
                     "total_pct": tot,
                     "wallets_with_pct": n,
+                    "hold_shape": hold_shape,
                     "severity": mc.get("severity") or "high",
                 }
             )
@@ -583,6 +611,14 @@ def comprehensive_bundle_check(
         )
         if multi_clusters:
             best_m = multi_clusters[0]
+            shape = best_m.get("hold_shape") or "unknown"
+            shape_note = (
+                "supply now mostly still on the sender (one wallet)"
+                if shape == "mostly_one_wallet_sender"
+                else "supply now mostly across receivers (many wallets)"
+                if shape == "mostly_across_receivers"
+                else "current hold split n/a"
+            )
             fusion_signals.append(
                 {
                     "id": "token_multi_send",
@@ -590,32 +626,93 @@ def comprehensive_bundle_check(
                     "severity": best_m.get("severity") or "high",
                     "title": "Token multi-send (one owner → many)",
                     "detail": (
-                        f"Sender {best_m.get('sender')} distributed this mint to "
-                        f"{best_m.get('receiver_count')} wallet(s); "
-                        f"{len(multi_clusters)} multi-send cluster(s) "
-                        f"(scanned {multi_send_report.get('txs_scanned') or 0} txs)."
+                        f"Sender {best_m.get('sender')} holds "
+                        f"{best_m.get('sender_pct') if best_m.get('sender_pct') is not None else 'n/a'}% now; "
+                        f"receivers hold ~{best_m.get('receivers_total_pct') if best_m.get('receivers_total_pct') is not None else 'n/a'}% "
+                        f"across {best_m.get('receiver_count')} wallet(s) "
+                        f"({shape_note}). "
+                        f"{len(multi_clusters)} cluster(s); "
+                        f"scanned {multi_send_report.get('txs_scanned') or 0} txs. "
+                        f"LP/bonding-curve wallets excluded."
                     ),
                 }
             )
             extra_score += min(
                 24, 10 + int(best_m.get("receiver_count") or 0) * 2
             )
+    else:
+        multi_send_error = multi_send_report.get("error") or multi_send_report.get(
+            "notes"
+        )
 
     # Also surface SOL multi-send = funding clusters (one funder → many children)
     sol_multi: list[dict[str, Any]] = []
     for fc in list((base.get("funding_clusters") if base.get("ok") else None) or [])[:8]:
         if not isinstance(fc, dict):
             continue
+        funder = (fc.get("funder") or "").strip()
+        if funder and funder in lp_wallets:
+            continue
+        kids_raw = list(fc.get("children") or [])[:24]
+        kids = []
+        for c in kids_raw:
+            w = c if isinstance(c, str) else (c or {}).get("wallet")
+            ws = (str(w) if w is not None else "").strip()
+            if ws and ws not in lp_wallets:
+                kids.append(c if isinstance(c, str) else ws)
+        child_rows = []
+        for row in list(fc.get("child_rows") or []):
+            if not isinstance(row, dict):
+                continue
+            w = (row.get("wallet") or "").strip()
+            if not w or w in lp_wallets:
+                continue
+            child_rows.append(row)
+        if not child_rows and kids:
+            child_rows = [
+                {
+                    "wallet": (k if isinstance(k, str) else str(k)),
+                    "pct_supply": pct_by_w.get(
+                        k if isinstance(k, str) else str(k)
+                    ),
+                }
+                for k in kids
+            ]
+        if len(child_rows) < 2 and len(kids) < 2:
+            continue
+        recv_tot, recv_n = bun._sum_wallets_pct(child_rows)  # type: ignore[attr-defined]
+        sp = fc.get("funder_pct") if fc.get("funder_pct") is not None else pct_by_w.get(funder)
+        sum_rows = list(child_rows)
+        if funder:
+            sum_rows.append({"wallet": funder, "pct_supply": sp})
+        tot, n = bun._sum_wallets_pct(sum_rows)  # type: ignore[attr-defined]
+        try:
+            sp_f = float(sp) if sp is not None else 0.0
+        except (TypeError, ValueError):
+            sp_f = 0.0
+        try:
+            rt_f = float(recv_tot) if recv_tot is not None else 0.0
+        except (TypeError, ValueError):
+            rt_f = 0.0
+        if sp_f <= 0 and rt_f <= 0:
+            hold_shape = "unknown"
+        elif sp_f >= rt_f and sp_f > 0:
+            hold_shape = "mostly_one_wallet_sender"
+        else:
+            hold_shape = "mostly_across_receivers"
         sol_multi.append(
             {
                 "kind": "sol_multi_send",
-                "sender": fc.get("funder"),
-                "sender_pct": fc.get("funder_pct"),
-                "receivers": list(fc.get("children") or [])[:24],
-                "receiver_count": fc.get("child_count")
-                or len(fc.get("children") or []),
-                "child_rows": list(fc.get("child_rows") or []),
-                "total_pct": fc.get("total_pct"),
+                "sender": funder,
+                "sender_pct": sp,
+                "receivers": kids[:24],
+                "receiver_count": fc.get("child_count") or len(child_rows) or len(kids),
+                "child_rows": child_rows,
+                "receivers_total_pct": recv_tot,
+                "receivers_with_pct": recv_n,
+                "total_pct": tot if tot is not None else fc.get("total_pct"),
+                "wallets_with_pct": n,
+                "hold_shape": hold_shape,
                 "severity": fc.get("severity") or "high",
             }
         )
@@ -666,6 +763,18 @@ def comprehensive_bundle_check(
             mt, mn = None, 0
         s0["multi_send_total_pct"] = mt
         s0["multi_send_wallet_with_pct"] = mn
+        # Split totals: one-wallet senders vs across receivers (LP excluded)
+        try:
+            split = bun._multi_send_split_totals(ms_shell, pct_by_w)  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            split = {}
+        s0["multi_send_sender_total_pct"] = split.get("sender_total_pct")
+        s0["multi_send_sender_count"] = split.get("sender_count")
+        s0["multi_send_receiver_total_pct"] = split.get("receiver_total_pct")
+        s0["multi_send_receiver_count"] = split.get("receiver_count")
+        s0["multi_send_hold_shape"] = split.get("hold_shape")
+        if multi_send_error and not multi_clusters and not sol_multi:
+            s0["multi_send_error"] = str(multi_send_error)[:240]
         base["summary"] = s0
 
     if jito_eng.get("ok"):

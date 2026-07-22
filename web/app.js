@@ -6197,7 +6197,12 @@ function renderBundlesUi(data) {
   html += stat("Total bundle", bunPctHtml(s.total_bundle_pct));
   html += stat("Similar-size", bunPctHtml(s.similar_size_total_pct));
   html += stat("Fresh total", bunPctHtml(s.fresh_total_pct));
-  html += stat("Multi-send total", bunPctHtml(s.multi_send_total_pct));
+  html += stat("Multi-send combined", bunPctHtml(s.multi_send_total_pct));
+  html += stat("Multi-send senders", bunPctHtml(s.multi_send_sender_total_pct));
+  html += stat(
+    "Multi-send receivers",
+    bunPctHtml(s.multi_send_receiver_total_pct)
+  );
   html += stat("Suspect total", bunPctHtml(s.suspect_total_pct));
   html += stat("Top10 ex-LP", bunPctHtml(s.top10_pct_excluding_known_programs));
   html += "</div>";
@@ -6385,19 +6390,45 @@ function renderBundlesUi(data) {
     );
   }
 
-  // Multi-send
+  // Multi-send — split: one-wallet senders vs across receivers (LP excluded)
   const msWallets = view.multi_send_wallets || [];
   const tokenMs = view.multi_send_clusters || [];
   const solMs = view.sol_multi_send_clusters || [];
   if (msWallets.length || tokenMs.length || solMs.length) {
+    const shape = String(s.multi_send_hold_shape || "");
+    let shapeNote = "";
+    if (shape === "mostly_one_wallet_sender") {
+      shapeNote =
+        "Hold shape: mostly still on sender wallet(s) — not spread across receivers.";
+    } else if (shape === "mostly_across_receivers") {
+      shapeNote =
+        "Hold shape: mostly across receiver wallets — not one sender bag.";
+    }
     html +=
       '<section class="bun-section"><div class="bun-section-head">' +
       '<span class="bun-section-title">Multi-send (one → many)</span>' +
-      '<span class="bun-section-total">total ' +
+      '<span class="bun-section-total">combined ' +
       bunPctHtml(s.multi_send_total_pct) +
       " · " +
       escHtml(String(msWallets.length || 0)) +
       " wallet(s)</span></div><div class=\"bun-section-body\">";
+    html +=
+      '<p class="bun-sub">Senders (each one wallet): ' +
+      bunPctHtml(s.multi_send_sender_total_pct) +
+      " · " +
+      escHtml(String(s.multi_send_sender_count != null ? s.multi_send_sender_count : "—")) +
+      " sender(s) · Receivers (across wallets): " +
+      bunPctHtml(s.multi_send_receiver_total_pct) +
+      " · " +
+      escHtml(
+        String(
+          s.multi_send_receiver_count != null ? s.multi_send_receiver_count : "—"
+        )
+      ) +
+      " receiver(s). LP/bonding-curve wallets excluded.</p>";
+    if (shapeNote) {
+      html += '<p class="bun-sub">' + escHtml(shapeNote) + "</p>";
+    }
     if (msWallets.length) {
       html += '<p class="bun-sub">All wallets involved (by current supply %)</p>';
       html += bunWalletTable(msWallets, [
@@ -6412,15 +6443,29 @@ function renderBundlesUi(data) {
       ]);
     }
     for (const mc of tokenMs) {
+      const hs = String(mc.hold_shape || "");
+      const hsNote =
+        hs === "mostly_one_wallet_sender"
+          ? " · mostly still on sender"
+          : hs === "mostly_across_receivers"
+            ? " · mostly across receivers"
+            : "";
       html +=
         '<div class="bun-cluster"><div class="bun-cluster-head">Token sender ' +
         bunWalletLink(mc.sender) +
         " holds " +
         bunPctHtml(mc.sender_pct) +
-        " → " +
+        " (one wallet) → " +
         escHtml(String(mc.receiver_count || (mc.receivers || []).length || 0)) +
-        " receivers · cluster " +
+        " receivers hold " +
+        bunPctHtml(
+          mc.receivers_total_pct != null
+            ? mc.receivers_total_pct
+            : null
+        ) +
+        " · cluster " +
         bunPctHtml(mc.total_pct) +
+        escHtml(hsNote) +
         "</div>";
       html += bunWalletTable(mc.receivers || [], [
         { key: "wallet", label: "Receiver", render: (v) => bunWalletLink(v) },
@@ -6429,15 +6474,27 @@ function renderBundlesUi(data) {
       html += "</div>";
     }
     for (const mc of solMs) {
+      const hs = String(mc.hold_shape || "");
+      const hsNote =
+        hs === "mostly_one_wallet_sender"
+          ? " · mostly still on funder"
+          : hs === "mostly_across_receivers"
+            ? " · mostly across funded wallets"
+            : "";
       html +=
         '<div class="bun-cluster"><div class="bun-cluster-head">SOL funder ' +
         bunWalletLink(mc.sender) +
         " holds " +
         bunPctHtml(mc.sender_pct) +
-        " → " +
+        " (one wallet) → " +
         escHtml(String(mc.receiver_count || (mc.receivers || []).length || 0)) +
-        " wallets · cluster " +
+        " wallets hold " +
+        bunPctHtml(
+          mc.receivers_total_pct != null ? mc.receivers_total_pct : null
+        ) +
+        " · cluster " +
         bunPctHtml(mc.total_pct) +
+        escHtml(hsNote) +
         "</div>";
       html += bunWalletTable(mc.receivers || [], [
         { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
@@ -6447,9 +6504,14 @@ function renderBundlesUi(data) {
     }
     html += "</div></section>";
   } else {
+    const msErr = s.multi_send_error
+      ? " " + String(s.multi_send_error)
+      : "";
     html += bunEmptySection(
       "Multi-send (one → many)",
-      "None found — one wallet sending this mint or SOL to many others (not multi-account)."
+      "None found — one wallet sending this mint or SOL to many others (not multi-account)." +
+        " Needs Helius + full Analyze. LP/bonding-curve (~pool %) is never counted as a multi-send sender." +
+        msErr
     );
   }
 
