@@ -39,6 +39,9 @@
         sections: { bundles: "test" }
       };
     }
+    function totalChunk(text) {
+      return (String(text).split("TOTAL BUNDLE")[1] || "").split("SIMILAR")[0] || "";
+    }
     window.__runDeltaTest = function () {
       var out = { ok: false, errors: [], version: window.__ADTC_CLIENT__ || null, steps: [] };
       try {
@@ -46,39 +49,63 @@
         try { localStorage.clear(); sessionStorage.clear(); } catch (e) {}
         if (typeof migrateBundleDeltaBaselines === "function") migrateBundleDeltaBaselines();
 
+        // A: first run 10% → UP, no "no change" on total
         renderBundlesUi(makeData(10, 30));
         var t1 = document.getElementById("bundlesUi").innerText;
-        var up1 = /UP \+10/.test(t1);
-        out.steps.push({ step: "A_10pct", hasUp: up1, sample: t1.slice(0, 200) });
-        if (!up1) out.errors.push("A: expected UP +10%");
+        var c1 = totalChunk(t1);
+        var up1 = /UP \+10/.test(c1);
+        var flat1 = /no change/i.test(c1);
+        out.steps.push({ step: "A_10pct", hasUp: up1, hasNoChange: flat1, sample: c1.slice(0, 120) });
+        if (!up1) out.errors.push("A: expected UP +10% on total when change vs zeros");
+        if (flat1) out.errors.push("A: total should not say no change");
 
+        // B: 10→25 → UP +15
         renderBundlesUi(makeData(25, 30));
         var t2 = document.getElementById("bundlesUi").innerText;
-        var up2 = /UP \+15/.test(t2);
-        out.steps.push({ step: "B_25pct", hasUp15: up2, sample: t2.slice(0, 200) });
-        if (!up2) out.errors.push("B: expected UP +15%");
+        var c2 = totalChunk(t2);
+        var up2 = /UP \+15/.test(c2);
+        out.steps.push({ step: "B_25pct", hasUp15: up2, sample: c2.slice(0, 120) });
+        if (!up2) out.errors.push("B: expected UP +15% when total 10→25");
 
+        // C: 25→25 → no marker at all (not "no change")
         renderBundlesUi(makeData(25, 30));
         var t3 = document.getElementById("bundlesUi").innerText;
-        var totalChunk3 = (t3.split("TOTAL BUNDLE")[1] || "").split("SIMILAR")[0] || "";
-        var flat3 = /no change/i.test(totalChunk3);
-        out.steps.push({ step: "C_25pct_again", flat: flat3, sample: t3.slice(0, 200) });
-        if (!flat3) out.errors.push("C: expected no change");
+        var c3 = totalChunk(t3);
+        var up3 = /UP |DN /.test(c3);
+        var flat3 = /no change/i.test(c3);
+        var hasDeltaSpan = !!document.querySelector(
+          '.bun-stat[data-bun-stat="Total bundle"] .bun-stat-delta'
+        );
+        out.steps.push({
+          step: "C_25pct_flat",
+          hasMovement: up3,
+          hasNoChangeText: flat3,
+          hasDeltaSpan: hasDeltaSpan,
+          sample: c3.slice(0, 120)
+        });
+        if (up3) out.errors.push("C: should not show UP/DN when unchanged");
+        if (flat3) out.errors.push("C: should not show 'no change' text");
+        if (hasDeltaSpan) out.errors.push("C: should not render delta span when flat");
 
-        // D: poison storage forNext=cur then first analyze should still work after migrate
-        try {
-          localStorage.setItem("adtc_bundle_delta_baseline_ver", "1"); // force migrate wipe
-          migrateBundleDeltaBaselines();
-        } catch (e) {}
+        // D: 25→12 → DN
         renderBundlesUi(makeData(12, 30));
         var t4 = document.getElementById("bundlesUi").innerText;
-        // after C, memory has 25; 12 vs 25 should be DN
-        var dn = /DN /.test((t4.split("TOTAL BUNDLE")[1] || "").split("SIMILAR")[0] || "");
-        out.steps.push({ step: "D_12pct", hasDn: dn, sample: t4.slice(0, 200) });
-        if (!dn) out.errors.push("D: expected DN when 25→12");
+        var c4 = totalChunk(t4);
+        var dn = /DN /.test(c4);
+        out.steps.push({ step: "D_12pct", hasDn: dn, sample: c4.slice(0, 120) });
+        if (!dn) out.errors.push("D: expected DN when total 25→12");
 
-        out.ok = out.errors.length === 0 && String(out.version).indexOf("v90") >= 0;
-        if (String(out.version).indexOf("v90") < 0) out.errors.push("need v90 got " + out.version);
+        // Whole page should never show "no change" string
+        var all = document.getElementById("bundlesUi").innerText;
+        if (/no change/i.test(all)) {
+          out.errors.push("page still contains 'no change' text");
+        }
+
+        out.ok = out.errors.length === 0 && String(out.version).indexOf("v91") >= 0;
+        if (String(out.version).indexOf("v91") < 0) {
+          out.errors.push("need v91 got " + out.version);
+          out.ok = false;
+        }
       } catch (err) {
         out.errors.push(String(err && err.stack ? err.stack : err));
       }

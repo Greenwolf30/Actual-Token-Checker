@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v90";
+const ADTC_CLIENT_VERSION = "v91";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -6425,7 +6425,7 @@ function mountBundleStatsBar(mountEl, items, version) {
   note.textContent =
     "Since last Analyze · " +
     (version || "?") +
-    " · deltas: UP/DN or (no change)";
+    " · deltas show only when values change";
   mountEl.appendChild(note);
 
   const grid = document.createElement("div");
@@ -6449,16 +6449,22 @@ function mountBundleStatsBar(mountEl, items, version) {
     if (it.valueClass) main.className = String(it.valueClass);
     main.textContent = String(it.valueText != null ? it.valueText : "—");
 
-    const dlt = document.createElement("span");
-    dlt.className =
-      "bun-stat-delta " + String(it.deltaCls || "bun-delta-flat");
-    let dText = String(it.deltaText != null ? it.deltaText : "no change");
-    if (dText.charAt(0) !== "(") dText = "(" + dText + ")";
-    dlt.textContent = dText;
-
     val.appendChild(main);
-    val.appendChild(document.createElement("br"));
-    val.appendChild(dlt);
+    let dText = it.deltaText != null ? String(it.deltaText).trim() : "";
+    // Hide flat / empty markers entirely
+    if (
+      dText &&
+      !/^\(?no change\)?$/i.test(dText) &&
+      !/^\(?d\s*=0%?\)?$/i.test(dText)
+    ) {
+      if (dText.charAt(0) !== "(") dText = "(" + dText + ")";
+      const dlt = document.createElement("span");
+      dlt.className =
+        "bun-stat-delta " + String(it.deltaCls || "bun-delta-green");
+      dlt.textContent = dText;
+      val.appendChild(document.createElement("br"));
+      val.appendChild(dlt);
+    }
     box.appendChild(lab);
     box.appendChild(val);
 
@@ -7490,12 +7496,11 @@ function loadBundleStatsPrev(mint) {
 /** True if text already includes a since-last-Analyze marker. */
 function hasBundleDeltaMarker(text) {
   const t = String(text || "");
+  // Only real movement counts as a delta marker (not flat / no change)
   return (
     /\bUP\s+[+\-]/.test(t) ||
     /\bDN\s+[+\-]/.test(t) ||
-    /\(no change\)/i.test(t) ||
-    /\(d\s/i.test(t) ||
-    t.indexOf("bun-stat-delta") >= 0
+    (/bun-stat-delta/.test(t) && !/no change/i.test(t))
   );
 }
 
@@ -7508,21 +7513,14 @@ function computeBundleStatDeltaParts(cur, prev, kind, opts) {
     if (c == null) c = 0;
     if (p == null) p = 0;
   }
+  // No marker when there is nothing meaningful to show (missing or flat)
   if (c == null || p == null || !Number.isFinite(c - p)) {
-    return {
-      text: isScore ? "no change" : "no change",
-      cls: "bun-delta-flat",
-      title: "No baseline yet",
-    };
+    return { text: "", cls: "", title: "", flat: true };
   }
   const diff = c - p;
   const flatEps = isScore ? 0.5 : 0.05;
   if (Math.abs(diff) < flatEps) {
-    return {
-      text: isScore ? "no change" : "no change",
-      cls: "bun-delta-flat",
-      title: "No change since last Analyze",
-    };
+    return { text: "", cls: "", title: "", flat: true };
   }
   const up = diff > 0;
   const sign = up ? "+" : "-";
@@ -7549,6 +7547,7 @@ function computeBundleStatDeltaParts(cur, prev, kind, opts) {
 /** HTML span for a delta (always non-empty). Shown as: (d +12%) */
 function formatBundleStatDelta(cur, prev, kind, opts) {
   const parts = computeBundleStatDeltaParts(cur, prev, kind, opts);
+  if (!parts || !parts.text || parts.flat) return "";
   return (
     '<span class="bun-stat-delta ' +
     parts.cls +
@@ -7967,16 +7966,19 @@ function renderBundlesUi(data) {
         // Prefer recompute on live; on restore use frozen HTML span if present
         const frozen = String(frozenHtml[key]);
         if (hasBundleDeltaMarker(frozen)) {
-          htmlByKeyThisRun[key] = frozen;
-          // Still also bake plain text into the value for visibility
-          const plainMatch = frozen.match(
-            /\((?:no change|UP[^)]*|DN[^)]*|d[^)]*)\)/i
-          );
-          const plain = plainMatch ? plainMatch[0] : "(no change)";
-          const main = String(mainHtml);
-          const m = main.match(/^(<span\b[^>]*>)([\s\S]*)(<\/span>)\s*$/i);
-          if (m) return m[1] + m[2] + " " + plain + m[3];
-          return main + " " + plain;
+          // Only bake real UP/DN markers (never flat / no change)
+          const plainMatch = frozen.match(/\((?:UP[^)]*|DN[^)]*)\)/i);
+          if (!plainMatch) {
+            htmlByKeyThisRun[key] = "";
+            // fall through to recompute
+          } else {
+            const plain = plainMatch[0];
+            htmlByKeyThisRun[key] = frozen;
+            const main = String(mainHtml);
+            const m = main.match(/^(<span\b[^>]*>)([\s\S]*)(<\/span>)\s*$/i);
+            if (m) return m[1] + m[2] + " " + plain + m[3];
+            return main + " " + plain;
+          }
         }
       }
       const curVal =
@@ -7996,12 +7998,9 @@ function renderBundlesUi(data) {
       console.warn("[withDelta]", key, err);
       parts = null;
     }
-    if (!parts || !parts.text) {
-      parts = {
-        text: kind === "score" ? "no change" : "no change",
-        cls: "bun-delta-flat",
-        title: "No change since last Analyze",
-      };
+    if (!parts || !parts.text || parts.flat) {
+      htmlByKeyThisRun[key] = "";
+      return String(mainHtml);
     }
     const plain = "(" + parts.text + ")";
     const dHtml =
@@ -8805,12 +8804,11 @@ function renderBundlesUi(data) {
       // Restore: prefer exact frozen marker from last live Analyze
       if (isRestore && frozenHtml && frozenHtml[key]) {
         const fr = String(frozenHtml[key]);
-        const m = fr.match(/\((?:no change|UP[^)]*|DN[^)]*|d[^)]*)\)/i);
+        const m = fr.match(/\((?:UP[^)]*|DN[^)]*)\)/i);
         if (m) {
           deltaText = m[0];
           if (/UP/i.test(deltaText)) deltaCls = "bun-delta-green";
           else if (/DN/i.test(deltaText)) deltaCls = "bun-delta-red";
-          else deltaCls = "bun-delta-flat";
         }
       }
       if (!deltaText) {
@@ -8827,21 +8825,31 @@ function renderBundlesUi(data) {
           kind,
           { coalesceNull: true }
         );
-        deltaText = "(" + (parts && parts.text ? parts.text : "no change") + ")";
-        deltaCls = (parts && parts.cls) || "bun-delta-flat";
+        if (parts && parts.text && !parts.flat) {
+          deltaText = "(" + parts.text + ")";
+          deltaCls = parts.cls || "bun-delta-green";
+        } else {
+          deltaText = "";
+          deltaCls = "";
+        }
       }
-      htmlByKeyThisRun[key] =
-        '<span class="bun-stat-delta ' +
-        deltaCls +
-        '">' +
-        deltaText +
-        "</span>";
+      // Skip flat / empty — only store real UP/DN markers
+      if (deltaText) {
+        htmlByKeyThisRun[key] =
+          '<span class="bun-stat-delta ' +
+          deltaCls +
+          '">' +
+          deltaText +
+          "</span>";
+      } else {
+        htmlByKeyThisRun[key] = "";
+      }
       items.push({
         label: label,
         valueText: valueText,
         valueClass: valueClass || "",
-        deltaText: deltaText,
-        deltaCls: deltaCls,
+        deltaText: deltaText || "",
+        deltaCls: deltaCls || "",
         sub: sub || "",
       });
     }
@@ -9097,9 +9105,8 @@ function renderBundlesUi(data) {
           ""
       ).trim();
       const key = DELTA_LABEL_TO_KEY[lab];
-      let html =
-        (htmlByKey && key && htmlByKey[key]) ||
-        '<span class="bun-stat-delta bun-delta-flat" title="No change since last Analyze">(no change)</span>';
+      const html = htmlByKey && key ? htmlByKey[key] : "";
+      if (!html || /no change/i.test(String(html))) return;
       valEl.insertAdjacentHTML("beforeend", " ");
       valEl.insertAdjacentHTML("beforeend", html);
     });
@@ -9165,19 +9172,7 @@ function renderBundlesUi(data) {
       {};
     injectFrozenDeltasIntoDom(root, map);
     try {
-      root.querySelectorAll(".bun-stat .bun-stat-value").forEach((valEl) => {
-        if (
-          hasBundleDeltaMarker(valEl.textContent) ||
-          valEl.querySelector(".bun-stat-delta")
-        ) {
-          return;
-        }
-        const s = document.createElement("span");
-        s.className = "bun-stat-delta bun-delta-flat";
-        s.textContent = "(no change)";
-        valEl.appendChild(document.createElement("br"));
-        valEl.appendChild(s);
-      });
+      // Do not invent "(no change)" — only real UP/DN markers remain in the DOM
       const n = root.querySelectorAll(".bun-stat-delta").length;
       console.info(
         "[bundles deltas]",
