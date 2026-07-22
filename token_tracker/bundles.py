@@ -1536,23 +1536,19 @@ def recompute_total_bundle_all_vectors(
     Always counted (when present):
       multi_account, insider
 
-    Optional (only when the matching Analyze checkbox is ON):
+    Optional (ONLY when that Analyze checkbox is ON this run):
       multi_send (token multi-send), fresh, shared_funder (Shared SOL)
 
     Total = unique wallets across active vectors (each wallet once at max %).
-    So Fresh + Multi-send + Shared SOL bags are *included* in Total when their
-    checkboxes are on — not added as three independent sums (overlap is
-    deduped so Total ≤ Fresh% + Multi% + Shared%).
+    Checked optionals are included; unchecked are not — even if the UI still
+    shows last-known / “Last updated” for an unchecked box.
 
-    When Fresh + Multi-send + Shared SOL are ALL off:
+    When Fresh + Multi-send + Shared SOL are ALL unchecked:
       multi_account + insider + similar_size + suspect
 
-    When some optionals are on:
-      multi_account + insider + only the checked optionals
-      (similar/suspect not in Total)
-
-    UI may still show last-known % on unchecked optional boxes; those last-known
-    vectors are NOT double-counted into Total unless the checkbox is ON.
+    When any one (or more) is checked:
+      multi_account + insider + only the checked optional(s)
+      (similar/suspect not in Total; unchecked optionals not in Total)
 
     Never counted: launch_window (disabled).
     Excludes known LP / program wallets.
@@ -1794,23 +1790,16 @@ def recompute_total_bundle_all_vectors(
     }
 
     # Always: multi-account + insider
-    # Optionals: count when checkbox is ON *or* when that vector has bags on
-    # this payload (live scan or last-known cache still attached).
-    # Previously last-known Fresh/Multi/Shared showed in their boxes but were
-    # excluded from Total whenever the checkbox was off — looked like Total
-    # "ignored" Fresh even though wallets held supply.
-    # All 3 optionals empty (off + no rows) → also count similar + suspect
+    # Optionals: Fresh / Multi-send / Shared SOL — ONLY when that checkbox is ON
+    # for this Analyze. Last-known can still SHOW in those boxes when unchecked,
+    # but last-known bags do NOT enter Total.
+    # All 3 unchecked → Total = multi-account + insider + similar + suspect
+    # Any one checked → that vector counts; unchecked ones stay out of Total
     ALWAYS = ("multi_account", "insider")
-    OPTIONAL_HAS_BAGS = {
-        "multi_send": bool(ms_map),
-        "fresh": bool(fr_map),
-        "shared_funder": bool(fund_map),
-    }
     OPTIONAL_FLAGS = {
-        "multi_send": bool(include_multi_send) or OPTIONAL_HAS_BAGS["multi_send"],
-        "fresh": bool(include_fresh) or OPTIONAL_HAS_BAGS["fresh"],
-        "shared_funder": bool(include_shared_sol)
-        or OPTIONAL_HAS_BAGS["shared_funder"],
+        "multi_send": bool(include_multi_send),
+        "fresh": bool(include_fresh),
+        "shared_funder": bool(include_shared_sol),
     }
     any_optional_on = any(OPTIONAL_FLAGS.values())
 
@@ -1820,7 +1809,7 @@ def recompute_total_bundle_all_vectors(
             active_keys.append(key)
 
     if not any_optional_on:
-        # Fresh + Multi-send + Shared SOL all empty this run
+        # Fresh + Multi-send + Shared SOL all unchecked
         active_keys.extend(["similar_size", "suspect"])
         mode = "multi_plus_similar_suspect"
         use_sim_sus_in_total = True
@@ -1837,7 +1826,6 @@ def recompute_total_bundle_all_vectors(
                 by_vector[key]["excluded_from_total"] = True
                 by_vector[key]["optional_scan_off"] = True
         elif key in by_vector:
-            # Ensure present bags are never marked excluded_from_total
             by_vector[key] = dict(by_vector[key])
             by_vector[key]["excluded_from_total"] = False
             by_vector[key].pop("optional_scan_off", None)

@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v122";
+const ADTC_CLIENT_VERSION = "v123";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -7330,9 +7330,12 @@ function resolveTokenMultiSendTotalPct(view, summary) {
 }
 
 /**
- * Total bundle from the same wallet lists the UI shows:
- * multi-account + insider + Fresh + token Multi-send + Shared SOL (+ sol multi).
- * Unique wallets only. Used when server total is missing/low vs listed Holds.
+ * Total bundle from listed wallets, gated by Fresh / Multi-send / Shared SOL
+ * checkboxes (same rules as server):
+ *  - Always: multi-account + insider
+ *  - Optional vector only if THAT checkbox is ON (not merely last-known shown)
+ *  - All three unchecked → also similar + suspect
+ * Last-known / “Last updated” under an unchecked box must NOT enter Total.
  */
 function recomputeTotalBundleFromView(view, summary) {
   const s = summary || {};
@@ -7345,61 +7348,94 @@ function recomputeTotalBundleFromView(view, summary) {
   function pushWalletObj(r) {
     if (!r) return;
     if (typeof r === "string") pushRow(r, null);
-    else pushRow(r.wallet || r.owner, r.pct_supply != null ? r.pct_supply : r.combined_pct);
+    else
+      pushRow(
+        r.wallet || r.owner,
+        r.pct_supply != null ? r.pct_supply : r.combined_pct
+      );
   }
+  // Prefer this Analyze’s server flags; fall back to current UI checkboxes
+  function flagOn(serverKey, checkboxFn) {
+    if (s[serverKey] === true) return true;
+    if (s[serverKey] === false) return false;
+    try {
+      return typeof checkboxFn === "function" ? !!checkboxFn() : false;
+    } catch (_) {
+      return false;
+    }
+  }
+  const countFresh = flagOn("total_bundle_include_fresh", useFreshEnabled);
+  const countMs = flagOn("total_bundle_include_multi_send", useMultiSendEnabled);
+  const countSol = flagOn(
+    "total_bundle_include_shared_sol",
+    useSharedSolEnabled
+  );
+  const anyOptionalOn = countFresh || countMs || countSol;
+
   // multi-account
   const clusters = v.clusters || [];
   for (let i = 0; i < clusters.length; i++) pushWalletObj(clusters[i]);
   // insider
   const ins = v.insider_wallets || [];
   for (let i = 0; i < ins.length; i++) pushWalletObj(ins[i]);
-  // fresh — always include listed fresh bags (live or last-known on payload)
-  const fresh = v.fresh_wallets || [];
-  for (let i = 0; i < fresh.length; i++) pushWalletObj(fresh[i]);
-  // token multi-send
-  const msW = v.multi_send_wallets || [];
-  for (let i = 0; i < msW.length; i++) {
-    const r = msW[i] || {};
-    const roles = r.roles || [];
-    const onlySol =
-      roles.length &&
-      roles.every(function (role) {
-        return String(role || "").toLowerCase().indexOf("sol") === 0;
-      });
-    if (!onlySol) pushWalletObj(r);
+
+  // Fresh — only when Fresh checkbox was ON for this scan
+  if (countFresh) {
+    const fresh = v.fresh_wallets || [];
+    // Skip pure last-known rows when server marked scan off / from_cache-only
+    // with checkbox off is already handled by countFresh=false.
+    // If from_cache but checkbox ON (reuse last known intentionally), count.
+    for (let i = 0; i < fresh.length; i++) pushWalletObj(fresh[i]);
   }
-  const tokenMs = v.multi_send_clusters || [];
-  for (let i = 0; i < tokenMs.length; i++) {
-    const mc = tokenMs[i] || {};
-    pushRow(mc.sender, mc.sender_pct);
-    const recs = mc.receivers || [];
-    for (let j = 0; j < recs.length; j++) pushWalletObj(recs[j]);
+
+  // Token multi-send — only when Multi-send checkbox ON
+  if (countMs) {
+    const msW = v.multi_send_wallets || [];
+    for (let i = 0; i < msW.length; i++) {
+      const r = msW[i] || {};
+      const roles = r.roles || [];
+      const onlySol =
+        roles.length &&
+        roles.every(function (role) {
+          return String(role || "").toLowerCase().indexOf("sol") === 0;
+        });
+      if (!onlySol) pushWalletObj(r);
+    }
+    const tokenMs = v.multi_send_clusters || [];
+    for (let i = 0; i < tokenMs.length; i++) {
+      const mc = tokenMs[i] || {};
+      pushRow(mc.sender, mc.sender_pct);
+      const recs = mc.receivers || [];
+      for (let j = 0; j < recs.length; j++) pushWalletObj(recs[j]);
+    }
   }
-  // Shared SOL / funding + sol multi-send clusters
-  const fund = v.funding_clusters || [];
-  for (let i = 0; i < fund.length; i++) {
-    const fc = fund[i] || {};
-    pushRow(fc.funder || fc.sender, fc.funder_pct != null ? fc.funder_pct : fc.sender_pct);
-    const kids = fc.children || fc.child_rows || [];
-    for (let j = 0; j < kids.length; j++) pushWalletObj(kids[j]);
+
+  // Shared SOL — only when Shared SOL checkbox ON
+  if (countSol) {
+    const fund = v.funding_clusters || [];
+    for (let i = 0; i < fund.length; i++) {
+      const fc = fund[i] || {};
+      pushRow(
+        fc.funder || fc.sender,
+        fc.funder_pct != null ? fc.funder_pct : fc.sender_pct
+      );
+      const kids = fc.children || fc.child_rows || [];
+      for (let j = 0; j < kids.length; j++) pushWalletObj(kids[j]);
+    }
+    const solMs = v.sol_multi_send_clusters || [];
+    for (let i = 0; i < solMs.length; i++) {
+      const mc = solMs[i] || {};
+      pushRow(
+        mc.sender || mc.funder,
+        mc.sender_pct != null ? mc.sender_pct : mc.funder_pct
+      );
+      const recs = mc.receivers || mc.children || [];
+      for (let j = 0; j < recs.length; j++) pushWalletObj(recs[j]);
+    }
   }
-  const solMs = v.sol_multi_send_clusters || [];
-  for (let i = 0; i < solMs.length; i++) {
-    const mc = solMs[i] || {};
-    pushRow(mc.sender || mc.funder, mc.sender_pct != null ? mc.sender_pct : mc.funder_pct);
-    const recs = mc.receivers || mc.children || [];
-    for (let j = 0; j < recs.length; j++) pushWalletObj(recs[j]);
-  }
-  // Fallback mode: similar + suspect when no primary optional bags and no multi/insider
-  const hasPrimary =
-    clusters.length ||
-    ins.length ||
-    fresh.length ||
-    tokenMs.length ||
-    fund.length ||
-    solMs.length ||
-    (msW && msW.length);
-  if (!hasPrimary) {
+
+  // All three unchecked → similar + suspect enter Total
+  if (!anyOptionalOn) {
     const sims = v.similar_size_groups || [];
     for (let i = 0; i < sims.length; i++) {
       const g = sims[i] || {};
@@ -7414,12 +7450,13 @@ function recomputeTotalBundleFromView(view, summary) {
     const sus = v.suspect_wallets || [];
     for (let i = 0; i < sus.length; i++) pushWalletObj(sus[i]);
   }
+
   const recomputed = sumUniqueWalletSupplyPct(rows);
-  let server =
+  const server =
     s.total_bundle_pct != null && Number.isFinite(Number(s.total_bundle_pct))
       ? Number(s.total_bundle_pct)
       : null;
-  // Prefer client union when server is missing or undercounts listed bags
+  // Prefer client only when it counts checked vectors and server is low/missing
   if (recomputed != null && (server == null || recomputed > server + 0.0001)) {
     return recomputed;
   }
@@ -9639,12 +9676,14 @@ function renderBundlesUi(data) {
         ? s.total_bundle_unique_wallets
         : s.flagged_wallets;
     html +=
-      '<p class="bun-meta">Total bundle = unique wallets across multi-account, insider, ' +
-      "Fresh, Multi-send, and Shared SOL when those scans are on " +
-      "(each wallet once at max hold % — not a raw sum of the three boxes)" +
+      '<p class="bun-meta">Total bundle = multi-account + insider + only Fresh / Multi-send / Shared SOL ' +
+      "that were <strong>checked</strong> for this Analyze " +
+      "(last-known under an unchecked box does not count). " +
+      "All three unchecked → multi + similar/suspect. " +
+      "Each wallet once at max hold %." +
       (uniqN != null ? " · " + escHtml(String(uniqN)) + " wallet(s)" : "") +
       (parts.length
-        ? ". In total: " + escHtml(parts.join(" + "))
+        ? " In total: " + escHtml(parts.join(" + "))
         : "") +
       ".</p>";
   }
