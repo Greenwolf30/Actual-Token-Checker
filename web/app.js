@@ -7965,10 +7965,10 @@ function renderBundlesUi(data) {
       "</span></div><div class=\"bun-section-body\">";
     if (showSimilarSuspect) {
       html +=
-        '<p class="bun-sub">Multi-account + insider. Also used for Total when primary categories are empty.</p>';
+        '<p class="bun-sub">Rugcheck insider-flagged wallets only. Also used for Total when primary categories are empty.</p>';
     } else {
       html +=
-        '<p class="bun-sub">Multi-account + insider. Listed for reference — not counted in Total while primary categories have data.</p>';
+        '<p class="bun-sub">Rugcheck insider-flagged wallets only. Listed for reference — not counted in Total while primary categories have data.</p>';
     }
     html += bunWalletTable(sus, [
       { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
@@ -7991,11 +7991,9 @@ function renderBundlesUi(data) {
   } else {
     html += bunEmptySection(
       "Suspect wallets",
-      "None found this time.<br/><br/>" +
-        "This list only includes:<br/>" +
-        "· Wallets that control several large token accounts for this mint<br/>" +
-        "· Wallets marked as insiders on Rugcheck<br/><br/>" +
-        "Wallets that only match similar bag sizes are listed under Similar-size groups, not here."
+      "Insider-flagged<br/><br/>" +
+        "Top holders that Rugcheck marks as insider-related will be listed here when that flag is true.<br/><br/>" +
+        "This section’s only source is insider-flagged wallets from Rugcheck."
     );
   }
 

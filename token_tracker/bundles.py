@@ -198,8 +198,8 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
             }
         )
 
-    # Suspect = multi-account + insider ONLY (never fold similar-size in).
-    # Then partition vs similar so no wallet appears in both lists.
+    # Suspect = Rugcheck insider-flagged only (never multi / similar).
+    # Partition vs similar so no wallet appears in both lists.
     suspect_wallets = _suspect_wallets(multi_clusters, insiders)
     similar_groups, suspect_wallets = _partition_similar_and_suspect(
         similar_groups, suspect_wallets
@@ -2047,18 +2047,19 @@ def _similar(a: dict[str, Any], b: dict[str, Any], tol: float = 0.12) -> bool:
 
 
 def _suspect_wallets(
-    clusters: list[dict[str, Any]],
+    clusters: list[dict[str, Any]] | None,
     insiders: list[dict[str, Any]],
     groups: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Suspect wallets from non-similar signals only:
-      - multi Associated Token Account clusters
-      - insider-flagged accounts
+    Suspect wallets = Rugcheck insider-flagged top holders only
+    (``insider`` / insider flag true on the holder).
 
-    Similar-size wallets are NOT folded in (they stay under Similar-size only).
-    The optional ``groups`` arg is accepted for call-site compatibility but ignored.
+    Multi-account and similar-size are NOT included (they have their own sections).
+    ``clusters`` / ``groups`` accepted for call-site compatibility but ignored.
     """
+    _ = clusters
+    _ = groups
     bag: dict[str, dict[str, Any]] = {}
 
     def _add(wallet: str | None, reason: str, pct: Any = None) -> None:
@@ -2081,22 +2082,16 @@ def _suspect_wallets(
             except (TypeError, ValueError):
                 pass
 
-    for c in clusters or []:
-        if not isinstance(c, dict):
-            continue
-        _add(
-            c.get("wallet") or c.get("owner"),
-            "multi Associated Token Account cluster",
-            c.get("pct_supply")
-            if c.get("pct_supply") is not None
-            else c.get("combined_pct"),
-        )
-    # Intentionally do NOT add similar-size group wallets here.
-    _ = groups  # legacy kw; similar stays in its own category
     for h in insiders or []:
         if not isinstance(h, dict):
             continue
-        _add(h.get("wallet"), "insider flag", h.get("pct_supply"))
+        # Only when Rugcheck (or holder payload) marks insider as true
+        if h.get("insider") is False:
+            continue
+        # holders list uses insider=True; insider_wallets list is already filtered
+        if "insider" in h and not h.get("insider"):
+            continue
+        _add(h.get("wallet"), "insider-flagged (Rugcheck)", h.get("pct_supply"))
 
     return sorted(
         bag.values(),
