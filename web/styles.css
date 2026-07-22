@@ -1071,7 +1071,8 @@ a.copy-mint:hover,
 .rug-supply-sold.pct-low,
 .rug-supply-bought.pct-low,
 .bun-section-total .pct-low,
-.bun-table .pct-low {
+.bun-table .pct-low,
+.bun-cluster-head .pct-low {
   color: #6a9e78;
   font-weight: 500;
 }
@@ -1079,7 +1080,8 @@ a.copy-mint:hover,
 .rug-supply-sold.pct-medium,
 .rug-supply-bought.pct-medium,
 .bun-section-total .pct-medium,
-.bun-table .pct-medium {
+.bun-table .pct-medium,
+.bun-cluster-head .pct-medium {
   color: #b8a85c;
   font-weight: 500;
 }
@@ -1087,7 +1089,8 @@ a.copy-mint:hover,
 .rug-supply-sold.pct-high,
 .rug-supply-bought.pct-high,
 .bun-section-total .pct-high,
-.bun-table .pct-high {
+.bun-table .pct-high,
+.bun-cluster-head .pct-high {
   color: #c47a4a;
   font-weight: 600;
 }
@@ -1095,7 +1098,8 @@ a.copy-mint:hover,
 .rug-supply-sold.pct-critical,
 .rug-supply-bought.pct-critical,
 .bun-section-total .pct-critical,
-.bun-table .pct-critical {
+.bun-table .pct-critical,
+.bun-cluster-head .pct-critical {
   color: #c45c5c;
   font-weight: 600;
 }
@@ -1412,16 +1416,20 @@ a.copy-mint:hover,
 /* Supply % bands inside stats / section totals (class may be on child span) */
 .bun-stat-value .pct-low,
 .bun-stat-value.pct-low,
-.bun-section-total .pct-low { color: #6a9e78; }
+.bun-section-total .pct-low,
+.bun-cluster-head .pct-low { color: #6a9e78; }
 .bun-stat-value .pct-medium,
 .bun-stat-value.pct-medium,
-.bun-section-total .pct-medium { color: #b8a85c; }
+.bun-section-total .pct-medium,
+.bun-cluster-head .pct-medium { color: #b8a85c; }
 .bun-stat-value .pct-high,
 .bun-stat-value.pct-high,
-.bun-section-total .pct-high { color: #c47a4a; }
+.bun-section-total .pct-high,
+.bun-cluster-head .pct-high { color: #c47a4a; }
 .bun-stat-value .pct-critical,
 .bun-stat-value.pct-critical,
-.bun-section-total .pct-critical { color: #c45c5c; }
+.bun-section-total .pct-critical,
+.bun-cluster-head .pct-critical { color: #c45c5c; }
 /* Bundle risk score: 1–25 green · 25–50 yellow · 50–75 orange · 75–100 red */
 .bun-stat-value .risk-score-green,
 .bun-stat-value.risk-score-green,

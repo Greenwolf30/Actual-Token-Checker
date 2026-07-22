@@ -5657,12 +5657,12 @@ function formatHoldersRichHtml(text) {
 /**
  * Bundles tab % color scheme (same priority bands as Holders):
  *  - Summary: Total % bundles, Similar-size total, Fresh total, Multi-send total,
- *    Suspect total
+ *    Shared SOL total, Suspect total
  *  - Each wallet percent holdings in groups: "holds X%" on clusters,
- *    similar-size members, insiders, suspects, fresh, multi-send
+ *    similar-size members, insiders, suspects, fresh, multi-send, shared SOL
  *    (+ group avg/range headers)
  *  - Similar-size group header right side: "sum X%" (combined group holdings)
- *  - Fresh / Multi-send: “total X% across N wallet(s)” + flat lists by hold %
+ *  - Fresh / Multi-send / Shared SOL: “total X% across N wallet(s)” + lists
  *  - Top10 ex-LP stays uncolored (summary concentration, not a wallet bag)
  * Also yellows cluster "bal …" amounts.
  */
@@ -6190,6 +6190,20 @@ function renderBundlesUi(data) {
         ? '<span style="color:var(--text-muted)">skipped</span>'
         : bunPctHtml(s.multi_send_total_pct)
     );
+  }
+  {
+    const fundErr = String(s.funding_error || "");
+    const fundSkipped = /scan off|enable .Shared SOL|Shared SOL funder scan off/i.test(
+      fundErr
+    );
+    const fundCached = !!s.funding_from_cache;
+    let sharedSolVal;
+    if (fundSkipped && !fundCached && s.funding_total_pct == null) {
+      sharedSolVal = '<span style="color:var(--text-muted)">skipped</span>';
+    } else {
+      sharedSolVal = bunPctHtml(s.funding_total_pct);
+    }
+    html += stat("Shared SOL total", sharedSolVal);
   }
   html += stat("Suspect total", bunPctHtml(s.suspect_total_pct));
   html += stat("Top10 ex-LP", bunPctHtml(s.top10_pct_excluding_known_programs));
