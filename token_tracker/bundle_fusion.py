@@ -862,20 +862,23 @@ def comprehensive_bundle_check(
             s0["fresh_from_cache"] = True
             if fresh_report.get("scanned_at"):
                 s0["fresh_cached_at"] = fresh_report.get("scanned_at")
-        # Unique multi-send wallets (token + SOL) total supply %
-        ms_shell = {
+        # Multi-send total = TOKEN multi-send only (Multi-send checkbox).
+        # Do NOT fold SOL multi-send / Shared SOL funders into this total —
+        # that made Multi-send % == Shared SOL % and look "broken" until Shared SOL was on.
+        # SOL multi-send clusters still attach for detail UI when Shared SOL ran.
+        ms_shell_token = {
             "multi_send_clusters": multi_clusters,
-            "sol_multi_send_clusters": sol_multi,
+            "sol_multi_send_clusters": [],
         }
         try:
-            mt, mn = bun._multi_send_total_percent(ms_shell, pct_by_w)  # type: ignore[attr-defined]
+            mt, mn = bun._multi_send_total_percent(ms_shell_token, pct_by_w)  # type: ignore[attr-defined]
         except Exception:  # noqa: BLE001
             mt, mn = None, 0
         s0["multi_send_total_pct"] = mt
         s0["multi_send_wallet_with_pct"] = mn
-        # Split totals: one-wallet senders vs across receivers (LP excluded)
+        # Split totals for token multi-send only
         try:
-            split = bun._multi_send_split_totals(ms_shell, pct_by_w)  # type: ignore[attr-defined]
+            split = bun._multi_send_split_totals(ms_shell_token, pct_by_w)  # type: ignore[attr-defined]
         except Exception:  # noqa: BLE001
             split = {}
         s0["multi_send_sender_total_pct"] = split.get("sender_total_pct")
@@ -883,6 +886,19 @@ def comprehensive_bundle_check(
         s0["multi_send_receiver_total_pct"] = split.get("receiver_total_pct")
         s0["multi_send_receiver_count"] = split.get("receiver_count")
         s0["multi_send_hold_shape"] = split.get("hold_shape")
+        # Optional SOL multi-send total (from Shared SOL data) — separate field
+        try:
+            smt, smn = bun._multi_send_total_percent(  # type: ignore[attr-defined]
+                {
+                    "multi_send_clusters": [],
+                    "sol_multi_send_clusters": sol_multi,
+                },
+                pct_by_w,
+            )
+        except Exception:  # noqa: BLE001
+            smt, smn = None, 0
+        s0["sol_multi_send_total_pct"] = smt
+        s0["sol_multi_send_wallet_with_pct"] = smn
         # Multi-send off + no last-known cache → empty / skipped
         if not include_multi_send and not multi_send_from_cache:
             multi_send_error = (

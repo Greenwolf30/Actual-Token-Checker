@@ -814,17 +814,27 @@ def format_bundles_text(data: dict[str, Any]) -> str:
                 str(r.get("wallet") or ""),
             )
         )
-        ms_tot, ms_n = _sum_wallets_pct(ms_list)
+        # Multi-send total % = token multi-send only (not Shared SOL / sol-* )
+        token_only = [
+            r
+            for r in ms_list
+            if any(str(role).startswith("token") for role in (r.get("roles") or []))
+        ]
+        ms_tot, ms_n = _sum_wallets_pct(token_only)
+        s_fmt = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+        if s_fmt.get("multi_send_total_pct") is not None:
+            ms_tot = s_fmt.get("multi_send_total_pct")
+            ms_n = int(s_fmt.get("multi_send_wallet_with_pct") or ms_n or 0)
         split = _multi_send_split_totals(
             {
                 "multi_send_clusters": token_ms,
-                "sol_multi_send_clusters": sol_ms,
+                "sol_multi_send_clusters": [],
             },
             pct_map,
         )
         lines.append(
-            f"  Multi-send wallets — combined {_pct(ms_tot)} across {ms_n} wallet(s) "
-            f"(LP/bonding curve excluded):"
+            f"  Multi-send wallets (token multi-send) — {_pct(ms_tot)} across {ms_n} wallet(s) "
+            f"(LP/bonding curve excluded; Shared SOL is separate):"
         )
         lines.append(
             f"  Senders (each one wallet): {_pct(split.get('sender_total_pct'))} "
@@ -2455,11 +2465,48 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
         for mc in list(data.get("sol_multi_send_clusters") or [])[:8]
         if isinstance(mc, dict)
     ]
-    # Flat unique multi-send wallets for list UI
+    # Flat unique multi-send wallets for list UI:
+    # Token multi-send (Multi-send checkbox) + optional SOL multi (Shared SOL data).
+    # Total % for "Multi-send total" is TOKEN only — not Shared SOL funders.
     ms_by: dict[str, dict[str, Any]] = {}
-    for mc in token_ms + sol_ms:
-        role_s = "token-sender" if mc.get("kind") == "token" else "sol-sender"
-        role_r = "token-receiver" if mc.get("kind") == "token" else "sol-receiver"
+    for mc in token_ms:  # token multi-send first (drives Multi-send total)
+        role_s = "token-sender"
+        role_r = "token-receiver"
+        if mc.get("sender"):
+            cur = ms_by.get(mc["sender"]) or {
+                "wallet": mc["sender"],
+                "pct_supply": mc.get("sender_pct"),
+                "roles": [],
+            }
+            if mc.get("sender_pct") is not None:
+                try:
+                    pf = float(mc["sender_pct"])
+                    if cur.get("pct_supply") is None or pf > float(cur.get("pct_supply") or 0):
+                        cur["pct_supply"] = pf
+                except (TypeError, ValueError):
+                    pass
+            if role_s not in cur["roles"]:
+                cur["roles"].append(role_s)
+            ms_by[mc["sender"]] = cur
+        for r in mc.get("receivers") or []:
+            w = (r.get("wallet") or "").strip()
+            if not w:
+                continue
+            cur = ms_by.get(w) or {"wallet": w, "pct_supply": r.get("pct_supply"), "roles": []}
+            if r.get("pct_supply") is not None:
+                try:
+                    pf = float(r["pct_supply"])
+                    if cur.get("pct_supply") is None or pf > float(cur.get("pct_supply") or 0):
+                        cur["pct_supply"] = pf
+                except (TypeError, ValueError):
+                    pass
+            if role_r not in cur["roles"]:
+                cur["roles"].append(role_r)
+            ms_by[w] = cur
+    # SOL multi-send wallets (from Shared SOL) — listed with sol-* roles, not in token total
+    for mc in sol_ms:
+        role_s = "sol-sender"
+        role_r = "sol-receiver"
         if mc.get("sender"):
             cur = ms_by.get(mc["sender"]) or {
                 "wallet": mc["sender"],
@@ -2498,11 +2545,39 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
             str(r.get("wallet") or ""),
         )
     )
-    ms_tot, ms_n = _sum_wallets_pct(ms_list)
+    # Multi-send total = TOKEN multi-send only (not Shared SOL / sol-* roles)
+    token_only_list = [
+        r
+        for r in ms_list
+        if any(str(role).startswith("token") for role in (r.get("roles") or []))
+    ]
+    if not token_only_list and token_ms:
+        seen_t: set[str] = set()
+        for mc in token_ms:
+            for w, p in (
+                [(mc.get("sender"), mc.get("sender_pct"))]
+                + [
+                    (
+                        (rr.get("wallet") if isinstance(rr, dict) else rr),
+                        (rr.get("pct_supply") if isinstance(rr, dict) else None),
+                    )
+                    for rr in (mc.get("receivers") or [])
+                ]
+            ):
+                ws = (str(w) if w is not None else "").strip()
+                if not ws or ws in seen_t:
+                    continue
+                seen_t.add(ws)
+                token_only_list.append({"wallet": ws, "pct_supply": p})
+    ms_tot, ms_n = _sum_wallets_pct(token_only_list)
+    # Prefer fusion summary when already set (token-only after fusion fix)
+    if s.get("multi_send_total_pct") is not None:
+        ms_tot = s.get("multi_send_total_pct")
+        ms_n = int(s.get("multi_send_wallet_with_pct") or ms_n or 0)
     ms_split = _multi_send_split_totals(
         {
             "multi_send_clusters": token_ms,
-            "sol_multi_send_clusters": sol_ms,
+            "sol_multi_send_clusters": [],  # totals are token multi-send only
         },
         {},
     )
