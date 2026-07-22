@@ -6172,8 +6172,14 @@ function saveLastAnalyze(data, query) {
   if (!data || !data.ok) return;
   try {
     const sections = data.sections || {};
-    // Embed delta pair so refresh never loses arrows (backup to BUNDLE_STATS map)
+    // Embed delta pair + exact stats bar HTML so refresh never loses arrows
     let bundleDelta = data._bundleDeltaPair || null;
+    const barFromView =
+      (data.bundles_view &&
+        data.bundles_view.summary &&
+        data.bundles_view.summary._ui_stats_bar_html) ||
+      data._bundlesStatsBarHtml ||
+      null;
     if (!bundleDelta) {
       try {
         const mint =
@@ -6182,20 +6188,40 @@ function saveLastAnalyze(data, query) {
           "";
         const e = mint ? getBundleStatsEntry(mint) : null;
         const htmlByKey = mint ? loadBundleDeltaHtml(mint) : null;
-        if (e || htmlByKey) {
-          const barSnap = loadBundleStatsBarSnap(mint);
-          bundleDelta = {
-            mint: bundleStatsMintKey(mint),
-            forNext: e && e.forNext,
-            deltaFrom: e && e.deltaFrom,
-            deltaCur: e && e.deltaCur,
-            htmlByKey: htmlByKey || null,
-            barHtml: (barSnap && barSnap.html) || (htmlByKey && htmlByKey.barHtml) || null,
-          };
-        }
+        const barSnap = loadBundleStatsBarSnap(mint);
+        bundleDelta = {
+          mint: bundleStatsMintKey(mint),
+          forNext: e && e.forNext,
+          deltaFrom: e && e.deltaFrom,
+          deltaCur: e && e.deltaCur,
+          htmlByKey: htmlByKey || null,
+          barHtml:
+            barFromView ||
+            (barSnap && barSnap.html) ||
+            (htmlByKey && htmlByKey.barHtml) ||
+            null,
+        };
       } catch (_) {
-        bundleDelta = null;
+        bundleDelta = {
+          barHtml: barFromView || null,
+        };
       }
+    } else if (!bundleDelta.barHtml && barFromView) {
+      bundleDelta.barHtml = barFromView;
+    }
+    // Ensure summary still carries baked bar (survives as part of bundles_view)
+    try {
+      if (
+        data.bundles_view &&
+        data.bundles_view.summary &&
+        bundleDelta &&
+        bundleDelta.barHtml &&
+        !data.bundles_view.summary._ui_stats_bar_html
+      ) {
+        data.bundles_view.summary._ui_stats_bar_html = bundleDelta.barHtml;
+      }
+    } catch (_) {
+      /* ignore */
     }
     const slim = {
       savedAt: Date.now(),
@@ -6215,11 +6241,14 @@ function saveLastAnalyze(data, query) {
         links: data.links || null,
         holders: data.holders || null,
         bundles: data.bundles || null,
+        // Includes summary._ui_stats_bar_html when set above
         bundles_view: data.bundles_view || null,
         alerts: data.alerts || null,
         alerts_meta: data.alerts_meta || null,
         history_meta: data.history_meta || null,
         bundleDelta: bundleDelta,
+        _bundlesStatsBarHtml:
+          (bundleDelta && bundleDelta.barHtml) || barFromView || null,
         sections: {
           overview: sections.overview || null,
           holders: sections.holders || null,
@@ -6299,9 +6328,24 @@ function restoreLastAnalyze() {
   try {
     const data = cached.data;
     data._restoredFromBrowserCache = true;
-    // Carry frozen delta pair onto the payload so Bundles can replay arrows
+    // Carry frozen delta pair + stats bar HTML onto the payload
     if (cached.bundleDelta) {
       data.bundleDelta = cached.bundleDelta;
+    }
+    // Promote baked bar HTML to easy-to-find fields
+    const bakedBar =
+      (cached.bundleDelta && cached.bundleDelta.barHtml) ||
+      (data.bundleDelta && data.bundleDelta.barHtml) ||
+      data._bundlesStatsBarHtml ||
+      (data.bundles_view &&
+        data.bundles_view.summary &&
+        data.bundles_view.summary._ui_stats_bar_html) ||
+      null;
+    if (bakedBar) {
+      data._bundlesStatsBarHtml = bakedBar;
+      if (data.bundles_view && data.bundles_view.summary) {
+        data.bundles_view.summary._ui_stats_bar_html = bakedBar;
+      }
     }
     if (cached.query && $("query") && !$("query").value.trim()) {
       $("query").value = cached.query;
@@ -6382,6 +6426,24 @@ function restoreLastAnalyze() {
       const note = document.createElement("div");
       note.innerHTML = noteHtml;
       if (note.firstChild) root.insertBefore(note.firstChild, root.firstChild);
+    }
+    // Final pass: force frozen stats bar (with deltas) after any DOM tweaks
+    try {
+      const barHtml =
+        data._bundlesStatsBarHtml ||
+        (data.bundles_view &&
+          data.bundles_view.summary &&
+          data.bundles_view.summary._ui_stats_bar_html) ||
+        (data.bundleDelta && data.bundleDelta.barHtml) ||
+        (loadBundleStatsBarSnap("") && loadBundleStatsBarSnap("").html) ||
+        null;
+      if (root && barHtml && String(barHtml).indexOf("bun-stats") >= 0) {
+        const bar = root.querySelector(".bun-stats");
+        if (bar) bar.outerHTML = barHtml;
+        else root.insertAdjacentHTML("beforeend", barHtml);
+      }
+    } catch (_) {
+      /* ignore */
     }
     return true;
   } catch (err) {
@@ -6528,24 +6590,51 @@ function saveBundleStatsBarSnap(mint, barHtml) {
 }
 
 function loadBundleStatsBarSnap(mint) {
+  // 1) Global last bar (always the most recent live Analyze)
   try {
     const raw = localStorage.getItem(BUNDLE_STATS_BAR_SNAP_KEY);
     if (raw) {
+      // Prefer JSON {mint,html}; also accept raw HTML string
+      if (raw.trim().charAt(0) === "<") {
+        return { mint: "", html: raw, savedAt: 0 };
+      }
       const o = JSON.parse(raw);
       if (o && o.html) {
         const m = bundleStatsMintKey(mint);
-        // Prefer exact mint match; if mint unknown, still use last snap
-        if (!m || !o.mint || bundleStatsMintKey(o.mint) === m) return o;
+        // Always return last snap if mint unknown or matches; still return
+        // last snap on mismatch (refresh of last token is the common case)
+        if (!m || !o.mint || bundleStatsMintKey(o.mint) === m || m === "last") {
+          return o;
+        }
+        // Mismatch: still use it (user refreshed last result)
+        return o;
       }
     }
   } catch (_) {
     /* ignore */
   }
-  // Fallback: mint map
+  // 2) sessionStorage plain HTML
+  try {
+    const ss = sessionStorage.getItem(BUNDLE_STATS_BAR_SNAP_KEY);
+    if (ss && ss.indexOf("bun-stats") >= 0) {
+      return { mint: "", html: ss, savedAt: 0 };
+    }
+  } catch (_) {
+    /* ignore */
+  }
+  // 3) Per-mint map
   try {
     const row = mint ? loadBundleDeltaHtml(mint) : null;
     if (row && row.barHtml) {
-      return { mint: bundleStatsMintKey(mint), html: row.barHtml, savedAt: row.savedAt };
+      return {
+        mint: bundleStatsMintKey(mint),
+        html: row.barHtml,
+        savedAt: row.savedAt,
+      };
+    }
+    const last = loadBundleDeltaHtml("last");
+    if (last && last.barHtml) {
+      return { mint: "last", html: last.barHtml, savedAt: last.savedAt };
     }
   } catch (_) {
     /* ignore */
@@ -7660,42 +7749,77 @@ function renderBundlesUi(data) {
 
   root.innerHTML = html;
 
-  // ── Exact stats-bar snapshot (nuclear refresh fix) ─────────────────
-  // Live: freeze the rendered .bun-stats HTML (arrows included).
-  // Restore: swap in that exact bar so recompute cannot drop deltas.
+  // ── Freeze / thaw Bundles stats bar (deltas must survive refresh) ──
+  // Live Analyze: bake the exact .bun-stats HTML (with ▲/▼) into
+  //   1) bundles_view.summary (same object saveLastAnalyze already persists)
+  //   2) localStorage / sessionStorage snap
+  // Restore: always swap that HTML back in — no recompute.
   try {
     const bar = root.querySelector(".bun-stats");
-    if (!isRestore && bar && mint) {
-      saveBundleStatsBarSnap(mint, bar.outerHTML);
-      // Keep html-by-key map in sync for partial fallbacks
+    if (!isRestore && bar) {
+      const barHtml = bar.outerHTML;
+      // 1) Bake into the payload that last-Analyze restore already uses
+      try {
+        if (view && view.summary && typeof view.summary === "object") {
+          view.summary._ui_stats_bar_html = barHtml;
+          view.summary._ui_delta_html = { ...htmlByKeyThisRun };
+        }
+        if (data && data.bundles_view && data.bundles_view.summary) {
+          data.bundles_view.summary._ui_stats_bar_html = barHtml;
+          data.bundles_view.summary._ui_delta_html = { ...htmlByKeyThisRun };
+        }
+      } catch (_) {
+        /* ignore */
+      }
+      // 2) Browser storage (mint optional — always keep last bar)
+      saveBundleStatsBarSnap(mint || "last", barHtml);
+      try {
+        sessionStorage.setItem(BUNDLE_STATS_BAR_SNAP_KEY, barHtml);
+      } catch (_) {
+        /* ignore */
+      }
       if (Object.keys(htmlByKeyThisRun).length) {
-        saveBundleDeltaHtml(mint, {
+        saveBundleDeltaHtml(mint || "last", {
           ...htmlByKeyThisRun,
-          barHtml: bar.outerHTML,
+          barHtml,
         });
       }
-      if (data && data._bundleDeltaPair) {
-        data._bundleDeltaPair.barHtml = bar.outerHTML;
-        data._bundleDeltaPair.htmlByKey = {
-          ...(data._bundleDeltaPair.htmlByKey || {}),
-          ...htmlByKeyThisRun,
+      if (data) {
+        data._bundleDeltaPair = data._bundleDeltaPair || {
+          mint: bundleStatsMintKey(mint),
+          forNext: curStats,
+          deltaFrom: prev || zeroBundleStats(),
+          deltaCur: curStats,
         };
+        data._bundleDeltaPair.barHtml = barHtml;
+        data._bundleDeltaPair.htmlByKey = { ...htmlByKeyThisRun };
+        data._bundlesStatsBarHtml = barHtml;
       }
     } else if (isRestore) {
-      const snap =
-        loadBundleStatsBarSnap(mint) ||
-        (data &&
-          data.bundleDelta &&
-          data.bundleDelta.barHtml && {
-            mint: data.bundleDelta.mint,
-            html: data.bundleDelta.barHtml,
-          });
-      if (snap && snap.html && bar) {
-        // Replace recomputed bar with last live bar (keeps ▲/▼/%)
-        bar.outerHTML = snap.html;
-      } else if (snap && snap.html && !bar) {
-        // Stats grid missing — prepend frozen bar
-        root.insertAdjacentHTML("afterbegin", snap.html);
+      // Prefer: baked into restored bundles_view (most reliable)
+      let baked =
+        (s && s._ui_stats_bar_html) ||
+        (view.summary && view.summary._ui_stats_bar_html) ||
+        (data && data._bundlesStatsBarHtml) ||
+        (data && data.bundleDelta && data.bundleDelta.barHtml) ||
+        null;
+      if (!baked) {
+        try {
+          baked = sessionStorage.getItem(BUNDLE_STATS_BAR_SNAP_KEY);
+        } catch (_) {
+          /* ignore */
+        }
+      }
+      if (!baked) {
+        const snap = loadBundleStatsBarSnap(mint) || loadBundleStatsBarSnap("last");
+        if (snap && snap.html) baked = snap.html;
+      }
+      if (baked && typeof baked === "string" && baked.indexOf("bun-stats") >= 0) {
+        if (bar) {
+          bar.outerHTML = baked;
+        } else {
+          root.insertAdjacentHTML("afterbegin", baked);
+        }
       }
     }
   } catch (err) {
