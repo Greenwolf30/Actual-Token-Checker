@@ -6225,6 +6225,42 @@ function safeLocalStorageSet(key, raw) {
   }
 }
 
+/** sessionStorage set (survives refresh in the same tab). */
+function safeSessionStorageSet(key, raw) {
+  try {
+    sessionStorage.setItem(key, raw);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/** Shrink bundles_view for storage (keep summary + short lists). */
+function slimBundlesViewForStorage(bv) {
+  if (!bv || typeof bv !== "object") return null;
+  const c = jsonClone(bv);
+  if (!c) return null;
+  const caps = {
+    clusters: 12,
+    similar_size_groups: 8,
+    insider_wallets: 20,
+    funding_clusters: 8,
+    fresh_wallets: 24,
+    multi_send_clusters: 10,
+    multi_send_wallets: 32,
+    sol_multi_send_clusters: 8,
+    suspect_wallets: 24,
+    signals: 12,
+  };
+  for (const [k, n] of Object.entries(caps)) {
+    if (Array.isArray(c[k]) && c[k].length > n) c[k] = c[k].slice(0, n);
+  }
+  if (c.summary && typeof c.summary === "object") {
+    delete c.summary._ui_stats_bar_html;
+  }
+  return c;
+}
+
 /**
  * Persist last successful Analyze for all tabs after page refresh.
  * Always tries to keep at least a Bundles-only backup.
@@ -7245,8 +7281,8 @@ function renderBundlesUi(data) {
     /* ignore */
   }
 
-  // Live: compare new result → previous forNext baseline.
-  // Restore: recompute from frozen pair AND/OR use frozen HTML spans.
+  // Live: always compare to previous baseline (or zeros) so deltas always show.
+  // Restore: use frozen pair and/or frozen HTML spans.
   let prev = null;
   let deltaCurStats = curStats;
   if (isRestore) {
@@ -7256,12 +7292,16 @@ function renderBundlesUi(data) {
     } else if (stored && stored.deltaCur && stored.forNext) {
       prev = stored.forNext;
       deltaCurStats = stored.deltaCur;
-    } else {
+    } else if (frozenHtml) {
+      // Have frozen arrow HTML even without pair
       prev = null;
+    } else {
+      prev = zeroBundleStats(); // still show · 0% vs self baseline
+      deltaCurStats = curStats;
     }
-    if (mint && curStats) {
+    if (curStats) {
       try {
-        saveBundleStatsEntry(mint, {
+        saveBundleStatsEntry(mint || "last", {
           forNext: (stored && stored.forNext) || curStats,
           deltaFrom: stored && stored.deltaFrom ? stored.deltaFrom : undefined,
           deltaCur: stored && stored.deltaCur ? stored.deltaCur : undefined,
@@ -7270,9 +7310,13 @@ function renderBundlesUi(data) {
         /* ignore */
       }
     }
-  } else if (mint) {
-    prev = resolveBundleStatsPrev(mint);
-    // First live Analyze of this mint: baseline against zeros so arrows freeze
+  } else {
+    // LIVE Analyze — never leave prev null (otherwise no deltas)
+    try {
+      prev = mint ? resolveBundleStatsPrev(mint) : null;
+    } catch (_) {
+      prev = null;
+    }
     if (!prev) prev = zeroBundleStats();
     deltaCurStats = curStats;
   }
@@ -7390,16 +7434,31 @@ function renderBundlesUi(data) {
     if (isRestore && frozenHtml && frozenHtml[key]) {
       d = String(frozenHtml[key]);
     }
-    // 2) Else recompute from baseline pair (works live + restore)
-    if (!d && prev) {
+    // 2) Recompute from baseline (live always has prev = zeros at minimum)
+    if (!d) {
       const curVal =
-        curOverride !== undefined ? curOverride : deltaCurStats[key];
-      const prevVal = prev[key];
-      d = formatBundleStatDelta(curVal, prevVal, kind, {
-        coalesceNull: kind === "pct",
-      });
+        curOverride !== undefined
+          ? curOverride
+          : deltaCurStats
+            ? deltaCurStats[key]
+            : null;
+      const prevVal = prev ? prev[key] : kind === "pct" ? 0 : null;
+      if (kind === "pct") {
+        d = formatBundleStatDelta(
+          curVal != null ? curVal : 0,
+          prevVal != null ? prevVal : 0,
+          "pct",
+          { coalesceNull: true }
+        );
+      } else if (curVal != null || prevVal != null) {
+        d = formatBundleStatDelta(
+          curVal != null ? curVal : 0,
+          prevVal != null ? prevVal : 0,
+          "score",
+          { coalesceNull: false }
+        );
+      }
     }
-    // 3) Live still freezes whatever we show
     if (d) htmlByKeyThisRun[key] = d;
     return d ? mainHtml + " " + d : mainHtml;
   }
@@ -7599,29 +7658,34 @@ function renderBundlesUi(data) {
   );
   html += "</div>";
 
-  // Freeze this run's delta pair + precomputed HTML so refresh can replay arrows.
-  if (!isRestore && mint && curStats) {
-    // prev is always set on live (real baseline or zeros)
+  // Early freeze of delta pair (stats already rendered into htmlByKeyThisRun)
+  if (!isRestore && curStats) {
     const baseline = prev || zeroBundleStats();
-    // Carry last-known Shared SOL / Multi-send / Fresh into forNext when this
-    // Analyze left them null (box off / skipped). Next ON scan deltas vs that
-    // last known %, not vs 0.
     const carrySrc =
       (stored && (stored.deltaCur || stored.forNext)) || baseline;
     const statsForNext = mergeLastKnownOptionalStats(curStats, carrySrc);
-    // Also keep optional fields on deltaCur so frozen bar matches last known
     const statsForCur = mergeLastKnownOptionalStats(curStats, carrySrc);
-    saveBundleStatsEntry(mint, {
-      forNext: statsForNext,
-      deltaFrom: baseline,
-      deltaCur: statsForCur,
-    });
+    const mKey = mint || "last";
+    try {
+      saveBundleStatsEntry(mKey, {
+        forNext: statsForNext,
+        deltaFrom: baseline,
+        deltaCur: statsForCur,
+      });
+    } catch (_) {
+      /* ignore */
+    }
     if (Object.keys(htmlByKeyThisRun).length) {
-      saveBundleDeltaHtml(mint, htmlByKeyThisRun);
+      try {
+        saveBundleDeltaHtml(mKey, htmlByKeyThisRun);
+        saveBundleDeltaHtml("last", htmlByKeyThisRun);
+      } catch (_) {
+        /* ignore */
+      }
     }
     try {
       data._bundleDeltaPair = {
-        mint: bundleStatsMintKey(mint),
+        mint: bundleStatsMintKey(mint) || "last",
         forNext: statsForNext,
         deltaFrom: baseline,
         deltaCur: statsForCur,
@@ -7630,9 +7694,6 @@ function renderBundlesUi(data) {
     } catch (_) {
       /* ignore */
     }
-  } else if (isRestore && mint && Object.keys(htmlByKeyThisRun).length) {
-    // Refresh re-freeze whatever we displayed (keeps pair alive)
-    saveBundleDeltaHtml(mint, htmlByKeyThisRun);
   }
 
   const src = (s.sources_used || []).join(", ") || view.method || view.source || "—";
