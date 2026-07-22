@@ -902,6 +902,9 @@ def comprehensive_bundle_check(
             s["total_bundle_by_vector"] = tb.get("total_bundle_by_vector")
             s["total_bundle_additive"] = True
             s["total_bundle_cross_vector_dedupe"] = False
+            s["total_bundle_excluded_vectors"] = tb.get(
+                "total_bundle_excluded_vectors"
+            ) or ["similar_size", "suspect"]
             base["summary"] = s
         except Exception:  # noqa: BLE001
             pass
@@ -912,7 +915,8 @@ def comprehensive_bundle_check(
             "token multi-send (one sender → many). "
             "Total bundle % = sum of each risk vector’s supply % with NO "
             "cross-vector wallet dedupe (can exceed 100% if wallets hit multiple "
-            "vectors). Not a full commercial sniper graph. "
+            "vectors). Similar-size groups and suspect wallets are excluded from "
+            "Total bundle %. Not a full commercial sniper graph. "
             + (base.get("notes") or "")
         ).strip()
         return base

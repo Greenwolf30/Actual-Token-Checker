@@ -6218,13 +6218,12 @@ function renderBundlesUi(data) {
     '<p class="bun-meta">Sources: ' +
     escHtml(src) +
     " · Heuristic only — not proof of identity</p>";
-  // Total bundle = all risk vectors, additive (no cross-vector dedupe)
+  // Total bundle = counted risk vectors only (similar-size + suspect excluded)
   if (s.total_bundle_additive || s.total_bundle_by_vector) {
     const bv = s.total_bundle_by_vector || {};
     const parts = [];
     const labels = {
       multi_account: "multi-account",
-      similar_size: "similar-size",
       insider: "insider",
       multi_send: "multi-send",
       fresh: "fresh",
@@ -6233,7 +6232,7 @@ function renderBundlesUi(data) {
     };
     for (const [k, lab] of Object.entries(labels)) {
       const m = bv[k];
-      if (!m) continue;
+      if (!m || m.excluded_from_total) continue;
       const p = m.pct != null && Number.isFinite(Number(m.pct)) ? Number(m.pct) : null;
       const n = m.count != null ? Number(m.count) : 0;
       if (p != null && p > 0) {
@@ -6243,13 +6242,13 @@ function renderBundlesUi(data) {
       }
     }
     html +=
-      '<p class="bun-meta">Total bundle = sum of vectors (no wallet dedupe across vectors' +
+      '<p class="bun-meta">Total bundle = sum of vectors (no wallet dedupe across counted vectors' +
       (Number(s.total_bundle_pct) > 100
         ? " — can exceed 100%"
         : "") +
       ")" +
       (parts.length ? ": " + escHtml(parts.join(" + ")) : "") +
-      ".</p>";
+      ". Similar-size and suspect wallets excluded.</p>";
   }
 
   // Signals chips

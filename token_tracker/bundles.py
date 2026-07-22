@@ -199,12 +199,14 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
         )
 
     suspect_wallets = _suspect_wallets(multi_clusters, similar_groups, insiders)
+    # Total bundle % excludes similar-size groups and suspect wallets
+    # (fusion recomputes with full vector set; same exclusions).
     total_pct, flagged_n = _total_bundle_percent(
         holders=holders,
         clusters=multi_clusters,
-        similar_groups=similar_groups,
+        similar_groups=[],  # excluded from Total bundle %
         insiders=insiders,
-        suspects=suspect_wallets,
+        suspects=[],  # excluded from Total bundle %
     )
     suspect_pct, suspect_n = _suspect_total_percent(suspect_wallets)
     # Combined % of unique wallets that sit in similar-size groups
@@ -258,9 +260,11 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
             "Bundle detection is heuristic from a top-holder snapshot only. "
             "Suspect total % = sum of unique suspect wallets' supply %. "
             "Total bundle % (full Analyze) = sum of each risk vector’s supply % "
-            "with NO cross-vector wallet dedupe (multi-account + similar-size + "
-            "insider + multi-send + fresh + shared funder + launch-window). "
-            "A wallet in two vectors counts twice. Not a full commercial sniper graph."
+            "with NO cross-vector wallet dedupe (multi-account + insider + "
+            "multi-send + fresh + shared funder + launch-window). "
+            "Similar-size groups and suspect wallets are EXCLUDED from Total "
+            "bundle %. A wallet in two counted vectors counts twice. "
+            "Not a full commercial sniper graph."
         ),
     }
 
@@ -1473,9 +1477,12 @@ def recompute_total_bundle_all_vectors(
     A wallet in multi-send AND fresh contributes its % twice (once per vector).
     Within a single vector, each wallet is counted once (max % if listed twice).
 
-    Vectors:
-      multi_account, similar_size, insider, multi_send (token only),
-      fresh, shared_funder (funding clusters), launch_window (same-slot).
+    Counted vectors:
+      multi_account, insider, multi_send (token only), fresh,
+      shared_funder (funding clusters), launch_window (same-slot).
+
+    EXCLUDED from Total bundle % (still shown in Bundles sections):
+      similar_size groups, suspect wallets.
 
     Token multi-send only for multi_send (not sol_multi_send_clusters) so SOL
     funder wallets are not double-counted with shared_funder.
@@ -1544,7 +1551,7 @@ def recompute_total_bundle_all_vectors(
     p, n = _sum_vector(ma_rows)
     by_vector["multi_account"] = {"pct": p, "count": n}
 
-    # 2) Similar-size groups
+    # 2) Similar-size groups — EXCLUDED from Total bundle % (tracked only)
     sim_rows: list[tuple[str, Any]] = []
     for g in data.get("similar_size_groups") or []:
         if not isinstance(g, dict):
@@ -1560,7 +1567,11 @@ def recompute_total_bundle_all_vectors(
             for w in g.get("wallets") or []:
                 sim_rows.append((w, g.get("avg_pct")))
     p, n = _sum_vector(sim_rows)
-    by_vector["similar_size"] = {"pct": p, "count": n}
+    by_vector["similar_size"] = {
+        "pct": p,
+        "count": n,
+        "excluded_from_total": True,
+    }
 
     # 3) Insiders
     in_rows: list[tuple[str, Any]] = []
@@ -1636,14 +1647,41 @@ def recompute_total_bundle_all_vectors(
     p, n = _sum_vector(lw_rows)
     by_vector["launch_window"] = {"pct": p, "count": n}
 
+    # Suspect wallets — EXCLUDED from Total bundle % (tracked only)
+    sus_rows: list[tuple[str, Any]] = []
+    for sw in data.get("suspect_wallets") or []:
+        if isinstance(sw, dict):
+            sus_rows.append((sw.get("wallet"), sw.get("pct_supply")))
+        else:
+            sus_rows.append((sw, None))
+    p, n = _sum_vector(sus_rows)
+    by_vector["suspect"] = {
+        "pct": p,
+        "count": n,
+        "excluded_from_total": True,
+    }
+
+    # Vectors that contribute to Total bundle %
+    COUNTED = {
+        "multi_account",
+        "insider",
+        "multi_send",
+        "fresh",
+        "shared_funder",
+        "launch_window",
+    }
+    EXCLUDED = ("similar_size", "suspect")
+
     grand = 0.0
     slot_count = 0
     any_data = False
-    for meta in by_vector.values():
+    for key, meta in by_vector.items():
         try:
             vp = float(meta.get("pct") or 0)
             vn = int(meta.get("count") or 0)
         except (TypeError, ValueError):
+            continue
+        if key not in COUNTED:
             continue
         if vn > 0 or vp > 0:
             any_data = True
@@ -1657,6 +1695,7 @@ def recompute_total_bundle_all_vectors(
             "total_bundle_by_vector": by_vector,
             "total_bundle_additive": True,
             "total_bundle_cross_vector_dedupe": False,
+            "total_bundle_excluded_vectors": list(EXCLUDED),
         }
 
     return {
@@ -1665,6 +1704,7 @@ def recompute_total_bundle_all_vectors(
         "total_bundle_by_vector": by_vector,
         "total_bundle_additive": True,
         "total_bundle_cross_vector_dedupe": False,
+        "total_bundle_excluded_vectors": list(EXCLUDED),
     }
 
 
@@ -2244,6 +2284,9 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
             "total_bundle_additive": s.get("total_bundle_additive"),
             "total_bundle_cross_vector_dedupe": s.get(
                 "total_bundle_cross_vector_dedupe"
+            ),
+            "total_bundle_excluded_vectors": s.get(
+                "total_bundle_excluded_vectors"
             ),
             "multi_account_clusters": s.get("multi_account_clusters") or len(clusters_out),
             "similar_size_groups": s.get("similar_size_groups") or len(similar_out),
