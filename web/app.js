@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v133";
+const ADTC_CLIENT_VERSION = "v134";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -6308,7 +6308,8 @@ function fmtMarketUpdatedAt(isoOrMs) {
 
 /**
  * Stamp under Fresh / Multi-send / Shared SOL (under % + delta) — NOT MC/Liq/Vol.
- * Only after page refresh restore; cleared on next live Analyze.
+ * Shown when that optional was unchecked on Analyze (last known) or on restore.
+ * Compact two-line so it fits inside the bun-stat box.
  */
 function optionalBundleUpdatedSub(whenRaw) {
   const when = fmtMarketUpdatedAt(whenRaw);
@@ -9296,10 +9297,12 @@ function renderBundlesUi(data) {
 
   /**
    * Plain-text sub under Fresh / Multi / Shared SOL.
-   * Only after page refresh (restore) — hidden on live Analyze.
+   * When boxOff (checkbox off this Analyze / last-known / skipped): always show
+   * “Last updated” + timestamp so the box reflects the last scan of that check.
+   * Also on page restore. Hidden when that optional was scanned live this run.
    */
-  function optionalUpdatedPlain(whenCandidates) {
-    if (!isRestore) return "";
+  function optionalUpdatedPlain(whenCandidates, boxOff) {
+    if (!boxOff && !isRestore) return "";
     let whenRaw = null;
     for (let i = 0; i < (whenCandidates || []).length; i++) {
       if (whenCandidates[i]) {
@@ -9314,7 +9317,10 @@ function renderBundlesUi(data) {
         (data && data._restoredSavedAt) ||
         null;
     }
-    return optionalBundleUpdatedSub(whenRaw);
+    const stamp = optionalBundleUpdatedSub(whenRaw);
+    // Unchecked with no prior scan yet — still label last-known state briefly
+    if (!stamp && boxOff) return "Last updated\n—";
+    return stamp;
   }
 
   // Browser timestamps for optional scans (when server cache is gone)
