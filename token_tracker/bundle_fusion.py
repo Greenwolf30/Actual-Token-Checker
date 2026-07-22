@@ -273,39 +273,8 @@ def comprehensive_bundle_check(
             28, 12 + int(best_f.get("child_count") or 0) * 4
         )
         if base.get("ok"):
-            suspects = list(base.get("suspect_wallets") or [])
-            existing = {s.get("wallet") for s in suspects}
-            for fc in f_clusters[:4]:
-                funder = fc.get("funder")
-                kids = list(fc.get("children") or [])
-                for w in kids:
-                    if w not in existing:
-                        suspects.append(
-                            {
-                                "wallet": w,
-                                "reasons": [f"funded by {funder}"],
-                                "pct_supply": None,
-                            }
-                        )
-                        existing.add(w)
-                    else:
-                        for s in suspects:
-                            if s.get("wallet") == w:
-                                rs = list(s.get("reasons") or [])
-                                note = f"funded by {funder}"
-                                if note not in rs:
-                                    rs.append(note)
-                                s["reasons"] = rs
-                if funder and funder not in existing:
-                    suspects.append(
-                        {
-                            "wallet": funder,
-                            "reasons": ["common funder of bundle wallets"],
-                            "pct_supply": None,
-                        }
-                    )
-                    existing.add(funder)
-            # Enrich funding clusters with supply % + section totals
+            # Funding stays ONLY on Shared SOL funder + multi-send (SOL fan-out).
+            # Do not push "funded by …" into Suspects or other sections.
             enriched_fc = []
             for fc in f_clusters[:8]:
                 ff = dict(fc)
@@ -326,9 +295,29 @@ def comprehensive_bundle_check(
                 ff["wallets_with_pct"] = n
                 enriched_fc.append(ff)
             base = dict(base)
-            base["suspect_wallets"] = suspects[:40]
+            # Strip "funded by …" / common-funder reasons from suspects.
+            # Funding UI lives only under Shared SOL funder + multi-send.
+            cleaned_suspects: list[dict[str, Any]] = []
+            for s in list(base.get("suspect_wallets") or [])[:40]:
+                if not isinstance(s, dict):
+                    continue
+                orig = list(s.get("reasons") or [])
+
+                def _is_funding_reason(r: Any) -> bool:
+                    if not isinstance(r, str):
+                        return False
+                    low = r.lower()
+                    return low.startswith("funded by ") or "common funder" in low
+
+                kept = [r for r in orig if not _is_funding_reason(r)]
+                if orig and not kept:
+                    continue  # was funding-only suspect — drop
+                row = dict(s)
+                row["reasons"] = kept
+                cleaned_suspects.append(row)
+            base["suspect_wallets"] = cleaned_suspects[:40]
             base["funding_clusters"] = enriched_fc
-            spct, sn = bun._suspect_total_percent(suspects[:40])  # type: ignore[attr-defined]
+            spct, sn = bun._suspect_total_percent(cleaned_suspects[:40])  # type: ignore[attr-defined]
             s0 = dict(base.get("summary") or {})
             s0["suspect_total_pct"] = spct
             s0["suspect_wallet_count"] = sn

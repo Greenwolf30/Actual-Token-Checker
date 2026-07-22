@@ -989,7 +989,19 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             f"{suspect_n or len(suspects)} wallet(s):"
         )
         for sw in suspects[:12]:
-            reasons = ", ".join(sw.get("reasons") or [])
+            # Funding notes only belong under Shared SOL funder / multi-send
+            reason_list = [
+                r
+                for r in list(sw.get("reasons") or [])
+                if not (
+                    isinstance(r, str)
+                    and (
+                        r.lower().startswith("funded by ")
+                        or "common funder" in r.lower()
+                    )
+                )
+            ]
+            reasons = ", ".join(reason_list)
             w = (sw.get("wallet") or "").strip()
             lab = sw.get("label") or label_map.get(w)
             # Wallet + percent holdings; reasons on next line

@@ -6584,8 +6584,16 @@ function renderBundlesUi(data) {
       {
         key: "reasons",
         label: "Why",
-        render: (v) =>
-          escHtml(Array.isArray(v) ? v.join("; ") : v || "—"),
+        render: (v) => {
+          // Funding lives under Shared SOL funder / multi-send only
+          const list = (Array.isArray(v) ? v : v ? [v] : []).filter((r) => {
+            const s = String(r || "").toLowerCase();
+            return !(
+              s.startsWith("funded by ") || s.indexOf("common funder") >= 0
+            );
+          });
+          return escHtml(list.length ? list.join("; ") : "—");
+        },
       },
     ]);
     html += "</div></section>";
