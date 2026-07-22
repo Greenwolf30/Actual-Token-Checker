@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v106";
+const ADTC_CLIENT_VERSION = "v107";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -917,11 +917,77 @@ function saveRuggersStore(store) {
   }
 }
 
-function mintKeyFromToken(address, chain) {
-  const a = String(address || "").trim();
+/** Bare mint CA (no chain: prefix), trimmed. */
+function bareMintAddr(address) {
+  let a = String(address || "").trim();
   if (!a) return "";
-  const c = String(chain || "").trim().toLowerCase();
-  return c ? c + ":" + a : a;
+  if (a.includes(":") && !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a)) {
+    a = a.split(":").pop() || a;
+  }
+  return String(a).trim();
+}
+
+function sameMintAddr(a, b) {
+  const x = bareMintAddr(a).toLowerCase();
+  const y = bareMintAddr(b).toLowerCase();
+  return !!(x && y && x === y);
+}
+
+/**
+ * Canonical Ruggers store key — always chain-prefixed so mints never collide
+ * and bare vs solana: keys cannot mix two different tracks.
+ */
+function mintKeyFromToken(address, chain) {
+  const a = bareMintAddr(address);
+  if (!a) return "";
+  let c = String(chain || "").trim().toLowerCase();
+  if (!c || c === "sol" || c === "solana-mainnet") c = "solana";
+  return c + ":" + a;
+}
+
+/**
+ * Find the track record for a mint. Only returns a rec whose rec.address
+ * matches the requested mint (never another mint's sellers/hardware).
+ */
+function findRuggersRecForMint(store, address, chain) {
+  const s = store && typeof store === "object" ? store : {};
+  const bare = bareMintAddr(address);
+  if (!bare) return { key: "", rec: null };
+  const wantKey = mintKeyFromToken(bare, chain || "solana");
+  const candidates = [wantKey, bare, "solana:" + bare];
+  const seen = new Set();
+  for (const k of candidates) {
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    const rec = s[k];
+    if (rec && typeof rec === "object" && sameMintAddr(rec.address || k, bare)) {
+      return { key: k, rec };
+    }
+  }
+  // Full scan — address match only (never fuzzy suffix matches)
+  for (const [k, rec] of Object.entries(s)) {
+    if (k === "__meta" || !rec || typeof rec !== "object") continue;
+    if (sameMintAddr(rec.address, bare)) return { key: k, rec };
+    if (sameMintAddr(k, bare) && sameMintAddr(rec.address || k, bare)) {
+      return { key: k, rec };
+    }
+  }
+  return { key: wantKey, rec: null };
+}
+
+/** Mint CA currently shown in the summary bar (if any). */
+function getSummaryBarMintAddr() {
+  try {
+    const addrEl = $("sumAddr");
+    if (!addrEl) return "";
+    const link = addrEl.querySelector("a.sum-mint-link, a[href*='solscan'], a");
+    const raw = link
+      ? String(link.textContent || "").trim()
+      : String(addrEl.textContent || "").trim();
+    return bareMintAddr(raw);
+  } catch (_) {
+    return "";
+  }
 }
 
 /**
@@ -1643,24 +1709,47 @@ function enrollRuggersBaselineWallet(rec, w, info, now) {
 function processRuggersFromAnalyze(data) {
   const snap = extractRuggersSnapshot(data);
   if (!snap || !snap.address) return null;
-  const key = mintKeyFromToken(snap.address, snap.chain);
+  const mintBare = bareMintAddr(snap.address);
+  if (!mintBare) return null;
+  const key = mintKeyFromToken(mintBare, snap.chain || "solana");
   if (!key || key === "__meta") return null;
 
   const store = loadRuggersStore();
-  let rec = store[key];
-  if (rec && (rec === store.__meta || !rec.first_wallets && rec.rules_version && !rec.address)) {
+  // Strict: only load a track whose rec.address is THIS mint
+  let found = findRuggersRecForMint(store, mintBare, snap.chain || "solana");
+  let rec = found.rec;
+  // Refuse any rec that doesn't match this mint CA (cross-mint isolation)
+  if (rec && !sameMintAddr(rec.address || found.key, mintBare)) {
+    console.warn(
+      "[ruggers] refused foreign mint track",
+      found.key,
+      rec.address,
+      "want",
+      mintBare
+    );
     rec = null;
   }
+  if (rec && (rec === store.__meta || (!rec.first_wallets && rec.rules_version && !rec.address))) {
+    rec = null;
+  }
+  // Prefer canonical key going forward (migrate bare → solana:addr)
+  const storeKey = key;
+  if (rec && found.key && found.key !== storeKey) {
+    try {
+      delete store[found.key];
+    } catch (_) {}
+  }
+
   const now = snap.ts || new Date().toISOString();
   const isFirstLookup =
     !rec || !rec.first_wallets || !Object.keys(rec.first_wallets).length;
 
   if (isFirstLookup) {
-    // First lookup baseline — all Ruggers sections stay empty until later sells.
-    // Never inherit upload marks from other mints / cloud.
+    // First lookup baseline — empty sellers until later sells on THIS mint only.
+    // Never copy status/sticky/upload from any other mint.
     rec = {
-      address: snap.address,
-      chain: snap.chain,
+      address: mintBare,
+      chain: snap.chain || "solana",
       symbol: snap.symbol,
       name: snap.name,
       creator: snap.creator || null,
@@ -1681,6 +1770,7 @@ function processRuggersFromAnalyze(data) {
       // Similar/Single/Creator sellers who never buy back — stay forever until swing
       sticky_lane_sellers: {},
       rules_version: RUGGERS_RULES_VERSION,
+      mint_key: storeKey,
     };
     for (const [w, info] of Object.entries(snap.wallets || {})) {
       rec.first_wallets[w] = {
@@ -1930,16 +2020,55 @@ function processRuggersFromAnalyze(data) {
   }
   rec.rugwatch_known = rwKnown;
 
-  // Recompute status for every first-lookup wallet
+  // Recompute status for every first-lookup wallet on THIS mint only
   const status = rec.status && typeof rec.status === "object" ? rec.status : {};
   const flaggedSellers =
     rec.flagged_sellers && typeof rec.flagged_sellers === "object"
       ? { ...rec.flagged_sellers }
       : {};
-  const stickyLane =
-    rec.sticky_lane_sellers && typeof rec.sticky_lane_sellers === "object"
-      ? { ...rec.sticky_lane_sellers }
-      : {};
+  // Sticky sellers: only wallets that were on THIS mint's baseline (or stamped
+  // source_mint === this mint). Drop foreign hardware bleed from other mints.
+  const stickyLane = {};
+  {
+    const rawSticky =
+      rec.sticky_lane_sellers && typeof rec.sticky_lane_sellers === "object"
+        ? rec.sticky_lane_sellers
+        : {};
+    const base = rec.first_wallets || {};
+    for (const [w, meta] of Object.entries(rawSticky)) {
+      if (!w || !meta) continue;
+      const src = bareMintAddr(meta.source_mint || "").toLowerCase();
+      if (src && src !== mintBare.toLowerCase()) continue;
+      let onBase = !!base[w];
+      if (!onBase) {
+        const wl = String(w).toLowerCase();
+        for (const k of Object.keys(base)) {
+          if (String(k).toLowerCase() === wl) {
+            onBase = true;
+            break;
+          }
+        }
+      }
+      // No baseline and no valid source stamp → foreign inject; drop
+      if (!onBase && !src) continue;
+      if (!onBase && src && src === mintBare.toLowerCase()) {
+        // stamped this mint but missing baseline — keep (sold off-list)
+      } else if (!onBase) {
+        continue;
+      }
+      stickyLane[w] = { ...meta, source_mint: mintBare };
+    }
+  }
+  // Drop foreign flagged_sellers early
+  for (const w of Object.keys(flaggedSellers)) {
+    const meta = flaggedSellers[w];
+    const src = bareMintAddr((meta && meta.source_mint) || "").toLowerCase();
+    if (src && src !== mintBare.toLowerCase()) {
+      delete flaggedSellers[w];
+      continue;
+    }
+    if (meta && typeof meta === "object") meta.source_mint = mintBare;
+  }
   const unflagNow = [];
 
   for (const [w, first] of Object.entries(rec.first_wallets || {})) {
@@ -2312,6 +2441,7 @@ function processRuggersFromAnalyze(data) {
         entered_via: prior.entered_via || "sold_while_flagged",
         origin_lane: originLane,
         rules_v: RUGGERS_RULES_VERSION,
+        source_mint: mintBare,
       };
     }
 
@@ -2347,6 +2477,7 @@ function processRuggersFromAnalyze(data) {
         last_update: now,
         phase: "swing",
         ever_flagged: true,
+        source_mint: mintBare,
         sold_pct: prior.sold_pct != null ? prior.sold_pct : soldState.sold_pct,
         first_pct: first.pct_supply,
         reason: "buy_back_flagged_swing",
@@ -2441,6 +2572,7 @@ function processRuggersFromAnalyze(data) {
         in_launch: originLane === "launch" || !!first.in_launch,
         in_suspect: originLane === "suspect" || !!first.in_suspect,
         indefinite: true,
+        source_mint: mintBare,
       };
     } else if (tag === "swing" && buyBack && stickyLane[w]) {
       // Only leave sticky seller list on real buy-back → Swing
@@ -2494,6 +2626,7 @@ function processRuggersFromAnalyze(data) {
       first_seen_at: firstSeenAt,
       sold_at: soldAt,
       swing_at: swingAt,
+      source_mint: mintBare,
       in_multi: !!(
         originLane === "multi" ||
         first.in_multi ||
@@ -2654,17 +2787,9 @@ function processRuggersFromAnalyze(data) {
         status[sw].sold_supply_pct = meta.first_pct;
       }
     }
-    // Ensure baseline memory so future analyzes still track them
-    if (!rec.first_wallets[sw]) {
-      rec.first_wallets[sw] = {
-        pct_supply: meta.first_pct != null ? meta.first_pct : null,
-        balance: meta.first_balance != null ? meta.first_balance : null,
-        rank: null,
-        label: lane === "creator" ? "creator" : null,
-        in_similar: lane === "similar",
-        origin_lane: lane,
-      };
-    } else {
+    // Only extend baseline for sticky wallets already known on THIS mint
+    // (never invent first_wallets from foreign sticky bleed)
+    if (rec.first_wallets[sw]) {
       rec.first_wallets[sw].origin_lane =
         rec.first_wallets[sw].origin_lane || lane;
       if (lane === "similar") rec.first_wallets[sw].in_similar = true;
@@ -2775,8 +2900,19 @@ function processRuggersFromAnalyze(data) {
   // Final pass: Upload (N) only for real this-mint Upload button marks
   purgeFalseRuggersUploadMarks(rec);
   rec.rules_version = RUGGERS_RULES_VERSION;
+  // Hard-bind track to this mint CA (never another mint's hardware)
+  rec.address = mintBare;
+  rec.mint_key = storeKey;
+  rec.chain = rec.chain || snap.chain || "solana";
 
-  store[key] = rec;
+  // Drop any sticky/status rows that were stamped for a different mint
+  scrubForeignMintRuggersRows(rec, mintBare);
+
+  store[storeKey] = rec;
+  // Remove legacy bare-key duplicate if present
+  try {
+    if (store[mintBare] && store[mintBare] !== rec) delete store[mintBare];
+  } catch (_) {}
   saveRuggersStore(store);
 
   // Cloud unflag only for non-lineage cleanup (flagged identity stays for loop)
@@ -2786,7 +2922,67 @@ function processRuggersFromAnalyze(data) {
     });
   }
 
-  return { key, rec, unflagged: unflagNow };
+  return { key: storeKey, rec, unflagged: unflagNow };
+}
+
+/**
+ * Remove sticky/status/flagged rows that belong to a different mint.
+ * Prevents "same hardware from mint A" showing under mint B.
+ */
+function scrubForeignMintRuggersRows(rec, mintBare) {
+  if (!rec || !mintBare) return;
+  const want = bareMintAddr(mintBare).toLowerCase();
+  const baseline = rec.first_wallets && typeof rec.first_wallets === "object"
+    ? rec.first_wallets
+    : {};
+  function belongs(meta, wallet) {
+    if (!meta || typeof meta !== "object") meta = {};
+    const src = bareMintAddr(
+      meta.source_mint || meta.track_mint || ""
+    ).toLowerCase();
+    // Explicit foreign stamp → drop
+    if (src && src !== want) return false;
+    // Explicit this-mint stamp → keep
+    if (src && src === want) return true;
+    // No stamp: must be on this mint baseline (or creator)
+    const w = String(wallet || "").trim();
+    if (!w) return false;
+    if (baseline[w]) return true;
+    const wl = w.toLowerCase();
+    for (const k of Object.keys(baseline)) {
+      if (String(k).toLowerCase() === wl) return true;
+    }
+    if (rec.creator && String(rec.creator).toLowerCase() === wl) return true;
+    // No baseline + no stamp = foreign hardware bleed
+    return false;
+  }
+  if (rec.sticky_lane_sellers && typeof rec.sticky_lane_sellers === "object") {
+    for (const w of Object.keys(rec.sticky_lane_sellers)) {
+      if (!belongs(rec.sticky_lane_sellers[w], w)) {
+        delete rec.sticky_lane_sellers[w];
+      } else {
+        rec.sticky_lane_sellers[w].source_mint = mintBare;
+      }
+    }
+  }
+  if (rec.flagged_sellers && typeof rec.flagged_sellers === "object") {
+    for (const w of Object.keys(rec.flagged_sellers)) {
+      if (!belongs(rec.flagged_sellers[w], w)) {
+        delete rec.flagged_sellers[w];
+      } else {
+        rec.flagged_sellers[w].source_mint = mintBare;
+      }
+    }
+  }
+  if (rec.status && typeof rec.status === "object") {
+    for (const w of Object.keys(rec.status)) {
+      if (!belongs(rec.status[w], w)) {
+        delete rec.status[w];
+      } else {
+        rec.status[w].source_mint = mintBare;
+      }
+    }
+  }
 }
 
 /** True if wallet is known on RugWatch for this mint track (not necessarily in Flagged section). */
@@ -3201,6 +3397,7 @@ function markRuggersUploadedAsFlagged(exportKey, rows) {
           reason: st.reason || row.reason || "sold_99",
           uploaded: true,
           indefinite: true,
+          source_mint: bareMintAddr(rec.address) || null,
         };
       }
       // Never put uploaded Creator into Flagged on this mint
@@ -4811,51 +5008,24 @@ function refreshRuggersPanel(focusKey) {
       return tb.localeCompare(ta);
     });
 
-  // Resolve focus/sum mint → a key that actually exists in the track store.
-  // focusKey is often solana:<mint> after restore/Analyze even when that mint has
-  // no Ruggers baseline yet (other mints still in localStorage) — never read
-  // store[missing].address (TypeError: reading 'address').
-  const resolveRuggersKey = (hint) => {
-    const h = String(hint || "").trim();
-    if (!h) return "";
-    if (keys.includes(h) && store[h]) return h;
-    const bare = h.includes(":") ? h.split(":").pop() : h;
-    return (
-      keys.find(
-        (k) =>
-          k === h ||
-          k === bare ||
-          k.endsWith(":" + h) ||
-          k.endsWith(":" + bare) ||
-          k === "solana:" + h ||
-          k === "solana:" + bare ||
-          (k.includes(":") && k.split(":").pop() === bare)
-      ) || ""
-    );
-  };
-
-  let activeKey = resolveRuggersKey(focusKey);
-  if (!activeKey) {
-    const addrEl = $("sumAddr");
-    // Prefer the mint link address over plain text (logo/summary bar)
-    let addr = "";
-    try {
-      const link = addrEl && addrEl.querySelector("a.sum-mint-link, a");
-      addr = link
-        ? String(link.textContent || "").trim()
-        : addrEl
-          ? String(addrEl.textContent || "").trim()
-          : "";
-    } catch (_) {
-      addr = addrEl ? String(addrEl.textContent || "").trim() : "";
-    }
-    activeKey = resolveRuggersKey(addr);
-  }
-  // Never fall back to a *different* mint's track when the user is looking at
-  // a specific CA — that made Upload (0) from mint A appear on mint B.
+  // Expected mint: focusKey (Analyze) > summary bar CA > nothing
+  // Never fuzzy-match another mint's track.
   const focusHint = String(focusKey || "").trim();
-  if (!activeKey && keys.length && !focusHint) {
+  const summaryMint = getSummaryBarMintAddr();
+  const expectedBare = bareMintAddr(focusHint) || summaryMint;
+
+  let activeKey = "";
+  let rec = null;
+  if (expectedBare) {
+    const found = findRuggersRecForMint(store, expectedBare, "solana");
+    if (found.rec && sameMintAddr(found.rec.address || found.key, expectedBare)) {
+      activeKey = found.key;
+      rec = found.rec;
+    }
+  } else if (keys.length) {
+    // No mint in view — only then show most recent track
     activeKey = keys[0];
+    rec = store[activeKey];
   }
 
   if (!keys.length) {
@@ -4880,12 +5050,18 @@ function refreshRuggersPanel(focusKey) {
     return;
   }
 
-  // Defensive: never swap in another mint when focus was given
-  let rec = activeKey ? store[activeKey] : null;
-  if ((!rec || typeof rec !== "object") && !focusHint && keys.length) {
-    activeKey = keys[0];
-    rec = store[activeKey];
+  // Hard refuse: never display mint A's sellers under mint B
+  if (expectedBare && rec && !sameMintAddr(rec.address || activeKey, expectedBare)) {
+    console.warn(
+      "[ruggers] panel refused foreign track",
+      rec.address,
+      "expected",
+      expectedBare
+    );
+    rec = null;
+    activeKey = "";
   }
+
   if (!rec || typeof rec !== "object" || !activeKey) {
     _lastRuggersBuckets = null;
     _lastRuggersRec = null;
@@ -4893,22 +5069,26 @@ function refreshRuggersPanel(focusKey) {
     if (body) {
       body.innerHTML =
         '<p class="logs-empty">' +
-        (focusHint
-          ? "No Ruggers baseline for this mint yet. Run a full Analyze (not Quick), then re-analyze after sells to see sellers and Upload counts."
+        (expectedBare
+          ? "No Ruggers baseline for this mint yet (" +
+            escHtml(expectedBare.slice(0, 8)) +
+            "…). Run a full Analyze (not Quick) on this CA. Sellers only appear after a later re-Analyze of the same mint — never from another mint."
           : "Ruggers track data is missing or corrupt. Run a full Analyze again.") +
         "</p>";
     }
     if (dump) {
-      dump.textContent = focusHint
+      dump.textContent = expectedBare
         ? "No Ruggers baseline for this mint yet."
         : "Ruggers track data is missing or corrupt.";
     }
     return;
   }
 
-  // Live-purge poisoned upload marks when rendering (even before next Analyze)
+  // Live-purge + foreign-mint scrub when rendering
   try {
     purgeFalseRuggersUploadMarks(rec);
+    scrubForeignMintRuggersRows(rec, bareMintAddr(rec.address || expectedBare));
+    rec.address = bareMintAddr(rec.address) || expectedBare;
     store[activeKey] = rec;
     saveRuggersStore(store);
   } catch (_) {
