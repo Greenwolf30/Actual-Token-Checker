@@ -6342,8 +6342,8 @@ function restoreLastBundlesAnalyze() {
 }
 
 /**
- * Since-last-Analyze relative change color:
- * 1–25% green · 25–50% yellow · 50–75% orange · 75–99%+ red
+ * Since-last-Analyze change color (magnitude of the shown delta):
+ * 1–25 green · 25–50 yellow · 50–75 orange · 75–99+ red
  */
 function bundleChangeDeltaClass(absPct) {
   const a = Math.abs(Number(absPct));
@@ -6365,8 +6365,15 @@ function loadBundleStatsPrevMap() {
   }
 }
 
-function saveBundleStatsPrev(mint, stats) {
+/** Bare mint address for stats prev map (stable across chain: prefix variants). */
+function bundleStatsMintKey(mint) {
   const m = String(mint || "").trim();
+  if (!m) return "";
+  return m.includes(":") ? m.split(":").pop() : m;
+}
+
+function saveBundleStatsPrev(mint, stats) {
+  const m = bundleStatsMintKey(mint);
   if (!m || !stats) return;
   try {
     const map = loadBundleStatsPrevMap();
@@ -6387,37 +6394,71 @@ function saveBundleStatsPrev(mint, stats) {
   }
 }
 
+function loadBundleStatsPrev(mint) {
+  const m = bundleStatsMintKey(mint);
+  if (!m) return null;
+  const map = loadBundleStatsPrevMap();
+  if (map[m] && typeof map[m] === "object") return map[m];
+  // Legacy keys may have been full "solana:mint" or mixed forms
+  for (const k of Object.keys(map)) {
+    const bare = bundleStatsMintKey(k);
+    if (bare === m && map[k] && typeof map[k] === "object") return map[k];
+  }
+  return null;
+}
+
 /**
- * Relative % change since last Analyze. Returns HTML with arrow + color, or "".
+ * Change since last live Analyze for this mint.
+ * Supply tiles: absolute percentage-points (e.g. 12% → 15% ⇒ ▲ +3.0%).
+ * Risk: absolute score points (e.g. 40 → 48 ⇒ ▲ +8).
+ * Returns HTML with arrow + color, or "".
+ *
+ * kind: "pct" (default) | "score"
  */
-function formatBundleStatDelta(cur, prev) {
+function formatBundleStatDelta(cur, prev, kind) {
   const c = cur != null && Number.isFinite(Number(cur)) ? Number(cur) : null;
   const p = prev != null && Number.isFinite(Number(prev)) ? Number(prev) : null;
   if (c == null || p == null) return "";
-  if (Math.abs(c - p) < 1e-9) return "";
-  let rel;
-  if (Math.abs(p) < 1e-12) {
-    // From ~0: use absolute points as the % magnitude signal
-    rel = c > p ? Math.min(99, Math.abs(c) * 10) : -Math.min(99, Math.abs(c) * 10);
-    if (Math.abs(c) < 0.01) return "";
-  } else {
-    rel = ((c - p) / Math.abs(p)) * 100;
+  const diff = c - p;
+  if (!Number.isFinite(diff) || Math.abs(diff) < 1e-12) return "";
+
+  const isScore = kind === "score";
+  // Hide tiny noise: risk < 0.5 pt · supply < 0.05 percentage points
+  if (isScore) {
+    if (Math.abs(diff) < 0.5) return "";
+  } else if (Math.abs(diff) < 0.05) {
+    return "";
   }
-  if (!Number.isFinite(rel) || Math.abs(rel) < 1) return "";
-  const abs = Math.min(99, Math.abs(rel));
-  const up = rel > 0;
+
+  const up = diff > 0;
   const arrow = up ? "▲" : "▼";
   const sign = up ? "+" : "−";
-  const cls = bundleChangeDeltaClass(abs);
+  const mag = Math.abs(diff);
+
+  // Color intensity from magnitude (maps into existing 1–25 / 25–50 / … bands)
+  // Risk: 1 pt → ~5, 5 pts → 25 · Supply: 0.5pp → 10, 1.25pp → 25, 5pp → 100
+  const colorMag = isScore
+    ? Math.min(99, mag * 5)
+    : Math.min(99, mag * 20);
+  const cls = bundleChangeDeltaClass(Math.max(1, colorMag));
+
+  let label;
+  if (isScore) {
+    label = Math.round(mag).toString();
+  } else {
+    label =
+      (mag >= 10 ? mag.toFixed(0) : mag.toFixed(1).replace(/\.0$/, "")) + "%";
+  }
+
   return (
     '<span class="bun-stat-delta ' +
     cls +
-    '" title="Since last Analyze">' +
+    '" title="Change since last Analyze of this mint">' +
     arrow +
     " " +
     sign +
-    abs.toFixed(0) +
-    "%</span>"
+    label +
+    "</span>"
   );
 }
 
@@ -6503,8 +6544,7 @@ function renderBundlesUi(data) {
     (data.market && data.market.address) ||
     (view.token_address || "") ||
     "";
-  const prevMap = loadBundleStatsPrevMap();
-  const prev = (mint && prevMap[mint]) || null;
+  const prev = mint ? loadBundleStatsPrev(mint) : null;
   const curStats = extractBundleSummaryStats(s, riskScore);
   const isRestore = !!(data && data._restoredFromBrowserCache);
 
@@ -6519,8 +6559,11 @@ function renderBundlesUi(data) {
   }
 
   function withDelta(mainHtml, key) {
+    // Deltas only on live Analyze (not page-refresh restore) and only when
+    // we have a previous live run for this mint (2nd+ Analyze).
     if (isRestore || !prev) return mainHtml;
-    const d = formatBundleStatDelta(curStats[key], prev[key]);
+    const kind = key === "risk" ? "score" : "pct";
+    const d = formatBundleStatDelta(curStats[key], prev[key], kind);
     return d ? mainHtml + " " + d : mainHtml;
   }
 

@@ -1416,12 +1416,13 @@ a.copy-mint:hover,
 /* Since-last-Analyze relative change (1–25 green · 25–50 yellow · 50–75 orange · 75–99 red) */
 .bun-stat-delta {
   display: inline-block;
-  margin-left: 4px;
-  font-size: 0.72rem;
+  margin-left: 6px;
+  font-size: 0.78rem;
   font-weight: 700;
   letter-spacing: 0.02em;
   white-space: nowrap;
-  vertical-align: middle;
+  vertical-align: baseline;
+  line-height: 1.2;
 }
 .bun-stat-delta.bun-delta-green { color: #6a9e78; }
 .bun-stat-delta.bun-delta-yellow { color: #b8a85c; }
