@@ -951,9 +951,20 @@ def format_bundles_text(data: dict[str, Any]) -> str:
                 if len(norm) > 12:
                     lines.append(f"         … +{len(norm) - 12} more")
     else:
-        lines.append(
-            "  (none — no multi-send clusters this scan; needs Helius + full Analyze)"
-        )
+        ms_err = (s.get("multi_send_error") or "").strip()
+        srcs = " ".join(str(x) for x in (s.get("sources_used") or [])).lower()
+        helius_ran = "token_multi_send" in srcs or "helius" in srcs
+        if ms_err:
+            lines.append(f"  (none this scan — {ms_err[:200]})")
+        elif helius_ran:
+            lines.append(
+                "  (none this scan — Helius ran; no one→many token/SOL multi-send "
+                "in the recent history window. LP/bonding-curve excluded.)"
+            )
+        else:
+            lines.append(
+                "  (none — multi-send needs HELIUS_API_KEY on the API + full Analyze)"
+            )
 
     # Launch-window same-slot groups
     slots = data.get("same_slot_groups") or []

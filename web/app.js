@@ -6504,15 +6504,25 @@ function renderBundlesUi(data) {
     }
     html += "</div></section>";
   } else {
-    const msErr = s.multi_send_error
-      ? " " + String(s.multi_send_error)
-      : "";
-    html += bunEmptySection(
-      "Multi-send (one → many)",
-      "None found — one wallet sending this mint or SOL to many others (not multi-account)." +
-        " Needs Helius + full Analyze. LP/bonding-curve (~pool %) is never counted as a multi-send sender." +
-        msErr
-    );
+    const srcs = ((s.sources_used || []).join(" ") || "").toLowerCase();
+    const heliusRan =
+      srcs.indexOf("token_multi_send") >= 0 || srcs.indexOf("helius") >= 0;
+    let emptyMsg;
+    if (s.multi_send_error) {
+      emptyMsg =
+        "None this scan — " +
+        String(s.multi_send_error) +
+        " (set HELIUS_API_KEY on the API host, not in web/config.js).";
+    } else if (heliusRan) {
+      emptyMsg =
+        "None this scan — Helius ran, but no one→many token/SOL multi-send showed in the recent history window. " +
+        "That is normal for many mints. LP/bonding-curve (~pool %) is never counted as a multi-send sender.";
+    } else {
+      emptyMsg =
+        "None found — multi-send needs HELIUS_API_KEY on the API (Render) + full Analyze (not Quick). " +
+        "Key is server-side only; not web/config.js.";
+    }
+    html += bunEmptySection("Multi-send (one → many)", emptyMsg);
   }
 
   // Launch-window
