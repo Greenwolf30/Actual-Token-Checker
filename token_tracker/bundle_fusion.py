@@ -560,8 +560,9 @@ def comprehensive_bundle_check(
             }
     if include_multi_send:
         try:
+            # Wider history: newest + older mint txs (not only last ~20 swaps)
             multi_send_report = src.analyze_token_multi_sends(
-                mint, holder_seed_u, max_sigs=28, max_tx_fetch=20
+                mint, holder_seed_u, max_sigs=80, max_tx_fetch=40
             )
         except Exception as exc:  # noqa: BLE001
             multi_send_report = {"ok": False, "error": str(exc), "clusters": []}
@@ -908,6 +909,17 @@ def comprehensive_bundle_check(
             mt, mn = None, 0
         s0["multi_send_total_pct"] = mt
         s0["multi_send_wallet_with_pct"] = mn
+        # Scan diagnostics (helps explain "none found")
+        if multi_send_report.get("txs_scanned") is not None:
+            s0["multi_send_txs_scanned"] = multi_send_report.get("txs_scanned")
+        if multi_send_report.get("sigs_available") is not None:
+            s0["multi_send_sigs_available"] = multi_send_report.get(
+                "sigs_available"
+            )
+        if multi_send_report.get("edge_senders") is not None:
+            s0["multi_send_edge_senders"] = multi_send_report.get("edge_senders")
+        if multi_send_report.get("notes"):
+            s0["multi_send_scan_notes"] = str(multi_send_report.get("notes"))[:280]
         # Split totals for token multi-send only
         try:
             split = bun._multi_send_split_totals(ms_shell_token, pct_by_w)  # type: ignore[attr-defined]

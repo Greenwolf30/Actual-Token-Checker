@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v124";
+const ADTC_CLIENT_VERSION = "v125";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -10165,9 +10165,26 @@ function renderBundlesUi(data) {
         "No token multi-send this scan (Multi-send total 0%). " +
         "Funded wallets that hold supply are under Shared SOL — their % is in Shared SOL total, not Multi-send.";
     } else if (heliusRan) {
+      const txsN = s.multi_send_txs_scanned;
+      const sigsN = s.multi_send_sigs_available;
+      const edgeN = s.multi_send_edge_senders;
+      const scanBit =
+        txsN != null || sigsN != null
+          ? " Scanned " +
+            escHtml(String(txsN != null ? txsN : "?")) +
+            " txs / " +
+            escHtml(String(sigsN != null ? sigsN : "?")) +
+            " mint sigs" +
+            (edgeN != null
+              ? " · " + escHtml(String(edgeN)) + " sender outflow(s)"
+              : "") +
+            "."
+          : "";
       emptyMsg =
-        "None this scan — Helius ran, but no one→many token multi-send showed in the recent history window. " +
-        "That is normal for many mints. LP/bonding-curve (~pool %) is never counted as a multi-send sender.";
+        "None this scan — Helius ran token multi-send (this mint one→many)." +
+        scanBit +
+        " No fan-out with ≥2 receivers found (LP/bonding-curve senders excluded). " +
+        "Shared SOL funders are a different check.";
     } else {
       emptyMsg =
         "None found — multi-send needs HELIUS_API_KEY on the API (Render) + full Analyze (not Quick). " +

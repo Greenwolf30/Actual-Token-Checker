@@ -2781,6 +2781,10 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
             "multi_send_hold_shape": ms_split.get("hold_shape")
             or s.get("multi_send_hold_shape"),
             "multi_send_error": s.get("multi_send_error"),
+            "multi_send_txs_scanned": s.get("multi_send_txs_scanned"),
+            "multi_send_sigs_available": s.get("multi_send_sigs_available"),
+            "multi_send_edge_senders": s.get("multi_send_edge_senders"),
+            "multi_send_scan_notes": s.get("multi_send_scan_notes"),
             "funding_error": s.get("funding_error"),
             "funding_total_pct": s.get("funding_total_pct"),
             "funding_wallet_count": s.get("funding_wallet_count"),

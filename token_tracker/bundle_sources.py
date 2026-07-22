@@ -607,16 +607,16 @@ def analyze_token_multi_sends(
     mint: str,
     holder_wallets: list[str] | None = None,
     *,
-    max_sigs: int = 28,
-    max_tx_fetch: int = 20,
+    max_sigs: int = 80,
+    max_tx_fetch: int = 40,
     min_receivers: int = 2,
 ) -> dict[str, Any]:
     """
     Detect multi-sends of THIS mint: one owner sent the token to many wallets.
 
-    Scans recent mint signatures (Helius getTransaction), builds
-    sender_owner → receivers from pre/post token balances for this mint.
-    Prefers clusters that hit current holders when holder_wallets is set.
+    Paginate mint signatures (newest → older) and fetch a mix of recent + older
+    txs. Looking only at the latest ~20 swaps missed real fan-outs that sit
+    earlier in mint history (common on pump tokens after launch distribute).
     """
     url = helius_url()
     mint = (mint or "").strip()
@@ -634,12 +634,28 @@ def analyze_token_multi_sends(
         if w and len(str(w).strip()) >= 32
     }
 
+    # Paginate toward older activity (same pattern as launch-window scan)
+    all_sigs: list[dict[str, Any]] = []
+    before: str | None = None
+    pages = 0
     try:
-        sigs = _rpc(
-            url,
-            "getSignaturesForAddress",
-            [mint, {"limit": max_sigs}],
-        )
+        while len(all_sigs) < max_sigs and pages < 4:
+            params: dict[str, Any] = {"limit": min(50, max_sigs - len(all_sigs))}
+            if before:
+                params["before"] = before
+            batch = _rpc(url, "getSignaturesForAddress", [mint, params])
+            pages += 1
+            if not isinstance(batch, list) or not batch:
+                break
+            for b in batch:
+                if isinstance(b, dict) and b.get("signature"):
+                    all_sigs.append(b)
+            last_sig = batch[-1].get("signature") if batch else None
+            if not last_sig or last_sig == before:
+                break
+            before = str(last_sig)
+            if len(batch) < 20:
+                break
     except Exception as exc:  # noqa: BLE001
         return {
             "ok": False,
@@ -647,15 +663,42 @@ def analyze_token_multi_sends(
             "method": "helius_mint_token_multi_send",
             "clusters": [],
         }
-    if not isinstance(sigs, list):
-        sigs = []
 
-    # sender -> set of receivers (owners)
+    if not all_sigs:
+        return {
+            "ok": True,
+            "method": "helius_mint_token_multi_send",
+            "clusters": [],
+            "txs_scanned": 0,
+            "sigs_available": 0,
+            "notes": "No mint signatures — cannot scan multi-send.",
+        }
+
+    # Newest-first from RPC. Sample BOTH ends:
+    #  - recent: ongoing distributes
+    #  - older tail: launch / early fan-out (often the real multi-send)
+    n_fetch = max(8, min(max_tx_fetch, len(all_sigs)))
+    half = max(4, n_fetch // 2)
+    newest = all_sigs[:half]
+    older = list(reversed(all_sigs[-half:]))
+    # Dedupe while preserving order (newest first, then older unique)
+    seen_sig: set[str] = set()
+    to_fetch: list[dict[str, Any]] = []
+    for row in newest + older:
+        sig = str(row.get("signature") or "")
+        if not sig or sig in seen_sig:
+            continue
+        seen_sig.add(sig)
+        to_fetch.append(row)
+        if len(to_fetch) >= n_fetch:
+            break
+
+    # sender -> set of receivers (owners), aggregated across txs
     edges: dict[str, set[str]] = {}
     txs_ok = 0
-    for row in sigs[:max_sigs]:
-        if txs_ok >= max_tx_fetch:
-            break
+    txs_fail = 0
+    edge_hits = 0
+    for row in to_fetch:
         sig = (row or {}).get("signature")
         if not sig:
             continue
@@ -672,22 +715,31 @@ def analyze_token_multi_sends(
                 ],
             )
         except Exception:  # noqa: BLE001
+            txs_fail += 1
             continue
         if not tx:
+            txs_fail += 1
             continue
         txs_ok += 1
         for sender, receivers in _extract_mint_send_edges(tx, mint).items():
-            if not sender:
+            if not sender or len(sender) < 32:
                 continue
-            edges.setdefault(sender, set()).update(receivers)
+            before_n = len(edges.get(sender) or ())
+            edges.setdefault(sender, set()).update(
+                r for r in receivers if r and r != sender and len(str(r)) >= 32
+            )
+            edge_hits += max(0, len(edges[sender]) - before_n)
 
     clusters: list[dict[str, Any]] = []
     for sender, recs in edges.items():
         uniq = sorted({r for r in recs if r and r != sender})
         if len(uniq) < min_receivers:
             continue
-        in_holders = [r for r in uniq if r in holder_set] if holder_set else list(uniq)
-        # Prefer clusters that touch current holders; still keep pure fan-outs
+        in_holders = (
+            [r for r in uniq if r in holder_set] if holder_set else list(uniq)
+        )
+        # Prefer current holders when enough still hold; else keep full fan-out
+        # so historical multi-sends still track even if bags moved.
         focus = in_holders if len(in_holders) >= min_receivers else uniq
         if len(focus) < min_receivers:
             continue
@@ -713,11 +765,40 @@ def analyze_token_multi_sends(
         "method": "helius_mint_token_multi_send",
         "clusters": clusters[:12],
         "txs_scanned": txs_ok,
+        "txs_failed": txs_fail,
+        "sigs_available": len(all_sigs),
+        "txs_fetched": len(to_fetch),
+        "edge_senders": len(edges),
+        "edge_receiver_links": edge_hits,
         "notes": (
             "One wallet sent this mint to multiple receivers (token multi-send). "
-            "Best-effort from recent mint history; not full chain archive."
+            f"Scanned {txs_ok}/{len(to_fetch)} txs across {len(all_sigs)} sigs "
+            f"({len(edges)} sender(s) with outflows). "
+            "Not a full chain archive."
         ),
     }
+
+
+def _token_ui_amount(b: dict[str, Any]) -> float:
+    """Best-effort ui amount from pre/post token balance row."""
+    try:
+        ui_amt = b.get("uiTokenAmount") or {}
+        ui = ui_amt.get("uiAmount")
+        if ui is not None:
+            return float(ui)
+        # Prefer uiAmountString when present
+        uis = ui_amt.get("uiAmountString")
+        if uis is not None and str(uis).strip() != "":
+            return float(uis)
+        raw = ui_amt.get("amount")
+        dec = ui_amt.get("decimals")
+        if raw is not None and dec is not None:
+            return float(raw) / (10 ** int(dec))
+        if raw is not None:
+            return float(raw)
+    except (TypeError, ValueError):
+        pass
+    return 0.0
 
 
 def _extract_mint_send_edges(tx: dict[str, Any], mint: str) -> dict[str, set[str]]:
@@ -730,11 +811,7 @@ def _extract_mint_send_edges(tx: dict[str, Any], mint: str) -> dict[str, set[str
     if not isinstance(pre, list) or not isinstance(post, list):
         return {}
 
-    def _key(b: dict[str, Any]) -> tuple[str, str]:
-        owner = str(b.get("owner") or "").strip()
-        acct = str(b.get("accountIndex") if b.get("accountIndex") is not None else "")
-        return owner, acct
-
+    mint_n = (mint or "").strip()
     pre_map: dict[tuple[str, str], float] = {}
     post_map: dict[tuple[str, str], float] = {}
     owners_by_idx: dict[str, str] = {}
@@ -742,48 +819,36 @@ def _extract_mint_send_edges(tx: dict[str, Any], mint: str) -> dict[str, set[str
     for b in pre:
         if not isinstance(b, dict):
             continue
-        if str(b.get("mint") or "").strip() != mint:
+        if str(b.get("mint") or "").strip() != mint_n:
             continue
         owner = str(b.get("owner") or "").strip()
         idx = str(b.get("accountIndex") if b.get("accountIndex") is not None else "")
         if owner:
             owners_by_idx[idx] = owner
-        try:
-            ui = (b.get("uiTokenAmount") or {}).get("uiAmount")
-            pre_map[(owner, idx)] = float(ui) if ui is not None else float(
-                (b.get("uiTokenAmount") or {}).get("amount") or 0
-            )
-        except (TypeError, ValueError):
-            pre_map[(owner, idx)] = 0.0
+        pre_map[(owner, idx)] = _token_ui_amount(b)
 
     for b in post:
         if not isinstance(b, dict):
             continue
-        if str(b.get("mint") or "").strip() != mint:
+        if str(b.get("mint") or "").strip() != mint_n:
             continue
         owner = str(b.get("owner") or "").strip()
         idx = str(b.get("accountIndex") if b.get("accountIndex") is not None else "")
         if owner:
             owners_by_idx[idx] = owner
-        try:
-            ui = (b.get("uiTokenAmount") or {}).get("uiAmount")
-            post_map[(owner, idx)] = float(ui) if ui is not None else float(
-                (b.get("uiTokenAmount") or {}).get("amount") or 0
-            )
-        except (TypeError, ValueError):
-            post_map[(owner, idx)] = 0.0
+        post_map[(owner, idx)] = _token_ui_amount(b)
 
-    # Aggregate by owner
+    # Aggregate by owner (resolve empty owner via accountIndex map)
     pre_own: dict[str, float] = {}
     post_own: dict[str, float] = {}
     for (owner, _idx), v in pre_map.items():
         o = owner or owners_by_idx.get(_idx) or ""
-        if not o:
+        if not o or len(o) < 32:
             continue
         pre_own[o] = pre_own.get(o, 0.0) + float(v or 0)
     for (owner, _idx), v in post_map.items():
         o = owner or owners_by_idx.get(_idx) or ""
-        if not o:
+        if not o or len(o) < 32:
             continue
         post_own[o] = post_own.get(o, 0.0) + float(v or 0)
 
@@ -802,8 +867,16 @@ def _extract_mint_send_edges(tx: dict[str, Any], mint: str) -> dict[str, set[str
     # (common batch distribute pattern).
     if not senders or not receivers:
         return out
+    # One sender → many receivers is the multi-send signal.
+    # Skip pure 1↔1 swaps when that is the only edge in the tx unless there
+    # are multiple receivers (batch distribute / airdrop).
+    if len(receivers) < 2 and len(senders) == 1:
+        # Still record 1→1 so aggregation across txs can build 1→many
+        pass
     for s in senders:
-        out[s] = {r for r in receivers if r != s}
+        outs = {r for r in receivers if r != s}
+        if outs:
+            out[s] = outs
     return out
 
 
