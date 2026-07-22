@@ -58,6 +58,10 @@
         out.steps.push({ step: "A", note: note, total: t1, hasPainted: hasPainted, hasUp: hasUp });
         if (!hasPainted) out.errors.push("A: banner missing DELTAS PAINTED: 9 — got: " + note);
         if (!hasUp) out.errors.push("A: total missing UP +10 — got: " + t1);
+        var riskT = (document.querySelector('.bun-stat[data-bun-stat="Risk"]') || {}).innerText || "";
+        if (!/\+30|▲ \+30|UP \+30/.test(riskT)) out.errors.push("A: risk should show +30 points, got: " + riskT.slice(0, 100));
+        if (/\+30%/.test(riskT)) out.errors.push("A: risk delta must not use %, got: " + riskT.slice(0, 100));
+
 
         renderBundlesUi(makeData(25, 30));
         var t2 = totalText();
@@ -79,9 +83,9 @@
         out.steps.push({ step: "D", total: t4, hasDn: hasDn });
         if (!hasDn) out.errors.push("D: expected down move — got: " + t4);
 
-        out.ok = out.errors.length === 0 && String(out.version).indexOf("v93") >= 0;
-        if (String(out.version).indexOf("v93") < 0) {
-          out.errors.push("need v93, got " + out.version);
+        out.ok = out.errors.length === 0 && String(out.version).indexOf("v94") >= 0;
+        if (String(out.version).indexOf("v94") < 0) {
+          out.errors.push("need v94, got " + out.version);
           out.ok = false;
         }
       } catch (err) {

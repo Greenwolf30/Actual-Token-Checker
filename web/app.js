@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v93";
+const ADTC_CLIENT_VERSION = "v94";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -6440,15 +6440,27 @@ function mountBundleStatsBar(mountEl, items, version) {
     box.setAttribute("data-bun-stat", String(it.label || ""));
 
     // Normalize delta text — always present
+    // Risk score uses points (0 / +8); other boxes use percent (0% / +3%)
+    const isScoreBox =
+      it.isScore === true ||
+      String(it.label || "").toLowerCase() === "risk" ||
+      it.key === "risk";
     let dText = it.deltaText != null ? String(it.deltaText).trim() : "";
-    if (!dText || /no change/i.test(dText)) dText = "0%";
+    if (!dText || /no change/i.test(dText)) dText = isScoreBox ? "0" : "0%";
     dText = dText.replace(/^\(|\)$/g, "");
-    const isFlat = dText === "0%" || dText === "0";
+    // Strip accidental % on risk deltas
+    if (isScoreBox) dText = dText.replace(/%/g, "").trim();
+    const isFlat =
+      dText === "0%" ||
+      dText === "0" ||
+      dText === "+0" ||
+      dText === "-0" ||
+      /^[+\-]?0(\.0+)?%?$/.test(dText);
     const isUp = /^UP\b/i.test(dText);
     const isDn = /^DN\b/i.test(dText);
     // Human-facing chip text
     let chip = dText;
-    if (isFlat) chip = "0%";
+    if (isFlat) chip = isScoreBox ? "0" : "0%";
     else if (isUp) chip = dText.replace(/^UP\s*/i, "▲ ");
     else if (isDn) chip = dText.replace(/^DN\s*/i, "▼ ");
     const chipParen = "(" + chip + ")";
@@ -7545,7 +7557,7 @@ function hasBundleDeltaMarker(text) {
   return (
     /\bUP\s+[+\-]/.test(t) ||
     /\bDN\s+[+\-]/.test(t) ||
-    /\(0%\)/.test(t) ||
+    /\(0%?\)/.test(t) ||
     /bun-stat-delta/.test(t)
   );
 }
@@ -7559,23 +7571,27 @@ function computeBundleStatDeltaParts(cur, prev, kind, opts) {
     if (c == null) c = 0;
     if (p == null) p = 0;
   }
-  // Always return a visible marker. Flat / missing → green 0%
+  // Always return a visible marker.
+  // Flat / missing → green 0 (score points) or 0% (supply %)
+  const flatText = isScore ? "0" : "0%";
   if (c == null || p == null || !Number.isFinite(c - p)) {
     return {
-      text: "0%",
+      text: flatText,
       cls: "bun-delta-green",
       title: "No change since last Analyze",
       flat: true,
+      isScore: isScore,
     };
   }
   const diff = c - p;
   const flatEps = isScore ? 0.5 : 0.05;
   if (Math.abs(diff) < flatEps) {
     return {
-      text: "0%",
+      text: flatText,
       cls: "bun-delta-green",
       title: "No change since last Analyze",
       flat: true,
+      isScore: isScore,
     };
   }
   const up = diff > 0;
@@ -7585,6 +7601,7 @@ function computeBundleStatDeltaParts(cur, prev, kind, opts) {
   const cls = bundleChangeDeltaClass(Math.max(1, colorMag));
   let label;
   if (isScore) {
+    // Risk score is 0–100 points, never a percent delta
     label = Math.round(mag).toString();
   } else {
     if (mag >= 100) label = mag.toFixed(0) + "%";
@@ -7595,19 +7612,24 @@ function computeBundleStatDeltaParts(cur, prev, kind, opts) {
   return {
     text: arrow + " " + sign + label,
     cls: cls,
-    title: "Change since last Analyze of this mint",
+    title: isScore
+      ? "Risk score change since last Analyze (points, not %)"
+      : "Change since last Analyze of this mint",
     flat: false,
+    isScore: isScore,
   };
 }
 
-/** HTML span for a delta (always non-empty). Shown as: (d +12%) */
+/** HTML span for a delta (always non-empty). Risk = points; others = %. */
 function formatBundleStatDelta(cur, prev, kind, opts) {
+  const isScore = kind === "score";
   const parts = computeBundleStatDeltaParts(cur, prev, kind, opts) || {
-    text: "0%",
+    text: isScore ? "0" : "0%",
     cls: "bun-delta-green",
     title: "No change since last Analyze",
+    isScore: isScore,
   };
-  const text = parts.text || "0%";
+  const text = parts.text || (isScore ? "0" : "0%");
   const cls = parts.cls || "bun-delta-green";
   const title = parts.title || "Change since last Analyze";
   return (
@@ -8062,10 +8084,11 @@ function renderBundlesUi(data) {
     }
     if (!parts || !parts.text) {
       parts = {
-        text: "0%",
+        text: kind === "score" ? "0" : "0%",
         cls: "bun-delta-green",
         title: "No change since last Analyze",
         flat: true,
+        isScore: kind === "score",
       };
     }
     const plain = "(" + parts.text + ")";
@@ -8865,16 +8888,21 @@ function renderBundlesUi(data) {
     const items = [];
     function pushStat(label, valueText, valueClass, key, curOverride, sub) {
       const kind = key === "risk" ? "score" : "pct";
+      const isScore = kind === "score";
+      const flatDefault = isScore ? "(0)" : "(0%)";
       let deltaText = null;
-      let deltaCls = "bun-delta-flat";
+      let deltaCls = "bun-delta-green";
       // Restore: prefer exact frozen marker from last live Analyze
       if (isRestore && frozenHtml && frozenHtml[key]) {
         const fr = String(frozenHtml[key]);
-        const m = fr.match(/\((?:UP[^)]*|DN[^)]*)\)/i);
+        // Accept (0), (0%), (UP +8), (DN -3%), etc.
+        const m = fr.match(/\((?:UP[^)]*|DN[^)]*|0%?|[+\-]?\d+(?:\.\d+)?%?)\)/i);
         if (m) {
           deltaText = m[0];
+          if (isScore) deltaText = deltaText.replace(/%/g, "");
           if (/UP/i.test(deltaText)) deltaCls = "bun-delta-green";
           else if (/DN/i.test(deltaText)) deltaCls = "bun-delta-red";
+          else deltaCls = "bun-delta-green";
         }
       }
       if (!deltaText) {
@@ -8893,18 +8921,15 @@ function renderBundlesUi(data) {
         );
         if (parts && parts.text) {
           deltaText = "(" + parts.text + ")";
-          deltaCls =
-            parts.cls ||
-            (parts.flat ? "bun-delta-green" : "bun-delta-green");
+          deltaCls = parts.cls || "bun-delta-green";
           if (parts.flat) deltaCls = "bun-delta-green";
         } else {
-          deltaText = "(0%)";
+          deltaText = flatDefault;
           deltaCls = "bun-delta-green";
         }
       }
-      // On restore, if frozen had no UP/DN, still show green 0%
       if (!deltaText) {
-        deltaText = "(0%)";
+        deltaText = flatDefault;
         deltaCls = "bun-delta-green";
       }
       htmlByKeyThisRun[key] =
@@ -8915,6 +8940,8 @@ function renderBundlesUi(data) {
         "</span>";
       items.push({
         label: label,
+        key: key,
+        isScore: isScore,
         valueText: valueText,
         valueClass: valueClass || "",
         deltaText: deltaText,
@@ -9176,8 +9203,11 @@ function renderBundlesUi(data) {
       const key = DELTA_LABEL_TO_KEY[lab];
       let html = htmlByKey && key ? htmlByKey[key] : "";
       if (!html || /no change/i.test(String(html))) {
-        html =
-          '<span class="bun-stat-delta bun-delta-green">(0%)</span>';
+        const flat =
+          key === "risk"
+            ? '<span class="bun-stat-delta bun-delta-green">(0)</span>'
+            : '<span class="bun-stat-delta bun-delta-green">(0%)</span>';
+        html = flat;
       }
       valEl.insertAdjacentHTML("beforeend", " ");
       valEl.insertAdjacentHTML("beforeend", html);
@@ -9253,7 +9283,13 @@ function renderBundlesUi(data) {
         if (/\((?:0%|▲|▼|UP |DN )/i.test(valEl.textContent || "")) return;
         const s = document.createElement("span");
         s.className = "bun-stat-delta bun-delta-green";
-        s.textContent = "(0%)";
+        const lab = (
+          el.getAttribute("data-bun-stat") ||
+          (el.querySelector(".bun-stat-label") || {}).textContent ||
+          ""
+        ).toLowerCase();
+        // Risk is score points; other boxes are supply %
+        s.textContent = lab.indexOf("risk") === 0 ? "(0)" : "(0%)";
         s.setAttribute(
           "style",
           "display:block!important;color:#6ee7a8!important;font-weight:800!important;" +
