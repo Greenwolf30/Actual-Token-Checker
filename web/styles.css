@@ -592,6 +592,14 @@ button, .ghost, .primary {
 .sum-stats .sum-updated[hidden] {
   display: none !important;
 }
+.sum-market-updated {
+  display: block;
+  margin-top: 8px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted, #8a8f98);
+  letter-spacing: 0.02em;
+}
 .sum-stats .up { color: var(--good); }
 .sum-stats .down { color: var(--bad); }
 

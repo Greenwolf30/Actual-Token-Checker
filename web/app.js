@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v96";
+const ADTC_CLIENT_VERSION = "v97";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -5449,32 +5449,52 @@ function fmtMarketUpdatedAt(isoOrMs) {
  */
 function setPrimaryMarketUpdatedStamps(data) {
   const ids = ["sumMcAt", "sumLiqAt", "sumVolAt"];
-  const whenRaw =
+  // Always have a time — never leave stamps blank after Analyze/restore
+  let whenRaw =
     (data && data.generated_at) ||
     (data && data._marketUpdatedAt) ||
     (data && data._restoredSavedAt) ||
     null;
-  const when = fmtMarketUpdatedAt(whenRaw);
-  const isRestore = !!(data && data._restoredFromBrowserCache);
-  const label = when
-    ? (isRestore ? "Last updated · " : "Updated · ") + when
-    : isRestore
-      ? "Last updated · previous Analyze"
-      : "";
+  if (!whenRaw) whenRaw = Date.now();
+  const when = fmtMarketUpdatedAt(whenRaw) || new Date().toLocaleString();
+  // Live Analyze payload must NOT be treated as restore (save cache also sets the flag)
+  const isRestore =
+    !!(data && data._restoredFromBrowserCache) &&
+    !!(data && data._restoredSavedAt);
+  const label = (isRestore ? "Last updated · " : "Updated · ") + when;
   for (const id of ids) {
     const el = $(id);
-    if (!el) continue;
-    if (!label) {
-      el.textContent = "";
-      el.hidden = true;
+    if (!el) {
+      console.warn("[market stamp] missing #" + id);
       continue;
     }
     el.textContent = label;
+    el.removeAttribute("hidden");
     el.hidden = false;
+    el.style.display = "block";
     el.title = isRestore
       ? "From last Analyze — run Analyze again for a live update"
       : "Market figures from this Analyze";
   }
+  // Global line under the stats row (backup if per-box spans fail)
+  try {
+    let global = $("sumMarketUpdated");
+    if (!global) {
+      const stats = document.querySelector(".sum-stats");
+      if (stats && stats.parentNode) {
+        global = document.createElement("div");
+        global.id = "sumMarketUpdated";
+        global.className = "sum-market-updated";
+        stats.parentNode.insertBefore(global, stats.nextSibling);
+      }
+    }
+    if (global) {
+      global.textContent = label;
+      global.removeAttribute("hidden");
+      global.hidden = false;
+      global.style.display = "block";
+    }
+  } catch (_) {}
 }
 
 function fmtPct(n) {
@@ -6146,10 +6166,13 @@ function renderSummary(data) {
       sumAddr.appendChild(a);
     }
   }
-  $("sumPrice").textContent = fmtUsd(m.price_usd);
-  $("sumMc").textContent = fmtUsd(
-    m.market_cap_usd != null ? m.market_cap_usd : m.fdv_usd
-  );
+  const elPrice = $("sumPrice");
+  const elMc = $("sumMc");
+  if (elPrice) elPrice.textContent = fmtUsd(m.price_usd);
+  if (elMc)
+    elMc.textContent = fmtUsd(
+      m.market_cap_usd != null ? m.market_cap_usd : m.fdv_usd
+    );
   // Defensive: some providers use alternate keys; never leave Liq/Vol blank if present
   const liq =
     m.liquidity_usd != null
@@ -6169,20 +6192,24 @@ function renderSummary(data) {
           : m.volume != null && typeof m.volume === "object"
             ? m.volume.h24
             : m.volume;
-  $("sumLiq").textContent = fmtUsd(liq);
-  $("sumVol").textContent = fmtUsd(vol);
+  const elLiq = $("sumLiq");
+  const elVol = $("sumVol");
+  if (elLiq) elLiq.textContent = fmtUsd(liq);
+  if (elVol) elVol.textContent = fmtUsd(vol);
   const chg = (m.price_change_pct || {}).h24;
   const chgEl = $("sumChg");
-  chgEl.textContent = fmtPct(chg);
-  chgEl.classList.remove("up", "down");
-  if (Number(chg) > 0) chgEl.classList.add("up");
-  if (Number(chg) < 0) chgEl.classList.add("down");
+  if (chgEl) {
+    chgEl.textContent = fmtPct(chg);
+    chgEl.classList.remove("up", "down");
+    if (Number(chg) > 0) chgEl.classList.add("up");
+    if (Number(chg) < 0) chgEl.classList.add("down");
+  }
 
   // MC / Liq / Vol 24h — last updated stamp (survives refresh until next Analyze)
   try {
     setPrimaryMarketUpdatedStamps(data);
-  } catch (_) {
-    /* ignore */
+  } catch (err) {
+    console.warn("[market stamps]", err);
   }
 
   const linkBar = $("linkBar");
@@ -8963,18 +8990,17 @@ function renderBundlesUi(data) {
       let deltaCls = "bun-delta-green";
       // Restore: prefer exact frozen marker from last live Analyze
       if (isRestore && frozenHtml && frozenHtml[key]) {
-        const fr = String(frozenHtml[key]);
-        // Accept (0), (0%), (UP +8), (DN -3%), etc.
+        let fr = String(frozenHtml[key]).replace(/<[^>]+>/g, " ").trim();
+        fr = fr.replace(/\bUP\b/gi, "▲").replace(/\bDN\b/gi, "▼");
+        // Classic: "▲ +3%" or "· 0%" (optional surrounding parens / span text)
         const m = fr.match(
-          /\((?:[▲▼][^)]*|UP[^)]*|DN[^)]*|0%?|[+\-]?\d+(?:\.\d+)?%?)\)/i
+          /([▲▼]\s*[+\-\u2212]?\s*\d+(?:\.\d+)?%?|·\s*0%?)/
         );
         if (m) {
-          deltaText = m[0]
-            .replace(/\bUP\b/gi, "▲")
-            .replace(/\bDN\b/gi, "▼");
+          deltaText = m[1].trim();
           if (isScore) deltaText = deltaText.replace(/%/g, "");
-          if (/▲|UP/i.test(deltaText)) deltaCls = "bun-delta-green";
-          else if (/▼|DN/i.test(deltaText)) deltaCls = "bun-delta-red";
+          if (/▲/.test(deltaText)) deltaCls = "bun-delta-green";
+          else if (/▼/.test(deltaText)) deltaCls = "bun-delta-red";
           else deltaCls = "bun-delta-green";
         }
       }
@@ -9154,6 +9180,18 @@ function renderBundlesUi(data) {
     const mount = document.createElement("div");
     mount.id = "bunStatsMount";
     mountBundleStatsBar(mount, items, ver);
+    if (!items.length) {
+      console.error("[bundles deltas] no items to paint");
+    } else {
+      console.info(
+        "[bundles deltas] mounted",
+        items.length,
+        items.map(function (it) {
+          return (it.label || "") + "=" + (it.deltaText || "");
+        }).join(" | ")
+      );
+    }
+
     if (oldNote && oldNote.parentNode) {
       oldNote.parentNode.insertBefore(mount, oldNote);
       try {
