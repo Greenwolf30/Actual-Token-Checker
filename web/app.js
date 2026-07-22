@@ -6381,9 +6381,9 @@ function renderBundlesUi(data) {
   } else {
     html += bunEmptySection(
       "Fresh wallets",
-      useFreshMultiEnabled()
+      useFreshEnabled()
         ? "None found — wallets holding almost only this mint (needs Helius + full Analyze)."
-        : "Skipped — turn on “Fresh + multi-send” above Analyze to run this scan."
+        : "Skipped — turn on “Fresh” above Analyze to run this scan."
     );
   }
 
@@ -6506,9 +6506,9 @@ function renderBundlesUi(data) {
       srcs.indexOf("token_multi_send") >= 0 || srcs.indexOf("helius") >= 0;
     const errS = String(s.multi_send_error || "");
     let emptyMsg;
-    if (/scan off|enable “Fresh|enable "Fresh/i.test(errS)) {
+    if (/scan off|enable “Multi|enable "Multi|Multi-send scan off/i.test(errS)) {
       emptyMsg =
-        "Skipped — turn on “Fresh + multi-send” above Analyze to run this scan.";
+        "Skipped — turn on “Multi-send” above Analyze to run this scan.";
     } else if (s.multi_send_error) {
       emptyMsg =
         "None this scan — " +
@@ -6805,7 +6805,10 @@ async function checkHealth() {
 }
 
 const RUGWATCH_PREF_KEY = "adtc_use_rugwatch";
-const FRESH_MULTI_PREF_KEY = "adtc_use_fresh_multi";
+const FRESH_PREF_KEY = "adtc_use_fresh";
+const MULTI_SEND_PREF_KEY = "adtc_use_multi_send";
+/** Legacy combined pref — migrate once if present */
+const FRESH_MULTI_PREF_KEY_LEGACY = "adtc_use_fresh_multi";
 
 function useRugwatchEnabled() {
   const el = $("useRugwatch");
@@ -6813,50 +6816,53 @@ function useRugwatchEnabled() {
   return !!el.checked;
 }
 
-function useFreshMultiEnabled() {
-  const el = $("useFreshMulti");
+function useFreshEnabled() {
+  const el = $("useFresh");
   if (!el) return true;
   return !!el.checked;
 }
 
-function initRugwatchPref() {
-  const el = $("useRugwatch");
+function useMultiSendEnabled() {
+  const el = $("useMultiSend");
+  if (!el) return true;
+  return !!el.checked;
+}
+
+function initCheckboxPref(elId, storageKey, legacyKey) {
+  const el = $(elId);
   if (!el) return;
   try {
-    const saved = localStorage.getItem(RUGWATCH_PREF_KEY);
+    let saved = localStorage.getItem(storageKey);
+    if (saved == null && legacyKey) {
+      const leg = localStorage.getItem(legacyKey);
+      if (leg === "0" || leg === "false") saved = "0";
+      else if (leg === "1" || leg === "true") saved = "1";
+    }
     if (saved === "0" || saved === "false") el.checked = false;
     else if (saved === "1" || saved === "true") el.checked = true;
-    // default: checked (on)
   } catch (_) {
     /* ignore */
   }
   el.addEventListener("change", () => {
     try {
-      localStorage.setItem(RUGWATCH_PREF_KEY, el.checked ? "1" : "0");
+      localStorage.setItem(storageKey, el.checked ? "1" : "0");
     } catch (_) {
       /* ignore */
     }
   });
 }
 
+function initRugwatchPref() {
+  initCheckboxPref("useRugwatch", RUGWATCH_PREF_KEY);
+}
+
 function initFreshMultiPref() {
-  const el = $("useFreshMulti");
-  if (!el) return;
-  try {
-    const saved = localStorage.getItem(FRESH_MULTI_PREF_KEY);
-    if (saved === "0" || saved === "false") el.checked = false;
-    else if (saved === "1" || saved === "true") el.checked = true;
-    // default: checked (on)
-  } catch (_) {
-    /* ignore */
-  }
-  el.addEventListener("change", () => {
-    try {
-      localStorage.setItem(FRESH_MULTI_PREF_KEY, el.checked ? "1" : "0");
-    } catch (_) {
-      /* ignore */
-    }
-  });
+  initCheckboxPref("useFresh", FRESH_PREF_KEY, FRESH_MULTI_PREF_KEY_LEGACY);
+  initCheckboxPref(
+    "useMultiSend",
+    MULTI_SEND_PREF_KEY,
+    FRESH_MULTI_PREF_KEY_LEGACY
+  );
 }
 
 function initRugwatchNav() {
@@ -7053,7 +7059,8 @@ async function analyze(ev) {
   const chain = $("chain").value || null;
   const quick = $("quick").checked;
   const include_rugwatch = useRugwatchEnabled();
-  const include_fresh_multi_send = useFreshMultiEnabled();
+  const include_fresh = useFreshEnabled();
+  const include_multi_send = useMultiSendEnabled();
   const btn = $("analyzeBtn");
   btn.disabled = true;
   btn.textContent = quick ? "Quick…" : "Analyzing…";
@@ -7068,7 +7075,10 @@ async function analyze(ev) {
         chain,
         quick,
         include_rugwatch,
-        include_fresh_multi_send,
+        include_fresh,
+        include_multi_send,
+        // legacy combined flag (true only if both on)
+        include_fresh_multi_send: include_fresh && include_multi_send,
       }),
     });
     let data;

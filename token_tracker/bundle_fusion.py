@@ -16,7 +16,9 @@ def comprehensive_bundle_check(
     *,
     pair_address: str | None = None,
     chain_id: str = "solana",
-    include_fresh_multi_send: bool = True,
+    include_fresh: bool = True,
+    include_multi_send: bool = True,
+    include_fresh_multi_send: bool | None = None,
 ) -> dict[str, Any]:
     """
     Full multi-API bundle check.
@@ -24,9 +26,13 @@ def comprehensive_bundle_check(
     Returns same shape as analyze_bundles() plus fusion fields:
       sources_used, source_reports, fusion_signals, comprehensive_score
 
-    include_fresh_multi_send=False skips Fresh wallets + Multi-send RPC scans
-    (saves Helius credits / RPS; other bundle signals still run).
+    include_fresh / include_multi_send control optional Helius scans
+    (saves credits / RPS when off; other bundle signals still run).
+    include_fresh_multi_send=False (legacy) turns both off.
     """
+    if include_fresh_multi_send is False:
+        include_fresh = False
+        include_multi_send = False
     if (chain_id or "").lower() not in {"solana", "sol", ""}:
         return bun._empty("Comprehensive bundle check is Solana-only.")  # type: ignore[attr-defined]
 
@@ -493,7 +499,7 @@ def comprehensive_bundle_check(
     fresh_report: dict[str, Any] = {"ok": False, "wallets": []}
     multi_send_report: dict[str, Any] = {"ok": False, "clusters": []}
     multi_send_error = None
-    if include_fresh_multi_send:
+    if include_fresh:
         try:
             # Cap wallets for free Helius ~10 RPS (fresh = 2+ RPCs each)
             fresh_report = src.analyze_fresh_wallets(
@@ -501,6 +507,14 @@ def comprehensive_bundle_check(
             )
         except Exception as exc:  # noqa: BLE001
             fresh_report = {"ok": False, "error": str(exc), "wallets": []}
+    else:
+        fresh_report = {
+            "ok": False,
+            "wallets": [],
+            "skipped": True,
+            "error": "Fresh wallets scan off (enable “Fresh” to run).",
+        }
+    if include_multi_send:
         try:
             multi_send_report = src.analyze_token_multi_sends(
                 mint, holder_seed_u, max_sigs=28, max_tx_fetch=20
@@ -508,17 +522,11 @@ def comprehensive_bundle_check(
         except Exception as exc:  # noqa: BLE001
             multi_send_report = {"ok": False, "error": str(exc), "clusters": []}
     else:
-        fresh_report = {
-            "ok": False,
-            "wallets": [],
-            "skipped": True,
-            "error": "Fresh wallets scan off (enable “Fresh + multi-send” to run).",
-        }
         multi_send_report = {
             "ok": False,
             "clusters": [],
             "skipped": True,
-            "error": "Multi-send scan off (enable “Fresh + multi-send” to run).",
+            "error": "Multi-send scan off (enable “Multi-send” to run).",
         }
         multi_send_error = multi_send_report.get("error")
 

@@ -145,11 +145,18 @@
           RugWatch
         </label>
         <label
-          class="check check-fresh-multi"
-          title="When checked, full Analyze scans Fresh wallets + Multi-send (extra Helius RPCs). Uncheck to skip those scans (saves credits / fewer 429s)."
+          class="check check-fresh"
+          title="When checked, full Analyze scans Fresh wallets (extra Helius RPCs). Uncheck to skip."
         >
-          <input type="checkbox" id="useFreshMulti" checked />
-          Fresh + multi-send
+          <input type="checkbox" id="useFresh" checked />
+          Fresh
+        </label>
+        <label
+          class="check check-multi-send"
+          title="When checked, full Analyze scans Multi-send (extra Helius RPCs). Uncheck to skip."
+        >
+          <input type="checkbox" id="useMultiSend" checked />
+          Multi-send
         </label>
         <button type="submit" id="analyzeBtn">Analyze</button>
       </form>

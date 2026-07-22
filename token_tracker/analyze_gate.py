@@ -37,14 +37,21 @@ def cache_key(
     chain: str | None,
     quick: bool,
     include_rugwatch: bool,
-    include_fresh_multi_send: bool = True,
+    include_fresh: bool = True,
+    include_multi_send: bool = True,
+    include_fresh_multi_send: bool | None = None,
 ) -> str:
     q = (query or "").strip().lower()
     ch = (chain or "").strip().lower()
     rw = "1" if include_rugwatch else "0"
-    fm = "1" if include_fresh_multi_send else "0"
+    # Legacy combined flag: if provided alone, apply to both
+    if include_fresh_multi_send is not None and include_fresh_multi_send is False:
+        include_fresh = False
+        include_multi_send = False
+    fr = "1" if include_fresh else "0"
+    ms = "1" if include_multi_send else "0"
     mode = "q" if quick else "f"
-    raw = f"{mode}|{ch}|{rw}|{fm}|{q}"
+    raw = f"{mode}|{ch}|{rw}|{fr}|{ms}|{q}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:40]
 
 
@@ -142,14 +149,20 @@ def analyze_cached(
     chain: str | None,
     quick: bool,
     include_rugwatch: bool,
-    include_fresh_multi_send: bool = True,
+    include_fresh: bool = True,
+    include_multi_send: bool = True,
+    include_fresh_multi_send: bool | None = None,
 ) -> tuple[Any, str]:
     """Run analyze_token (or equivalent) with cache + single-flight."""
+    if include_fresh_multi_send is False:
+        include_fresh = False
+        include_multi_send = False
     key = cache_key(
         query,
         chain=chain,
         quick=quick,
         include_rugwatch=include_rugwatch,
-        include_fresh_multi_send=include_fresh_multi_send,
+        include_fresh=include_fresh,
+        include_multi_send=include_multi_send,
     )
     return run_single_flight(key, fn, ttl=_ttl(quick))

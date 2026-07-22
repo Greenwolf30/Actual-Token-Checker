@@ -958,7 +958,9 @@ def run_analyze(
     chain: str | None,
     quick: bool,
     include_rugwatch: bool = True,
-    include_fresh_multi_send: bool = True,
+    include_fresh: bool = True,
+    include_multi_send: bool = True,
+    include_fresh_multi_send: bool | None = None,
 ) -> dict[str, Any]:
     load_dotenv()
     from token_tracker.analyze import analyze_token
@@ -969,6 +971,9 @@ def run_analyze(
         return {"ok": False, "error": "query is required"}
     if len(q) > 200:
         return {"ok": False, "error": "query too long"}
+    if include_fresh_multi_send is False:
+        include_fresh = False
+        include_multi_send = False
 
     def _live() -> dict[str, Any]:
         try:
@@ -978,7 +983,8 @@ def run_analyze(
                 include_holders=not quick,
                 quick=quick,
                 include_rugwatch=bool(include_rugwatch),
-                include_fresh_multi_send=bool(include_fresh_multi_send),
+                include_fresh=bool(include_fresh),
+                include_multi_send=bool(include_multi_send),
             )
         except Exception as exc:  # noqa: BLE001
             return {
@@ -995,7 +1001,8 @@ def run_analyze(
             chain=chain,
             quick=quick,
             include_rugwatch=bool(include_rugwatch),
-            include_fresh_multi_send=bool(include_fresh_multi_send),
+            include_fresh=bool(include_fresh),
+            include_multi_send=bool(include_multi_send),
         )
     except Exception as exc:  # noqa: BLE001
         return {
@@ -1237,23 +1244,36 @@ class WebHandler(BaseHTTPRequestHandler):
                 "no",
                 "off",
             }
-            fm_raw = (
-                qs.get("fresh_multi")
-                or qs.get("include_fresh_multi_send")
-                or ["1"]
-            )[0]
-            include_fresh_multi_send = str(fm_raw).strip().lower() not in {
-                "0",
-                "false",
-                "no",
-                "off",
-            }
+            def _qs_bool(keys: list[str], default: bool = True) -> bool:
+                for k in keys:
+                    if k in qs and qs.get(k):
+                        return str(qs.get(k)[0]).strip().lower() not in {
+                            "0",
+                            "false",
+                            "no",
+                            "off",
+                        }
+                return default
+
+            include_fresh = _qs_bool(["fresh", "include_fresh"], True)
+            include_multi_send = _qs_bool(
+                ["multi_send", "include_multi_send"], True
+            )
+            # Legacy combined param
+            if "fresh_multi" in qs or "include_fresh_multi_send" in qs:
+                combined = _qs_bool(
+                    ["fresh_multi", "include_fresh_multi_send"], True
+                )
+                if not combined:
+                    include_fresh = False
+                    include_multi_send = False
             return self._handle_analyze(
                 q,
                 chain=chain,
                 quick=quick,
                 include_rugwatch=include_rugwatch,
-                include_fresh_multi_send=include_fresh_multi_send,
+                include_fresh=include_fresh,
+                include_multi_send=include_multi_send,
             )
 
         # Static files from /web
@@ -1298,19 +1318,41 @@ class WebHandler(BaseHTTPRequestHandler):
                 include_rugwatch = bool(body.get("rugwatch"))
             else:
                 include_rugwatch = True
-            # Default True; uncheck “Fresh + multi-send” to skip those Helius scans
-            if "include_fresh_multi_send" in body:
-                include_fresh_multi_send = bool(body.get("include_fresh_multi_send"))
-            elif "fresh_multi" in body:
-                include_fresh_multi_send = bool(body.get("fresh_multi"))
+            # Default True; uncheck Fresh / Multi-send to skip those Helius scans
+            if "include_fresh" in body:
+                include_fresh = bool(body.get("include_fresh"))
+            elif "fresh" in body:
+                include_fresh = bool(body.get("fresh"))
             else:
-                include_fresh_multi_send = True
+                include_fresh = True
+            if "include_multi_send" in body:
+                include_multi_send = bool(body.get("include_multi_send"))
+            elif "multi_send" in body:
+                include_multi_send = bool(body.get("multi_send"))
+            else:
+                include_multi_send = True
+            # Legacy combined: only if neither separate flag sent
+            if (
+                "include_fresh" not in body
+                and "fresh" not in body
+                and "include_multi_send" not in body
+                and "multi_send" not in body
+            ):
+                if "include_fresh_multi_send" in body:
+                    if not bool(body.get("include_fresh_multi_send")):
+                        include_fresh = False
+                        include_multi_send = False
+                elif "fresh_multi" in body:
+                    if not bool(body.get("fresh_multi")):
+                        include_fresh = False
+                        include_multi_send = False
             return self._handle_analyze(
                 q,
                 chain=chain_s,
                 quick=quick,
                 include_rugwatch=include_rugwatch,
-                include_fresh_multi_send=include_fresh_multi_send,
+                include_fresh=include_fresh,
+                include_multi_send=include_multi_send,
             )
 
         return self._json(404, {"ok": False, "error": "not found"})
@@ -1322,7 +1364,8 @@ class WebHandler(BaseHTTPRequestHandler):
         chain: str | None,
         quick: bool,
         include_rugwatch: bool = True,
-        include_fresh_multi_send: bool = True,
+        include_fresh: bool = True,
+        include_multi_send: bool = True,
     ) -> None:
         if not self._check_gate():
             return self._json(
@@ -1365,7 +1408,8 @@ class WebHandler(BaseHTTPRequestHandler):
                 chain=chain,
                 quick=quick,
                 include_rugwatch=include_rugwatch,
-                include_fresh_multi_send=include_fresh_multi_send,
+                include_fresh=include_fresh,
+                include_multi_send=include_multi_send,
             )
         finally:
             _release_inflight(ip)
