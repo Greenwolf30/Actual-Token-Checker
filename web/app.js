@@ -3001,6 +3001,10 @@ function processRuggersFromAnalyze(data) {
   rec.address = mintBare;
   rec.mint_key = storeKey;
   rec.chain = rec.chain || snap.chain || "solana";
+  // Real holder bags → no longer a thin auto-seed
+  if (Object.keys(rec.first_wallets || {}).length > 0) {
+    delete rec.seeded_empty;
+  }
 
   // Drop any sticky/status rows that were stamped for a different mint
   try {
