@@ -7991,11 +7991,11 @@ function renderBundlesUi(data) {
   } else {
     html += bunEmptySection(
       "Suspect wallets",
-      "None tagged this scan.<br/><br/>" +
-        "<strong>Suspect sources</strong> (all must miss for an empty list):<br/>" +
-        "· <strong>Multi-account</strong> — one owner with several large Associated Token Accounts<br/>" +
-        "· <strong>Insider-flagged</strong> — Rugcheck insider marks on top holders<br/><br/>" +
-        "Similar-size wallets are <strong>not</strong> folded into Suspect (they stay under Similar-size only)."
+      "None found this time.<br/><br/>" +
+        "This list only includes:<br/>" +
+        "· Wallets that control several large token accounts for this mint<br/>" +
+        "· Wallets marked as insiders on Rugcheck<br/><br/>" +
+        "Wallets that only match similar bag sizes are listed under Similar-size groups, not here."
     );
   }
 
