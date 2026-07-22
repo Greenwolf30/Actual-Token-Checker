@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v117";
+const ADTC_CLIENT_VERSION = "v118";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -9339,10 +9339,11 @@ function renderBundlesUi(data) {
         msSubEsc
       );
     } else {
+      // Same hold-% bands as Multi-send list at bottom (bunPctHtml / pctPriorityClass)
       const live = msPct != null ? msPct : 0;
       html += stat(
         "Multi-send total",
-        withDelta(bunPctHtmlBox(live), "multi_send_total_pct", live),
+        withDelta(bunPctHtml(live), "multi_send_total_pct", live),
         msSubEsc
       );
     }
@@ -9796,7 +9797,7 @@ function renderBundlesUi(data) {
       '<span class="bun-section-title">Multi-send (one → many)' +
       (msCached ? " (last known)" : "") +
       "</span>" +
-      '<span class="bun-section-total">combined ' +
+      '<span class="bun-section-total">total supply held ' +
       bunPctHtml(s.multi_send_total_pct) +
       " · " +
       escHtml(String(msWallets.length || 0)) +
@@ -10146,10 +10147,11 @@ function renderBundlesUi(data) {
       data && data.generated_at,
       data && data._restoredSavedAt,
     ]);
+    // Match Multi-send list at bottom: ≥15 red · ≥10 orange · >5 yellow · ≥2 green
     pushStat(
       "Multi-send total",
       fmtSupplyPct(mp) || "0%",
-      mp > 0 ? "pct-low" : "bun-pct-zero",
+      pctPriorityClass(mp) || (mp <= 0 ? "bun-pct-zero" : ""),
       "multi_send_total_pct",
       mp,
       msSubPlain
