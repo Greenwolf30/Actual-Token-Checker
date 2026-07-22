@@ -228,7 +228,7 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
             "top10_pct_excluding_known_programs": top10_ex_f,
             "unique_wallets_in_top": summary.get("unique_wallets_in_top"),
             "accounts_scanned": summary.get("accounts_returned") or len(holders),
-            # Combined % of supply across unique wallets flagged as bundle-related
+            # Combined % across risk vectors (fusion recomputes all-vectors additive)
             "total_bundle_pct": total_pct,
             "flagged_wallets": flagged_n,
             # Sum of unique suspect wallets' supply %
@@ -257,9 +257,10 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
         "notes": (
             "Bundle detection is heuristic from a top-holder snapshot only. "
             "Suspect total % = sum of unique suspect wallets' supply %. "
-            "Comprehensive mode also scans launch-window same-slot multi-buys, "
-            "1-hop SOL funding, fresh/sole-token wallets, and token multi-send "
-            "(Helius). Not a full commercial sniper graph."
+            "Total bundle % (full Analyze) = sum of each risk vector’s supply % "
+            "with NO cross-vector wallet dedupe (multi-account + similar-size + "
+            "insider + multi-send + fresh + shared funder + launch-window). "
+            "A wallet in two vectors counts twice. Not a full commercial sniper graph."
         ),
     }
 
@@ -298,11 +299,13 @@ def format_bundles_text(data: dict[str, Any]) -> str:
         total_line = (
             f"  Total % bundles: {_pct(total_bp)}"
             + (
-                f"  ({s.get('flagged_wallets')} flagged wallet(s))"
+                f"  ({s.get('flagged_wallets')} wallet-slot(s) across vectors)"
                 if s.get("flagged_wallets")
                 else ""
             )
         )
+        if s.get("total_bundle_additive"):
+            total_line += "  [additive: no cross-vector dedupe]"
     else:
         total_line = _empty_line("Total % bundles")
     src_list = s.get("sources_used") or []
@@ -1407,6 +1410,9 @@ def _total_bundle_percent(
     suspects: list[dict[str, Any]],
 ) -> tuple[float | None, int]:
     """
+    Legacy helper used by analyze_bundles before fusion attaches more vectors.
+    Prefer recompute_total_bundle_all_vectors() on full comprehensive payloads.
+
     Sum unique wallets' supply % that are flagged as bundle-related
     (clusters, similar-size groups, insiders, suspect union).
     Excludes known program/LP wallets.
@@ -1451,10 +1457,215 @@ def _total_bundle_percent(
         return (None if not flagged else 0.0, len(flagged))
 
     total = sum(pct_by_wallet[w] for w in usable)
-    # Cap display weirdness
+    # Cap display weirdness (legacy path only; all-vectors path does not cap)
     if total > 100.0:
         total = 100.0
     return round(total, 4), len(usable)
+
+
+def recompute_total_bundle_all_vectors(
+    data: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """
+    Total bundle % = sum of each risk vector's wallet supply %, with
+    NO cross-vector wallet dedupe.
+
+    A wallet in multi-send AND fresh contributes its % twice (once per vector).
+    Within a single vector, each wallet is counted once (max % if listed twice).
+
+    Vectors:
+      multi_account, similar_size, insider, multi_send (token only),
+      fresh, shared_funder (funding clusters), launch_window (same-slot).
+
+    Token multi-send only for multi_send (not sol_multi_send_clusters) so SOL
+    funder wallets are not double-counted with shared_funder.
+
+    Excludes known LP / program wallets. Does not cap at 100% (additive).
+    """
+    data = data if isinstance(data, dict) else {}
+    pct_map = _wallet_pct_map(data)
+
+    lp_wallets: set[str] = set()
+    for h in data.get("holders") or []:
+        if not isinstance(h, dict):
+            continue
+        w = (h.get("wallet") or "").strip()
+        if not w:
+            continue
+        if h.get("is_known_program") or is_known_lp_label(h.get("label")):
+            lp_wallets.add(w)
+
+    def _norm(w: Any) -> str:
+        return (str(w) if w is not None else "").strip()
+
+    def _is_lp(w: str) -> bool:
+        if not w or w in lp_wallets:
+            return True
+        return False
+
+    def _pct_of(w: str, explicit: Any = None) -> float | None:
+        if explicit is not None:
+            try:
+                return float(explicit)
+            except (TypeError, ValueError):
+                pass
+        if w in pct_map:
+            return float(pct_map[w])
+        return None
+
+    def _sum_vector(rows: list[tuple[str, Any]]) -> tuple[float, int]:
+        """Unique within vector; skip LP / missing %."""
+        best: dict[str, float] = {}
+        for w_raw, p_raw in rows:
+            w = _norm(w_raw)
+            if not w or len(w) < 20 or _is_lp(w):
+                continue
+            p = _pct_of(w, p_raw)
+            if p is None:
+                continue
+            best[w] = max(best.get(w, 0.0), float(p))
+        if not best:
+            return 0.0, 0
+        return round(sum(best.values()), 4), len(best)
+
+    by_vector: dict[str, dict[str, Any]] = {}
+
+    # 1) Multi-account clusters
+    ma_rows: list[tuple[str, Any]] = []
+    for c in data.get("clusters") or []:
+        if not isinstance(c, dict):
+            continue
+        ma_rows.append(
+            (
+                c.get("wallet") or c.get("owner"),
+                c.get("pct_supply") if c.get("pct_supply") is not None else c.get("combined_pct"),
+            )
+        )
+    p, n = _sum_vector(ma_rows)
+    by_vector["multi_account"] = {"pct": p, "count": n}
+
+    # 2) Similar-size groups
+    sim_rows: list[tuple[str, Any]] = []
+    for g in data.get("similar_size_groups") or []:
+        if not isinstance(g, dict):
+            continue
+        members = list(g.get("members") or [])
+        if members:
+            for m in members:
+                if isinstance(m, dict):
+                    sim_rows.append((m.get("wallet"), m.get("pct_supply")))
+                else:
+                    sim_rows.append((m, g.get("avg_pct")))
+        else:
+            for w in g.get("wallets") or []:
+                sim_rows.append((w, g.get("avg_pct")))
+    p, n = _sum_vector(sim_rows)
+    by_vector["similar_size"] = {"pct": p, "count": n}
+
+    # 3) Insiders
+    in_rows: list[tuple[str, Any]] = []
+    for h in data.get("insider_wallets") or []:
+        if isinstance(h, dict):
+            in_rows.append((h.get("wallet"), h.get("pct_supply")))
+    p, n = _sum_vector(in_rows)
+    by_vector["insider"] = {"pct": p, "count": n}
+
+    # 4) Token multi-send only (not SOL re-label — that is shared_funder)
+    ms_rows: list[tuple[str, Any]] = []
+    for mc in data.get("multi_send_clusters") or []:
+        if not isinstance(mc, dict):
+            continue
+        ms_rows.append((mc.get("sender"), mc.get("sender_pct")))
+        for row in mc.get("child_rows") or []:
+            if isinstance(row, dict):
+                ms_rows.append((row.get("wallet"), row.get("pct_supply")))
+            else:
+                ms_rows.append((row, None))
+        for r in mc.get("receivers") or []:
+            if isinstance(r, dict):
+                ms_rows.append((r.get("wallet"), r.get("pct_supply")))
+            else:
+                ms_rows.append((r, None))
+    p, n = _sum_vector(ms_rows)
+    by_vector["multi_send"] = {"pct": p, "count": n}
+
+    # 5) Fresh wallets
+    fr_rows: list[tuple[str, Any]] = []
+    for fw in data.get("fresh_wallets") or []:
+        if isinstance(fw, dict):
+            fr_rows.append((fw.get("wallet"), fw.get("pct_supply")))
+        else:
+            fr_rows.append((fw, None))
+    p, n = _sum_vector(fr_rows)
+    by_vector["fresh"] = {"pct": p, "count": n}
+
+    # 6) Shared funder (funding clusters — funder + children)
+    fund_rows: list[tuple[str, Any]] = []
+    for fc in data.get("funding_clusters") or []:
+        if not isinstance(fc, dict):
+            continue
+        fund_rows.append((fc.get("funder"), fc.get("funder_pct")))
+        for row in fc.get("child_rows") or []:
+            if isinstance(row, dict):
+                fund_rows.append((row.get("wallet"), row.get("pct_supply")))
+            else:
+                fund_rows.append((row, None))
+        for c in fc.get("children") or []:
+            if isinstance(c, dict):
+                fund_rows.append((c.get("wallet"), c.get("pct_supply")))
+            else:
+                fund_rows.append((c, None))
+    p, n = _sum_vector(fund_rows)
+    by_vector["shared_funder"] = {"pct": p, "count": n}
+
+    # 7) Launch-window same-slot multi-buys
+    lw_rows: list[tuple[str, Any]] = []
+    for g in data.get("same_slot_groups") or []:
+        if not isinstance(g, dict):
+            continue
+        for row in g.get("wallet_rows") or []:
+            if isinstance(row, dict):
+                lw_rows.append((row.get("wallet"), row.get("pct_supply")))
+            else:
+                lw_rows.append((row, None))
+        for w in g.get("wallets") or []:
+            if isinstance(w, dict):
+                lw_rows.append((w.get("wallet"), w.get("pct_supply")))
+            else:
+                lw_rows.append((w, None))
+    p, n = _sum_vector(lw_rows)
+    by_vector["launch_window"] = {"pct": p, "count": n}
+
+    grand = 0.0
+    slot_count = 0
+    any_data = False
+    for meta in by_vector.values():
+        try:
+            vp = float(meta.get("pct") or 0)
+            vn = int(meta.get("count") or 0)
+        except (TypeError, ValueError):
+            continue
+        if vn > 0 or vp > 0:
+            any_data = True
+        grand += vp
+        slot_count += vn
+
+    if not any_data:
+        return {
+            "total_bundle_pct": None,
+            "flagged_wallets": 0,
+            "total_bundle_by_vector": by_vector,
+            "total_bundle_additive": True,
+            "total_bundle_cross_vector_dedupe": False,
+        }
+
+    return {
+        "total_bundle_pct": round(grand, 4),
+        "flagged_wallets": slot_count,
+        "total_bundle_by_vector": by_vector,
+        "total_bundle_additive": True,
+        "total_bundle_cross_vector_dedupe": False,
+    }
 
 
 def _risk_label(score: int) -> str:
@@ -2029,6 +2240,11 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
             "bundle_risk_score": s.get("bundle_risk_score"),
             "total_bundle_pct": s.get("total_bundle_pct"),
             "flagged_wallets": s.get("flagged_wallets"),
+            "total_bundle_by_vector": s.get("total_bundle_by_vector"),
+            "total_bundle_additive": s.get("total_bundle_additive"),
+            "total_bundle_cross_vector_dedupe": s.get(
+                "total_bundle_cross_vector_dedupe"
+            ),
             "multi_account_clusters": s.get("multi_account_clusters") or len(clusters_out),
             "similar_size_groups": s.get("similar_size_groups") or len(similar_out),
             "similar_size_total_pct": s.get("similar_size_total_pct"),

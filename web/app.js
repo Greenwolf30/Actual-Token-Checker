@@ -6194,6 +6194,8 @@ function renderBundlesUi(data) {
       "</span>"
   );
   // Summary % tiles — same Holders priority color bands
+  // Total bundle = sum of all risk vectors with NO cross-vector wallet dedupe
+  // (can exceed 100% if the same wallet appears in multiple vectors).
   html += stat("Total bundle", bunPctHtml(s.total_bundle_pct));
   html += stat("Similar-size", bunPctHtml(s.similar_size_total_pct));
   html += stat("Fresh total", bunPctHtml(s.fresh_total_pct));
@@ -6216,6 +6218,39 @@ function renderBundlesUi(data) {
     '<p class="bun-meta">Sources: ' +
     escHtml(src) +
     " · Heuristic only — not proof of identity</p>";
+  // Total bundle = all risk vectors, additive (no cross-vector dedupe)
+  if (s.total_bundle_additive || s.total_bundle_by_vector) {
+    const bv = s.total_bundle_by_vector || {};
+    const parts = [];
+    const labels = {
+      multi_account: "multi-account",
+      similar_size: "similar-size",
+      insider: "insider",
+      multi_send: "multi-send",
+      fresh: "fresh",
+      shared_funder: "shared funder",
+      launch_window: "launch-window",
+    };
+    for (const [k, lab] of Object.entries(labels)) {
+      const m = bv[k];
+      if (!m) continue;
+      const p = m.pct != null && Number.isFinite(Number(m.pct)) ? Number(m.pct) : null;
+      const n = m.count != null ? Number(m.count) : 0;
+      if (p != null && p > 0) {
+        parts.push(lab + " " + p.toFixed(2) + "%");
+      } else if (n > 0) {
+        parts.push(lab + " n/a%");
+      }
+    }
+    html +=
+      '<p class="bun-meta">Total bundle = sum of vectors (no wallet dedupe across vectors' +
+      (Number(s.total_bundle_pct) > 100
+        ? " — can exceed 100%"
+        : "") +
+      ")" +
+      (parts.length ? ": " + escHtml(parts.join(" + ")) : "") +
+      ".</p>";
+  }
 
   // Signals chips
   const sigs = view.signals || [];

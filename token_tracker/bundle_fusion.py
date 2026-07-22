@@ -893,12 +893,26 @@ def comprehensive_bundle_check(
                 }
             )
         base["signals"] = signals
+        # Total bundle % = all risk vectors, additive (no cross-vector dedupe)
+        try:
+            tb = bun.recompute_total_bundle_all_vectors(base)
+            s = dict(base.get("summary") or {})
+            s["total_bundle_pct"] = tb.get("total_bundle_pct")
+            s["flagged_wallets"] = tb.get("flagged_wallets")
+            s["total_bundle_by_vector"] = tb.get("total_bundle_by_vector")
+            s["total_bundle_additive"] = True
+            s["total_bundle_cross_vector_dedupe"] = False
+            base["summary"] = s
+        except Exception:  # noqa: BLE001
+            pass
         base["notes"] = (
             "Comprehensive bundle check: Helius top holders (owner-resolved) + "
             "Rugcheck insiders/risks + Birdeye (if key) + launch-window same-slot "
             "multi-buys + 1-hop SOL funding + fresh/sole-token wallets + "
             "token multi-send (one sender → many). "
-            "Not a full commercial sniper graph. "
+            "Total bundle % = sum of each risk vector’s supply % with NO "
+            "cross-vector wallet dedupe (can exceed 100% if wallets hit multiple "
+            "vectors). Not a full commercial sniper graph. "
             + (base.get("notes") or "")
         ).strip()
         return base

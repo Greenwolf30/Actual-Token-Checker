@@ -542,7 +542,10 @@ def _bundle_pct_alert(bundles_data: dict[str, Any] | None) -> dict[str, Any] | N
     flagged_n = summary.get("flagged_wallets")
     extra = ""
     if flagged_n is not None:
-        extra = f" · {flagged_n} wallet(s) in bundle estimate"
+        extra = (
+            f" · {flagged_n} wallet-slot(s) across risk vectors "
+            f"(additive total; wallets in multiple vectors count more than once)"
+        )
 
     if pct >= 50.0:
         return {

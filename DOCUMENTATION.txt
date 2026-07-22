@@ -238,8 +238,11 @@ What people often ask
   coordinated wallets,” not a proof that one person owns those wallets.
 
   The app looks at top-holder snapshots and risk tags, then estimates a
-  total_bundle_pct (% of total supply). That single number drives the
-  Alerts “bundle band” messages below.
+  total_bundle_pct. On full Analyze that number is the SUM of supply % from
+  each risk vector (multi-account, similar-size, insider, multi-send, fresh,
+  shared funder, launch-window) with NO cross-vector wallet dedupe — a wallet
+  in two vectors contributes twice, so the total can exceed 100%. That single
+  number drives the Alerts “bundle band” messages below.
 
   This is NOT:
     - A professional sniper-graph product
