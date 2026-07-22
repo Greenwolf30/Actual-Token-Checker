@@ -198,26 +198,21 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
             }
         )
 
-    # Suspect = Rugcheck insider-flagged only (never multi / similar).
-    # Partition vs similar so no wallet appears in both lists.
-    suspect_wallets = _suspect_wallets(multi_clusters, insiders)
-    similar_groups, suspect_wallets = _partition_similar_and_suspect(
-        similar_groups, suspect_wallets
-    )
-    # Baseline: primary vectors only. Similar/suspect only if primary empty
-    # (fusion recomputes with fresh / multi-send / shared funder).
-    primary_empty = not multi_clusters and not insiders
+    # Unified Suspect = multi-account + similar-size + Rugcheck insiders
+    # (unique wallets; no separate multi / similar / insider lists in UI).
+    suspect_wallets = _suspect_wallets(multi_clusters, insiders, similar_groups)
+    suspect_pct, suspect_n = _suspect_total_percent(suspect_wallets)
+    # Keep similar totals for risk notes only (not a separate Total vector)
+    similar_total_pct, similar_wallet_n = _similar_size_total_percent(similar_groups)
+    # Baseline Total: suspects only when optionals off (fusion recomputes fully)
     total_pct, flagged_n = _total_bundle_percent(
         holders=holders,
-        clusters=multi_clusters,
-        similar_groups=similar_groups if primary_empty else [],
-        insiders=insiders,
-        suspects=suspect_wallets if primary_empty else [],
+        clusters=[],
+        similar_groups=[],
+        insiders=[],
+        suspects=suspect_wallets,
     )
-    suspect_pct, suspect_n = _suspect_total_percent(suspect_wallets)
-    # Combined % of unique wallets that sit in similar-size groups
-    similar_total_pct, similar_wallet_n = _similar_size_total_percent(similar_groups)
-    # Single holders (non-LP, not in any other category) — fusion recomputes too
+    # Single holders exclude unified suspects + optional categories
     _base_for_single = {
         "holders": holders,
         "clusters": multi_clusters,
@@ -236,6 +231,7 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
         "summary": {
             "bundle_risk_score": score,
             "bundle_risk": risk,
+            # Legacy counts (signals only; not separate UI sections)
             "multi_account_clusters": len(multi_clusters),
             "similar_size_groups": len(similar_groups),
             "similar_size_total_pct": similar_total_pct,
@@ -245,17 +241,16 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
             "top10_pct_excluding_known_programs": top10_ex_f,
             "unique_wallets_in_top": summary.get("unique_wallets_in_top"),
             "accounts_scanned": summary.get("accounts_returned") or len(holders),
-            # Combined % across risk vectors (fusion recomputes all-vectors additive)
             "total_bundle_pct": total_pct,
             "flagged_wallets": flagged_n,
-            # Sum of unique suspect wallets' supply %
+            # Unified suspect (multi + similar + rugcheck), unique wallets
             "suspect_total_pct": suspect_pct,
             "suspect_wallet_count": suspect_n,
-            # Non-LP holders not in multi/similar/insider/suspect/etc.
             "single_holders_total_pct": single_pct,
             "single_holders_wallet_count": single_n,
         },
         "signals": signals,
+        # Keep raw lists for fusion/recompute + Ruggers flags; UI shows only suspect
         "clusters": multi_clusters,
         "similar_size_groups": similar_groups,
         "insider_wallets": [
@@ -268,7 +263,7 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
             }
             for h in insiders[:15]
         ],
-        "suspect_wallets": suspect_wallets[:20],
+        "suspect_wallets": suspect_wallets[:40],
         "meta": {
             "holder_source": holders_data.get("source"),
             "rpc_endpoint_host": meta.get("rpc_endpoint_host"),
@@ -276,7 +271,7 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
         },
         "notes": (
             "Bundle detection is heuristic from a top-holder snapshot only. "
-            "Suspect total % = sum of unique suspect wallets' supply %. "
+            "Suspect = unique multi-account + similar-size + Rugcheck wallets. "
             "Total bundle % = unique wallets across multi-account + insider + "
             "multi-send + fresh + shared funder (each wallet once, max %). "
             "Similar-size and suspect only appear / count when those primary "
@@ -1533,23 +1528,23 @@ def recompute_total_bundle_all_vectors(
     Each wallet contributes its supply % at most once (max % if it appears in
     several vectors or lists). Cap display total at 100%.
 
-    Always counted (when present):
-      multi_account, insider
+    Unified Suspect (multi-account + similar-size + Rugcheck insiders):
+      same Total rules as the old similar + suspect fallback —
+      only when Fresh / Multi-send / Shared SOL are ALL unchecked.
 
     Optional (ONLY when that Analyze checkbox is ON this run):
       multi_send (token multi-send), fresh, shared_funder (Shared SOL)
 
     Total = unique wallets across active vectors (each wallet once at max %).
-    Wallets that appear in more than one list (e.g. Fresh + Shared SOL) are
-    not double-counted. Checked optionals are included; unchecked are not —
-    even if the UI still shows last-known for an unchecked box.
+    No double-count across categories. Unchecked optionals do not enter Total
+    even if last-known is shown.
 
     When Fresh + Multi-send + Shared SOL are ALL unchecked:
-      multi_account + insider + similar_size + suspect
+      Total = unique unified Suspect wallets only
 
-    When any one (or more) is checked:
-      multi_account + insider + only the checked optional(s)
-      (similar/suspect not in Total; unchecked optionals not in Total)
+    When any optional is checked:
+      Total = unique wallets in the checked optional(s) only
+      (unified Suspect is listed for reference, not in Total)
 
     Never counted: launch_window (disabled).
     Excludes known LP / program wallets.
@@ -1627,12 +1622,13 @@ def recompute_total_bundle_all_vectors(
     # Per counted vector: wallet → pct (for cross-list + totals)
     counted_maps: dict[str, dict[str, float]] = {}
 
-    # 1) Multi-account clusters
-    ma_rows: list[tuple[str, Any]] = []
+    # 1–3) Unified Suspect = multi-account + similar-size + Rugcheck insiders
+    # (plus any pre-built suspect_wallets). Unique wallet map for Total fallback.
+    sus_rows: list[tuple[str, Any]] = []
     for c in data.get("clusters") or []:
         if not isinstance(c, dict):
             continue
-        ma_rows.append(
+        sus_rows.append(
             (
                 c.get("wallet") or c.get("owner"),
                 c.get("pct_supply")
@@ -1640,13 +1636,6 @@ def recompute_total_bundle_all_vectors(
                 else c.get("combined_pct"),
             )
         )
-    ma_map = _wallet_map(ma_rows)
-    p, n = _sum_map(ma_map)
-    by_vector["multi_account"] = {"pct": p, "count": n}
-    counted_maps["multi_account"] = ma_map
-
-    # 2) Similar-size groups — EXCLUDED as a category (unless also in counted)
-    sim_rows: list[tuple[str, Any]] = []
     for g in data.get("similar_size_groups") or []:
         if not isinstance(g, dict):
             continue
@@ -1654,26 +1643,63 @@ def recompute_total_bundle_all_vectors(
         if members:
             for m in members:
                 if isinstance(m, dict):
-                    sim_rows.append((m.get("wallet"), m.get("pct_supply")))
+                    sus_rows.append((m.get("wallet"), m.get("pct_supply")))
                 else:
-                    sim_rows.append((m, g.get("avg_pct")))
+                    sus_rows.append((m, g.get("avg_pct")))
         else:
             for w in g.get("wallets") or []:
-                sim_rows.append((w, g.get("avg_pct")))
-    sim_map = _wallet_map(sim_rows)
-    p, n = _sum_map(sim_map)
-    by_vector["similar_size"] = {"pct": p, "count": n}
-    # similar_size is fallback-only — not always in counted_maps
-
-    # 3) Insiders
-    in_rows: list[tuple[str, Any]] = []
+                if isinstance(w, dict):
+                    sus_rows.append((w.get("wallet"), w.get("pct_supply")))
+                else:
+                    sus_rows.append((w, g.get("avg_pct")))
     for h in data.get("insider_wallets") or []:
         if isinstance(h, dict):
-            in_rows.append((h.get("wallet"), h.get("pct_supply")))
-    in_map = _wallet_map(in_rows)
-    p, n = _sum_map(in_map)
-    by_vector["insider"] = {"pct": p, "count": n}
-    counted_maps["insider"] = in_map
+            sus_rows.append((h.get("wallet"), h.get("pct_supply")))
+    for sw in data.get("suspect_wallets") or []:
+        if isinstance(sw, dict):
+            sus_rows.append((sw.get("wallet"), sw.get("pct_supply")))
+        else:
+            sus_rows.append((sw, None))
+    sus_map = _wallet_map(sus_rows)
+    p, n = _sum_map(sus_map)
+    by_vector["suspect"] = {
+        "pct": p,
+        "count": n,
+        "fallback_only": True,
+        "shown": True,
+        "unified": True,
+    }
+    counted_maps["suspect"] = sus_map
+    # Legacy vector keys kept empty/excluded so old UI code does not double-count
+    by_vector["multi_account"] = {
+        "pct": 0.0,
+        "count": 0,
+        "excluded_from_total": True,
+        "merged_into": "suspect",
+    }
+    by_vector["similar_size"] = {
+        "pct": 0.0,
+        "count": 0,
+        "excluded_from_total": True,
+        "merged_into": "suspect",
+        "fallback_only": True,
+    }
+    by_vector["insider"] = {
+        "pct": 0.0,
+        "count": 0,
+        "excluded_from_total": True,
+        "merged_into": "suspect",
+    }
+    sim_map = {}  # no longer a separate Total vector
+    # Also write unified suspect list back for UI payload consistency
+    try:
+        if not list(data.get("suspect_wallets") or []):
+            data["suspect_wallets"] = [
+                {"wallet": w, "pct_supply": pct}
+                for w, pct in sus_map.items()
+            ]
+    except Exception:  # noqa: BLE001
+        pass
 
     # 4) Token multi-send only (not SOL re-label — that is shared_funder)
     ms_rows: list[tuple[str, Any]] = []
@@ -1775,28 +1801,9 @@ def recompute_total_bundle_all_vectors(
         "disabled": True,
     }
 
-    # Suspect wallets — EXCLUDED as a category (unless also in counted)
-    sus_rows: list[tuple[str, Any]] = []
-    for sw in data.get("suspect_wallets") or []:
-        if isinstance(sw, dict):
-            sus_rows.append((sw.get("wallet"), sw.get("pct_supply")))
-        else:
-            sus_rows.append((sw, None))
-    sus_map = _wallet_map(sus_rows)
-    p, n = _sum_map(sus_map)
-    by_vector["suspect"] = {
-        "pct": p,
-        "count": n,
-        "excluded_from_total": True,
-    }
-
-    # Always: multi-account + insider
-    # Optionals: Fresh / Multi-send / Shared SOL — ONLY when that checkbox is ON
-    # for this Analyze. Last-known can still SHOW in those boxes when unchecked,
-    # but last-known bags do NOT enter Total.
-    # All 3 unchecked → Total = multi-account + insider + similar + suspect
-    # Any one checked → that vector counts; unchecked ones stay out of Total
-    ALWAYS = ("multi_account", "insider")
+    # Optionals: Fresh / Multi-send / Shared SOL — only when checkbox ON.
+    # Unified Suspect: only when ALL three optionals are unchecked (old
+    # similar + suspect fallback rules).
     OPTIONAL_FLAGS = {
         "multi_send": bool(include_multi_send),
         "fresh": bool(include_fresh),
@@ -1804,21 +1811,25 @@ def recompute_total_bundle_all_vectors(
     }
     any_optional_on = any(OPTIONAL_FLAGS.values())
 
-    active_keys: list[str] = list(ALWAYS)
+    active_keys: list[str] = []
     for key, on in OPTIONAL_FLAGS.items():
         if on:
             active_keys.append(key)
 
     if not any_optional_on:
-        # Fresh + Multi-send + Shared SOL all unchecked
-        active_keys.extend(["similar_size", "suspect"])
-        mode = "multi_plus_similar_suspect"
+        active_keys.append("suspect")
+        mode = "suspect_fallback"
         use_sim_sus_in_total = True
     else:
         mode = "primary"
         use_sim_sus_in_total = False
 
-    excluded = ["launch_window"]
+    excluded = [
+        "launch_window",
+        "multi_account",
+        "similar_size",
+        "insider",
+    ]
     for key, on in OPTIONAL_FLAGS.items():
         if not on:
             excluded.append(key)
@@ -1831,33 +1842,22 @@ def recompute_total_bundle_all_vectors(
             by_vector[key]["excluded_from_total"] = False
             by_vector[key].pop("optional_scan_off", None)
 
-    if "similar_size" in by_vector:
-        by_vector["similar_size"] = dict(by_vector["similar_size"])
-        by_vector["similar_size"]["fallback_only"] = True
-        by_vector["similar_size"]["shown"] = True  # UI always lists
-        by_vector["similar_size"]["excluded_from_total"] = not use_sim_sus_in_total
     if "suspect" in by_vector:
         by_vector["suspect"] = dict(by_vector["suspect"])
         by_vector["suspect"]["fallback_only"] = True
         by_vector["suspect"]["shown"] = True
         by_vector["suspect"]["excluded_from_total"] = not use_sim_sus_in_total
+        by_vector["suspect"]["unified"] = True
 
-    if use_sim_sus_in_total:
-        for key in ("similar_size", "suspect"):
-            if key in by_vector:
-                by_vector[key]["excluded_from_total"] = False
-    else:
-        excluded.extend(["similar_size", "suspect"])
+    if not use_sim_sus_in_total:
+        excluded.append("suspect")
 
     # Total = unique wallets across active vectors only (no double-count).
-    # A wallet in Fresh + Shared SOL (etc.) contributes once at max hold %.
     union: dict[str, float] = {}
     appear_in: dict[str, list[str]] = {}
     for key in active_keys:
         wmap = counted_maps.get(key) or {}
-        if key == "similar_size":
-            wmap = sim_map
-        elif key == "suspect":
+        if key == "suspect":
             wmap = sus_map
         for w, pct in wmap.items():
             try:
@@ -2151,43 +2151,96 @@ def _suspect_wallets(
     groups: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Suspect wallets = Rugcheck insider-flagged top holders only
-    (``insider`` / insider flag true on the holder).
+    Unified Suspect wallets (unique by address, max hold %):
 
-    Multi-account and similar-size are NOT included (they have their own sections).
-    ``clusters`` / ``groups`` accepted for call-site compatibility but ignored.
+      • multi-account cluster owners
+      • Rugcheck insider-flagged holders
+      • similar-size group members
+
+    One list for Bundles / Total fallback / Ruggers (replaces separate
+    multi-account, similar-size, and old insider/suspect sections).
     """
-    _ = clusters
-    _ = groups
     bag: dict[str, dict[str, Any]] = {}
 
     def _add(wallet: str | None, reason: str, pct: Any = None) -> None:
         if not wallet:
             return
         w = str(wallet).strip()
-        if not w:
+        if not w or len(w) < 20:
             return
-        row = bag.setdefault(w, {"wallet": w, "reasons": [], "pct_supply": pct})
-        if reason not in row["reasons"]:
+        row = bag.setdefault(
+            w, {"wallet": w, "reasons": [], "sources": [], "pct_supply": None}
+        )
+        if reason and reason not in row["reasons"]:
             row["reasons"].append(reason)
-        if pct is not None and row.get("pct_supply") is None:
-            row["pct_supply"] = pct
-        elif pct is not None:
+        src = reason.split("(")[0].strip().lower()
+        if "multi" in src and "multi-account" not in row["sources"]:
+            row["sources"].append("multi-account")
+        elif "similar" in src and "similar-size" not in row["sources"]:
+            row["sources"].append("similar-size")
+        elif "insider" in src or "rugcheck" in src:
+            if "rugcheck" not in row["sources"]:
+                row["sources"].append("rugcheck")
+        if pct is not None:
             try:
-                old = float(row["pct_supply"]) if row.get("pct_supply") is not None else None
                 new = float(pct)
+                old = (
+                    float(row["pct_supply"])
+                    if row.get("pct_supply") is not None
+                    else None
+                )
                 if old is None or new > old:
-                    row["pct_supply"] = pct
+                    row["pct_supply"] = new
             except (TypeError, ValueError):
-                pass
+                if row.get("pct_supply") is None:
+                    row["pct_supply"] = pct
+
+    for c in clusters or []:
+        if not isinstance(c, dict):
+            continue
+        w = c.get("wallet") or c.get("owner")
+        pct = (
+            c.get("pct_supply")
+            if c.get("pct_supply") is not None
+            else c.get("combined_pct")
+        )
+        _add(w, "multi-account cluster", pct)
+
+    for g in groups or []:
+        if not isinstance(g, dict):
+            continue
+        avg = g.get("avg_pct")
+        members = list(g.get("members") or [])
+        if members:
+            for m in members:
+                if isinstance(m, dict):
+                    _add(
+                        m.get("wallet"),
+                        "similar-size group",
+                        m.get("pct_supply")
+                        if m.get("pct_supply") is not None
+                        else avg,
+                    )
+                else:
+                    _add(m, "similar-size group", avg)
+        else:
+            for w in g.get("wallets") or []:
+                if isinstance(w, dict):
+                    _add(
+                        w.get("wallet"),
+                        "similar-size group",
+                        w.get("pct_supply")
+                        if w.get("pct_supply") is not None
+                        else avg,
+                    )
+                else:
+                    _add(w, "similar-size group", avg)
 
     for h in insiders or []:
         if not isinstance(h, dict):
             continue
-        # Only when Rugcheck (or holder payload) marks insider as true
         if h.get("insider") is False:
             continue
-        # holders list uses insider=True; insider_wallets list is already filtered
         if "insider" in h and not h.get("insider"):
             continue
         _add(h.get("wallet"), "insider-flagged (Rugcheck)", h.get("pct_supply"))
@@ -2201,6 +2254,7 @@ def _suspect_wallets(
                 if x.get("pct_supply") is not None
                 else 0
             ),
+            str(x.get("wallet") or ""),
         ),
     )
 
@@ -2377,61 +2431,52 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
                 row[k] = v
         return row
 
-    # Multi-account clusters
+    # Multi-account / similar / insider merged into Suspect UI (lists kept empty)
     clusters_out: list[dict[str, Any]] = []
-    for c in list(data.get("clusters") or [])[:12]:
-        if not isinstance(c, dict):
-            continue
-        pct = c.get("pct_supply")
-        if pct is None:
-            pct = c.get("combined_pct")
-        clusters_out.append(
-            {
-                "wallet": c.get("wallet") or c.get("owner"),
-                "pct_supply": pct,
-                "accounts": c.get("accounts"),
-                "token_accounts": list(c.get("token_accounts") or [])[:6],
-            }
-        )
-
-    # Similar-size groups
     similar_out: list[dict[str, Any]] = []
-    for g in list(data.get("similar_size_groups") or [])[:8]:
-        if not isinstance(g, dict):
-            continue
-        members: list[dict[str, Any]] = []
-        member_rows = list(g.get("members") or [])
-        if not member_rows:
-            for w in g.get("wallets") or []:
-                member_rows.append({"wallet": w, "pct_supply": g.get("avg_pct")})
-        for m in member_rows[:10]:
-            if isinstance(m, dict):
-                r = _wallet_row(m.get("wallet"), m.get("pct_supply"))
-            else:
-                r = _wallet_row(m, g.get("avg_pct"))
-            if r:
-                members.append(r)
-        similar_out.append(
-            {
-                "avg_pct": g.get("avg_pct"),
-                "min_pct": g.get("min_pct"),
-                "max_pct": g.get("max_pct"),
-                "total_pct": g.get("total_pct"),
-                "wallets": members,
-                "count": len(members)
-                or len(g.get("wallets") or [])
-                or len(member_rows),
-            }
-        )
-
-    # Insiders
     insiders_out: list[dict[str, Any]] = []
-    for h in list(data.get("insider_wallets") or [])[:16]:
-        if not isinstance(h, dict):
+    # Unified suspect built from multi + similar + rugcheck + any existing rows
+    unified_sus = _suspect_wallets(
+        list(data.get("clusters") or []),
+        list(data.get("insider_wallets") or []),
+        list(data.get("similar_size_groups") or []),
+    )
+    # Fold any pre-existing suspect reasons
+    bag_ui: dict[str, dict[str, Any]] = {
+        (r.get("wallet") or "").strip(): dict(r)
+        for r in unified_sus
+        if (r.get("wallet") or "").strip()
+    }
+    for srow in list(data.get("suspect_wallets") or []):
+        if not isinstance(srow, dict):
             continue
-        r = _wallet_row(h.get("wallet"), h.get("pct_supply"), rank=h.get("rank"))
-        if r:
-            insiders_out.append(r)
+        w = (srow.get("wallet") or "").strip()
+        if not w:
+            continue
+        cur = bag_ui.get(w) or {
+            "wallet": w,
+            "reasons": [],
+            "sources": [],
+            "pct_supply": srow.get("pct_supply"),
+        }
+        for reason in list(srow.get("reasons") or []) or (
+            [srow.get("reason")] if srow.get("reason") else []
+        ):
+            if reason and reason not in (cur.get("reasons") or []):
+                cur.setdefault("reasons", []).append(reason)
+        if srow.get("pct_supply") is not None:
+            try:
+                pf = float(srow["pct_supply"])
+                old = (
+                    float(cur["pct_supply"])
+                    if cur.get("pct_supply") is not None
+                    else None
+                )
+                if old is None or pf > old:
+                    cur["pct_supply"] = pf
+            except (TypeError, ValueError):
+                pass
+        bag_ui[w] = cur
 
     # Funding / shared SOL funder
     funding_out: list[dict[str, Any]] = []
@@ -2657,30 +2702,45 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
             }
         )
 
-    # Suspects
+    # Unified Suspect list (multi-account + similar-size + Rugcheck)
     suspects_out: list[dict[str, Any]] = []
-    for srow in list(data.get("suspect_wallets") or [])[:24]:
-        if not isinstance(srow, dict):
-            continue
+    for srow in sorted(
+        bag_ui.values(),
+        key=lambda x: (
+            -(
+                float(x["pct_supply"])
+                if x.get("pct_supply") is not None
+                else 0
+            ),
+            str(x.get("wallet") or ""),
+        ),
+    )[:40]:
         reasons = srow.get("reasons") or srow.get("reason")
         if isinstance(reasons, str):
             reasons = [reasons]
+        sources = srow.get("sources")
         r = _wallet_row(
             srow.get("wallet"),
             srow.get("pct_supply"),
-            reasons=list(reasons or [])[:6],
+            reasons=list(reasons or [])[:8],
+            sources=list(sources or [])[:6] if sources else None,
         )
         if r:
             suspects_out.append(r)
     sus_tot, sus_n = _sum_wallets_pct(suspects_out)
+    if sus_tot is None and suspects_out:
+        sus_tot = 0.0
+        sus_n = len(suspects_out)
     if s.get("suspect_total_pct") is not None:
         try:
-            sus_tot = float(s.get("suspect_total_pct"))
+            st = float(s.get("suspect_total_pct"))
+            if sus_tot is None or st >= float(sus_tot or 0):
+                sus_tot = st
         except (TypeError, ValueError):
             pass
     if s.get("suspect_wallet_count") is not None:
         try:
-            sus_n = int(s.get("suspect_wallet_count"))
+            sus_n = max(int(sus_n or 0), int(s.get("suspect_wallet_count")))
         except (TypeError, ValueError):
             pass
 
