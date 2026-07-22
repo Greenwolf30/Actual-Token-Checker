@@ -25,8 +25,64 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v89";
+const ADTC_CLIENT_VERSION = "v90";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
+
+/** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
+const BUNDLE_DELTA_BASELINE_VER_KEY = "adtc_bundle_delta_baseline_ver";
+const BUNDLE_DELTA_BASELINE_VER = 90;
+/** In-page last LIVE stats per mint — survives re-Analyze in the same tab without storage races. */
+const __adtcLiveBaselineByMint = Object.create(null);
+
+function migrateBundleDeltaBaselines() {
+  try {
+    const cur = Number(localStorage.getItem(BUNDLE_DELTA_BASELINE_VER_KEY) || 0);
+    if (cur >= BUNDLE_DELTA_BASELINE_VER) return;
+    localStorage.removeItem(BUNDLE_STATS_PREV_KEY);
+    localStorage.removeItem(BUNDLE_DELTA_HTML_KEY);
+    try {
+      sessionStorage.removeItem(BUNDLE_DELTA_HTML_KEY);
+      sessionStorage.removeItem("adtc_delta_html_last");
+    } catch (_) {}
+    localStorage.setItem(BUNDLE_DELTA_BASELINE_VER_KEY, String(BUNDLE_DELTA_BASELINE_VER));
+    console.info(
+      "[bundles] cleared old delta baselines (upgrade to v" +
+        BUNDLE_DELTA_BASELINE_VER +
+        ")"
+    );
+  } catch (err) {
+    console.warn("[bundles] baseline migrate failed", err);
+  }
+}
+
+function statsAlmostEqual(a, b) {
+  if (!a || !b) return false;
+  const keys = [
+    "risk",
+    "total_bundle_pct",
+    "similar_size_total_pct",
+    "fresh_total_pct",
+    "multi_send_total_pct",
+    "funding_total_pct",
+    "suspect_total_pct",
+    "single_holders_total_pct",
+    "top10_ex_lp",
+  ];
+  let compared = 0;
+  for (const k of keys) {
+    const x = a[k];
+    const y = b[k];
+    const xn = x != null && Number.isFinite(Number(x)) ? Number(x) : null;
+    const yn = y != null && Number.isFinite(Number(y)) ? Number(y) : null;
+    if (xn == null && yn == null) continue;
+    compared++;
+    const xv = xn == null ? 0 : xn;
+    const yv = yn == null ? 0 : yn;
+    if (Math.abs(xv - yv) > 0.05) return false;
+  }
+  return compared > 0;
+}
+
 
 /** Bump when Flagged-wallet rules change so sticky junk is wiped once. */
 const RUGGERS_RULES_VERSION = 8;
@@ -7746,25 +7802,40 @@ function renderBundlesUi(data) {
       deltaCurStats = curStats;
     }
   } else {
-    // LIVE Analyze — snapshot baseline once; do not write storage yet
+    // LIVE Analyze — baseline = last LIVE run in this tab, else storage, else zeros.
+    // Never use current stats as baseline (that forced permanent "(no change)").
+    const mKey = bundleStatsMintKey(mint) || "last";
+    let baseline = null;
+    let baselineSrc = "zeros";
     try {
-      prev = mint ? resolveBundleStatsPrev(mint) : null;
-    } catch (_) {
-      prev = null;
+      if (mKey && __adtcLiveBaselineByMint[mKey]) {
+        baseline = cloneBundleStats(__adtcLiveBaselineByMint[mKey]);
+        baselineSrc = "memory";
+      }
+    } catch (_) {}
+    if (!baseline) {
+      try {
+        baseline = mint ? resolveBundleStatsPrev(mint) : null;
+        if (baseline) baselineSrc = "storage";
+      } catch (_) {
+        baseline = null;
+      }
     }
-    if (!prev) {
-      // No prior baseline → compare vs zeros so first run shows UP +N%
+    // Note: storage matching live is NORMAL when you re-Analyze the same mint
+    // with unchanged numbers (shows "(no change)"). Poisoned forNext=cur from
+    // old builds is cleared once by migrateBundleDeltaBaselines() on upgrade.
+    if (!baseline) {
       prev = zeroBundleStats();
+      baselineSrc = "zeros";
     } else {
-      prev = cloneBundleStats(prev);
+      prev = cloneBundleStats(baseline);
     }
-    // Guard: if baseline accidentally equals live (same object / seed bug),
-    // still allow zeros fallback only when every key matches *and* we detect
-    // forNext was written as cur in the same tick — handled by not writing early.
     deltaCurStats = curStats;
     try {
       console.info(
         "[bundles baseline]",
+        "src=",
+        baselineSrc,
         "mint=",
         (mint || "").slice(0, 8),
         "prev.total=",
@@ -8729,21 +8800,36 @@ function renderBundlesUi(data) {
     const items = [];
     function pushStat(label, valueText, valueClass, key, curOverride, sub) {
       const kind = key === "risk" ? "score" : "pct";
-      const curVal =
-        curOverride !== undefined
-          ? curOverride
-          : deltaCurStats
-            ? deltaCurStats[key]
-            : null;
-      const prevVal = prev ? prev[key] : 0;
-      const parts = computeBundleStatDeltaParts(
-        curVal != null && Number.isFinite(Number(curVal)) ? Number(curVal) : 0,
-        prevVal != null && Number.isFinite(Number(prevVal)) ? Number(prevVal) : 0,
-        kind,
-        { coalesceNull: true }
-      );
-      const deltaText = "(" + (parts && parts.text ? parts.text : "no change") + ")";
-      const deltaCls = (parts && parts.cls) || "bun-delta-flat";
+      let deltaText = null;
+      let deltaCls = "bun-delta-flat";
+      // Restore: prefer exact frozen marker from last live Analyze
+      if (isRestore && frozenHtml && frozenHtml[key]) {
+        const fr = String(frozenHtml[key]);
+        const m = fr.match(/\((?:no change|UP[^)]*|DN[^)]*|d[^)]*)\)/i);
+        if (m) {
+          deltaText = m[0];
+          if (/UP/i.test(deltaText)) deltaCls = "bun-delta-green";
+          else if (/DN/i.test(deltaText)) deltaCls = "bun-delta-red";
+          else deltaCls = "bun-delta-flat";
+        }
+      }
+      if (!deltaText) {
+        const curVal =
+          curOverride !== undefined
+            ? curOverride
+            : deltaCurStats
+              ? deltaCurStats[key]
+              : null;
+        const prevVal = prev ? prev[key] : 0;
+        const parts = computeBundleStatDeltaParts(
+          curVal != null && Number.isFinite(Number(curVal)) ? Number(curVal) : 0,
+          prevVal != null && Number.isFinite(Number(prevVal)) ? Number(prevVal) : 0,
+          kind,
+          { coalesceNull: true }
+        );
+        deltaText = "(" + (parts && parts.text ? parts.text : "no change") + ")";
+        deltaCls = (parts && parts.cls) || "bun-delta-flat";
+      }
       htmlByKeyThisRun[key] =
         '<span class="bun-stat-delta ' +
         deltaCls +
@@ -8937,6 +9023,9 @@ function renderBundlesUi(data) {
           deltaFrom: baseline,
           deltaCur: statsForCur,
         });
+        try {
+          __adtcLiveBaselineByMint[mKey] = cloneBundleStats(statsForNext);
+        } catch (_) {}
       } catch (_) {}
       if (Object.keys(htmlByKeyThisRun).length) {
         try {
