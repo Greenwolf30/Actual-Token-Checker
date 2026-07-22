@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v130";
+const ADTC_CLIENT_VERSION = "v131";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -1899,8 +1899,9 @@ function primaryLaneFromBaselineFlags(first, uploadedSimilar) {
     return "creator";
   }
   if (first.in_multi) return "multi";
-  // Similar-size renamed Suspect (not multi-account; not Rugcheck-only list)
-  if (uploadedSimilar || first.in_similar) return "suspect";
+  // Suspect = similar-size + Rugcheck insider (not multi-account)
+  if (uploadedSimilar || first.in_similar || first.in_insider || first.in_suspect)
+    return "suspect";
   if (first.in_multi_send) return "multi_send";
   if (first.in_funding) return "funding";
   if (first.in_fresh) return "fresh";
@@ -5725,10 +5726,11 @@ function _refreshRuggersPanelImpl(focusKey) {
     buckets.freshSellers || [],
     "fresh"
   );
-  // Suspect = former similar-size (not multi-account; not old Rugcheck list)
+  // Suspect = similar-size + Rugcheck insider (not multi-account)
   const suspectSellersOnly = []
     .concat(buckets.similarSellers || [])
-    .concat(buckets.suspectSellers || []);
+    .concat(buckets.suspectSellers || [])
+    .concat(buckets.insiderSellers || []);
   const susSeen = new Set();
   const suspectSellersDedup = [];
   for (const row of suspectSellersOnly) {
@@ -5741,13 +5743,14 @@ function _refreshRuggersPanelImpl(focusKey) {
       ...row,
       origin_lane: "suspect",
       lane_label: "suspect",
-      in_similar: true,
+      in_similar: !!(row.in_similar || row.origin_lane === "similar"),
+      in_insider: !!(row.in_insider || row.origin_lane === "insider"),
       in_suspect: true,
     });
   }
   html += renderRuggersSection(
     "Suspect wallets",
-    "Similar-size top bags (renamed Suspect). Not multi-account. " +
+    "Similar-size top bags + Rugcheck insider-flagged. Not multi-account. " +
       "Sticky sell ↔ Swing. Export + Upload.",
     suspectSellersDedup,
     "suspect"
@@ -7398,7 +7401,7 @@ function recomputeTotalBundleFromView(view, summary) {
       for (let j = 0; j < recs.length; j++) pushWalletObj(recs[j]);
     }
   }
-  // Suspect (= similar-size) only when all optionals off
+  // Suspect (= similar-size + Rugcheck insider) only when all optionals off
   if (!anyOptionalOn) {
     const sims = v.similar_size_groups || [];
     for (let i = 0; i < sims.length; i++) {
@@ -7410,6 +7413,8 @@ function recomputeTotalBundleFromView(view, summary) {
         else pushWalletObj({ wallet: m, pct_supply: g.avg_pct });
       }
     }
+    const ins = v.insider_wallets || [];
+    for (let i = 0; i < ins.length; i++) pushWalletObj(ins[i]);
   }
 
   const unique = sumUniqueWalletSupplyPct(rows);
@@ -9683,7 +9688,7 @@ function renderBundlesUi(data) {
     const crossN = s.total_bundle_crosslisted_count;
     html +=
       '<p class="bun-meta">Total = unique wallets (no double-count). ' +
-      "Multi-account always counts. Suspect (similar-size) counts only when Fresh / Multi-send / Shared SOL are all off. " +
+      "Multi-account always counts. Suspect (similar-size + Rugcheck insider) counts only when Fresh / Multi-send / Shared SOL are all off. " +
       "Checked optionals enter Total; last-known under an unchecked box does not. " +
       (uniqN != null ? " · " + escHtml(String(uniqN)) + " unique wallet(s)" : "") +
       (crossN != null && Number(crossN) > 0
@@ -10075,13 +10080,14 @@ function renderBundlesUi(data) {
 
   // Launch-window removed from Bundles (Helius scan disabled).
 
-  // Suspect = similar-size bags (renamed). Not multi-account; not old Rugcheck list.
+  // Suspect = similar-size bags + Rugcheck insider-flagged (not multi-account)
   const sims = view.similar_size_groups || [];
+  const insiders = view.insider_wallets || [];
   let susTot =
     s.suspect_total_pct != null
       ? s.suspect_total_pct
       : s.similar_size_total_pct;
-  if (sims.length) {
+  if (sims.length || insiders.length) {
     html +=
       '<section class="bun-section"><div class="bun-section-head">' +
       '<span class="bun-section-title">Suspect wallets</span>' +
@@ -10092,31 +10098,50 @@ function renderBundlesUi(data) {
       "</span></div><div class=\"bun-section-body\">";
     if (showSimilarSuspect) {
       html +=
-        '<p class="bun-sub">Similar-size top bags (renamed Suspect). Counted in Total when Fresh, Multi-send, and Shared SOL are all off (with multi-account; unique wallets).</p>';
+        '<p class="bun-sub">Similar-size top bags + Rugcheck insider-flagged. Counted in Total when Fresh, Multi-send, and Shared SOL are all off (with multi-account; unique wallets).</p>';
     } else {
       html +=
-        '<p class="bun-sub">Similar-size top bags (renamed Suspect). Listed for reference — not in Total while Fresh / Multi-send / Shared SOL are checked.</p>';
+        '<p class="bun-sub">Similar-size top bags + Rugcheck insider-flagged. Listed for reference — not in Total while Fresh / Multi-send / Shared SOL are checked.</p>';
     }
-    for (const g of sims) {
+    if (sims.length) {
       html +=
-        '<div class="bun-cluster"><div class="bun-cluster-head">' +
-        escHtml(String(g.count || (g.wallets || []).length || 0)) +
-        " wallets ≈ " +
-        bunPctHtml(g.avg_pct) +
-        " each" +
-        (g.total_pct != null ? " · sum " + bunPctHtml(g.total_pct) : "") +
-        "</div>";
-      html += bunWalletTable(g.wallets || [], [
+        '<p class="bun-sub"><strong>Similar-size bags</strong></p>';
+      for (const g of sims) {
+        html +=
+          '<div class="bun-cluster"><div class="bun-cluster-head">' +
+          escHtml(String(g.count || (g.wallets || []).length || 0)) +
+          " wallets ≈ " +
+          bunPctHtml(g.avg_pct) +
+          " each" +
+          (g.total_pct != null ? " · sum " + bunPctHtml(g.total_pct) : "") +
+          "</div>";
+        html += bunWalletTable(g.wallets || [], [
+          { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
+          { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
+        ]);
+        html += "</div>";
+      }
+    }
+    if (insiders.length) {
+      html +=
+        '<p class="bun-sub"><strong>Rugcheck insider-flagged</strong> · ' +
+        escHtml(String(insiders.length)) +
+        " wallet(s)</p>";
+      html += bunWalletTable(insiders, [
         { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
         { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
+        {
+          key: "label",
+          label: "Tag",
+          render: (v) => escHtml(v || "insider-flagged (Rugcheck)"),
+        },
       ]);
-      html += "</div>";
     }
     html += "</div></section>";
   } else {
     html += bunEmptySection(
       "Suspect wallets",
-      "None found — top wallets with nearly the same bag size (formerly similar-size)."
+      "None found — no similar-size bags or Rugcheck insider-flagged wallets."
     );
   }
 

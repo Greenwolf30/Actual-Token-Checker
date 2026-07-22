@@ -557,19 +557,19 @@ def _ruggers_track_snapshot(
         in_fund = addr in funding_wallets
         in_launch = addr in launch_wallets
         in_fresh = addr in fresh_wallets
-        # Multi-account stays multi. Similar-size → Suspect (in_similar).
-        # Old Rugcheck-only suspect list not used as its own section.
+        # Multi-account stays multi. Suspect = similar-size + Rugcheck insider.
         return {
             "in_similar": in_sim,
             "in_multi": in_multi,
             "in_multi_send": in_ms,
-            "in_insider": False,
-            "in_suspect": in_sim,
+            "in_insider": in_ins,
+            "in_suspect": bool(in_sim or in_ins),
             "in_funding": in_fund,
             "in_launch": in_launch,
             "in_fresh": in_fresh,
             "exclude_from_single": bool(
                 in_sim
+                or in_ins
                 or in_multi
                 or in_ms
                 or in_fund
