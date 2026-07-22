@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v87";
+const ADTC_CLIENT_VERSION = "v88";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Bump when Flagged-wallet rules change so sticky junk is wiped once. */
@@ -6369,7 +6369,7 @@ function mountBundleStatsBar(mountEl, items, version) {
   note.textContent =
     "Since last Analyze · " +
     (version || "?") +
-    " · each box shows (d …) change";
+    " · deltas: UP/DN or (no change)";
   mountEl.appendChild(note);
 
   const grid = document.createElement("div");
@@ -6396,12 +6396,12 @@ function mountBundleStatsBar(mountEl, items, version) {
     const dlt = document.createElement("span");
     dlt.className =
       "bun-stat-delta " + String(it.deltaCls || "bun-delta-flat");
-    // Leading space + parenthetical always present
-    let dText = String(it.deltaText != null ? it.deltaText : "(d =0%)");
+    let dText = String(it.deltaText != null ? it.deltaText : "no change");
     if (dText.charAt(0) !== "(") dText = "(" + dText + ")";
-    dlt.textContent = " " + dText;
+    dlt.textContent = dText;
 
     val.appendChild(main);
+    val.appendChild(document.createElement("br"));
     val.appendChild(dlt);
     box.appendChild(lab);
     box.appendChild(val);
@@ -7430,6 +7430,19 @@ function loadBundleStatsPrev(mint) {
  * Compute plain delta text + CSS class (always returns a result).
  * text examples: "d =0%" | "d +12%" | "d -3.5%" | "d +8" (score)
  */
+
+/** True if text already includes a since-last-Analyze marker. */
+function hasBundleDeltaMarker(text) {
+  const t = String(text || "");
+  return (
+    /\bUP\s+[+\-]/.test(t) ||
+    /\bDN\s+[+\-]/.test(t) ||
+    /\(no change\)/i.test(t) ||
+    /\(d\s/i.test(t) ||
+    t.indexOf("bun-stat-delta") >= 0
+  );
+}
+
 function computeBundleStatDeltaParts(cur, prev, kind, opts) {
   const isScore = kind === "score";
   const coalesce = !opts || opts.coalesceNull !== false;
@@ -7441,7 +7454,7 @@ function computeBundleStatDeltaParts(cur, prev, kind, opts) {
   }
   if (c == null || p == null || !Number.isFinite(c - p)) {
     return {
-      text: isScore ? "d =0" : "d =0%",
+      text: isScore ? "no change" : "no change",
       cls: "bun-delta-flat",
       title: "No baseline yet",
     };
@@ -7450,7 +7463,7 @@ function computeBundleStatDeltaParts(cur, prev, kind, opts) {
   const flatEps = isScore ? 0.5 : 0.05;
   if (Math.abs(diff) < flatEps) {
     return {
-      text: isScore ? "d =0" : "d =0%",
+      text: isScore ? "no change" : "no change",
       cls: "bun-delta-flat",
       title: "No change since last Analyze",
     };
@@ -7464,11 +7477,14 @@ function computeBundleStatDeltaParts(cur, prev, kind, opts) {
   if (isScore) {
     label = Math.round(mag).toString();
   } else {
-    label =
-      (mag >= 10 ? mag.toFixed(0) : mag.toFixed(1).replace(/\.0$/, "")) + "%";
+    // Keep one decimal under 10 so 18.5 does not become "19%"
+    if (mag >= 100) label = mag.toFixed(0) + "%";
+    else if (mag >= 10) label = mag.toFixed(1).replace(/\.0$/, "") + "%";
+    else label = mag.toFixed(1).replace(/\.0$/, "") + "%";
   }
+  const arrow = up ? "UP" : "DN";
   return {
-    text: "d " + sign + label,
+    text: arrow + " " + sign + label,
     cls: cls,
     title: "Change since last Analyze of this mint",
   };
@@ -7778,8 +7794,8 @@ function renderBundlesUi(data) {
   function stat(label, valueHtml, subHtml) {
     let val = valueHtml == null ? "" : String(valueHtml);
     // Last-resort: if withDelta did not attach a marker, append plain text
-    if (val.indexOf("(d ") < 0 && val.indexOf("(d=") < 0) {
-      val = val + " (d =0%)";
+    if (!hasBundleDeltaMarker(val)) {
+      val = val + " (no change)";
     }
     return (
       '<div class="bun-stat" data-bun-stat="' +
@@ -7892,11 +7908,13 @@ function renderBundlesUi(data) {
       if (isRestore && frozenHtml && frozenHtml[key]) {
         // Prefer recompute on live; on restore use frozen HTML span if present
         const frozen = String(frozenHtml[key]);
-        if (frozen.indexOf("bun-stat-delta") >= 0 || frozen.indexOf("(d ") >= 0) {
+        if (hasBundleDeltaMarker(frozen)) {
           htmlByKeyThisRun[key] = frozen;
           // Still also bake plain text into the value for visibility
-          const plainMatch = frozen.match(/\(d[^)]*\)/);
-          const plain = plainMatch ? plainMatch[0] : "(d =0%)";
+          const plainMatch = frozen.match(
+            /\((?:no change|UP[^)]*|DN[^)]*|d[^)]*)\)/i
+          );
+          const plain = plainMatch ? plainMatch[0] : "(no change)";
           const main = String(mainHtml);
           const m = main.match(/^(<span\b[^>]*>)([\s\S]*)(<\/span>)\s*$/i);
           if (m) return m[1] + m[2] + " " + plain + m[3];
@@ -7922,7 +7940,7 @@ function renderBundlesUi(data) {
     }
     if (!parts || !parts.text) {
       parts = {
-        text: kind === "score" ? "d =0" : "d =0%",
+        text: kind === "score" ? "no change" : "no change",
         cls: "bun-delta-flat",
         title: "No change since last Analyze",
       };
@@ -8759,7 +8777,7 @@ function renderBundlesUi(data) {
         kind,
         { coalesceNull: true }
       );
-      const deltaText = "(" + (parts && parts.text ? parts.text : "d =0%") + ")";
+      const deltaText = "(" + (parts && parts.text ? parts.text : "no change") + ")";
       const deltaCls = (parts && parts.cls) || "bun-delta-flat";
       htmlByKeyThisRun[key] =
         '<span class="bun-stat-delta ' +
@@ -8972,8 +8990,8 @@ function renderBundlesUi(data) {
       const valEl = el.querySelector(".bun-stat-value");
       if (!valEl) return;
       if (
-        valEl.querySelector(".bun-stat-delta") ||
-        /\(d /.test(valEl.textContent || "")
+        hasBundleDeltaMarker(valEl.textContent) ||
+        valEl.querySelector(".bun-stat-delta")
       ) {
         return;
       }
@@ -8986,8 +9004,9 @@ function renderBundlesUi(data) {
       const key = DELTA_LABEL_TO_KEY[lab];
       let html =
         (htmlByKey && key && htmlByKey[key]) ||
-        '<span class="bun-stat-delta bun-delta-flat" title="No change since last Analyze">(d =0%)</span>';
-      valEl.insertAdjacentHTML("beforeend", " " + html);
+        '<span class="bun-stat-delta bun-delta-flat" title="No change since last Analyze">(no change)</span>';
+      valEl.insertAdjacentHTML("beforeend", " ");
+      valEl.insertAdjacentHTML("beforeend", html);
     });
   }
 
@@ -9053,15 +9072,18 @@ function renderBundlesUi(data) {
     try {
       root.querySelectorAll(".bun-stat .bun-stat-value").forEach((valEl) => {
         if (
-          valEl.querySelector(".bun-stat-delta") ||
-          /\(d /.test(valEl.textContent || "")
+          hasBundleDeltaMarker(valEl.textContent) ||
+          valEl.querySelector(".bun-stat-delta")
         ) {
           return;
         }
-        // Plain text — no dependency on CSS classes
-        valEl.appendChild(document.createTextNode(" (d =0%)"));
+        const s = document.createElement("span");
+        s.className = "bun-stat-delta bun-delta-flat";
+        s.textContent = "(no change)";
+        valEl.appendChild(document.createElement("br"));
+        valEl.appendChild(s);
       });
-      const n = (root.textContent || "").split("(d ").length - 1;
+      const n = root.querySelectorAll(".bun-stat-delta").length;
       console.info(
         "[bundles deltas]",
         "v=" +
@@ -9242,6 +9264,7 @@ async function recordAndLoadStats() {
 
 async function checkHealth() {
   const el = $("serverStatus");
+  if (!el) return;
   try {
     const r = await fetch(apiUrl("/api/health"), { headers: headers(false) });
     const j = await r.json();
@@ -9660,20 +9683,30 @@ function initTabs() {
 
 function initSettings() {
   const dlg = $("settingsDialog");
-  $("settingsBtn").addEventListener("click", () => {
-    $("siteToken").value = siteToken();
-    dlg.showModal();
+  const btn = $("settingsBtn");
+  const form = $("settingsForm");
+  const tokenEl = $("siteToken");
+  const clearBtn = $("clearToken");
+  if (!dlg || !btn || !form || !tokenEl) {
+    console.warn("[initSettings] settings UI missing — skipped");
+    return;
+  }
+  btn.addEventListener("click", () => {
+    tokenEl.value = siteToken();
+    if (dlg.showModal) dlg.showModal();
   });
-  $("settingsForm").addEventListener("submit", (e) => {
+  form.addEventListener("submit", (e) => {
     e.preventDefault();
-    setSiteToken($("siteToken").value.trim());
-    dlg.close();
+    setSiteToken(tokenEl.value.trim());
+    if (dlg.close) dlg.close();
     checkHealth();
   });
-  $("clearToken").addEventListener("click", () => {
-    $("siteToken").value = "";
-    setSiteToken("");
-  });
+  if (clearBtn) {
+    clearBtn.addEventListener("click", () => {
+      tokenEl.value = "";
+      setSiteToken("");
+    });
+  }
 }
 
 async function init() {
@@ -9685,7 +9718,9 @@ async function init() {
   initFreshMultiPref();
   initRugwatchNav();
   initRugwatchCounts();
-  $("searchForm").addEventListener("submit", analyze);
+  const searchForm = $("searchForm");
+  if (searchForm) searchForm.addEventListener("submit", analyze);
+  else console.warn("[init] searchForm missing");
   checkHealth();
   recordAndLoadStats();
 

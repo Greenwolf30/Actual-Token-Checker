@@ -1453,9 +1453,10 @@ a.copy-mint:hover,
   display: inline;
   margin-left: 4px;
 }
+/* bun-stat-delta as chip under the % */
 .bun-stat-value .bun-stat-delta,
 .bun-stat-delta {
-  display: inline !important;
+  display: inline-block !important;
   visibility: visible !important;
   opacity: 1 !important;
   margin-left: 6px;
@@ -1476,6 +1477,20 @@ a.copy-mint:hover,
   font-weight: 800 !important;
   opacity: 1 !important;
 }
+
+.bun-stat-value .bun-stat-delta {
+  display: block !important;
+  margin-left: 0 !important;
+  margin-top: 6px !important;
+  padding: 3px 8px !important;
+  border-radius: 6px !important;
+  background: rgba(0, 0, 0, 0.35) !important;
+  border: 1px solid rgba(230, 208, 122, 0.4) !important;
+  width: fit-content;
+  max-width: 100%;
+  font-size: 0.8rem !important;
+}
+
 .bun-client-ver {
   color: var(--text-muted, #8a8f98);
   font-size: 0.72rem;

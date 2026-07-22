@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>ADTC delta unit test</title>
+  <link rel="stylesheet" href="/styles.css?v=test" />
+  <script>window.ADTC_CONFIG = { apiBase: "" };</script>
+</head>
+<body>
+  <div id="bundlesUi" class="bundles-ui"></div>
+  <pre id="text-bundles" hidden></pre>
+  <div id="testOut" style="white-space:pre-wrap;font:14px monospace;padding:12px;background:#111;color:#eee"></div>
+  <script src="/app.js?v=test"></script>
+  <script>
+    function log(s) {
+      var el = document.getElementById("testOut");
+      el.textContent += s + "\n";
+      console.log(s);
+    }
+    window.__runDeltaTest = function () {
+      var out = { ok: false, errors: [], text: "", deltaCount: 0, version: window.__ADTC_CLIENT__ || null, hasMount: false, sample: "" };
+      try {
+        if (typeof renderBundlesUi !== "function") {
+          out.errors.push("renderBundlesUi missing — app.js did not load");
+          return out;
+        }
+        var data = {
+          ok: true,
+          token: { address: "So11111111111111111111111111111111111111112", chain_id: "solana" },
+          market: { address: "So11111111111111111111111111111111111111112", chain_id: "solana" },
+          bundles_view: {
+            ok: true,
+            method: "test",
+            source: "test",
+            token_address: "So11111111111111111111111111111111111111112",
+            summary: {
+              bundle_risk: "elevated",
+              bundle_risk_score: 42,
+              total_bundle_pct: 18.5,
+              similar_size_total_pct: 5.2,
+              fresh_total_pct: 1.1,
+              multi_send_total_pct: 3.3,
+              funding_total_pct: 2.2,
+              suspect_total_pct: 0.5,
+              single_holders_total_pct: 40,
+              top10_pct_excluding_known_programs: 55,
+              sources_used: ["test"],
+              total_bundle_mode: "primary"
+            },
+            clusters: [],
+            signals: [],
+            similar_size_groups: [],
+            insider_wallets: [],
+            funding_clusters: [],
+            fresh_wallets: [],
+            multi_send_wallets: [],
+            multi_send_clusters: [],
+            sol_multi_send_clusters: [],
+            suspect_wallets: []
+          },
+          sections: { bundles: "test bundles text" }
+        };
+        // Clear prev baseline so first run compares vs zeros
+        try { localStorage.removeItem("adtc_bundle_stats_prev"); } catch (e) {}
+        try { localStorage.removeItem("adtc_bundle_delta_html"); } catch (e) {}
+        renderBundlesUi(data);
+        var root = document.getElementById("bundlesUi");
+        out.text = root ? root.innerText : "";
+        out.hasMount = !!(root && root.querySelector("#bunStatsMount, .bun-stats, .bun-delta-note"));
+        out.deltaCount = (out.text.match(/\((?:UP |DN |no change)/g) || []).length;
+        out.sample = out.text.slice(0, 500);
+        out.ok = out.deltaCount >= 5 && /v88|v87/.test(String(out.version || ""));
+        if (!out.ok) out.errors.push("expected >=5 UP/DN/no-change markers, got " + out.deltaCount + " ver=" + out.version);
+        // Second render should still show deltas (flat or change)
+        renderBundlesUi(data);
+        out.text2 = root.innerText.slice(0, 500);
+        out.deltaCount2 = (root.innerText.match(/\((?:UP |DN |no change)/g) || []).length;
+      } catch (err) {
+        out.errors.push(String(err && err.stack ? err.stack : err));
+      }
+      log(JSON.stringify(out, null, 2));
+      window.__deltaTestResult = out;
+      return out;
+    };
+    document.addEventListener("DOMContentLoaded", function () {
+      setTimeout(function () { window.__runDeltaTest(); }, 50);
+    });
+  </script>
+</body>
+</html>

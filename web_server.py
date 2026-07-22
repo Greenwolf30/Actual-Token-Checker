@@ -1468,6 +1468,38 @@ class WebHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
         return None
 
+
+    def _inject_asset_hashes(self, rel: str, data: bytes, ctype: str) -> bytes:
+        """Rewrite app.js/styles.css query strings to content hashes (cache bust)."""
+        if rel not in {"index.html", "docs.html"} and not rel.endswith(".html"):
+            return data
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            return data
+        import hashlib
+        import re as _re
+
+        def file_hash(name: str) -> str:
+            path = WEB_DIR / name
+            if not path.is_file():
+                return "missing"
+            return hashlib.md5(path.read_bytes()).hexdigest()[:10]
+
+        app_h = file_hash("app.js")
+        css_h = file_hash("styles.css")
+        text = _re.sub(
+            r'src="(/app\.js)\?v=[^"]*"',
+            f'src="\\1?v=h-{app_h}"',
+            text,
+        )
+        text = _re.sub(
+            r'href="(/styles\.css)\?v=[^"]*"',
+            f'href="\\1?v=h-{css_h}"',
+            text,
+        )
+        return text.encode("utf-8")
+
     def _serve_static(self, rel: str) -> None:
         if not WEB_DIR.is_dir():
             return self._json(
@@ -1486,12 +1518,17 @@ class WebHandler(BaseHTTPRequestHandler):
             return self._json(404, {"ok": False, "error": "not found"})
         data = target.read_bytes()
         ctype = STATIC_TYPES.get(target.suffix.lower(), "application/octet-stream")
+        if target.suffix.lower() in {".html"}:
+            data = self._inject_asset_hashes(rel, data, ctype)
         # Always revalidate HTML/JS so Docs + app updates appear after deploy
         if target.suffix.lower() in {".html", ".js", ".txt", ".css"}:
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-cache, must-revalidate")
+            # Stronger for JS: never use stale cached app without revalidation
+            if target.suffix.lower() in {".js", ".css"}:
+                self.send_header("Cache-Control", "no-store")
             self._cors()
             self.end_headers()
             self.wfile.write(data)
