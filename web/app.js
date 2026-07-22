@@ -6230,17 +6230,29 @@ function restoreLastAnalyze() {
       }
     }
     renderSummary(data);
-    // Apply all text sections (overview, holders, alerts, maps, about)
+    const when = cached.savedAt
+      ? new Date(cached.savedAt).toLocaleString()
+      : "previous Analyze";
+    // Prepend last-known marker to RAW text BEFORE setPanelText so green
+    // section titles / hold colors still run (never overwrite innerHTML via textContent).
+    const lastKnownLine =
+      "── Last known (page refresh) · " +
+      when +
+      " · Run Analyze for live update ──\n\n";
     const sections = data.sections || {};
     for (const tab of TABS) {
       if (tab === "history" || tab === "ruggers" || tab === "bundles") continue;
-      if (sections[tab]) setPanelText(tab, sections[tab]);
+      if (sections[tab]) {
+        setPanelText(tab, lastKnownLine + String(sections[tab]));
+      }
     }
     try {
       renderBundlesUi(data);
     } catch (err) {
       console.error("[bundles ui restore]", err);
-      if (sections.bundles) setPanelText("bundles", sections.bundles);
+      if (sections.bundles) {
+        setPanelText("bundles", lastKnownLine + String(sections.bundles));
+      }
     }
     // Ruggers: show existing browser track for this mint (do not re-process)
     try {
@@ -6265,32 +6277,10 @@ function restoreLastAnalyze() {
         /* ignore */
       }
     }
-    const when = cached.savedAt
-      ? new Date(cached.savedAt).toLocaleString()
-      : "previous Analyze";
     const noteHtml =
       '<div class="bun-hint" style="margin-bottom:10px"><strong>Last known result</strong> (page refresh) — showing Analyze from ' +
       escHtml(when) +
       ". Run <strong>Analyze</strong> again for a live update.</div>";
-    // Prefixed note on each main tab panel
-    for (const tab of [
-      "overview",
-      "holders",
-      "alerts",
-      "maps",
-      "about",
-    ]) {
-      const el = $("text-" + tab);
-      if (el && el.textContent && !el.dataset.lastKnownPrefixed) {
-        el.dataset.lastKnownPrefixed = "1";
-        // text panels are plain pre — prepend text line
-        el.textContent =
-          "── Last known (page refresh) · " +
-          when +
-          " · Run Analyze for live update ──\n\n" +
-          el.textContent;
-      }
-    }
     const root = $("bundlesUi");
     if (root && root.firstChild && !root.dataset.lastKnownPrefixed) {
       root.dataset.lastKnownPrefixed = "1";
