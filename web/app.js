@@ -11,6 +11,8 @@ const RUGGERS_KEY = "adtc_ruggers_track";
 /** Last Analyze full payload (all tabs). */
 const LAST_ANALYZE_KEY = "adtc_last_analyze";
 const LAST_BUNDLES_ANALYZE_KEY = "adtc_last_bundles_analyze";
+/** Minimal Bundles-only backup if full last-Analyze is too large for localStorage. */
+const LAST_BUNDLES_ONLY_KEY = "adtc_last_bundles_only";
 /** Per-mint baseline + frozen delta pair for Bundles arrows. */
 const BUNDLE_STATS_PREV_KEY = "adtc_bundle_stats_prev";
 /** Per-mint precomputed delta HTML snippets. */
@@ -6186,16 +6188,59 @@ function bunWalletTable(rows, cols) {
   return h;
 }
 
+/** JSON-safe clone (drops non-serializable junk that breaks localStorage). */
+function jsonClone(obj) {
+  try {
+    return JSON.parse(JSON.stringify(obj));
+  } catch (_) {
+    return null;
+  }
+}
+
+/** localStorage setItem with quota recovery. */
+function safeLocalStorageSet(key, raw) {
+  try {
+    localStorage.setItem(key, raw);
+    return true;
+  } catch (err) {
+    // QuotaExceeded — free non-critical keys and retry
+    try {
+      localStorage.removeItem(BUNDLE_STATS_BAR_SNAP_KEY);
+      localStorage.removeItem(BUNDLE_DELTA_HTML_KEY);
+      localStorage.removeItem(OPTIONAL_LAST_KNOWN_KEY);
+      localStorage.removeItem(BUNDLE_STATS_PREV_KEY);
+      localStorage.removeItem(LAST_BUNDLES_ANALYZE_KEY);
+      try {
+        sessionStorage.removeItem(BUNDLE_STATS_BAR_SNAP_KEY);
+        sessionStorage.removeItem("adtc_delta_html_last");
+      } catch (_) {
+        /* ignore */
+      }
+      localStorage.setItem(key, raw);
+      return true;
+    } catch (err2) {
+      console.error("[localStorage] set failed", key, err2 || err);
+      return false;
+    }
+  }
+}
+
 /**
  * Persist last successful Analyze for all tabs after page refresh.
- * Replaced only when a new successful Analyze runs.
+ * Always tries to keep at least a Bundles-only backup.
  */
 function saveLastAnalyze(data, query) {
-  if (!data || !data.ok) return;
+  if (!data || !data.ok) return false;
   try {
     const sections = data.sections || {};
-    // Embed delta pair so refresh can restore arrows (not full bar HTML)
-    let bundleDelta = data._bundleDeltaPair || null;
+    let bundleDelta = null;
+    try {
+      bundleDelta = data._bundleDeltaPair
+        ? jsonClone(data._bundleDeltaPair)
+        : null;
+    } catch (_) {
+      bundleDelta = data._bundleDeltaPair || null;
+    }
     if (!bundleDelta) {
       try {
         const mint =
@@ -6221,20 +6266,59 @@ function saveLastAnalyze(data, query) {
         bundleDelta = null;
       }
     }
-    // Always keep delta HTML on summary for refresh
+    // Stamp delta HTML onto summary (cloned below)
+    let bundlesView = data.bundles_view || null;
     try {
-      if (
-        data.bundles_view &&
-        data.bundles_view.summary &&
-        bundleDelta &&
-        bundleDelta.htmlByKey
-      ) {
-        data.bundles_view.summary._ui_delta_html = bundleDelta.htmlByKey;
-        delete data.bundles_view.summary._ui_stats_bar_html;
+      if (bundlesView && bundlesView.summary && bundleDelta && bundleDelta.htmlByKey) {
+        bundlesView = jsonClone(bundlesView) || bundlesView;
+        if (bundlesView.summary) {
+          bundlesView.summary._ui_delta_html = bundleDelta.htmlByKey;
+          delete bundlesView.summary._ui_stats_bar_html;
+        }
+      } else if (bundlesView) {
+        bundlesView = jsonClone(bundlesView) || bundlesView;
       }
     } catch (_) {
-      /* ignore */
+      /* keep original reference */
     }
+
+    const mintAddr =
+      (data.token && data.token.address) ||
+      (data.market && data.market.address) ||
+      "";
+
+    // Always save a small Bundles-only backup first (survives quota on full payload)
+    const bundlesOnly = {
+      savedAt: Date.now(),
+      query: (query || "").trim(),
+      chain:
+        (data.token && data.token.chain_id) ||
+        (data.market && data.market.chain_id) ||
+        "",
+      mint: mintAddr,
+      bundleDelta: bundleDelta,
+      data: {
+        ok: true,
+        _restoredFromBrowserCache: true,
+        market: jsonClone(data.market) || data.market || null,
+        token: jsonClone(data.token) || data.token || null,
+        bundles_view: bundlesView,
+        sections: {
+          bundles: sections.bundles || null,
+          holders: sections.holders || null,
+          overview: sections.overview || null,
+        },
+        bundleDelta: bundleDelta,
+      },
+    };
+    try {
+      const boRaw = JSON.stringify(bundlesOnly);
+      safeLocalStorageSet(LAST_BUNDLES_ONLY_KEY, boRaw);
+    } catch (err) {
+      console.error("[saveLastAnalyze] bundles-only backup failed", err);
+    }
+
+    // Full multi-tab payload (may be large — progressive strip)
     const slim = {
       savedAt: Date.now(),
       query: (query || "").trim(),
@@ -6248,59 +6332,73 @@ function saveLastAnalyze(data, query) {
         _restoredFromBrowserCache: true,
         quick: !!(data.quick || data._phase === "quick"),
         _phase: data._phase || null,
-        market: data.market || null,
-        token: data.token || null,
-        links: data.links || null,
-        holders: data.holders || null,
-        bundles: data.bundles || null,
-        bundles_view: data.bundles_view || null,
-        alerts: data.alerts || null,
-        alerts_meta: data.alerts_meta || null,
-        history_meta: data.history_meta || null,
+        market: jsonClone(data.market) || data.market || null,
+        token: jsonClone(data.token) || data.token || null,
+        links: jsonClone(data.links) || data.links || null,
+        holders: null, // heavy; not needed for Bundles restore
+        bundles: null,
+        bundles_view: bundlesView,
+        alerts: null,
+        alerts_meta: jsonClone(data.alerts_meta) || data.alerts_meta || null,
+        history_meta: null,
         bundleDelta: bundleDelta,
         sections: {
           overview: sections.overview || null,
           holders: sections.holders || null,
           bundles: sections.bundles || null,
           alerts: sections.alerts || null,
-          maps: sections.maps || null,
-          about: sections.about || null,
+          maps: null,
+          about: null,
         },
       },
     };
-    let raw = JSON.stringify(slim);
-    // Trim heavy fields if over ~4MB (never drop bundles_view)
-    if (raw.length > 4 * 1024 * 1024) {
-      slim.data.history_meta = null;
-      slim.data.alerts = null;
-      raw = JSON.stringify(slim);
-    }
-    if (raw.length > 4 * 1024 * 1024) {
-      if (slim.data.sections) {
-        slim.data.sections.about = null;
-        slim.data.sections.maps = null;
+
+    const attempts = [
+      () => slim,
+      () => {
+        slim.data.alerts_meta = null;
+        slim.data.links = null;
+        return slim;
+      },
+      () => {
+        // Keep only what restore needs for Bundles + summary
+        slim.data.sections = {
+          overview: sections.overview || null,
+          holders: sections.holders || null,
+          bundles: sections.bundles || null,
+        };
+        return slim;
+      },
+    ];
+
+    let saved = false;
+    for (const build of attempts) {
+      try {
+        const obj = build();
+        const raw = JSON.stringify(obj);
+        if (raw.length > 4.5 * 1024 * 1024) continue;
+        if (safeLocalStorageSet(LAST_ANALYZE_KEY, raw)) {
+          try {
+            localStorage.setItem(LAST_BUNDLES_ANALYZE_KEY, raw);
+          } catch (_) {
+            /* ignore */
+          }
+          saved = true;
+          break;
+        }
+      } catch (err) {
+        console.warn("[saveLastAnalyze] attempt failed", err);
       }
-      raw = JSON.stringify(slim);
     }
-    if (raw.length > 4 * 1024 * 1024) {
-      // Last resort: keep market + bundles_view + sections essentials only
-      slim.data.holders = null;
-      slim.data.bundles = null;
-      slim.data.alerts_meta = null;
-      raw = JSON.stringify(slim);
+    if (!saved) {
+      console.warn(
+        "[saveLastAnalyze] full payload not saved; bundles-only backup may still work"
+      );
     }
-    if (raw.length > 4 * 1024 * 1024) {
-      console.warn("[saveLastAnalyze] payload still too large; not saved");
-      return;
-    }
-    localStorage.setItem(LAST_ANALYZE_KEY, raw);
-    try {
-      localStorage.setItem(LAST_BUNDLES_ANALYZE_KEY, raw);
-    } catch (_) {
-      /* ignore */
-    }
+    return saved;
   } catch (err) {
     console.error("[saveLastAnalyze] failed", err);
+    return false;
   }
 }
 
@@ -6313,6 +6411,7 @@ function loadLastAnalyze() {
   try {
     let raw = localStorage.getItem(LAST_ANALYZE_KEY);
     if (!raw) raw = localStorage.getItem(LAST_BUNDLES_ANALYZE_KEY);
+    if (!raw) raw = localStorage.getItem(LAST_BUNDLES_ONLY_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed || !parsed.data || !parsed.data.ok) return null;
@@ -8711,12 +8810,21 @@ async function analyze(ev) {
       return;
     }
     renderSummary(data);
-    renderSections(data, query);
-    // Persist all tabs for page refresh until next Analyze
     try {
-      saveLastAnalyze(data, query);
-    } catch (_) {
-      /* ignore */
+      renderSections(data, query);
+    } catch (err) {
+      console.error("[renderSections]", err);
+    }
+    // Persist AFTER UI so delta freeze is included — must not be skipped
+    try {
+      const ok = saveLastAnalyze(data, query);
+      if (!ok) {
+        console.warn(
+          "[analyze] last Analyze may not fully persist; Bundles backup attempted"
+        );
+      }
+    } catch (err) {
+      console.error("[saveLastAnalyze]", err);
     }
   } catch (e) {
     showError(String(e.message || e));
