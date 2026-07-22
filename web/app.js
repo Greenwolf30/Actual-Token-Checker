@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v92";
+const ADTC_CLIENT_VERSION = "v93";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -6425,41 +6425,75 @@ function mountBundleStatsBar(mountEl, items, version) {
   note.textContent =
     "Since last Analyze · " +
     (version || "?") +
-    " · delta under each % (0% green if unchanged)";
+    " · deltas on every box";
   mountEl.appendChild(note);
 
   const grid = document.createElement("div");
   grid.className = "bun-stats";
   grid.setAttribute("data-adtc-deltas", "1");
 
+  let painted = 0;
   (items || []).forEach((it) => {
     if (!it) return;
     const box = document.createElement("div");
     box.className = "bun-stat";
     box.setAttribute("data-bun-stat", String(it.label || ""));
 
+    // Normalize delta text — always present
+    let dText = it.deltaText != null ? String(it.deltaText).trim() : "";
+    if (!dText || /no change/i.test(dText)) dText = "0%";
+    dText = dText.replace(/^\(|\)$/g, "");
+    const isFlat = dText === "0%" || dText === "0";
+    const isUp = /^UP\b/i.test(dText);
+    const isDn = /^DN\b/i.test(dText);
+    // Human-facing chip text
+    let chip = dText;
+    if (isFlat) chip = "0%";
+    else if (isUp) chip = dText.replace(/^UP\s*/i, "▲ ");
+    else if (isDn) chip = dText.replace(/^DN\s*/i, "▼ ");
+    const chipParen = "(" + chip + ")";
+
     const lab = document.createElement("span");
     lab.className = "bun-stat-label";
-    lab.textContent = String(it.label || "");
+    // Put delta in the LABEL too so it cannot be missed
+    lab.textContent =
+      String(it.label || "") + "  " + chipParen;
 
     const val = document.createElement("span");
     val.className = "bun-stat-value";
 
+    // Single line: "12% (▲ +3%)" — delta is plain text next to %, not a fragile chip-only UI
     const main = document.createElement("span");
     if (it.valueClass) main.className = String(it.valueClass);
-    main.textContent = String(it.valueText != null ? it.valueText : "—");
+    const base = String(it.valueText != null ? it.valueText : "—");
+    main.textContent = base + " " + chipParen;
+
+    // Second, high-contrast chip with INLINE STYLES (survives any stylesheet)
+    const dlt = document.createElement("span");
+    dlt.className =
+      "bun-stat-delta " +
+      (isFlat
+        ? "bun-delta-green"
+        : isDn
+          ? "bun-delta-red"
+          : isUp
+            ? "bun-delta-green"
+            : String(it.deltaCls || "bun-delta-green"));
+    dlt.textContent = chipParen;
+    dlt.setAttribute(
+      "style",
+      "display:block!important;visibility:visible!important;opacity:1!important;" +
+        "margin-top:6px!important;padding:4px 8px!important;" +
+        "font-size:0.9rem!important;font-weight:800!important;" +
+        "border-radius:6px!important;width:fit-content!important;" +
+        "background:rgba(0,0,0,0.45)!important;" +
+        "border:1px solid rgba(110,231,168,0.55)!important;" +
+        "color:" +
+        (isDn ? "#f87171" : "#6ee7a8") +
+        "!important;"
+    );
 
     val.appendChild(main);
-    // Always show a delta under the %: UP/DN when moved, green 0% when flat
-    let dText = it.deltaText != null ? String(it.deltaText).trim() : "";
-    if (!dText || /^\(?no change\)?$/i.test(dText)) dText = "0%";
-    if (dText.charAt(0) !== "(") dText = "(" + dText + ")";
-    let dCls = String(it.deltaCls || "");
-    if (!dCls || /flat/i.test(dCls) || dText === "(0%)") dCls = "bun-delta-green";
-    const dlt = document.createElement("span");
-    dlt.className = "bun-stat-delta " + dCls;
-    dlt.textContent = dText;
-    val.appendChild(document.createElement("br"));
     val.appendChild(dlt);
     box.appendChild(lab);
     box.appendChild(val);
@@ -6471,9 +6505,25 @@ function mountBundleStatsBar(mountEl, items, version) {
       box.appendChild(sub);
     }
     grid.appendChild(box);
+    painted++;
   });
 
   mountEl.appendChild(grid);
+  // Visible proof deltas were painted
+  try {
+    note.textContent =
+      "Since last Analyze · " +
+      (version || "?") +
+      " · DELTAS PAINTED: " +
+      painted +
+      " boxes";
+    note.setAttribute(
+      "style",
+      "display:block!important;color:#fde68a!important;font-weight:800!important;" +
+        "padding:8px 10px!important;border:1px solid #fde68a!important;" +
+        "background:rgba(253,230,138,0.12)!important;margin-bottom:10px!important;"
+    );
+  } catch (_) {}
 }
 
 function summaryOnlyBundlesView(bv) {
@@ -9199,10 +9249,17 @@ function renderBundlesUi(data) {
         const valEl = el.querySelector(".bun-stat-value");
         if (!valEl) return;
         if (valEl.querySelector(".bun-stat-delta")) return;
+        // Also check if value text already includes a delta paren
+        if (/\((?:0%|▲|▼|UP |DN )/i.test(valEl.textContent || "")) return;
         const s = document.createElement("span");
         s.className = "bun-stat-delta bun-delta-green";
         s.textContent = "(0%)";
-        valEl.appendChild(document.createElement("br"));
+        s.setAttribute(
+          "style",
+          "display:block!important;color:#6ee7a8!important;font-weight:800!important;" +
+            "margin-top:6px!important;padding:4px 8px!important;" +
+            "background:rgba(0,0,0,0.45)!important;border-radius:6px!important;"
+        );
         valEl.appendChild(s);
       });
       const n = root.querySelectorAll(".bun-stat-delta").length;

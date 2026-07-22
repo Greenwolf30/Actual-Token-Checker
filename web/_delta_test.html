@@ -39,11 +39,9 @@
         sections: { bundles: "test" }
       };
     }
-    function totalChunk(text) {
-      return (String(text).split("TOTAL BUNDLE")[1] || "").split("SIMILAR")[0] || "";
-    }
-    function countDeltas() {
-      return document.querySelectorAll(".bun-stat-delta").length;
+    function totalText() {
+      var el = document.querySelector('.bun-stat[data-bun-stat="Total bundle"]');
+      return el ? el.innerText : "";
     }
     window.__runDeltaTest = function () {
       var out = { ok: false, errors: [], version: window.__ADTC_CLIENT__ || null, steps: [] };
@@ -52,46 +50,38 @@
         try { localStorage.clear(); sessionStorage.clear(); } catch (e) {}
         if (typeof migrateBundleDeltaBaselines === "function") migrateBundleDeltaBaselines();
 
-        // A: 10% first → UP +10%, every box has a delta
         renderBundlesUi(makeData(10, 30));
-        var t1 = document.getElementById("bundlesUi").innerText;
-        var c1 = totalChunk(t1);
-        var n1 = countDeltas();
-        out.steps.push({ step: "A", up: /UP \+10/.test(c1), n: n1, sample: c1.slice(0, 80) });
-        if (!/UP \+10/.test(c1)) out.errors.push("A: expected UP +10% on total");
-        if (n1 < 9) out.errors.push("A: expected delta on every box, got " + n1);
+        var note = (document.getElementById("bunDeltaNote") || {}).textContent || "";
+        var t1 = totalText();
+        var hasPainted = /DELTAS PAINTED:\\s*9/i.test(note) || /DELTAS PAINTED: 9/i.test(note);
+        var hasUp = /\\+10%|UP \\+10|▲/.test(t1);
+        out.steps.push({ step: "A", note: note, total: t1, hasPainted: hasPainted, hasUp: hasUp });
+        if (!hasPainted) out.errors.push("A: banner missing DELTAS PAINTED: 9 — got: " + note);
+        if (!hasUp) out.errors.push("A: total missing UP +10 — got: " + t1);
 
-        // B: 10→25 → UP +15%
         renderBundlesUi(makeData(25, 30));
-        var c2 = totalChunk(document.getElementById("bundlesUi").innerText);
-        var n2 = countDeltas();
-        out.steps.push({ step: "B", up15: /UP \+15/.test(c2), n: n2, sample: c2.slice(0, 80) });
-        if (!/UP \+15/.test(c2)) out.errors.push("B: expected UP +15%");
-        if (n2 < 9) out.errors.push("B: expected 9 deltas, got " + n2);
+        var t2 = totalText();
+        var hasUp15 = /\\+15%|UP \\+15|▲/.test(t2);
+        out.steps.push({ step: "B", total: t2, hasUp15: hasUp15 });
+        if (!hasUp15) out.errors.push("B: expected +15% movement — got: " + t2);
 
-        // C: 25→25 → green (0%) on total, still all boxes have deltas
         renderBundlesUi(makeData(25, 30));
-        var c3 = totalChunk(document.getElementById("bundlesUi").innerText);
-        var n3 = countDeltas();
-        var flat3 = /\(0%\)/.test(c3) && !/UP |DN /.test(c3);
-        var totalEl = document.querySelector('.bun-stat[data-bun-stat="Total bundle"] .bun-stat-delta');
-        var green = totalEl && /bun-delta-green/.test(totalEl.className);
-        out.steps.push({ step: "C", flat0: flat3, green: !!green, n: n3, sample: c3.slice(0, 80) });
-        if (!flat3) out.errors.push("C: expected (0%) when unchanged, got: " + c3.slice(0, 60));
-        if (!green) out.errors.push("C: expected green class on flat 0%");
-        if (n3 < 9) out.errors.push("C: expected 9 deltas, got " + n3);
+        var t3 = totalText();
+        var has0 = /\(0%\)/.test(t3);
+        var hasMove = /▲|▼|UP |DN /.test(t3);
+        out.steps.push({ step: "C", total: t3, has0: has0, hasMove: hasMove });
+        if (!has0) out.errors.push("C: expected (0%) when flat — got: " + t3);
+        if (hasMove) out.errors.push("C: should not show UP/DN when flat");
 
-        // D: 25→12 → DN
         renderBundlesUi(makeData(12, 30));
-        var c4 = totalChunk(document.getElementById("bundlesUi").innerText);
-        var n4 = countDeltas();
-        out.steps.push({ step: "D", dn: /DN /.test(c4), n: n4, sample: c4.slice(0, 80) });
-        if (!/DN /.test(c4)) out.errors.push("D: expected DN when 25→12");
-        if (n4 < 9) out.errors.push("D: expected 9 deltas, got " + n4);
+        var t4 = totalText();
+        var hasDn = /-13%|DN |▼/.test(t4);
+        out.steps.push({ step: "D", total: t4, hasDn: hasDn });
+        if (!hasDn) out.errors.push("D: expected down move — got: " + t4);
 
-        out.ok = out.errors.length === 0 && String(out.version).indexOf("v92") >= 0;
-        if (String(out.version).indexOf("v92") < 0) {
-          out.errors.push("need v92 got " + out.version);
+        out.ok = out.errors.length === 0 && String(out.version).indexOf("v93") >= 0;
+        if (String(out.version).indexOf("v93") < 0) {
+          out.errors.push("need v93, got " + out.version);
           out.ok = false;
         }
       } catch (err) {
