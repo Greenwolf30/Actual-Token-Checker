@@ -6966,6 +6966,8 @@ const RUGWATCH_PREF_KEY = "adtc_use_rugwatch";
 const FRESH_PREF_KEY = "adtc_use_fresh";
 const MULTI_SEND_PREF_KEY = "adtc_use_multi_send";
 const SHARED_SOL_PREF_KEY = "adtc_use_shared_sol";
+/** Last full Analyze payload for Bundles (survives page refresh until next Analyze). */
+const LAST_BUNDLES_ANALYZE_KEY = "adtc_last_bundles_analyze";
 /** Legacy combined pref — migrate once if present */
 const FRESH_MULTI_PREF_KEY_LEGACY = "adtc_use_fresh_multi";
 
@@ -7295,6 +7297,12 @@ async function analyze(ev) {
     }
     renderSummary(data);
     renderSections(data, query);
+    // Persist for page refresh (Bundles last known until next Analyze)
+    try {
+      saveLastBundlesAnalyze(data, query);
+    } catch (_) {
+      /* ignore */
+    }
   } catch (e) {
     showError(String(e.message || e));
   } finally {
@@ -7351,6 +7359,9 @@ function init() {
     $("query").value = q;
     if (params.get("chain")) $("chain").value = params.get("chain");
     if (params.get("auto") === "1") analyze();
+  } else {
+    // No auto-analyze: restore last Bundles after page refresh
+    restoreLastBundlesAnalyze();
   }
 }
 
