@@ -6112,6 +6112,107 @@ function bunWalletTable(rows, cols) {
 }
 
 /**
+ * Persist last successful Analyze enough to re-show Bundles after refresh.
+ * Replaced only when a new successful Analyze runs.
+ */
+function saveLastBundlesAnalyze(data, query) {
+  if (!data || !data.ok) return;
+  const isQuick = !!(data.quick || data._phase === "quick");
+  if (isQuick && !(data.bundles_view && data.bundles_view.ok)) return;
+  try {
+    const slim = {
+      savedAt: Date.now(),
+      query: (query || "").trim(),
+      chain:
+        (data.token && data.token.chain_id) ||
+        (data.market && data.market.chain_id) ||
+        "",
+      data: {
+        ok: true,
+        _restoredFromBrowserCache: true,
+        quick: !!data.quick,
+        market: data.market || null,
+        token: data.token || null,
+        links: data.links || null,
+        bundles_view: data.bundles_view || null,
+        sections: data.sections
+          ? { bundles: data.sections.bundles || null }
+          : null,
+      },
+    };
+    let raw = JSON.stringify(slim);
+    if (raw.length > 4 * 1024 * 1024) {
+      if (slim.data.sections) slim.data.sections.bundles = null;
+      raw = JSON.stringify(slim);
+      if (raw.length > 4 * 1024 * 1024) return;
+    }
+    localStorage.setItem(LAST_BUNDLES_ANALYZE_KEY, raw);
+  } catch (_) {
+    /* quota / private mode */
+  }
+}
+
+function loadLastBundlesAnalyze() {
+  try {
+    const raw = localStorage.getItem(LAST_BUNDLES_ANALYZE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || !parsed.data || !parsed.data.ok) return null;
+    if (
+      !parsed.data.bundles_view &&
+      !(parsed.data.sections && parsed.data.sections.bundles)
+    ) {
+      return null;
+    }
+    return parsed;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Restore Bundles (and summary) from browser last-known Analyze after refresh.
+ */
+function restoreLastBundlesAnalyze() {
+  const cached = loadLastBundlesAnalyze();
+  if (!cached || !cached.data) return false;
+  try {
+    const data = cached.data;
+    data._restoredFromBrowserCache = true;
+    if (cached.query && $("query") && !$("query").value.trim()) {
+      $("query").value = cached.query;
+    }
+    if (cached.chain && $("chain")) {
+      try {
+        $("chain").value = cached.chain;
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    renderSummary(data);
+    renderSections(data, cached.query || "");
+    const root = $("bundlesUi");
+    if (root && root.firstChild) {
+      const note = document.createElement("div");
+      note.className = "bun-hint";
+      note.style.marginBottom = "10px";
+      const when = cached.savedAt
+        ? new Date(cached.savedAt).toLocaleString()
+        : "previous Analyze";
+      note.innerHTML =
+        "<strong>Last known Bundles</strong> (page refresh) — showing result from " +
+        escHtml(when) +
+        ". Run <strong>Analyze</strong> again for a live update.";
+      root.insertBefore(note, root.firstChild);
+    }
+    return true;
+  } catch (err) {
+    console.error("[restore bundles]", err);
+    return false;
+  }
+}
+
+/**
  * Card UI for Bundles tab from structured bundles_view.
  * Never dumps raw JSON / monospaced report into the main panel.
  */
