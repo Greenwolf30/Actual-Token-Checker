@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v104";
+const ADTC_CLIENT_VERSION = "v105";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -1783,9 +1783,33 @@ function processRuggersFromAnalyze(data) {
           cleanedUp[w] = meta;
           continue;
         }
-        // Drop poisoned mark (no this-mint proof)
+        // Drop poisoned mark (no this-mint proof) + clear sticky status
+        if (rec.status && rec.status[w]) {
+          delete rec.status[w].ruggers_uploaded;
+          delete rec.status[w].ruggers_uploaded_section;
+        }
       }
       rec.ruggers_uploaded = cleanedUp;
+      // Also clear status flags for wallets no longer in ruggers_uploaded
+      if (rec.status && typeof rec.status === "object") {
+        for (const [sw, st] of Object.entries(rec.status)) {
+          if (!st) continue;
+          if (st.ruggers_uploaded && !cleanedUp[sw] && !isUploadedSimilarOnThisMint(rec, sw)) {
+            let keep = false;
+            const wl = String(sw).toLowerCase();
+            for (const k of Object.keys(cleanedUp)) {
+              if (String(k).toLowerCase() === wl) {
+                keep = true;
+                break;
+              }
+            }
+            if (!keep) {
+              delete st.ruggers_uploaded;
+              delete st.ruggers_uploaded_section;
+            }
+          }
+        }
+      }
     }
     // Never let cloud-known wallets carry origin "uploaded" onto this mint
     // unless flagged_from_mint is this mint (breaks Upload (0) on new mints).
@@ -2203,13 +2227,35 @@ function processRuggersFromAnalyze(data) {
 
     // Uploaded from any Ruggers section on THIS mint (Single, multi, Creator, …).
     // Stay in that origin section ↔ Swing — never Ruggers Flagged on this mint.
+    // Must be a real this-mint Upload — not cloud-known from another mint
+    // (old bug: false "uploaded" kept RugWatch wallets in Single + Upload (0)).
     const uploadedOnThisMint = isRuggersAlreadyUploaded(rec, w);
-    let uploadedSection =
-      (rec.ruggers_uploaded &&
-        rec.ruggers_uploaded[w] &&
-        rec.ruggers_uploaded[w].section) ||
-      (prev && prev.ruggers_uploaded_section) ||
-      null;
+    let uploadedSection = null;
+    if (uploadedOnThisMint) {
+      uploadedSection =
+        (rec.ruggers_uploaded &&
+          rec.ruggers_uploaded[w] &&
+          rec.ruggers_uploaded[w].section) ||
+        (rec.uploaded_similar && rec.uploaded_similar[w] ? "similar" : null) ||
+        null;
+      // Case-insensitive lookup for ruggers_uploaded section
+      if (
+        !uploadedSection &&
+        rec.ruggers_uploaded &&
+        typeof rec.ruggers_uploaded === "object"
+      ) {
+        const wl = String(w).toLowerCase();
+        for (const [k, meta] of Object.entries(rec.ruggers_uploaded)) {
+          if (String(k).toLowerCase() === wl && meta && meta.section) {
+            uploadedSection = String(meta.section);
+            break;
+          }
+        }
+      }
+    } else if (prev && (prev.ruggers_uploaded || prev.ruggers_uploaded_section)) {
+      // Clear poisoned status flags from older builds (do not re-stick)
+      // so RugWatch-known sellers go to Flagged, not Single with Upload (0).
+    }
     // Never force non-creator wallets into Creator via a bad upload section tag
     if (
       uploadedSection === "creator" &&
