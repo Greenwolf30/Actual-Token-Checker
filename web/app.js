@@ -6197,22 +6197,40 @@ function jsonClone(obj) {
   }
 }
 
-/** localStorage setItem with quota recovery. */
+/**
+ * localStorage setItem with quota recovery.
+ * Never delete delta / last-Analyze keys when recovering — those are what
+ * refresh restore needs (old path wiped them and cleared Bundles + arrows).
+ */
 function safeLocalStorageSet(key, raw) {
   try {
     localStorage.setItem(key, raw);
     return true;
   } catch (err) {
-    // QuotaExceeded — free non-critical keys and retry
     try {
-      localStorage.removeItem(BUNDLE_STATS_BAR_SNAP_KEY);
-      localStorage.removeItem(BUNDLE_DELTA_HTML_KEY);
-      localStorage.removeItem(OPTIONAL_LAST_KNOWN_KEY);
-      localStorage.removeItem(BUNDLE_STATS_PREV_KEY);
-      localStorage.removeItem(LAST_BUNDLES_ANALYZE_KEY);
+      const drop = [
+        BUNDLE_STATS_BAR_SNAP_KEY,
+        "adtc_history_log_backup",
+        "adtc_debug",
+        "adtc_tmp",
+      ];
+      for (const k of drop) {
+        try {
+          localStorage.removeItem(k);
+        } catch (_) {
+          /* ignore */
+        }
+      }
+      // Only drop the secondary full-payload key if we are not writing it
+      if (key !== LAST_BUNDLES_ANALYZE_KEY) {
+        try {
+          localStorage.removeItem(LAST_BUNDLES_ANALYZE_KEY);
+        } catch (_) {
+          /* ignore */
+        }
+      }
       try {
         sessionStorage.removeItem(BUNDLE_STATS_BAR_SNAP_KEY);
-        sessionStorage.removeItem("adtc_delta_html_last");
       } catch (_) {
         /* ignore */
       }
@@ -6231,8 +6249,23 @@ function safeSessionStorageSet(key, raw) {
     sessionStorage.setItem(key, raw);
     return true;
   } catch (_) {
-    return false;
+    try {
+      sessionStorage.removeItem(BUNDLE_STATS_BAR_SNAP_KEY);
+      sessionStorage.setItem(key, raw);
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
+}
+
+/** Truncate long report text so localStorage quota is not blown. */
+function truncateSectionText(s, maxLen) {
+  const lim = maxLen != null ? maxLen : 12000;
+  if (s == null) return null;
+  const t = String(s);
+  if (t.length <= lim) return t;
+  return t.slice(0, lim) + "\n… (truncated for browser storage)";
 }
 
 /** Shrink bundles_view for storage (keep summary + short lists). */
@@ -6241,19 +6274,30 @@ function slimBundlesViewForStorage(bv) {
   const c = jsonClone(bv);
   if (!c) return null;
   const caps = {
-    clusters: 12,
-    similar_size_groups: 8,
-    insider_wallets: 20,
-    funding_clusters: 8,
-    fresh_wallets: 24,
-    multi_send_clusters: 10,
-    multi_send_wallets: 32,
-    sol_multi_send_clusters: 8,
-    suspect_wallets: 24,
-    signals: 12,
+    clusters: 8,
+    similar_size_groups: 6,
+    insider_wallets: 12,
+    funding_clusters: 6,
+    fresh_wallets: 16,
+    multi_send_clusters: 6,
+    multi_send_wallets: 20,
+    sol_multi_send_clusters: 6,
+    suspect_wallets: 16,
+    signals: 8,
+    single_holders: 16,
   };
   for (const [k, n] of Object.entries(caps)) {
     if (Array.isArray(c[k]) && c[k].length > n) c[k] = c[k].slice(0, n);
+  }
+  for (const heavy of [
+    "raw",
+    "debug",
+    "holder_rows",
+    "all_holders",
+    "transactions",
+    "tx_sample",
+  ]) {
+    if (c[heavy] != null) delete c[heavy];
   }
   if (c.summary && typeof c.summary === "object") {
     delete c.summary._ui_stats_bar_html;
@@ -6261,9 +6305,46 @@ function slimBundlesViewForStorage(bv) {
   return c;
 }
 
+/** Summary-only bundles_view (stats bar always works after refresh). */
+function summaryOnlyBundlesView(bv) {
+  if (!bv || typeof bv !== "object") return null;
+  const c = jsonClone(bv) || {};
+  const out = {
+    ok: c.ok !== false,
+    error: c.error || null,
+    method: c.method || null,
+    source: c.source || null,
+    token_address: c.token_address || null,
+    summary: c.summary && typeof c.summary === "object" ? c.summary : {},
+  };
+  if (out.summary) delete out.summary._ui_stats_bar_html;
+  return out;
+}
+
+/**
+ * Write payload to localStorage + sessionStorage for one or more keys.
+ * Returns true if at least one write succeeded.
+ */
+function persistAnalyzePayload(keys, obj) {
+  let raw;
+  try {
+    raw = JSON.stringify(obj);
+  } catch (err) {
+    console.warn("[persistAnalyzePayload] stringify failed", err);
+    return false;
+  }
+  if (raw.length > 4 * 1024 * 1024) return false;
+  let ok = false;
+  for (const k of keys) {
+    if (safeLocalStorageSet(k, raw)) ok = true;
+    if (safeSessionStorageSet(k, raw)) ok = true;
+  }
+  return ok;
+}
+
 /**
  * Persist last successful Analyze for all tabs after page refresh.
- * Always tries to keep at least a Bundles-only backup.
+ * Always keeps at least a tiny Bundles summary + delta backup (session + local).
  */
 function saveLastAnalyze(data, query) {
   if (!data || !data.ok) return false;
@@ -6302,136 +6383,217 @@ function saveLastAnalyze(data, query) {
         bundleDelta = null;
       }
     }
-    // Stamp delta HTML onto summary (cloned below)
-    let bundlesView = data.bundles_view || null;
+
+    // Always slim — full wallet lists + monospaced reports blow quota.
+    let bundlesView = slimBundlesViewForStorage(data.bundles_view);
+    if (!bundlesView && data.bundles_view) {
+      bundlesView = summaryOnlyBundlesView(data.bundles_view);
+    }
     try {
-      if (bundlesView && bundlesView.summary && bundleDelta && bundleDelta.htmlByKey) {
-        bundlesView = jsonClone(bundlesView) || bundlesView;
-        if (bundlesView.summary) {
-          bundlesView.summary._ui_delta_html = bundleDelta.htmlByKey;
-          delete bundlesView.summary._ui_stats_bar_html;
-        }
-      } else if (bundlesView) {
-        bundlesView = jsonClone(bundlesView) || bundlesView;
+      if (
+        bundlesView &&
+        bundlesView.summary &&
+        bundleDelta &&
+        bundleDelta.htmlByKey
+      ) {
+        bundlesView.summary._ui_delta_html = bundleDelta.htmlByKey;
+        delete bundlesView.summary._ui_stats_bar_html;
       }
     } catch (_) {
-      /* keep original reference */
+      /* ignore */
     }
 
     const mintAddr =
       (data.token && data.token.address) ||
       (data.market && data.market.address) ||
       "";
+    const chainId =
+      (data.token && data.token.chain_id) ||
+      (data.market && data.market.chain_id) ||
+      "";
+    const q = (query || "").trim();
+    const marketSlim = jsonClone(data.market) || data.market || null;
+    const tokenSlim = jsonClone(data.token) || data.token || null;
 
-    // Always save a small Bundles-only backup first (survives quota on full payload)
-    const bundlesOnly = {
+    // 1) Tiny nuclear backup first (must fit when storage is nearly full)
+    const micro = {
       savedAt: Date.now(),
-      query: (query || "").trim(),
-      chain:
-        (data.token && data.token.chain_id) ||
-        (data.market && data.market.chain_id) ||
-        "",
+      query: q,
+      chain: chainId,
       mint: mintAddr,
       bundleDelta: bundleDelta,
       data: {
         ok: true,
         _restoredFromBrowserCache: true,
-        market: jsonClone(data.market) || data.market || null,
-        token: jsonClone(data.token) || data.token || null,
+        market: marketSlim,
+        token: tokenSlim,
+        bundles_view: summaryOnlyBundlesView(bundlesView || data.bundles_view),
+        sections: {
+          bundles: truncateSectionText(sections.bundles, 4000),
+        },
+        bundleDelta: bundleDelta,
+      },
+    };
+    let anySaved = false;
+    try {
+      if (
+        persistAnalyzePayload(
+          [LAST_BUNDLES_ONLY_KEY, LAST_ANALYZE_KEY, LAST_BUNDLES_ANALYZE_KEY],
+          micro
+        )
+      ) {
+        anySaved = true;
+      }
+    } catch (err) {
+      console.error("[saveLastAnalyze] micro backup failed", err);
+    }
+
+    // 2) Bundles-focused backup (slim cards + short text)
+    const bundlesOnly = {
+      savedAt: Date.now(),
+      query: q,
+      chain: chainId,
+      mint: mintAddr,
+      bundleDelta: bundleDelta,
+      data: {
+        ok: true,
+        _restoredFromBrowserCache: true,
+        market: marketSlim,
+        token: tokenSlim,
         bundles_view: bundlesView,
         sections: {
-          bundles: sections.bundles || null,
-          holders: sections.holders || null,
-          overview: sections.overview || null,
+          bundles: truncateSectionText(sections.bundles, 8000),
+          holders: truncateSectionText(sections.holders, 6000),
+          overview: truncateSectionText(sections.overview, 6000),
         },
         bundleDelta: bundleDelta,
       },
     };
     try {
-      const boRaw = JSON.stringify(bundlesOnly);
-      safeLocalStorageSet(LAST_BUNDLES_ONLY_KEY, boRaw);
+      if (persistAnalyzePayload([LAST_BUNDLES_ONLY_KEY], bundlesOnly)) {
+        anySaved = true;
+      }
     } catch (err) {
       console.error("[saveLastAnalyze] bundles-only backup failed", err);
     }
 
-    // Full multi-tab payload (may be large — progressive strip)
-    const slim = {
-      savedAt: Date.now(),
-      query: (query || "").trim(),
-      chain:
-        (data.token && data.token.chain_id) ||
-        (data.market && data.market.chain_id) ||
-        "",
-      bundleDelta: bundleDelta,
-      data: {
-        ok: true,
-        _restoredFromBrowserCache: true,
-        quick: !!(data.quick || data._phase === "quick"),
-        _phase: data._phase || null,
-        market: jsonClone(data.market) || data.market || null,
-        token: jsonClone(data.token) || data.token || null,
-        links: jsonClone(data.links) || data.links || null,
-        holders: null, // heavy; not needed for Bundles restore
-        bundles: null,
-        bundles_view: bundlesView,
-        alerts: null,
-        alerts_meta: jsonClone(data.alerts_meta) || data.alerts_meta || null,
-        history_meta: null,
+    // 3) Full multi-tab payload with progressive strip
+    const buildFull = (level) => {
+      const bv = level >= 3 ? summaryOnlyBundlesView(bundlesView) : bundlesView;
+      const sec =
+        level === 0
+          ? {
+              overview: truncateSectionText(sections.overview, 12000),
+              holders: truncateSectionText(sections.holders, 12000),
+              bundles: truncateSectionText(sections.bundles, 12000),
+              alerts: truncateSectionText(sections.alerts, 8000),
+              maps: null,
+              about: null,
+            }
+          : level === 1
+            ? {
+                overview: truncateSectionText(sections.overview, 6000),
+                holders: truncateSectionText(sections.holders, 6000),
+                bundles: truncateSectionText(sections.bundles, 6000),
+              }
+            : level === 2
+              ? {
+                  bundles: truncateSectionText(sections.bundles, 4000),
+                  overview: truncateSectionText(sections.overview, 3000),
+                }
+              : {
+                  bundles: truncateSectionText(sections.bundles, 2000),
+                };
+      return {
+        savedAt: Date.now(),
+        query: q,
+        chain: chainId,
         bundleDelta: bundleDelta,
-        sections: {
-          overview: sections.overview || null,
-          holders: sections.holders || null,
-          bundles: sections.bundles || null,
-          alerts: sections.alerts || null,
-          maps: null,
-          about: null,
+        data: {
+          ok: true,
+          _restoredFromBrowserCache: true,
+          quick: !!(data.quick || data._phase === "quick"),
+          _phase: data._phase || null,
+          market: marketSlim,
+          token: tokenSlim,
+          links: level === 0 ? jsonClone(data.links) || data.links || null : null,
+          holders: null,
+          bundles: null,
+          bundles_view: bv,
+          alerts: null,
+          alerts_meta:
+            level === 0
+              ? jsonClone(data.alerts_meta) || data.alerts_meta || null
+              : null,
+          history_meta: null,
+          bundleDelta: bundleDelta,
+          sections: sec,
         },
-      },
+      };
     };
 
-    const attempts = [
-      () => slim,
-      () => {
-        slim.data.alerts_meta = null;
-        slim.data.links = null;
-        return slim;
-      },
-      () => {
-        // Keep only what restore needs for Bundles + summary
-        slim.data.sections = {
-          overview: sections.overview || null,
-          holders: sections.holders || null,
-          bundles: sections.bundles || null,
-        };
-        return slim;
-      },
-    ];
-
-    let saved = false;
-    for (const build of attempts) {
+    let fullSaved = false;
+    for (let level = 0; level <= 3; level++) {
       try {
-        const obj = build();
-        const raw = JSON.stringify(obj);
-        if (raw.length > 4.5 * 1024 * 1024) continue;
-        if (safeLocalStorageSet(LAST_ANALYZE_KEY, raw)) {
-          try {
-            localStorage.setItem(LAST_BUNDLES_ANALYZE_KEY, raw);
-          } catch (_) {
-            /* ignore */
-          }
-          saved = true;
+        const obj = buildFull(level);
+        if (
+          persistAnalyzePayload(
+            [LAST_ANALYZE_KEY, LAST_BUNDLES_ANALYZE_KEY],
+            obj
+          )
+        ) {
+          fullSaved = true;
+          anySaved = true;
           break;
         }
       } catch (err) {
-        console.warn("[saveLastAnalyze] attempt failed", err);
+        console.warn("[saveLastAnalyze] attempt failed", level, err);
       }
     }
-    if (!saved) {
-      console.warn(
-        "[saveLastAnalyze] full payload not saved; bundles-only backup may still work"
-      );
+
+    // Keep delta HTML map in sync (small, separate key)
+    try {
+      const hk =
+        (bundleDelta && bundleDelta.htmlByKey) ||
+        (data.bundles_view &&
+          data.bundles_view.summary &&
+          data.bundles_view.summary._ui_delta_html) ||
+        null;
+      if (hk && typeof hk === "object") {
+        const m = bundleStatsMintKey(mintAddr) || "last";
+        saveBundleDeltaHtml(m, hk);
+        saveBundleDeltaHtml("last", hk);
+        try {
+          sessionStorage.setItem("adtc_delta_html_last", JSON.stringify(hk));
+        } catch (_) {
+          /* ignore */
+        }
+      }
+    } catch (_) {
+      /* ignore */
     }
-    return saved;
+
+    if (!fullSaved) {
+      console.warn(
+        "[saveLastAnalyze] full payload not saved; micro/bundles backup:",
+        anySaved
+      );
+    } else {
+      try {
+        console.info(
+          "[saveLastAnalyze] ok",
+          "mint=",
+          (mintAddr || "").slice(0, 8),
+          "deltaKeys=",
+          bundleDelta && bundleDelta.htmlByKey
+            ? Object.keys(bundleDelta.htmlByKey).length
+            : 0
+        );
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    return anySaved;
   } catch (err) {
     console.error("[saveLastAnalyze] failed", err);
     return false;
@@ -6444,27 +6606,43 @@ function saveLastBundlesAnalyze(data, query) {
 }
 
 function loadLastAnalyze() {
-  try {
-    let raw = localStorage.getItem(LAST_ANALYZE_KEY);
-    if (!raw) raw = localStorage.getItem(LAST_BUNDLES_ANALYZE_KEY);
-    if (!raw) raw = localStorage.getItem(LAST_BUNDLES_ONLY_KEY);
+  const keys = [
+    LAST_ANALYZE_KEY,
+    LAST_BUNDLES_ANALYZE_KEY,
+    LAST_BUNDLES_ONLY_KEY,
+  ];
+  const tryParse = (raw) => {
     if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed || !parsed.data || !parsed.data.ok) return null;
-    const d = parsed.data;
-    const hasSections =
-      d.sections &&
-      (d.sections.overview ||
-        d.sections.holders ||
-        d.sections.bundles ||
-        d.sections.alerts ||
-        d.sections.about ||
-        d.sections.maps);
-    if (!hasSections && !d.bundles_view && !d.market) return null;
-    return parsed;
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || !parsed.data || !parsed.data.ok) return null;
+      const d = parsed.data;
+      if (!d.bundles_view && !(d.sections && d.sections.bundles) && !d.market) {
+        return null;
+      }
+      return parsed;
+    } catch (_) {
+      return null;
+    }
+  };
+  try {
+    for (const k of keys) {
+      const hit = tryParse(localStorage.getItem(k));
+      if (hit) return hit;
+    }
+    // sessionStorage survives refresh in the same tab
+    for (const k of keys) {
+      try {
+        const hit = tryParse(sessionStorage.getItem(k));
+        if (hit) return hit;
+      } catch (_) {
+        /* ignore */
+      }
+    }
   } catch (_) {
-    return null;
+    /* ignore */
   }
+  return null;
 }
 
 function loadLastBundlesAnalyze() {
@@ -6739,7 +6917,14 @@ function resolveOptionalDisplayPct(liveVal, lastKnownObj) {
 
 function loadBundleDeltaHtmlMap() {
   try {
-    const raw = localStorage.getItem(BUNDLE_DELTA_HTML_KEY);
+    let raw = localStorage.getItem(BUNDLE_DELTA_HTML_KEY);
+    if (!raw) {
+      try {
+        raw = sessionStorage.getItem(BUNDLE_DELTA_HTML_KEY);
+      } catch (_) {
+        raw = null;
+      }
+    }
     if (!raw) return {};
     const o = JSON.parse(raw);
     return o && typeof o === "object" ? o : {};
@@ -6761,7 +6946,13 @@ function saveBundleDeltaHtml(mint, htmlByKey) {
         .slice(0, keys.length - 80)
         .forEach((k) => delete map[k]);
     }
-    localStorage.setItem(BUNDLE_DELTA_HTML_KEY, JSON.stringify(map));
+    const raw = JSON.stringify(map);
+    safeLocalStorageSet(BUNDLE_DELTA_HTML_KEY, raw);
+    try {
+      sessionStorage.setItem(BUNDLE_DELTA_HTML_KEY, raw);
+    } catch (_) {
+      /* ignore */
+    }
   } catch (_) {
     /* ignore */
   }
@@ -7430,37 +7621,57 @@ function renderBundlesUi(data) {
   function withDelta(mainHtml, key, curOverride) {
     const kind = key === "risk" ? "score" : "pct";
     let d = "";
-    // 1) Prefer frozen HTML on restore (exact last live arrows)
-    if (isRestore && frozenHtml && frozenHtml[key]) {
-      d = String(frozenHtml[key]);
-    }
-    // 2) Recompute from baseline (live always has prev = zeros at minimum)
-    if (!d) {
-      const curVal =
-        curOverride !== undefined
-          ? curOverride
-          : deltaCurStats
-            ? deltaCurStats[key]
-            : null;
-      const prevVal = prev ? prev[key] : kind === "pct" ? 0 : null;
-      if (kind === "pct") {
-        d = formatBundleStatDelta(
-          curVal != null ? curVal : 0,
-          prevVal != null ? prevVal : 0,
-          "pct",
-          { coalesceNull: true }
-        );
-      } else if (curVal != null || prevVal != null) {
-        d = formatBundleStatDelta(
-          curVal != null ? curVal : 0,
-          prevVal != null ? prevVal : 0,
-          "score",
-          { coalesceNull: false }
-        );
+    try {
+      // 1) Prefer frozen HTML on restore (exact last live arrows)
+      if (isRestore && frozenHtml && frozenHtml[key]) {
+        d = String(frozenHtml[key]);
       }
+      // 2) Recompute from baseline (live always has prev = zeros at minimum)
+      if (!d || d.indexOf("bun-stat-delta") < 0) {
+        const curVal =
+          curOverride !== undefined
+            ? curOverride
+            : deltaCurStats
+              ? deltaCurStats[key]
+              : null;
+        const prevVal = prev ? prev[key] : kind === "pct" ? 0 : 0;
+        if (kind === "pct") {
+          d = formatBundleStatDelta(
+            curVal != null && Number.isFinite(Number(curVal))
+              ? Number(curVal)
+              : 0,
+            prevVal != null && Number.isFinite(Number(prevVal))
+              ? Number(prevVal)
+              : 0,
+            "pct",
+            { coalesceNull: true }
+          );
+        } else {
+          d = formatBundleStatDelta(
+            curVal != null && Number.isFinite(Number(curVal))
+              ? Number(curVal)
+              : 0,
+            prevVal != null && Number.isFinite(Number(prevVal))
+              ? Number(prevVal)
+              : 0,
+            "score",
+            { coalesceNull: true }
+          );
+        }
+      }
+    } catch (err) {
+      console.warn("[withDelta]", key, err);
+      d = "";
     }
-    if (d) htmlByKeyThisRun[key] = d;
-    return d ? mainHtml + " " + d : mainHtml;
+    // 3) Hard fallback so the feature never goes blank
+    if (!d || d.indexOf("bun-stat-delta") < 0) {
+      d =
+        kind === "score"
+          ? '<span class="bun-stat-delta bun-delta-flat" title="No change since last Analyze">· 0</span>'
+          : '<span class="bun-stat-delta bun-delta-flat" title="No change since last Analyze">· 0%</span>';
+    }
+    htmlByKeyThisRun[key] = d;
+    return mainHtml + " " + d;
   }
 
   let html = "";
@@ -8280,8 +8491,8 @@ function renderBundlesUi(data) {
 
   // ── Freeze deltas only (never full bar — full-bar restore caused stale %s) ──
   try {
+    const freezeMap = { ...htmlByKeyThisRun };
     if (!isRestore) {
-      const freezeMap = { ...htmlByKeyThisRun };
       if (Object.keys(freezeMap).length) {
         if (mint) saveBundleDeltaHtml(mint, freezeMap);
         saveBundleDeltaHtml("last", freezeMap);
@@ -8327,15 +8538,17 @@ function renderBundlesUi(data) {
       } catch (_) {
         /* ignore */
       }
-    } else {
-      // Restore: force-inject frozen deltas if withDelta missed any box
-      const map =
-        frozenHtml ||
-        (s && s._ui_delta_html) ||
-        (data && data.bundleDelta && data.bundleDelta.htmlByKey) ||
-        null;
-      if (map) injectFrozenDeltasIntoDom(root, map);
     }
+    // Always force-inject deltas into DOM (live + restore) so arrows cannot
+    // go missing even if a span was dropped while building HTML strings.
+    const map =
+      (Object.keys(freezeMap).length ? freezeMap : null) ||
+      frozenHtml ||
+      (s && s._ui_delta_html) ||
+      (data && data.bundleDelta && data.bundleDelta.htmlByKey) ||
+      (data && data._bundleDeltaPair && data._bundleDeltaPair.htmlByKey) ||
+      null;
+    if (map) injectFrozenDeltasIntoDom(root, map);
   } catch (err) {
     console.warn("[bundles delta snap]", err);
   }
