@@ -1794,13 +1794,23 @@ def recompute_total_bundle_all_vectors(
     }
 
     # Always: multi-account + insider
-    # Optionals: only when checkbox ON (do not count last-known/cache into Total)
-    # All 3 optionals OFF → also count similar + suspect with multi-account
+    # Optionals: count when checkbox is ON *or* when that vector has bags on
+    # this payload (live scan or last-known cache still attached).
+    # Previously last-known Fresh/Multi/Shared showed in their boxes but were
+    # excluded from Total whenever the checkbox was off — looked like Total
+    # "ignored" Fresh even though wallets held supply.
+    # All 3 optionals empty (off + no rows) → also count similar + suspect
     ALWAYS = ("multi_account", "insider")
+    OPTIONAL_HAS_BAGS = {
+        "multi_send": bool(ms_map),
+        "fresh": bool(fr_map),
+        "shared_funder": bool(fund_map),
+    }
     OPTIONAL_FLAGS = {
-        "multi_send": bool(include_multi_send),
-        "fresh": bool(include_fresh),
-        "shared_funder": bool(include_shared_sol),
+        "multi_send": bool(include_multi_send) or OPTIONAL_HAS_BAGS["multi_send"],
+        "fresh": bool(include_fresh) or OPTIONAL_HAS_BAGS["fresh"],
+        "shared_funder": bool(include_shared_sol)
+        or OPTIONAL_HAS_BAGS["shared_funder"],
     }
     any_optional_on = any(OPTIONAL_FLAGS.values())
 
@@ -1810,7 +1820,7 @@ def recompute_total_bundle_all_vectors(
             active_keys.append(key)
 
     if not any_optional_on:
-        # Fresh + Multi-send + Shared SOL all unchecked
+        # Fresh + Multi-send + Shared SOL all empty this run
         active_keys.extend(["similar_size", "suspect"])
         mode = "multi_plus_similar_suspect"
         use_sim_sus_in_total = True
@@ -1826,6 +1836,11 @@ def recompute_total_bundle_all_vectors(
                 by_vector[key] = dict(by_vector[key])
                 by_vector[key]["excluded_from_total"] = True
                 by_vector[key]["optional_scan_off"] = True
+        elif key in by_vector:
+            # Ensure present bags are never marked excluded_from_total
+            by_vector[key] = dict(by_vector[key])
+            by_vector[key]["excluded_from_total"] = False
+            by_vector[key].pop("optional_scan_off", None)
 
     if "similar_size" in by_vector:
         by_vector["similar_size"] = dict(by_vector["similar_size"])

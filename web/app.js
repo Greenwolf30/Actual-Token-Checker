@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v121";
+const ADTC_CLIENT_VERSION = "v122";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -7330,6 +7330,104 @@ function resolveTokenMultiSendTotalPct(view, summary) {
 }
 
 /**
+ * Total bundle from the same wallet lists the UI shows:
+ * multi-account + insider + Fresh + token Multi-send + Shared SOL (+ sol multi).
+ * Unique wallets only. Used when server total is missing/low vs listed Holds.
+ */
+function recomputeTotalBundleFromView(view, summary) {
+  const s = summary || {};
+  const v = view || {};
+  const rows = [];
+  function pushRow(w, pct) {
+    if (w == null || w === "") return;
+    rows.push({ wallet: w, pct_supply: pct });
+  }
+  function pushWalletObj(r) {
+    if (!r) return;
+    if (typeof r === "string") pushRow(r, null);
+    else pushRow(r.wallet || r.owner, r.pct_supply != null ? r.pct_supply : r.combined_pct);
+  }
+  // multi-account
+  const clusters = v.clusters || [];
+  for (let i = 0; i < clusters.length; i++) pushWalletObj(clusters[i]);
+  // insider
+  const ins = v.insider_wallets || [];
+  for (let i = 0; i < ins.length; i++) pushWalletObj(ins[i]);
+  // fresh — always include listed fresh bags (live or last-known on payload)
+  const fresh = v.fresh_wallets || [];
+  for (let i = 0; i < fresh.length; i++) pushWalletObj(fresh[i]);
+  // token multi-send
+  const msW = v.multi_send_wallets || [];
+  for (let i = 0; i < msW.length; i++) {
+    const r = msW[i] || {};
+    const roles = r.roles || [];
+    const onlySol =
+      roles.length &&
+      roles.every(function (role) {
+        return String(role || "").toLowerCase().indexOf("sol") === 0;
+      });
+    if (!onlySol) pushWalletObj(r);
+  }
+  const tokenMs = v.multi_send_clusters || [];
+  for (let i = 0; i < tokenMs.length; i++) {
+    const mc = tokenMs[i] || {};
+    pushRow(mc.sender, mc.sender_pct);
+    const recs = mc.receivers || [];
+    for (let j = 0; j < recs.length; j++) pushWalletObj(recs[j]);
+  }
+  // Shared SOL / funding + sol multi-send clusters
+  const fund = v.funding_clusters || [];
+  for (let i = 0; i < fund.length; i++) {
+    const fc = fund[i] || {};
+    pushRow(fc.funder || fc.sender, fc.funder_pct != null ? fc.funder_pct : fc.sender_pct);
+    const kids = fc.children || fc.child_rows || [];
+    for (let j = 0; j < kids.length; j++) pushWalletObj(kids[j]);
+  }
+  const solMs = v.sol_multi_send_clusters || [];
+  for (let i = 0; i < solMs.length; i++) {
+    const mc = solMs[i] || {};
+    pushRow(mc.sender || mc.funder, mc.sender_pct != null ? mc.sender_pct : mc.funder_pct);
+    const recs = mc.receivers || mc.children || [];
+    for (let j = 0; j < recs.length; j++) pushWalletObj(recs[j]);
+  }
+  // Fallback mode: similar + suspect when no primary optional bags and no multi/insider
+  const hasPrimary =
+    clusters.length ||
+    ins.length ||
+    fresh.length ||
+    tokenMs.length ||
+    fund.length ||
+    solMs.length ||
+    (msW && msW.length);
+  if (!hasPrimary) {
+    const sims = v.similar_size_groups || [];
+    for (let i = 0; i < sims.length; i++) {
+      const g = sims[i] || {};
+      const mem = g.members || [];
+      if (mem.length) {
+        for (let j = 0; j < mem.length; j++) pushWalletObj(mem[j]);
+      } else {
+        const ws = g.wallets || [];
+        for (let j = 0; j < ws.length; j++) pushRow(ws[j], g.avg_pct);
+      }
+    }
+    const sus = v.suspect_wallets || [];
+    for (let i = 0; i < sus.length; i++) pushWalletObj(sus[i]);
+  }
+  const recomputed = sumUniqueWalletSupplyPct(rows);
+  let server =
+    s.total_bundle_pct != null && Number.isFinite(Number(s.total_bundle_pct))
+      ? Number(s.total_bundle_pct)
+      : null;
+  // Prefer client union when server is missing or undercounts listed bags
+  if (recomputed != null && (server == null || recomputed > server + 0.0001)) {
+    return recomputed;
+  }
+  if (server != null) return server;
+  return recomputed != null ? recomputed : 0;
+}
+
+/**
  * Hold-% colors for Bundles top boxes (Multi-send / Shared SOL / etc.).
  * Same bands as Holders, but any positive bag gets at least green so small
  * multi-send / shared SOL totals still show the scheme.
@@ -8906,6 +9004,14 @@ function renderBundlesUi(data) {
     if (q.length >= 32 && !/\s/.test(q)) mint = q;
   }
   const curStats = extractBundleSummaryStats(s, riskScore);
+  // Align Total with listed Fresh / Multi-send / Shared SOL bags
+  try {
+    const tFix = recomputeTotalBundleFromView(view, s);
+    if (tFix != null && Number.isFinite(Number(tFix))) {
+      curStats.total_bundle_pct = Number(tFix);
+      if (s && typeof s === "object") s.total_bundle_pct = Number(tFix);
+    }
+  } catch (_) {}
   const isRestore = !!(data && data._restoredFromBrowserCache);
   let stored = mint ? getBundleStatsEntry(mint) : null;
 
@@ -9292,13 +9398,10 @@ function renderBundlesUi(data) {
     )
   );
   // Summary % tiles — same Holders priority color bands
-  // Total bundle = unique wallets across counted vectors (no double-count)
+  // Total bundle = unique wallets (Fresh + Multi-send + Shared SOL + multi + insider)
   {
-    // Always show a value (0% when none of the counted vectors hit)
-    const tbp =
-      s.total_bundle_pct != null && Number.isFinite(Number(s.total_bundle_pct))
-        ? Number(s.total_bundle_pct)
-        : 0;
+    // Prefer union of listed bags so Fresh etc. always land in Total
+    const tbp = recomputeTotalBundleFromView(view, s);
     const showSimSus =
       s.total_bundle_mode === "fallback_similar_suspect" ||
       s.total_bundle_mode === "multi_plus_similar_suspect" ||
@@ -9307,7 +9410,7 @@ function renderBundlesUi(data) {
     const totalLabel = showSimSus
       ? "Total (multi + similar/suspect)"
       : "Total bundle";
-    html += stat(totalLabel, withDelta(bunPctHtml(tbp), "total_bundle_pct"));
+    html += stat(totalLabel, withDelta(bunPctHtml(tbp), "total_bundle_pct", tbp));
   }
   html += stat(
     "Similar-size",
@@ -10133,10 +10236,7 @@ function renderBundlesUi(data) {
       (riskScore != null ? " (" + Math.round(riskScore) + "/100)" : "");
     pushStat("Risk", riskText, riskCls, "risk");
 
-    const tbp =
-      s.total_bundle_pct != null && Number.isFinite(Number(s.total_bundle_pct))
-        ? Number(s.total_bundle_pct)
-        : 0;
+    const tbp = recomputeTotalBundleFromView(view, s);
     const showSimSus =
       s.total_bundle_mode === "fallback_similar_suspect" ||
       s.total_bundle_mode === "multi_plus_similar_suspect" ||
