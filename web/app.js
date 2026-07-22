@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v114";
+const ADTC_CLIENT_VERSION = "v115";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -134,18 +134,45 @@ function loadHistoryLog() {
     if (!raw) return [];
     const data = JSON.parse(raw);
     if (!Array.isArray(data)) return [];
-    return data.filter((x) => x && typeof x === "object").slice(0, HISTORY_MAX);
+    // Always newest first; cap length by dropping earliest
+    return trimHistoryDropOldest(
+      data.filter((x) => x && typeof x === "object"),
+      HISTORY_MAX
+    );
   } catch {
     return [];
   }
 }
 
 /**
- * Persist Logs. On quota errors, strip heavy snapshots then drop oldest rows
- * until the write succeeds so new Analyzes always appear at the top.
+ * Newest-first order by timestamp (index 0 = latest Analyze).
+ * Always drop from the END (earliest / oldest mints) — never the newest.
+ */
+function sortHistoryNewestFirst(items) {
+  const arr = (items || []).filter((x) => x && typeof x === "object");
+  arr.sort((a, b) => {
+    const ta = Date.parse(a.ts || 0) || 0;
+    const tb = Date.parse(b.ts || 0) || 0;
+    return tb - ta; // newest first
+  });
+  return arr;
+}
+
+/** Keep newest head; drop earliest (oldest) from the tail. */
+function trimHistoryDropOldest(items, maxKeep) {
+  const max = Math.max(1, maxKeep != null ? maxKeep : HISTORY_MAX);
+  const list = sortHistoryNewestFirst(items);
+  if (list.length <= max) return list;
+  // list[0] = newest · list[length-1] = earliest → slice keeps newest
+  return list.slice(0, max);
+}
+
+/**
+ * Persist Logs. On quota errors: strip snapshots, then drop earliest entries
+ * until the write succeeds. Newest Analyze is always kept.
  */
 function saveHistoryLog(items) {
-  let list = (items || []).slice(0, HISTORY_MAX);
+  let list = trimHistoryDropOldest(items, HISTORY_MAX);
   const tryWrite = (arr) => {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(arr));
     return true;
@@ -167,9 +194,9 @@ function saveHistoryLog(items) {
     });
     return tryWrite(list);
   } catch (e2) {
-    console.warn("[logs] slim save failed, shrinking list", e2 && e2.name);
+    console.warn("[logs] slim save failed, dropping earliest entries", e2 && e2.name);
   }
-  // Retry 2: keep only compact market fields, drop oldest until it fits
+  // Retry 2: compact fields only
   list = list.map((e) => {
     if (!e || typeof e !== "object") return e;
     return {
@@ -191,19 +218,27 @@ function saveHistoryLog(items) {
       alerts_priority_count: e.alerts_priority_count,
     };
   });
+  list = sortHistoryNewestFirst(list);
+  // Drop earliest (tail) until it fits — never drop list[0] (newest) first
   while (list.length > 0) {
     try {
       return tryWrite(list);
     } catch (_) {
-      list = list.slice(0, Math.max(1, Math.floor(list.length * 0.7)));
       if (list.length <= 1) {
         try {
-          return tryWrite(list);
+          return tryWrite(list); // only the newest left
         } catch (e3) {
           console.error("[logs] save failed completely", e3);
           return false;
         }
       }
+      // Remove earliest known mint (last index), keep latest
+      list = list.slice(0, list.length - 1);
+      console.info(
+        "[logs] dropped earliest entry; keeping",
+        list.length,
+        "newest"
+      );
     }
   }
   return false;
@@ -388,6 +423,7 @@ function cleanLogsSnapshot(text) {
 
 function pushHistoryLog(entry) {
   if (!entry) return loadHistoryLog();
+  if (!entry.ts) entry.ts = new Date().toISOString();
   let items = [];
   try {
     items = loadHistoryLog();
@@ -402,7 +438,7 @@ function pushHistoryLog(entry) {
   } catch (_) {
     addr = addrRaw.toLowerCase();
   }
-  // Drop older entries for the same mint (keep only newest at top)
+  // Drop older entries for the same mint (re-Analyze replaces prior row)
   const filtered = items.filter((e) => {
     if (!addr || !e) return true;
     let ea = "";
@@ -415,9 +451,9 @@ function pushHistoryLog(entry) {
     }
     return !ea || ea !== addr;
   });
-  // Always put the just-Analyzed token first
+  // Newest Analyze first; trimHistoryDropOldest drops earliest from the tail
   filtered.unshift(entry);
-  const next = filtered.slice(0, HISTORY_MAX);
+  const next = trimHistoryDropOldest(filtered, HISTORY_MAX);
   let ok = false;
   try {
     ok = saveHistoryLog(next);
@@ -426,7 +462,7 @@ function pushHistoryLog(entry) {
     ok = false;
   }
   if (!ok) {
-    // Nuclear: wipe log and write only this entry so the user always sees it
+    // Last resort: keep newest only (never drop the just-Analyzed mint)
     try {
       const mini = {
         ts: entry.ts || new Date().toISOString(),
@@ -439,8 +475,7 @@ function pushHistoryLog(entry) {
         market_cap_usd: entry.market_cap_usd,
       };
       localStorage.setItem(HISTORY_KEY, JSON.stringify([mini]));
-      ok = true;
-      console.warn("[logs] wiped old log and saved only current mint");
+      console.warn("[logs] kept only latest Analyze; dropped all earlier mints");
     } catch (e2) {
       console.error("[logs] pushHistoryLog could not persist", e2);
     }
@@ -709,7 +744,7 @@ function refreshHistoryPanel(highlightCa) {
       "Each entry shows Overview · Holders · Bundles side by side.<br/>" +
       "After " +
       HISTORY_MAX +
-      " entries, oldest are deleted on consecutive lookups.<br/>" +
+      " entries, the <strong>earliest</strong> mints are deleted first (never the latest Analyze).<br/>" +
       "Use the search bar above to find a previous lookup by CA.</p>";
     return;
   }
