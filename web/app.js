@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v110";
+const ADTC_CLIENT_VERSION = "v111";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -1020,16 +1020,21 @@ function getSummaryBarMintAddr() {
 function extractRuggersSnapshot(data) {
   if (!data || !data.ok) return null;
   const t = data.token || {};
-  const address = (t.address || "").trim();
-  if (!address) return null;
+  // Prefer token.address; fall back to query string (CA) when token meta is thin
+  let address = bareMintAddr(t.address || "");
+  if (!address) {
+    address = bareMintAddr(data.query || "");
+  }
+  if (!address || address.length < 32) return null;
   const hm = data.history_meta || {};
   const track = hm.ruggers_track || data.ruggers_track || null;
-  const chain = (t.chain_id || (data.market || {}).chain_id || "").trim() || null;
+  const chain = (t.chain_id || (data.market || {}).chain_id || "").trim() || "solana";
   const symbol = (t.symbol || "").trim() || null;
   const name = (t.name || "").trim() || null;
   const ts = data.generated_at || new Date().toISOString();
 
-  if (track && Array.isArray(track.wallets) && track.wallets.length) {
+  // Use structured track whenever present — even if wallets[] is empty (still seed mint)
+  if (track && typeof track === "object" && Array.isArray(track.wallets)) {
     const wallets = {};
     for (const row of track.wallets) {
       const w = (row && row.wallet) || "";
@@ -1268,7 +1273,7 @@ function parseRuggersFromText(address, chain, symbol, name, ts, holdersText, bun
     }
   }
 
-  if (!Object.keys(wallets).length) return null;
+  // Even with zero parsed wallets, return a snap so this mint can be seeded
   return {
     address,
     chain,
@@ -1729,6 +1734,59 @@ function enrollRuggersBaselineWallet(rec, w, info, now) {
  *    or Flagged if on RugWatch
  * Flagged for mint B never rewrites lanes on mint A (per-mint store).
  */
+/**
+ * Create (or return) an empty Ruggers track for a mint so the panel can open
+ * on the correct CA even when holders/ruggers_track was empty/thin.
+ */
+function ensureRuggersMintTrack(address, meta) {
+  const mintBare = bareMintAddr(address);
+  if (!mintBare || mintBare.length < 32) return null;
+  const chain = (meta && meta.chain) || "solana";
+  const storeKey = mintKeyFromToken(mintBare, chain);
+  const store = loadRuggersStore();
+  const found = findRuggersRecForMint(store, mintBare, chain);
+  if (found.rec && sameMintAddr(found.rec.address || found.key, mintBare)) {
+    // Keep existing track; ensure address/key normalized
+    found.rec.address = mintBare;
+    found.rec.mint_key = storeKey;
+    if (meta && meta.symbol) found.rec.symbol = meta.symbol;
+    if (meta && meta.name) found.rec.name = meta.name;
+    store[storeKey] = found.rec;
+    if (found.key && found.key !== storeKey) {
+      try {
+        delete store[found.key];
+      } catch (_) {}
+    }
+    saveRuggersStore(store);
+    return { key: storeKey, rec: found.rec };
+  }
+  const now = new Date().toISOString();
+  const rec = {
+    address: mintBare,
+    chain: chain,
+    symbol: (meta && meta.symbol) || null,
+    name: (meta && meta.name) || null,
+    creator: null,
+    first_ts: now,
+    last_ts: now,
+    lookup_count: 1,
+    first_wallets: {},
+    first_similar_groups: [],
+    status: {},
+    rugwatch_known: {},
+    flagged_sellers: {},
+    uploaded_similar: {},
+    ruggers_uploaded: {},
+    sticky_lane_sellers: {},
+    rules_version: RUGGERS_RULES_VERSION,
+    mint_key: storeKey,
+    seeded_empty: true,
+  };
+  store[storeKey] = rec;
+  saveRuggersStore(store);
+  return { key: storeKey, rec };
+}
+
 function processRuggersFromAnalyze(data) {
   const snap = extractRuggersSnapshot(data);
   if (!snap || !snap.address) return null;
@@ -10111,21 +10169,31 @@ function renderSections(data, query) {
   }
   refreshHistoryPanel();
 
-  // Ruggers: first-lookup baseline + sell/swing tracking (needs holder snapshot)
+  // Ruggers: first-lookup baseline + sell/swing tracking
   let rugKey = null;
   try {
     const isQuick = !!(data.quick || data._phase === "quick");
     const track = (data.history_meta || {}).ruggers_track;
+    const mintAddr =
+      bareMintAddr((data.token && data.token.address) || data.query || "") ||
+      "";
+    const holdersText = String(
+      (sections && sections.holders) || ""
+    );
     const holdersOk = !!(
-      (track && track.ok) ||
+      (track && (track.ok || (Array.isArray(track.wallets) && track.wallets.length))) ||
       (data.holders && data.holders.ok) ||
-      (sections.holders && !/unavailable|skipped|quick/i.test(sections.holders || ""))
+      (holdersText &&
+        holdersText.length > 40 &&
+        !/unavailable|skipped|quick mode/i.test(holdersText))
     );
     if (isQuick) {
       console.info("[ruggers] skipped — Quick mode (need full Analyze for sellers)");
-    } else if (!holdersOk) {
-      console.warn("[ruggers] skipped — holders/ruggers_track not ok");
+      if (mintAddr) {
+        rugKey = mintKeyFromToken(mintAddr, (data.token && data.token.chain_id) || "solana");
+      }
     } else {
+      // Always try to seed/update track when we have a mint CA (even if holders thin)
       let result = null;
       try {
         result = processRuggersFromAnalyze(data);
@@ -10133,28 +10201,37 @@ function renderSections(data, query) {
         console.error("[ruggers] process threw", procErr);
         result = null;
       }
+      if (!result && mintAddr) {
+        // Force-seed empty baseline so the panel shows THIS mint (not blank)
+        try {
+          result = ensureRuggersMintTrack(mintAddr, {
+            chain: (data.token && data.token.chain_id) || "solana",
+            symbol: (data.token && data.token.symbol) || null,
+            name: (data.token && data.token.name) || null,
+          });
+        } catch (seedErr) {
+          console.warn("[ruggers] seed failed", seedErr);
+        }
+      }
       if (result && result.key) {
         rugKey = result.key;
-        const nBase = result.rec && result.rec.first_wallets
-          ? Object.keys(result.rec.first_wallets).length
-          : 0;
+        const nBase =
+          result.rec && result.rec.first_wallets
+            ? Object.keys(result.rec.first_wallets).length
+            : 0;
         const nLook = (result.rec && result.rec.lookup_count) || 0;
         console.info(
           "[ruggers] updated",
           result.key,
           "lookups=" + nLook,
-          "baseline_wallets=" + nBase
+          "baseline_wallets=" + nBase,
+          holdersOk ? "holders_ok" : "holders_thin"
         );
-      } else {
-        console.warn("[ruggers] process returned null (no mint/snapshot)");
-        // Still try to open panel for this mint CA so the tab is not blank
-        try {
-          const addr =
-            (data.token && data.token.address) ||
-            (data.market && data.market.address) ||
-            "";
-          if (addr) rugKey = mintKeyFromToken(addr, (data.token && data.token.chain_id) || "solana");
-        } catch (_) {}
+      } else if (mintAddr) {
+        rugKey = mintKeyFromToken(
+          mintAddr,
+          (data.token && data.token.chain_id) || "solana"
+        );
       }
     }
   } catch (err) {

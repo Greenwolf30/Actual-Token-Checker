@@ -816,7 +816,9 @@ def _ruggers_track_snapshot(
         )
     )
     return {
-        "ok": bool(holders.get("ok")) and bool(wallet_rows),
+        # ok if holders succeeded OR we at least have some wallet rows
+        # (empty rows still return a track so the client can seed this mint)
+        "ok": bool(holders.get("ok")) or bool(wallet_rows),
         "creator": creator,
         "single_min_pct": SINGLE_MIN_PCT,
         "wallets": wallet_rows[:200],
