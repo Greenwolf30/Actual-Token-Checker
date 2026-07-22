@@ -299,10 +299,15 @@
     >
       <strong>Warning:</strong>
       <strong>Shared SOL</strong> is the <strong>heaviest Helius load</strong>
-      (up to ~156 RPCs per Analyze). Prefer unchecking it when you only need
-      Fresh / Multi-send / holders. Do not run <strong>Fresh</strong> and
-      <strong>Multi-send</strong> together on free Helius if you hit
-      <strong>429</strong> rate limits — use one at a time.
+      (up to ~156 RPCs). Prefer unchecking it when you only need Fresh /
+      Multi-send / holders.
+      <strong>Pings:</strong> One full Analyze with
+      <strong>Fresh + Multi-send + Shared SOL</strong> on at once uses
+      <strong>fewer total Helius pings</strong> than three separate Analyzes
+      (holders base ~6 is paid once, not three times). Checking them one
+      category per Analyze costs more overall.
+      If you hit <strong>429</strong> rate limits on free Helius (~10 RPS),
+      wait 30–60s or turn Shared SOL off — rate limit ≠ total credit cost.
       <strong>Last known:</strong> After you Analyze with
       <strong>Fresh</strong>, <strong>Multi-send</strong>, or
       <strong>Shared SOL</strong> checked, those results stay on Bundles for
@@ -329,6 +334,9 @@
       to current live values (new Helius scan).
       <strong>Shared SOL</strong> is the heaviest optional Helius scan — uncheck
       to save credits.
+      To collect all three for a mint the first time, check them
+      <strong>together on one Analyze</strong> (fewer pings than running each
+      separately).
     </div>
 
     <footer class="foot">

@@ -88,9 +88,12 @@ Analyze options (next to the search form)
 
   Shared SOL is usually the largest Helius cost on a full Analyze. Prefer
   unchecking it when you only need Fresh / Multi-send / holders.
-  Do not check Fresh and Multi-send at the same time if you are on free Helius
-  (~10 RPS) — both on one Analyze can raise 429 rate limits. Prefer one at a
-  time. Full ping tables: §6.3g.
+
+  One Analyze with Fresh + Multi-send + Shared SOL together uses FEWER total
+  Helius pings than three separate Analyzes (holders base ~6 paid once).
+  Checking one category per Analyze costs more overall. 429 rate limits
+  (free ~10 RPS) are separate from total credit cost — wait 30–60s if limited.
+  Full ping tables: §6.3g.
 
 
 --------------------------------------------------------------------------------
