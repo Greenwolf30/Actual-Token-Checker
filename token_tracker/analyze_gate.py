@@ -37,12 +37,14 @@ def cache_key(
     chain: str | None,
     quick: bool,
     include_rugwatch: bool,
+    include_fresh_multi_send: bool = True,
 ) -> str:
     q = (query or "").strip().lower()
     ch = (chain or "").strip().lower()
     rw = "1" if include_rugwatch else "0"
+    fm = "1" if include_fresh_multi_send else "0"
     mode = "q" if quick else "f"
-    raw = f"{mode}|{ch}|{rw}|{q}"
+    raw = f"{mode}|{ch}|{rw}|{fm}|{q}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:40]
 
 
@@ -140,9 +142,14 @@ def analyze_cached(
     chain: str | None,
     quick: bool,
     include_rugwatch: bool,
+    include_fresh_multi_send: bool = True,
 ) -> tuple[Any, str]:
     """Run analyze_token (or equivalent) with cache + single-flight."""
     key = cache_key(
-        query, chain=chain, quick=quick, include_rugwatch=include_rugwatch
+        query,
+        chain=chain,
+        quick=quick,
+        include_rugwatch=include_rugwatch,
+        include_fresh_multi_send=include_fresh_multi_send,
     )
     return run_single_flight(key, fn, ttl=_ttl(quick))

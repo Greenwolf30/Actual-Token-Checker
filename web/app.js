@@ -6381,7 +6381,9 @@ function renderBundlesUi(data) {
   } else {
     html += bunEmptySection(
       "Fresh wallets",
-      "None found — wallets holding almost only this mint (needs Helius + full Analyze)."
+      useFreshMultiEnabled()
+        ? "None found — wallets holding almost only this mint (needs Helius + full Analyze)."
+        : "Skipped — turn on “Fresh + multi-send” above Analyze to run this scan."
     );
   }
 
@@ -6502,11 +6504,15 @@ function renderBundlesUi(data) {
     const srcs = ((s.sources_used || []).join(" ") || "").toLowerCase();
     const heliusRan =
       srcs.indexOf("token_multi_send") >= 0 || srcs.indexOf("helius") >= 0;
+    const errS = String(s.multi_send_error || "");
     let emptyMsg;
-    if (s.multi_send_error) {
+    if (/scan off|enable “Fresh|enable "Fresh/i.test(errS)) {
+      emptyMsg =
+        "Skipped — turn on “Fresh + multi-send” above Analyze to run this scan.";
+    } else if (s.multi_send_error) {
       emptyMsg =
         "None this scan — " +
-        String(s.multi_send_error) +
+        errS +
         " (set HELIUS_API_KEY on the API host, not in web/config.js).";
     } else if (heliusRan) {
       emptyMsg =
@@ -6799,9 +6805,16 @@ async function checkHealth() {
 }
 
 const RUGWATCH_PREF_KEY = "adtc_use_rugwatch";
+const FRESH_MULTI_PREF_KEY = "adtc_use_fresh_multi";
 
 function useRugwatchEnabled() {
   const el = $("useRugwatch");
+  if (!el) return true;
+  return !!el.checked;
+}
+
+function useFreshMultiEnabled() {
+  const el = $("useFreshMulti");
   if (!el) return true;
   return !!el.checked;
 }
@@ -6820,6 +6833,26 @@ function initRugwatchPref() {
   el.addEventListener("change", () => {
     try {
       localStorage.setItem(RUGWATCH_PREF_KEY, el.checked ? "1" : "0");
+    } catch (_) {
+      /* ignore */
+    }
+  });
+}
+
+function initFreshMultiPref() {
+  const el = $("useFreshMulti");
+  if (!el) return;
+  try {
+    const saved = localStorage.getItem(FRESH_MULTI_PREF_KEY);
+    if (saved === "0" || saved === "false") el.checked = false;
+    else if (saved === "1" || saved === "true") el.checked = true;
+    // default: checked (on)
+  } catch (_) {
+    /* ignore */
+  }
+  el.addEventListener("change", () => {
+    try {
+      localStorage.setItem(FRESH_MULTI_PREF_KEY, el.checked ? "1" : "0");
     } catch (_) {
       /* ignore */
     }
@@ -7020,6 +7053,7 @@ async function analyze(ev) {
   const chain = $("chain").value || null;
   const quick = $("quick").checked;
   const include_rugwatch = useRugwatchEnabled();
+  const include_fresh_multi_send = useFreshMultiEnabled();
   const btn = $("analyzeBtn");
   btn.disabled = true;
   btn.textContent = quick ? "Quick…" : "Analyzing…";
@@ -7029,7 +7063,13 @@ async function analyze(ev) {
     const r = await fetch(apiUrl("/api/analyze"), {
       method: "POST",
       headers: headers(true),
-      body: JSON.stringify({ query, chain, quick, include_rugwatch }),
+      body: JSON.stringify({
+        query,
+        chain,
+        quick,
+        include_rugwatch,
+        include_fresh_multi_send,
+      }),
     });
     let data;
     try {
@@ -7096,6 +7136,7 @@ function init() {
   initHistory();
   initRuggers();
   initRugwatchPref();
+  initFreshMultiPref();
   initRugwatchNav();
   initRugwatchCounts();
   $("searchForm").addEventListener("submit", analyze);

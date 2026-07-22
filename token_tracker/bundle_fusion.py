@@ -16,12 +16,16 @@ def comprehensive_bundle_check(
     *,
     pair_address: str | None = None,
     chain_id: str = "solana",
+    include_fresh_multi_send: bool = True,
 ) -> dict[str, Any]:
     """
     Full multi-API bundle check.
 
     Returns same shape as analyze_bundles() plus fusion fields:
       sources_used, source_reports, fusion_signals, comprehensive_score
+
+    include_fresh_multi_send=False skips Fresh wallets + Multi-send RPC scans
+    (saves Helius credits / RPS; other bundle signals still run).
     """
     if (chain_id or "").lower() not in {"solana", "sol", ""}:
         return bun._empty("Comprehensive bundle check is Solana-only.")  # type: ignore[attr-defined]
@@ -488,17 +492,35 @@ def comprehensive_bundle_check(
 
     fresh_report: dict[str, Any] = {"ok": False, "wallets": []}
     multi_send_report: dict[str, Any] = {"ok": False, "clusters": []}
-    try:
-        # Cap wallets for free Helius ~10 RPS (fresh = 2+ RPCs each)
-        fresh_report = src.analyze_fresh_wallets(mint, holder_seed_u, max_wallets=12)
-    except Exception as exc:  # noqa: BLE001
-        fresh_report = {"ok": False, "error": str(exc), "wallets": []}
-    try:
-        multi_send_report = src.analyze_token_multi_sends(
-            mint, holder_seed_u, max_sigs=28, max_tx_fetch=20
-        )
-    except Exception as exc:  # noqa: BLE001
-        multi_send_report = {"ok": False, "error": str(exc), "clusters": []}
+    multi_send_error = None
+    if include_fresh_multi_send:
+        try:
+            # Cap wallets for free Helius ~10 RPS (fresh = 2+ RPCs each)
+            fresh_report = src.analyze_fresh_wallets(
+                mint, holder_seed_u, max_wallets=12
+            )
+        except Exception as exc:  # noqa: BLE001
+            fresh_report = {"ok": False, "error": str(exc), "wallets": []}
+        try:
+            multi_send_report = src.analyze_token_multi_sends(
+                mint, holder_seed_u, max_sigs=28, max_tx_fetch=20
+            )
+        except Exception as exc:  # noqa: BLE001
+            multi_send_report = {"ok": False, "error": str(exc), "clusters": []}
+    else:
+        fresh_report = {
+            "ok": False,
+            "wallets": [],
+            "skipped": True,
+            "error": "Fresh wallets scan off (enable “Fresh + multi-send” to run).",
+        }
+        multi_send_report = {
+            "ok": False,
+            "clusters": [],
+            "skipped": True,
+            "error": "Multi-send scan off (enable “Fresh + multi-send” to run).",
+        }
+        multi_send_error = multi_send_report.get("error")
 
     # Attach supply % to fresh wallets
     fresh_rows: list[dict[str, Any]] = []
@@ -545,7 +567,6 @@ def comprehensive_bundle_check(
     # Exclude LP / bonding-curve / known program wallets so pool % (~30%+) is never
     # mistaken for a multi-send sender bag.
     multi_clusters: list[dict[str, Any]] = []
-    multi_send_error = None
     if multi_send_report.get("ok"):
         if "token_multi_send" not in sources_used:
             sources_used.append("token_multi_send")

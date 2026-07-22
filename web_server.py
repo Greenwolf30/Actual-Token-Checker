@@ -958,6 +958,7 @@ def run_analyze(
     chain: str | None,
     quick: bool,
     include_rugwatch: bool = True,
+    include_fresh_multi_send: bool = True,
 ) -> dict[str, Any]:
     load_dotenv()
     from token_tracker.analyze import analyze_token
@@ -977,6 +978,7 @@ def run_analyze(
                 include_holders=not quick,
                 quick=quick,
                 include_rugwatch=bool(include_rugwatch),
+                include_fresh_multi_send=bool(include_fresh_multi_send),
             )
         except Exception as exc:  # noqa: BLE001
             return {
@@ -993,6 +995,7 @@ def run_analyze(
             chain=chain,
             quick=quick,
             include_rugwatch=bool(include_rugwatch),
+            include_fresh_multi_send=bool(include_fresh_multi_send),
         )
     except Exception as exc:  # noqa: BLE001
         return {
@@ -1234,8 +1237,23 @@ class WebHandler(BaseHTTPRequestHandler):
                 "no",
                 "off",
             }
+            fm_raw = (
+                qs.get("fresh_multi")
+                or qs.get("include_fresh_multi_send")
+                or ["1"]
+            )[0]
+            include_fresh_multi_send = str(fm_raw).strip().lower() not in {
+                "0",
+                "false",
+                "no",
+                "off",
+            }
             return self._handle_analyze(
-                q, chain=chain, quick=quick, include_rugwatch=include_rugwatch
+                q,
+                chain=chain,
+                quick=quick,
+                include_rugwatch=include_rugwatch,
+                include_fresh_multi_send=include_fresh_multi_send,
             )
 
         # Static files from /web
@@ -1280,11 +1298,19 @@ class WebHandler(BaseHTTPRequestHandler):
                 include_rugwatch = bool(body.get("rugwatch"))
             else:
                 include_rugwatch = True
+            # Default True; uncheck “Fresh + multi-send” to skip those Helius scans
+            if "include_fresh_multi_send" in body:
+                include_fresh_multi_send = bool(body.get("include_fresh_multi_send"))
+            elif "fresh_multi" in body:
+                include_fresh_multi_send = bool(body.get("fresh_multi"))
+            else:
+                include_fresh_multi_send = True
             return self._handle_analyze(
                 q,
                 chain=chain_s,
                 quick=quick,
                 include_rugwatch=include_rugwatch,
+                include_fresh_multi_send=include_fresh_multi_send,
             )
 
         return self._json(404, {"ok": False, "error": "not found"})
@@ -1296,6 +1322,7 @@ class WebHandler(BaseHTTPRequestHandler):
         chain: str | None,
         quick: bool,
         include_rugwatch: bool = True,
+        include_fresh_multi_send: bool = True,
     ) -> None:
         if not self._check_gate():
             return self._json(
@@ -1338,6 +1365,7 @@ class WebHandler(BaseHTTPRequestHandler):
                 chain=chain,
                 quick=quick,
                 include_rugwatch=include_rugwatch,
+                include_fresh_multi_send=include_fresh_multi_send,
             )
         finally:
             _release_inflight(ip)

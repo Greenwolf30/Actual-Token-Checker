@@ -338,6 +338,7 @@ def analyze_token(
     include_holders: bool = True,
     quick: bool = False,
     include_rugwatch: bool = True,
+    include_fresh_multi_send: bool = True,
 ) -> dict[str, Any]:
     """
     Build a full token report.
@@ -345,6 +346,7 @@ def analyze_token(
     quick=True: market + basic fields only (fast first paint for the GUI).
     Skips slow OHLCV history, social scrape, holders, and bundles.
     include_rugwatch=False: skip RugWatch flagged-wallet merge on holders.
+    include_fresh_multi_send=False: skip Fresh wallets + Multi-send Helius scans.
     """
     try:
         pairs = resolve_pairs(query, chain=chain)
@@ -724,6 +726,7 @@ def analyze_token(
                 token_addr,
                 pair_address=pair_summary.get("pair_address"),
                 chain_id=pair_summary.get("chain_id") or "solana",
+                include_fresh_multi_send=include_fresh_multi_send,
             )
         except Exception as exc:  # noqa: BLE001
             return {
