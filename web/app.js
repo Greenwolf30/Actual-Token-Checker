@@ -6336,6 +6336,10 @@ function renderBundlesUi(data) {
 
   // Shared SOL funder
   const fund = view.funding_clusters || [];
+  const fundErr = String(s.funding_error || "");
+  const fundSkipped = /scan off|enable .Shared SOL|Shared SOL funder scan off/i.test(
+    fundErr
+  );
   if (fund.length) {
     html +=
       '<section class="bun-section"><div class="bun-section-head">' +
@@ -6364,7 +6368,9 @@ function renderBundlesUi(data) {
   } else {
     html += bunEmptySection(
       "Shared SOL funder",
-      "None found — needs Helius for 1-hop funding clusters."
+      fundSkipped
+        ? "Skipped — turn on “Shared SOL” above Analyze (heaviest Helius load)."
+        : "None found — needs Helius for 1-hop funding clusters."
     );
   }
 
@@ -6808,6 +6814,7 @@ async function checkHealth() {
 const RUGWATCH_PREF_KEY = "adtc_use_rugwatch";
 const FRESH_PREF_KEY = "adtc_use_fresh";
 const MULTI_SEND_PREF_KEY = "adtc_use_multi_send";
+const SHARED_SOL_PREF_KEY = "adtc_use_shared_sol";
 /** Legacy combined pref — migrate once if present */
 const FRESH_MULTI_PREF_KEY_LEGACY = "adtc_use_fresh_multi";
 
@@ -6825,6 +6832,12 @@ function useFreshEnabled() {
 
 function useMultiSendEnabled() {
   const el = $("useMultiSend");
+  if (!el) return true;
+  return !!el.checked;
+}
+
+function useSharedSolEnabled() {
+  const el = $("useSharedSol");
   if (!el) return true;
   return !!el.checked;
 }
@@ -6864,16 +6877,29 @@ function initFreshMultiPref() {
     MULTI_SEND_PREF_KEY,
     FRESH_MULTI_PREF_KEY_LEGACY
   );
+  initCheckboxPref("useSharedSol", SHARED_SOL_PREF_KEY);
   const fresh = $("useFresh");
   const multi = $("useMultiSend");
+  const sharedSol = $("useSharedSol");
   const banner = $("heliusFreshMultiWarn");
   function syncHeliusWarnBanner() {
     if (!banner) return;
-    const both = !!(fresh && multi && fresh.checked && multi.checked);
-    banner.classList.toggle("helius-warn-active", both);
+    const bothFreshMulti = !!(
+      fresh &&
+      multi &&
+      fresh.checked &&
+      multi.checked
+    );
+    const heavyShared = !!(sharedSol && sharedSol.checked);
+    // Brighten when Shared SOL is on (heaviest) or Fresh+Multi together
+    banner.classList.toggle(
+      "helius-warn-active",
+      bothFreshMulti || heavyShared
+    );
   }
   if (fresh) fresh.addEventListener("change", syncHeliusWarnBanner);
   if (multi) multi.addEventListener("change", syncHeliusWarnBanner);
+  if (sharedSol) sharedSol.addEventListener("change", syncHeliusWarnBanner);
   syncHeliusWarnBanner();
 }
 
@@ -7073,6 +7099,7 @@ async function analyze(ev) {
   const include_rugwatch = useRugwatchEnabled();
   const include_fresh = useFreshEnabled();
   const include_multi_send = useMultiSendEnabled();
+  const include_shared_sol = useSharedSolEnabled();
   const btn = $("analyzeBtn");
   btn.disabled = true;
   btn.textContent = quick ? "Quick…" : "Analyzing…";
@@ -7089,6 +7116,7 @@ async function analyze(ev) {
         include_rugwatch,
         include_fresh,
         include_multi_send,
+        include_shared_sol,
         // legacy combined flag (true only if both on)
         include_fresh_multi_send: include_fresh && include_multi_send,
       }),

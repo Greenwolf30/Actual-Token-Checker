@@ -39,6 +39,7 @@ def cache_key(
     include_rugwatch: bool,
     include_fresh: bool = True,
     include_multi_send: bool = True,
+    include_shared_sol: bool = True,
     include_fresh_multi_send: bool | None = None,
 ) -> str:
     q = (query or "").strip().lower()
@@ -50,8 +51,9 @@ def cache_key(
         include_multi_send = False
     fr = "1" if include_fresh else "0"
     ms = "1" if include_multi_send else "0"
+    ss = "1" if include_shared_sol else "0"
     mode = "q" if quick else "f"
-    raw = f"{mode}|{ch}|{rw}|{fr}|{ms}|{q}"
+    raw = f"{mode}|{ch}|{rw}|{fr}|{ms}|{ss}|{q}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:40]
 
 
@@ -151,6 +153,7 @@ def analyze_cached(
     include_rugwatch: bool,
     include_fresh: bool = True,
     include_multi_send: bool = True,
+    include_shared_sol: bool = True,
     include_fresh_multi_send: bool | None = None,
 ) -> tuple[Any, str]:
     """Run analyze_token (or equivalent) with cache + single-flight."""
@@ -164,5 +167,6 @@ def analyze_cached(
         include_rugwatch=include_rugwatch,
         include_fresh=include_fresh,
         include_multi_send=include_multi_send,
+        include_shared_sol=include_shared_sol,
     )
     return run_single_flight(key, fn, ttl=_ttl(quick))

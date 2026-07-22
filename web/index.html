@@ -158,6 +158,13 @@
           <input type="checkbox" id="useMultiSend" checked />
           Multi-send
         </label>
+        <label
+          class="check check-shared-sol"
+          title="Shared SOL funder (1-hop). Heaviest Helius load (~0–156 RPCs). Uncheck to skip."
+        >
+          <input type="checkbox" id="useSharedSol" checked />
+          Shared SOL
+        </label>
         <button type="submit" id="analyzeBtn">Analyze</button>
       </form>
       <p id="errorBox" class="error" hidden></p>
@@ -291,9 +298,11 @@
       aria-live="polite"
     >
       <strong>Warning:</strong>
-      Do not check <strong>Fresh</strong> and <strong>Multi-send</strong> at the
-      same time. Running both on one Analyze can overload the Helius API and
-      cause <strong>429</strong> rate limits. Use <strong>one at a time</strong>.
+      <strong>Shared SOL</strong> is the <strong>heaviest Helius load</strong>
+      (up to ~156 RPCs per Analyze). Prefer unchecking it when you only need
+      Fresh / Multi-send / holders. Do not run <strong>Fresh</strong> and
+      <strong>Multi-send</strong> together on free Helius if you hit
+      <strong>429</strong> rate limits — use one at a time.
     </div>
 
     <div
@@ -311,6 +320,8 @@
       Total bundle % via those groups.
       <strong>Launch-window</strong> / same-slot multi-buys is
       <strong>disabled</strong> (not in Bundles or Ruggers).
+      <strong>Shared SOL</strong> is the heaviest optional Helius scan — uncheck
+      to save credits.
     </div>
 
     <footer class="foot">

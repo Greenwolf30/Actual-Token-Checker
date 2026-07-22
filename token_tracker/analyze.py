@@ -340,6 +340,7 @@ def analyze_token(
     include_rugwatch: bool = True,
     include_fresh: bool = True,
     include_multi_send: bool = True,
+    include_shared_sol: bool = True,
     include_fresh_multi_send: bool | None = None,
 ) -> dict[str, Any]:
     """
@@ -351,7 +352,8 @@ def analyze_token(
     include_fresh=False: skip Fresh wallets Helius scan.
     include_multi_send=False: skip Multi-send (token Helius scan + SOL
     multi-send re-label from funding; no Multi-send totals/section).
-    include_fresh_multi_send=False (legacy): skip both.
+    include_shared_sol=False: skip Shared SOL funder Helius scan (heaviest).
+    include_fresh_multi_send=False (legacy): skip fresh + multi-send.
     """
     if include_fresh_multi_send is False:
         include_fresh = False
@@ -736,6 +738,7 @@ def analyze_token(
                 chain_id=pair_summary.get("chain_id") or "solana",
                 include_fresh=include_fresh,
                 include_multi_send=include_multi_send,
+                include_shared_sol=include_shared_sol,
             )
         except Exception as exc:  # noqa: BLE001
             return {

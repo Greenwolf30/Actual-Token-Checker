@@ -164,6 +164,13 @@ body::before {
 .check-rugwatch input {
   accent-color: #c4a84a;
 }
+.check-shared-sol {
+  color: #d4a060;
+  font-weight: 500;
+}
+.check-shared-sol input {
+  accent-color: #e0a050;
+}
 
 /* RugWatch wallet counts bar (mirrors RugWatch local/cloud pills + stats) */
 .rw-wallet-counts {

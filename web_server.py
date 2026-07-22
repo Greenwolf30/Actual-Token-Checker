@@ -950,6 +950,7 @@ def run_analyze(
     include_rugwatch: bool = True,
     include_fresh: bool = True,
     include_multi_send: bool = True,
+    include_shared_sol: bool = True,
     include_fresh_multi_send: bool | None = None,
 ) -> dict[str, Any]:
     load_dotenv()
@@ -975,6 +976,7 @@ def run_analyze(
                 include_rugwatch=bool(include_rugwatch),
                 include_fresh=bool(include_fresh),
                 include_multi_send=bool(include_multi_send),
+                include_shared_sol=bool(include_shared_sol),
             )
         except Exception as exc:  # noqa: BLE001
             return {
@@ -993,6 +995,7 @@ def run_analyze(
             include_rugwatch=bool(include_rugwatch),
             include_fresh=bool(include_fresh),
             include_multi_send=bool(include_multi_send),
+            include_shared_sol=bool(include_shared_sol),
         )
     except Exception as exc:  # noqa: BLE001
         return {
@@ -1249,6 +1252,10 @@ class WebHandler(BaseHTTPRequestHandler):
             include_multi_send = _qs_bool(
                 ["multi_send", "include_multi_send"], True
             )
+            include_shared_sol = _qs_bool(
+                ["shared_sol", "include_shared_sol", "funding", "include_funding"],
+                True,
+            )
             # Legacy combined param
             if "fresh_multi" in qs or "include_fresh_multi_send" in qs:
                 combined = _qs_bool(
@@ -1264,6 +1271,7 @@ class WebHandler(BaseHTTPRequestHandler):
                 include_rugwatch=include_rugwatch,
                 include_fresh=include_fresh,
                 include_multi_send=include_multi_send,
+                include_shared_sol=include_shared_sol,
             )
 
         # Static files from /web
@@ -1321,6 +1329,16 @@ class WebHandler(BaseHTTPRequestHandler):
                 include_multi_send = bool(body.get("multi_send"))
             else:
                 include_multi_send = True
+            if "include_shared_sol" in body:
+                include_shared_sol = bool(body.get("include_shared_sol"))
+            elif "shared_sol" in body:
+                include_shared_sol = bool(body.get("shared_sol"))
+            elif "include_funding" in body:
+                include_shared_sol = bool(body.get("include_funding"))
+            elif "funding" in body:
+                include_shared_sol = bool(body.get("funding"))
+            else:
+                include_shared_sol = True
             # Legacy combined: only if neither separate flag sent
             if (
                 "include_fresh" not in body
@@ -1343,6 +1361,7 @@ class WebHandler(BaseHTTPRequestHandler):
                 include_rugwatch=include_rugwatch,
                 include_fresh=include_fresh,
                 include_multi_send=include_multi_send,
+                include_shared_sol=include_shared_sol,
             )
 
         return self._json(404, {"ok": False, "error": "not found"})
@@ -1356,6 +1375,7 @@ class WebHandler(BaseHTTPRequestHandler):
         include_rugwatch: bool = True,
         include_fresh: bool = True,
         include_multi_send: bool = True,
+        include_shared_sol: bool = True,
     ) -> None:
         if not self._check_gate():
             return self._json(
@@ -1400,6 +1420,7 @@ class WebHandler(BaseHTTPRequestHandler):
                 include_rugwatch=include_rugwatch,
                 include_fresh=include_fresh,
                 include_multi_send=include_multi_send,
+                include_shared_sol=include_shared_sol,
             )
         finally:
             _release_inflight(ip)

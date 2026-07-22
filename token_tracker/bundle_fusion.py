@@ -18,6 +18,7 @@ def comprehensive_bundle_check(
     chain_id: str = "solana",
     include_fresh: bool = True,
     include_multi_send: bool = True,
+    include_shared_sol: bool = True,
     include_fresh_multi_send: bool | None = None,
 ) -> dict[str, Any]:
     """
@@ -26,11 +27,13 @@ def comprehensive_bundle_check(
     Returns same shape as analyze_bundles() plus fusion fields:
       sources_used, source_reports, fusion_signals, comprehensive_score
 
-    include_fresh / include_multi_send control optional Helius scans
-    (saves credits / RPS when off; other bundle signals still run).
+    include_fresh / include_multi_send / include_shared_sol control optional
+    Helius scans (saves credits / RPS when off; other bundle signals still run).
+    include_shared_sol=False skips Shared SOL funder (heaviest scan, ~0–156 RPCs)
+    and leaves SOL multi-send empty (token multi-send still runs if multi-send on).
     include_multi_send=False skips token multi-send AND does not re-label
     funding clusters as SOL multi-send (no Multi-send totals / section data).
-    include_fresh_multi_send=False (legacy) turns both off.
+    include_fresh_multi_send=False (legacy) turns fresh + multi-send off.
     """
     if include_fresh_multi_send is False:
         include_fresh = False
@@ -245,10 +248,25 @@ def comprehensive_bundle_check(
                 if isinstance(m, dict) and m.get("wallet"):
                     seed_wallets.append(str(m["wallet"]))
 
-    try:
-        funding_report = src.analyze_funding_clusters(seed_wallets)
-    except Exception as exc:  # noqa: BLE001
-        funding_report = {"ok": False, "error": str(exc), "clusters": []}
+    if include_shared_sol:
+        try:
+            funding_report = src.analyze_funding_clusters(seed_wallets)
+        except Exception as exc:  # noqa: BLE001
+            funding_report = {"ok": False, "error": str(exc), "clusters": []}
+    else:
+        funding_report = {
+            "ok": False,
+            "clusters": [],
+            "skipped": True,
+            "error": "Shared SOL funder scan off (enable “Shared SOL” to run).",
+        }
+        if base.get("ok"):
+            base = dict(base)
+            base["funding_clusters"] = []
+            s0 = dict(base.get("summary") or {})
+            s0["funding_clusters"] = 0
+            s0["funding_error"] = funding_report["error"]
+            base["summary"] = s0
 
     if funding_report.get("ok") and (funding_report.get("clusters") or []):
         if "funding_1hop" not in sources_used:
