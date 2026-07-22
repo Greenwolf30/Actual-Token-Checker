@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=fix-arrows-stamps-026985a2b3" />
+  <link rel="stylesheet" href="/styles.css?v=optional-updated-v98" />
   <!-- app cache: same-slot-title-green-v59 -->
   <!-- Public API base only — never put provider keys in config.js -->
   <script src="/config.js"></script>
@@ -191,22 +191,18 @@
           <div>
             <span class="k">MC</span>
             <span id="sumMc" class="v">—</span>
-            <span id="sumMcAt" class="sum-updated" hidden></span>
           </div>
           <div>
             <span class="k">Liq</span>
             <span id="sumLiq" class="v">—</span>
-            <span id="sumLiqAt" class="sum-updated" hidden></span>
           </div>
           <div>
             <span class="k">Vol 24h</span>
             <span id="sumVol" class="v">—</span>
-            <span id="sumVolAt" class="sum-updated" hidden></span>
           </div>
           <div><span class="k">24h</span><span id="sumChg" class="v">—</span></div>
         </div>
       </div>
-      <div id="sumMarketUpdated" class="sum-market-updated" hidden></div>
       <div id="linkBar" class="links"></div>
     </section>
 
@@ -380,7 +376,7 @@
     </form>
   </dialog>
 
-  <script src="/app.js?v=fix-arrows-stamps-c226968298"></script>
+  <script src="/app.js?v=optional-updated-v98"></script>
   <script>
     // Visible boot check — if this is not v87, hard-refresh / redeploy
     document.addEventListener("DOMContentLoaded", function () {

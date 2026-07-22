@@ -1459,7 +1459,7 @@ a.copy-mint:hover,
   color: var(--text-muted, #8a8f98);
   font-weight: 600;
 }
-/* Last known · timestamp under Fresh / Multi-send / Shared SOL when not live */
+/* Last updated · under Fresh / Multi-send / Shared SOL (under % + delta) */
 .bun-stat-sub {
   display: block;
   margin-top: 4px;
@@ -1468,6 +1468,7 @@ a.copy-mint:hover,
   color: var(--text-muted, #8a8f98);
   line-height: 1.25;
   letter-spacing: 0.01em;
+  white-space: nowrap;
 }
 /* Since-last-Analyze relative change (1–25 green · 25–50 yellow · 50–75 orange · 75–99 red) */
 /* Delta sits next to the %: 24% (d +24%) — always visible */

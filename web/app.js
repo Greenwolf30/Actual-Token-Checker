@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v97";
+const ADTC_CLIENT_VERSION = "v98";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -5422,7 +5422,7 @@ function fmtUsd(n) {
   return "$" + x.toPrecision(4);
 }
 
-/** Format Analyze time for MC / Liq / Vol “last updated” lines. */
+/** Format Analyze / scan time for “Updated · …” / “Last updated · …” stamps. */
 function fmtMarketUpdatedAt(isoOrMs) {
   if (isoOrMs == null || isoOrMs === "") return "";
   try {
@@ -5443,58 +5443,30 @@ function fmtMarketUpdatedAt(isoOrMs) {
 }
 
 /**
- * MC, Liq, Vol 24h — show last-updated under each box.
+ * Stamp under Fresh / Multi-send / Shared SOL (under % + delta) — NOT MC/Liq/Vol.
  * Live Analyze: "Updated · …"
- * Page refresh restore: "Last updated · …" until next Analyze.
+ * Restore / last-known: "Last updated · …"
  */
-function setPrimaryMarketUpdatedStamps(data) {
-  const ids = ["sumMcAt", "sumLiqAt", "sumVolAt"];
-  // Always have a time — never leave stamps blank after Analyze/restore
-  let whenRaw =
-    (data && data.generated_at) ||
-    (data && data._marketUpdatedAt) ||
-    (data && data._restoredSavedAt) ||
-    null;
-  if (!whenRaw) whenRaw = Date.now();
-  const when = fmtMarketUpdatedAt(whenRaw) || new Date().toLocaleString();
-  // Live Analyze payload must NOT be treated as restore (save cache also sets the flag)
-  const isRestore =
-    !!(data && data._restoredFromBrowserCache) &&
-    !!(data && data._restoredSavedAt);
-  const label = (isRestore ? "Last updated · " : "Updated · ") + when;
-  for (const id of ids) {
+function optionalBundleUpdatedSub(whenRaw, opts) {
+  const o = opts || {};
+  const when = fmtMarketUpdatedAt(whenRaw);
+  if (!when) return "";
+  if (o.isRestore || o.lastKnown) return "Last updated · " + when;
+  return "Updated · " + when;
+}
+
+/** Clear any legacy MC/Liq/Vol market stamps left in old HTML / cache. */
+function clearPrimaryMarketUpdatedStamps() {
+  ["sumMcAt", "sumLiqAt", "sumVolAt", "sumMarketUpdated"].forEach(function (id) {
     const el = $(id);
-    if (!el) {
-      console.warn("[market stamp] missing #" + id);
-      continue;
-    }
-    el.textContent = label;
-    el.removeAttribute("hidden");
-    el.hidden = false;
-    el.style.display = "block";
-    el.title = isRestore
-      ? "From last Analyze — run Analyze again for a live update"
-      : "Market figures from this Analyze";
-  }
-  // Global line under the stats row (backup if per-box spans fail)
-  try {
-    let global = $("sumMarketUpdated");
-    if (!global) {
-      const stats = document.querySelector(".sum-stats");
-      if (stats && stats.parentNode) {
-        global = document.createElement("div");
-        global.id = "sumMarketUpdated";
-        global.className = "sum-market-updated";
-        stats.parentNode.insertBefore(global, stats.nextSibling);
-      }
-    }
-    if (global) {
-      global.textContent = label;
-      global.removeAttribute("hidden");
-      global.hidden = false;
-      global.style.display = "block";
-    }
-  } catch (_) {}
+    if (!el) return;
+    el.textContent = "";
+    el.hidden = true;
+    el.setAttribute("hidden", "");
+    try {
+      el.style.display = "none";
+    } catch (_) {}
+  });
 }
 
 function fmtPct(n) {
@@ -6205,12 +6177,10 @@ function renderSummary(data) {
     if (Number(chg) < 0) chgEl.classList.add("down");
   }
 
-  // MC / Liq / Vol 24h — last updated stamp (survives refresh until next Analyze)
+  // Last-updated belongs under Fresh / Multi-send / Shared SOL (Bundles), not MC/Liq/Vol
   try {
-    setPrimaryMarketUpdatedStamps(data);
-  } catch (err) {
-    console.warn("[market stamps]", err);
-  }
+    clearPrimaryMarketUpdatedStamps();
+  } catch (_) {}
 
   const linkBar = $("linkBar");
   linkBar.innerHTML = "";
@@ -8073,9 +8043,31 @@ function renderBundlesUi(data) {
     if (!fromCache && !browserAt && !serverAt) return "";
     const when = fmtLastKnownAt(serverAt || browserAt);
     if (!when) {
-      return fromCache ? escHtml("last known") : "";
+      return fromCache ? escHtml("Last updated") : "";
     }
-    return escHtml("last known · " + when);
+    return escHtml("Last updated · " + when);
+  }
+
+  /** Plain-text sub under Fresh / Multi / Shared SOL (DOM pushStat path). */
+  function optionalUpdatedPlain(whenCandidates, lastKnown) {
+    let whenRaw = null;
+    for (let i = 0; i < (whenCandidates || []).length; i++) {
+      if (whenCandidates[i]) {
+        whenRaw = whenCandidates[i];
+        break;
+      }
+    }
+    if (!whenRaw) {
+      whenRaw =
+        (data && data.generated_at) ||
+        (data && data._marketUpdatedAt) ||
+        (data && data._restoredSavedAt) ||
+        null;
+    }
+    return optionalBundleUpdatedSub(whenRaw, {
+      isRestore: isRestore,
+      lastKnown: !!lastKnown,
+    });
   }
 
   // Browser timestamps for optional scans (when server cache is gone)
@@ -8269,9 +8261,18 @@ function renderBundlesUi(data) {
       (freshPct != null &&
         freshPct > 0 &&
         (s.fresh_total_pct == null || Number(s.fresh_total_pct) <= 0));
-    const freshSub = usingFreshLast
-      ? lastKnownSub(true, freshAt, optKnown.fresh && optKnown.fresh.at)
-      : "";
+    // Always stamp under % + delta (not on MC/Liq/Vol)
+    const freshSubEsc = escHtml(
+      optionalUpdatedPlain(
+        [
+          freshAt,
+          optKnown.fresh && optKnown.fresh.at,
+          data && data.generated_at,
+          data && data._restoredSavedAt,
+        ],
+        usingFreshLast
+      )
+    );
     if (freshSkipped && freshPct == null && !freshCached) {
       html += stat(
         "Fresh total",
@@ -8280,14 +8281,14 @@ function renderBundlesUi(data) {
           "fresh_total_pct",
           0
         ),
-        ""
+        freshSubEsc
       );
     } else {
       const live = freshPct != null ? freshPct : 0;
       html += stat(
         "Fresh total",
         withDelta(bunPctHtmlBox(live), "fresh_total_pct", live),
-        freshSub
+        freshSubEsc
       );
     }
   }
@@ -8311,9 +8312,17 @@ function renderBundlesUi(data) {
       (msPct != null &&
         msPct > 0 &&
         (s.multi_send_total_pct == null || Number(s.multi_send_total_pct) <= 0));
-    const msSub = usingMsLast
-      ? lastKnownSub(true, msAt, optKnown.multi_send && optKnown.multi_send.at)
-      : "";
+    const msSubEsc = escHtml(
+      optionalUpdatedPlain(
+        [
+          msAt,
+          optKnown.multi_send && optKnown.multi_send.at,
+          data && data.generated_at,
+          data && data._restoredSavedAt,
+        ],
+        usingMsLast
+      )
+    );
     if (msSkipped && msPct == null && !msCached) {
       html += stat(
         "Multi-send total",
@@ -8322,14 +8331,14 @@ function renderBundlesUi(data) {
           "multi_send_total_pct",
           0
         ),
-        ""
+        msSubEsc
       );
     } else {
       const live = msPct != null ? msPct : 0;
       html += stat(
         "Multi-send total",
         withDelta(bunPctHtmlBox(live), "multi_send_total_pct", live),
-        msSub
+        msSubEsc
       );
     }
   }
@@ -8355,9 +8364,17 @@ function renderBundlesUi(data) {
       (fundPct != null &&
         fundPct > 0 &&
         (s.funding_total_pct == null || Number(s.funding_total_pct) <= 0));
-    const fundSub = usingFundLast
-      ? lastKnownSub(true, fundAt, optKnown.funding && optKnown.funding.at)
-      : "";
+    const fundSubEsc = escHtml(
+      optionalUpdatedPlain(
+        [
+          fundAt,
+          optKnown.funding && optKnown.funding.at,
+          data && data.generated_at,
+          data && data._restoredSavedAt,
+        ],
+        usingFundLast
+      )
+    );
     let sharedSolVal;
     if (fundSkipped && !fundCached && fundPct == null) {
       sharedSolVal = withDelta(
@@ -8369,7 +8386,7 @@ function renderBundlesUi(data) {
       const live = fundPct != null ? fundPct : 0;
       sharedSolVal = withDelta(bunPctHtmlBox(live), "funding_total_pct", live);
     }
-    html += stat("Shared SOL total", sharedSolVal, fundSub);
+    html += stat("Shared SOL total", sharedSolVal, fundSubEsc);
   }
   html += stat(
     "Suspect total",
@@ -9095,12 +9112,27 @@ function renderBundlesUi(data) {
       freshDisp != null && Number.isFinite(Number(freshDisp))
         ? Number(freshDisp)
         : 0;
+    const freshLastKnown =
+      !!s.fresh_from_cache ||
+      /scan off|enable .Fresh|Fresh wallets scan off/i.test(
+        String(s.fresh_error || "")
+      );
+    const freshSubPlain = optionalUpdatedPlain(
+      [
+        s.fresh_cached_at,
+        optKnown.fresh && optKnown.fresh.at,
+        data && data.generated_at,
+        data && data._restoredSavedAt,
+      ],
+      freshLastKnown
+    );
     pushStat(
       "Fresh total",
       fmtSupplyPct(fp) || "0%",
       fp > 0 ? "pct-low" : "bun-pct-zero",
       "fresh_total_pct",
-      fp
+      fp,
+      freshSubPlain
     );
 
     const msDisp = resolveOptionalDisplayPct(
@@ -9111,12 +9143,27 @@ function renderBundlesUi(data) {
     );
     const mp =
       msDisp != null && Number.isFinite(Number(msDisp)) ? Number(msDisp) : 0;
+    const msLastKnown =
+      !!s.multi_send_from_cache ||
+      /scan off|enable [“"]Multi|Multi-send scan off/i.test(
+        String(s.multi_send_error || "")
+      );
+    const msSubPlain = optionalUpdatedPlain(
+      [
+        s.multi_send_cached_at,
+        optKnown.multi_send && optKnown.multi_send.at,
+        data && data.generated_at,
+        data && data._restoredSavedAt,
+      ],
+      msLastKnown
+    );
     pushStat(
       "Multi-send total",
       fmtSupplyPct(mp) || "0%",
       mp > 0 ? "pct-low" : "bun-pct-zero",
       "multi_send_total_pct",
-      mp
+      mp,
+      msSubPlain
     );
 
     const fundDisp = resolveOptionalDisplayPct(
@@ -9129,12 +9176,27 @@ function renderBundlesUi(data) {
       fundDisp != null && Number.isFinite(Number(fundDisp))
         ? Number(fundDisp)
         : 0;
+    const fundLastKnown =
+      !!s.funding_from_cache ||
+      /scan off|enable .Shared SOL|Shared SOL funder scan off/i.test(
+        String(s.funding_error || "")
+      );
+    const fundSubPlain = optionalUpdatedPlain(
+      [
+        s.funding_cached_at,
+        optKnown.funding && optKnown.funding.at,
+        data && data.generated_at,
+        data && data._restoredSavedAt,
+      ],
+      fundLastKnown
+    );
     pushStat(
       "Shared SOL total",
       fmtSupplyPct(fdp) || "0%",
       fdp > 0 ? "pct-low" : "bun-pct-zero",
       "funding_total_pct",
-      fdp
+      fdp,
+      fundSubPlain
     );
 
     const sus =
@@ -9957,7 +10019,7 @@ async function analyze(ev) {
       $("summaryBar").hidden = true;
       return;
     }
-    // Ensure market stamp exists for MC/Liq/Vol “last updated”
+    // Analyze time for Fresh / Multi-send / Shared SOL “Updated · …” under % + delta
     if (!data.generated_at) data.generated_at = new Date().toISOString();
     data._marketUpdatedAt = data.generated_at;
     renderSummary(data);
