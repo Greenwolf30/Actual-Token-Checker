@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v101";
+const ADTC_CLIENT_VERSION = "v102";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -5422,7 +5422,10 @@ function fmtUsd(n) {
   return "$" + x.toPrecision(4);
 }
 
-/** Format Analyze / scan time for “Updated · …” / “Last updated · …” stamps. */
+/**
+ * Compact Analyze time for Bundles box stamp (must fit ~140px grid cells).
+ * e.g. "Mar 22 · 3:45 PM"
+ */
 function fmtMarketUpdatedAt(isoOrMs) {
   if (isoOrMs == null || isoOrMs === "") return "";
   try {
@@ -5430,13 +5433,14 @@ function fmtMarketUpdatedAt(isoOrMs) {
       typeof isoOrMs === "number"
         ? new Date(isoOrMs)
         : new Date(String(isoOrMs));
-    if (!Number.isFinite(d.getTime())) return String(isoOrMs).slice(0, 19);
-    return d.toLocaleString(undefined, {
-      month: "short",
-      day: "numeric",
+    if (!Number.isFinite(d.getTime())) return String(isoOrMs).slice(0, 16);
+    const mon = d.toLocaleString(undefined, { month: "short" });
+    const day = d.getDate();
+    const time = d.toLocaleString(undefined, {
       hour: "numeric",
       minute: "2-digit",
     });
+    return mon + " " + day + " · " + time;
   } catch (_) {
     return String(isoOrMs).slice(0, 16);
   }
@@ -5444,13 +5448,12 @@ function fmtMarketUpdatedAt(isoOrMs) {
 
 /**
  * Stamp under Fresh / Multi-send / Shared SOL (under % + delta) — NOT MC/Liq/Vol.
- * Always shown once we have an Analyze time; stays until the next live Analyze
- * updates the timestamp (including across page refresh restore).
+ * Only after page refresh restore; cleared on next live Analyze.
  */
 function optionalBundleUpdatedSub(whenRaw) {
   const when = fmtMarketUpdatedAt(whenRaw);
   if (!when) return "";
-  return "Last updated · " + when;
+  return "Last updated\n" + when;
 }
 
 /** Clear any legacy MC/Liq/Vol market stamps left in old HTML / cache. */
@@ -8049,9 +8052,10 @@ function renderBundlesUi(data) {
 
   /**
    * Plain-text sub under Fresh / Multi / Shared SOL.
-   * Always show when we have a time (live Analyze or restore until re-Analyzed).
+   * Only after page refresh (restore) — hidden on live Analyze.
    */
   function optionalUpdatedPlain(whenCandidates) {
+    if (!isRestore) return "";
     let whenRaw = null;
     for (let i = 0; i < (whenCandidates || []).length; i++) {
       if (whenCandidates[i]) {
@@ -8066,8 +8070,6 @@ function renderBundlesUi(data) {
         (data && data._restoredSavedAt) ||
         null;
     }
-    // Live Analyze with no stamp yet — use now so the field always appears
-    if (!whenRaw && !isRestore) whenRaw = Date.now();
     return optionalBundleUpdatedSub(whenRaw);
   }
 
