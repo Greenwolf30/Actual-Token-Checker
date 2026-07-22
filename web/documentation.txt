@@ -936,11 +936,13 @@ What people often ask
   └────────────────────────────────┴──────────────────┴──────────────────────┘
 
   Notes
+    - First time you need Fresh + Multi-send + Shared SOL: check all three on
+      ONE Analyze (fewer total pings than three separate runs — base ~6 once).
     - Shared SOL is the heaviest load. Uncheck it to save the most credits.
     - Token multi-send works with Multi-send alone (needs Helius).
     - SOL multi-send only fills when Shared SOL also ran (same funding data).
-    - Prefer Fresh OR Multi-send one at a time on free Helius if you hit 429s.
-    - Wait 30–60s after a 429 before re-clicking Analyze.
+    - 429s on free Helius (~10 RPS) are rate limits, not the same as credit burn;
+      wait 30–60s after a 429 before re-clicking Analyze.
     - Quick mode skips holders/bundles Helius-heavy paths (much lighter).
     - HELIUS_API_KEY is server-side only (Render / .env), not web/config.js.
     - Free plan: 1M credits refresh monthly (see Helius dashboard).
