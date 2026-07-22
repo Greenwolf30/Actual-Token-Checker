@@ -256,14 +256,11 @@ What people often ask
 
   The app looks at top-holder snapshots and risk tags, then estimates a
   total_bundle_pct. On full Analyze that number is the SUM of supply % from
-  counted risk vectors (multi-account, insider, multi-send, fresh, shared
-  funder, launch-window) with NO cross-vector wallet dedupe — a wallet in two
-  vectors contributes twice, so the total can exceed 100%. Similar-size groups
-  and suspect wallets are EXCLUDED as categories from Total bundle % (still
-  shown in their own sections). Exception: if a wallet is multi-send (or
-  multi-account / insider / fresh / shared funder / launch-window) and also
-  appears under similar-size or suspect, it is still counted via the counted
-  group. That number drives Alerts “bundle band” messages.
+  counted risk vectors (multi-account, similar-size, insider, multi-send, fresh,
+  shared funder) with NO cross-vector wallet dedupe — a wallet in two vectors
+  contributes twice, so the total can exceed 100%. Suspect wallets are EXCLUDED
+  from Total bundle % (still shown in their own section) to avoid double-count.
+  Launch-window is disabled. That number drives Alerts “bundle band” messages.
 
   This is NOT:
     - A professional sniper-graph product

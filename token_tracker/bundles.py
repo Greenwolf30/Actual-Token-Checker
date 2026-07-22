@@ -199,12 +199,13 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
         )
 
     suspect_wallets = _suspect_wallets(multi_clusters, similar_groups, insiders)
-    # Total bundle % excludes similar-size groups and suspect wallets
-    # (fusion recomputes with full vector set; same exclusions).
+    # Baseline total: multi-account + similar-size + insiders.
+    # Suspects excluded (union would double-count). Fusion recomputes with
+    # fresh / multi-send / shared funder added.
     total_pct, flagged_n = _total_bundle_percent(
         holders=holders,
         clusters=multi_clusters,
-        similar_groups=[],  # excluded from Total bundle %
+        similar_groups=similar_groups,
         insiders=insiders,
         suspects=[],  # excluded from Total bundle %
     )
@@ -260,10 +261,10 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
             "Bundle detection is heuristic from a top-holder snapshot only. "
             "Suspect total % = sum of unique suspect wallets' supply %. "
             "Total bundle % (full Analyze) = sum of each risk vector’s supply % "
-            "with NO cross-vector wallet dedupe (multi-account + insider + "
-            "multi-send + fresh + shared funder). "
-            "Similar-size, suspect, and launch-window are EXCLUDED from Total "
-            "bundle %. A wallet in two counted vectors counts twice. "
+            "with NO cross-vector wallet dedupe (multi-account + similar-size + "
+            "insider + multi-send + fresh + shared funder). "
+            "Suspect and launch-window are EXCLUDED from Total bundle %. "
+            "A wallet in two counted vectors counts twice. "
             "Not a full commercial sniper graph."
         ),
     }
@@ -1385,17 +1386,12 @@ def recompute_total_bundle_all_vectors(
     Within a single vector, each wallet is counted once (max % if listed twice).
 
     Counted vectors:
-      multi_account, insider, multi_send (token only), fresh,
+      multi_account, similar_size, insider, multi_send (token only), fresh,
       shared_funder (funding clusters).
 
     EXCLUDED as categories from Total bundle %:
-      similar_size groups, suspect wallets (pure members only).
+      suspect wallets (union of other tags — would double-count).
       launch_window (scan disabled; not in Bundles/Ruggers).
-
-    Exception: if a wallet is multi-send (or multi-account / insider / fresh /
-    shared funder) AND also appears under similar-size or
-    suspect, it is STILL counted via the counted group(s). Those wallets are
-    listed alone in total_bundle_crosslisted_wallets for the report.
 
     Token multi-send only for multi_send (not sol_multi_send_clusters) so SOL
     funder wallets are not double-counted with shared_funder.
@@ -1490,11 +1486,8 @@ def recompute_total_bundle_all_vectors(
                 sim_rows.append((w, g.get("avg_pct")))
     sim_map = _wallet_map(sim_rows)
     p, n = _sum_map(sim_map)
-    by_vector["similar_size"] = {
-        "pct": p,
-        "count": n,
-        "excluded_from_total": True,
-    }
+    by_vector["similar_size"] = {"pct": p, "count": n}
+    counted_maps["similar_size"] = sim_map
 
     # 3) Insiders
     in_rows: list[tuple[str, Any]] = []
@@ -1592,75 +1585,22 @@ def recompute_total_bundle_all_vectors(
     # Vectors that contribute to Total bundle %
     COUNTED = {
         "multi_account",
+        "similar_size",
         "insider",
         "multi_send",
         "fresh",
         "shared_funder",
     }
-    EXCLUDED = ("similar_size", "suspect", "launch_window")
+    EXCLUDED = ("suspect", "launch_window")
     VECTOR_LABEL = {
         "multi_account": "multi-account",
+        "similar_size": "similar-size",
         "insider": "insider",
         "multi_send": "multi-send",
         "fresh": "fresh",
         "shared_funder": "shared funder",
-        "similar_size": "similar-size",
         "suspect": "suspect",
     }
-
-    # Union of all wallets in counted groups (with which vectors + max %)
-    counted_union: dict[str, dict[str, Any]] = {}
-    for vkey, wmap in counted_maps.items():
-        for w, pct in wmap.items():
-            row = counted_union.setdefault(
-                w, {"wallet": w, "pct_supply": pct, "counted_in": []}
-            )
-            if vkey not in row["counted_in"]:
-                row["counted_in"].append(vkey)
-            try:
-                row["pct_supply"] = max(float(row.get("pct_supply") or 0), float(pct))
-            except (TypeError, ValueError):
-                pass
-
-    # Wallets that sit in similar-size and/or suspect AND also in multi-send
-    # (or any other counted group) — still counted via those groups; list alone
-    # in the bundle report so they are not "lost" under excluded categories.
-    crosslisted: list[dict[str, Any]] = []
-    for w, info in counted_union.items():
-        in_similar = w in sim_map
-        in_suspect = w in sus_map
-        if not in_similar and not in_suspect:
-            continue
-        excluded_in: list[str] = []
-        if in_similar:
-            excluded_in.append("similar_size")
-        if in_suspect:
-            excluded_in.append("suspect")
-        counted_in = list(info.get("counted_in") or [])
-        crosslisted.append(
-            {
-                "wallet": w,
-                "pct_supply": info.get("pct_supply"),
-                "counted_in": counted_in,
-                "counted_in_labels": [
-                    VECTOR_LABEL.get(k, k) for k in counted_in
-                ],
-                "also_in_excluded": excluded_in,
-                "also_in_excluded_labels": [
-                    VECTOR_LABEL.get(k, k) for k in excluded_in
-                ],
-            }
-        )
-    crosslisted.sort(
-        key=lambda r: (
-            -(
-                float(r["pct_supply"])
-                if r.get("pct_supply") is not None
-                else -1.0
-            ),
-            str(r.get("wallet") or ""),
-        )
-    )
 
     grand = 0.0
     slot_count = 0
@@ -1682,12 +1622,12 @@ def recompute_total_bundle_all_vectors(
         "total_bundle_additive": True,
         "total_bundle_cross_vector_dedupe": False,
         "total_bundle_excluded_vectors": list(EXCLUDED),
-        # Wallets also under similar-size/suspect but still in Total via multi-send etc.
-        "total_bundle_crosslisted_wallets": crosslisted[:48],
-        "total_bundle_crosslisted_count": len(crosslisted),
+        "total_bundle_crosslisted_wallets": [],
+        "total_bundle_crosslisted_count": 0,
     }
     if not any_data:
-        result["total_bundle_pct"] = None
+        # Explicit 0 so the UI shows "0%" instead of a blank "—"
+        result["total_bundle_pct"] = 0.0
         result["flagged_wallets"] = 0
         return result
 

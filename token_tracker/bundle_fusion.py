@@ -979,26 +979,29 @@ def comprehensive_bundle_check(
             s["total_bundle_cross_vector_dedupe"] = False
             s["total_bundle_excluded_vectors"] = tb.get(
                 "total_bundle_excluded_vectors"
-            ) or ["similar_size", "suspect"]
+            ) or ["suspect", "launch_window"]
             s["total_bundle_crosslisted_count"] = tb.get(
                 "total_bundle_crosslisted_count"
             ) or 0
+            if s.get("total_bundle_pct") is None:
+                s["total_bundle_pct"] = 0.0
             base["summary"] = s
-            # Alone list for Bundles report (also under similar/suspect but counted)
-            base["total_bundle_crosslisted_wallets"] = list(
-                tb.get("total_bundle_crosslisted_wallets") or []
-            )
-        except Exception:  # noqa: BLE001
-            pass
+            base["total_bundle_crosslisted_wallets"] = []
+        except Exception as exc:  # noqa: BLE001
+            s = dict(base.get("summary") or {})
+            if s.get("total_bundle_pct") is None:
+                s["total_bundle_pct"] = 0.0
+            s["total_bundle_recompute_error"] = str(exc)[:160]
+            base["summary"] = s
         base["notes"] = (
             "Comprehensive bundle check: Helius top holders (owner-resolved) + "
             "Rugcheck insiders/risks + Birdeye (if key) + 1-hop SOL funding + "
             "fresh/sole-token wallets + token multi-send (one sender → many). "
             "Launch-window / same-slot multi-buys disabled. "
-            "Total bundle % = sum of each risk vector’s supply % with NO "
-            "cross-vector wallet dedupe (can exceed 100% if wallets hit multiple "
-            "vectors). Similar-size groups and suspect wallets are excluded from "
-            "Total bundle %. Not a full commercial sniper graph. "
+            "Total bundle % = sum of multi-account + similar-size + insider + "
+            "multi-send + fresh + shared funder (no cross-vector wallet dedupe; "
+            "can exceed 100%). Suspect wallets excluded from Total. "
+            "Not a full commercial sniper graph. "
             + (base.get("notes") or "")
         ).strip()
         return base

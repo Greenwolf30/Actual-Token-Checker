@@ -6178,7 +6178,14 @@ function renderBundlesUi(data) {
   // Summary % tiles — same Holders priority color bands
   // Total bundle = sum of all risk vectors with NO cross-vector wallet dedupe
   // (can exceed 100% if the same wallet appears in multiple vectors).
-  html += stat("Total bundle", bunPctHtml(s.total_bundle_pct));
+  {
+    // Always show a value (0% when none of the counted vectors hit)
+    const tbp =
+      s.total_bundle_pct != null && Number.isFinite(Number(s.total_bundle_pct))
+        ? Number(s.total_bundle_pct)
+        : 0;
+    html += stat("Total bundle", bunPctHtml(tbp));
+  }
   html += stat("Similar-size", bunPctHtml(s.similar_size_total_pct));
   html += stat("Fresh total", bunPctHtml(s.fresh_total_pct));
   {
@@ -6220,6 +6227,7 @@ function renderBundlesUi(data) {
     const parts = [];
     const labels = {
       multi_account: "multi-account",
+      similar_size: "similar-size",
       insider: "insider",
       multi_send: "multi-send",
       fresh: "fresh",
@@ -6243,7 +6251,7 @@ function renderBundlesUi(data) {
         : "") +
       ")" +
       (parts.length ? ": " + escHtml(parts.join(" + ")) : "") +
-      ". Similar-size and suspect categories excluded (pure members only).</p>";
+      ". Suspect wallets excluded from Total (avoids double-count).</p>";
   }
 
   // Signals chips
