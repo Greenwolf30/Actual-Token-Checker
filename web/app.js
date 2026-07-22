@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v113";
+const ADTC_CLIENT_VERSION = "v114";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -388,23 +388,150 @@ function cleanLogsSnapshot(text) {
 
 function pushHistoryLog(entry) {
   if (!entry) return loadHistoryLog();
-  const items = loadHistoryLog();
-  // Drop an identical top entry (same mint re-Analyze) so the newest snapshot wins
-  const addr = bareMintAddr(entry.address || entry.query || "").toLowerCase();
-  const filtered = items.filter((e, i) => {
-    if (i > 0) return true; // only collapse exact duplicate at head
-    if (!addr) return true;
-    const ea = bareMintAddr((e && (e.address || e.query)) || "").toLowerCase();
-    return ea !== addr;
+  let items = [];
+  try {
+    items = loadHistoryLog();
+  } catch (_) {
+    items = [];
+  }
+  // Normalize address for matching
+  const addrRaw = String(entry.address || entry.query || "").trim();
+  let addr = "";
+  try {
+    addr = bareMintAddr(addrRaw).toLowerCase();
+  } catch (_) {
+    addr = addrRaw.toLowerCase();
+  }
+  // Drop older entries for the same mint (keep only newest at top)
+  const filtered = items.filter((e) => {
+    if (!addr || !e) return true;
+    let ea = "";
+    try {
+      ea = bareMintAddr(e.address || e.query || "").toLowerCase();
+    } catch (_) {
+      ea = String(e.address || e.query || "")
+        .trim()
+        .toLowerCase();
+    }
+    return !ea || ea !== addr;
   });
   // Always put the just-Analyzed token first
   filtered.unshift(entry);
   const next = filtered.slice(0, HISTORY_MAX);
-  const ok = saveHistoryLog(next);
+  let ok = false;
+  try {
+    ok = saveHistoryLog(next);
+  } catch (e) {
+    console.error("[logs] saveHistoryLog threw", e);
+    ok = false;
+  }
   if (!ok) {
-    console.error("[logs] pushHistoryLog could not persist entry", entry.address || entry.query);
+    // Nuclear: wipe log and write only this entry so the user always sees it
+    try {
+      const mini = {
+        ts: entry.ts || new Date().toISOString(),
+        query: entry.query || entry.address || "token",
+        address: entry.address || null,
+        symbol: entry.symbol || null,
+        name: entry.name || null,
+        chain: entry.chain || "solana",
+        price_usd: entry.price_usd,
+        market_cap_usd: entry.market_cap_usd,
+      };
+      localStorage.setItem(HISTORY_KEY, JSON.stringify([mini]));
+      ok = true;
+      console.warn("[logs] wiped old log and saved only current mint");
+    } catch (e2) {
+      console.error("[logs] pushHistoryLog could not persist", e2);
+    }
   }
   return loadHistoryLog();
+}
+
+/**
+ * Record a successful Analyze into Logs (top of list = current mint).
+ * Safe to call even if other UI rendering fails.
+ */
+function recordAnalyzeInLogs(data, query) {
+  if (!data || !data.ok) return false;
+  let qArg = query;
+  try {
+    if (!qArg) {
+      qArg =
+        ($("query") && $("query").value) ||
+        data.query ||
+        (data.token && data.token.address) ||
+        "";
+    }
+  } catch (_) {
+    qArg = (data && data.query) || query || "";
+  }
+  qArg = String(qArg || "").trim();
+  let entry = null;
+  try {
+    entry = buildHistoryEntry(data, qArg);
+  } catch (e) {
+    console.warn("[logs] buildHistoryEntry threw", e);
+    entry = null;
+  }
+  if (!entry) {
+    let addr = "";
+    try {
+      addr =
+        bareMintAddr(
+          (data.token && data.token.address) ||
+            data.query ||
+            qArg ||
+            ($("query") && $("query").value) ||
+            ""
+        ) || "";
+    } catch (_) {
+      addr = String(qArg || "").trim();
+    }
+    if (!addr) {
+      console.warn("[logs] no address/query to record");
+      return false;
+    }
+    entry = {
+      ts: new Date().toISOString(),
+      query: addr,
+      address: addr,
+      symbol: (data.token && data.token.symbol) || null,
+      name: (data.token && data.token.name) || null,
+      chain: (data.token && data.token.chain_id) || "solana",
+      price_usd: (data.market && data.market.price_usd) || null,
+      market_cap_usd:
+        (data.market &&
+          (data.market.market_cap_usd || data.market.fdv_usd)) ||
+        null,
+      liquidity_usd: (data.market && data.market.liquidity_usd) || null,
+      volume_h24_usd: (data.market && data.market.volume_h24_usd) || null,
+    };
+  }
+  // Ensure address is set
+  if (!entry.address && qArg) {
+    try {
+      entry.address = bareMintAddr(qArg) || qArg;
+    } catch (_) {
+      entry.address = qArg;
+    }
+  }
+  pushHistoryLog(entry);
+  console.info(
+    "[logs] recorded",
+    entry.symbol || entry.query || "?",
+    String(entry.address || "").slice(0, 12)
+  );
+  try {
+    refreshHistoryPanel(entry.address || entry.query || "");
+  } catch (_) {
+    try {
+      refreshHistoryPanel();
+    } catch (__) {
+      /* ignore */
+    }
+  }
+  return true;
 }
 
 function entryOverviewText(e) {
@@ -10263,66 +10390,8 @@ function renderSections(data, query) {
     }
     if (sections.bundles) setPanelText("bundles", sections.bundles);
   }
-  // Log successful Analyze into browser History (max HISTORY_MAX; drop oldest)
-  // Always log the CURRENT mint at the top of Logs after Analyze.
-  try {
-    if (data && data.ok) {
-      let qArg = query;
-      try {
-        if (!qArg) qArg = ($("query") && $("query").value) || data.query || "";
-      } catch (_) {
-        qArg = (data && data.query) || query || "";
-      }
-      const entry = buildHistoryEntry(data, qArg);
-      if (entry) {
-        pushHistoryLog(entry);
-        console.info(
-          "[logs] recorded",
-          entry.symbol || entry.query || "?",
-          (entry.address || "").slice(0, 8) + "…"
-        );
-      } else {
-        console.warn("[logs] buildHistoryEntry returned null", {
-          query: qArg,
-          token: data.token,
-        });
-        // Last-resort minimal entry so the mint always shows in Logs
-        const addr =
-          bareMintAddr(
-            (data.token && data.token.address) ||
-              data.query ||
-              qArg ||
-              ""
-          ) || "";
-        if (addr) {
-          pushHistoryLog({
-            ts: new Date().toISOString(),
-            query: addr,
-            address: addr,
-            symbol: (data.token && data.token.symbol) || null,
-            name: (data.token && data.token.name) || null,
-            chain: (data.token && data.token.chain_id) || "solana",
-            price_usd: (data.market && data.market.price_usd) || null,
-            market_cap_usd: (data.market && data.market.market_cap_usd) || null,
-          });
-        }
-      }
-    }
-  } catch (histErr) {
-    console.error("[logs] history write failed", histErr);
-  }
-  try {
-    refreshHistoryPanel(
-      bareMintAddr(
-        (data && data.token && data.token.address) ||
-          data.query ||
-          query ||
-          ""
-      ) || ""
-    );
-  } catch (_) {
-    refreshHistoryPanel();
-  }
+  // Logs are recorded from analyze() after renderSections so a UI error
+  // cannot skip writing the current mint to Logs.
 
   // Ruggers: first-lookup baseline + sell/swing tracking
   let rugKey = null;
@@ -10878,6 +10947,12 @@ async function analyze(ev) {
     } catch (err) {
       console.error("[renderSections]", err);
     }
+    // ALWAYS record current mint in Logs (even if renderSections threw)
+    try {
+      recordAnalyzeInLogs(data, query);
+    } catch (logErr) {
+      console.error("[logs] recordAnalyzeInLogs failed", logErr);
+    }
     // Persist AFTER UI so delta freeze is included — must not be skipped
     try {
       const ok = saveLastAnalyze(data, query);
@@ -10916,7 +10991,17 @@ function initTabs() {
   document.querySelectorAll(".tab").forEach((b) => {
     b.addEventListener("click", () => {
       switchTab(b.dataset.tab);
-      if (b.dataset.tab === "history") refreshHistoryPanel();
+      if (b.dataset.tab === "history") {
+        // Clear search filter status and show full log (newest first)
+        try {
+          setLogsCaStatus("", false);
+        } catch (_) {}
+        refreshHistoryPanel();
+        try {
+          const list = $("historyList");
+          if (list) list.scrollTop = 0;
+        } catch (_) {}
+      }
       if (b.dataset.tab === "ruggers") {
         // Prefer the mint currently in the summary / query box — never another mint
         const ca = getSummaryBarMintAddr();
