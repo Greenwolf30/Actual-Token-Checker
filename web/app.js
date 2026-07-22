@@ -6372,7 +6372,18 @@ function renderBundlesUi(data) {
       s.total_bundle_pct != null && Number.isFinite(Number(s.total_bundle_pct))
         ? Number(s.total_bundle_pct)
         : 0;
-    html += stat("Total bundle", bunPctHtml(tbp));
+    const fallbackSimSus =
+      s.total_bundle_mode === "fallback_similar_suspect" ||
+      s.total_bundle_show_similar_suspect === true;
+    const totalLabel = fallbackSimSus
+      ? "Total bundle · showing similar/suspect"
+      : "Total bundle";
+    const totalVal =
+      bunPctHtml(tbp) +
+      (fallbackSimSus
+        ? ' <span style="color:var(--text-muted);font-size:0.72rem;font-weight:500">(showing similar/suspect)</span>'
+        : "");
+    html += stat(totalLabel, totalVal);
   }
   html += stat("Similar-size", bunPctHtml(s.similar_size_total_pct));
   html += stat("Fresh total", bunPctHtml(s.fresh_total_pct));
@@ -6433,21 +6444,23 @@ function renderBundlesUi(data) {
         parts.push(lab + " n/a%");
       }
     }
-    const modeNote =
-      s.total_bundle_mode === "fallback_similar_suspect"
-        ? " Fallback mode: only similar-size + suspect (primary categories empty)."
-        : " Similar-size and suspect hidden/excluded when primary categories have data.";
+    const fallbackSimSus =
+      s.total_bundle_mode === "fallback_similar_suspect" ||
+      s.total_bundle_show_similar_suspect === true;
+    const modeNote = fallbackSimSus
+      ? " Showing similar/suspect (primary categories empty)."
+      : " Similar-size and suspect hidden when primary categories have data.";
     const uniqN =
       s.total_bundle_unique_wallets != null
         ? s.total_bundle_unique_wallets
         : s.flagged_wallets;
     html +=
       '<p class="bun-meta">Total bundle = unique wallets across counted vectors ' +
-      "(each wallet once, max hold %; Shared SOL + Multi-send do not double-count)" +
+      "(each wallet once, max hold %; no double-count)" +
+      (fallbackSimSus ? " · showing similar/suspect" : "") +
       (uniqN != null ? " · " + escHtml(String(uniqN)) + " wallet(s)" : "") +
       (parts.length
-        ? ". Per-vector (for reference, may overlap): " +
-          escHtml(parts.join(" + "))
+        ? ". Per-vector (for reference): " + escHtml(parts.join(" + "))
         : "") +
       "." +
       modeNote +
