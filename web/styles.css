@@ -1387,6 +1387,19 @@ a.copy-mint:hover,
   max-height: min(68vh, 880px);
   padding: 12px 14px 24px;
 }
+/* Version + delta system indicator (confirms client build loaded) */
+.bun-delta-note {
+  display: block;
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid rgba(230, 208, 122, 0.35);
+  background: rgba(230, 208, 122, 0.08);
+  color: #e6d07a;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
 .bun-stats {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));

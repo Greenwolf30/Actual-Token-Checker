@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v85";
+const ADTC_CLIENT_VERSION = "v86";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Bump when Flagged-wallet rules change so sticky junk is wiped once. */
@@ -6516,95 +6516,24 @@ function saveLastAnalyze(data, query) {
     const marketSlim = jsonClone(data.market) || data.market || null;
     const tokenSlim = jsonClone(data.token) || data.token || null;
 
-    // 1) Tiny nuclear backup first (must fit when storage is nearly full)
-    const micro = {
-      savedAt: Date.now(),
-      query: q,
-      chain: chainId,
-      mint: mintAddr,
-      bundleDelta: bundleDelta,
-      data: {
-        ok: true,
-        _restoredFromBrowserCache: true,
-        market: marketSlim,
-        token: tokenSlim,
-        bundles_view: summaryOnlyBundlesView(bundlesView || data.bundles_view),
-        sections: {
-          bundles: truncateSectionText(sections.bundles, 4000),
-        },
-        bundleDelta: bundleDelta,
-      },
-    };
-    let anySaved = false;
-    try {
-      if (
-        persistAnalyzePayload(
-          [LAST_BUNDLES_ONLY_KEY, LAST_ANALYZE_KEY, LAST_BUNDLES_ANALYZE_KEY],
-          micro
-        )
-      ) {
-        anySaved = true;
-      }
-    } catch (err) {
-      console.error("[saveLastAnalyze] micro backup failed", err);
+    // Build section pack — always keep every tab (truncated), never drop maps/about.
+    function sectionPack(maxEach) {
+      const m = maxEach != null ? maxEach : 10000;
+      return {
+        overview: truncateSectionText(sections.overview, m),
+        holders: truncateSectionText(sections.holders, m),
+        bundles: truncateSectionText(sections.bundles, m),
+        alerts: truncateSectionText(sections.alerts, Math.min(m, 10000)),
+        maps: truncateSectionText(sections.maps, Math.min(m, 8000)),
+        about: truncateSectionText(sections.about, Math.min(m, 12000)),
+      };
     }
 
-    // 2) Bundles-focused backup (slim cards + short text)
-    const bundlesOnly = {
-      savedAt: Date.now(),
-      query: q,
-      chain: chainId,
-      mint: mintAddr,
-      bundleDelta: bundleDelta,
-      data: {
-        ok: true,
-        _restoredFromBrowserCache: true,
-        market: marketSlim,
-        token: tokenSlim,
-        bundles_view: bundlesView,
-        sections: {
-          bundles: truncateSectionText(sections.bundles, 8000),
-          holders: truncateSectionText(sections.holders, 6000),
-          overview: truncateSectionText(sections.overview, 6000),
-        },
-        bundleDelta: bundleDelta,
-      },
-    };
-    try {
-      if (persistAnalyzePayload([LAST_BUNDLES_ONLY_KEY], bundlesOnly)) {
-        anySaved = true;
-      }
-    } catch (err) {
-      console.error("[saveLastAnalyze] bundles-only backup failed", err);
-    }
-
-    // 3) Full multi-tab payload with progressive strip
+    // 1) Full multi-tab payload first (progressive size cut) — primary restore source
     const buildFull = (level) => {
-      const bv = level >= 3 ? summaryOnlyBundlesView(bundlesView) : bundlesView;
-      const sec =
-        level === 0
-          ? {
-              overview: truncateSectionText(sections.overview, 12000),
-              holders: truncateSectionText(sections.holders, 12000),
-              bundles: truncateSectionText(sections.bundles, 12000),
-              alerts: truncateSectionText(sections.alerts, 8000),
-              maps: null,
-              about: null,
-            }
-          : level === 1
-            ? {
-                overview: truncateSectionText(sections.overview, 6000),
-                holders: truncateSectionText(sections.holders, 6000),
-                bundles: truncateSectionText(sections.bundles, 6000),
-              }
-            : level === 2
-              ? {
-                  bundles: truncateSectionText(sections.bundles, 4000),
-                  overview: truncateSectionText(sections.overview, 3000),
-                }
-              : {
-                  bundles: truncateSectionText(sections.bundles, 2000),
-                };
+      const maxSec = level === 0 ? 14000 : level === 1 ? 8000 : level === 2 ? 4000 : 2500;
+      const bv =
+        level >= 3 ? summaryOnlyBundlesView(bundlesView) : bundlesView;
       return {
         savedAt: Date.now(),
         query: q,
@@ -6617,7 +6546,7 @@ function saveLastAnalyze(data, query) {
           _phase: data._phase || null,
           market: marketSlim,
           token: tokenSlim,
-          links: level === 0 ? jsonClone(data.links) || data.links || null : null,
+          links: level <= 1 ? jsonClone(data.links) || data.links || null : null,
           holders: null,
           bundles: null,
           bundles_view: bv,
@@ -6628,11 +6557,12 @@ function saveLastAnalyze(data, query) {
               : null,
           history_meta: null,
           bundleDelta: bundleDelta,
-          sections: sec,
+          sections: sectionPack(maxSec),
         },
       };
     };
 
+    let anySaved = false;
     let fullSaved = false;
     for (let level = 0; level <= 3; level++) {
       try {
@@ -6648,7 +6578,64 @@ function saveLastAnalyze(data, query) {
           break;
         }
       } catch (err) {
-        console.warn("[saveLastAnalyze] attempt failed", level, err);
+        console.warn("[saveLastAnalyze] full attempt failed", level, err);
+      }
+    }
+
+    // 2) Bundles-focused backup (cards + main text tabs)
+    try {
+      const bundlesOnly = {
+        savedAt: Date.now(),
+        query: q,
+        chain: chainId,
+        mint: mintAddr,
+        bundleDelta: bundleDelta,
+        data: {
+          ok: true,
+          _restoredFromBrowserCache: true,
+          market: marketSlim,
+          token: tokenSlim,
+          bundles_view: bundlesView,
+          sections: sectionPack(6000),
+          bundleDelta: bundleDelta,
+        },
+      };
+      if (persistAnalyzePayload([LAST_BUNDLES_ONLY_KEY], bundlesOnly)) {
+        anySaved = true;
+      }
+    } catch (err) {
+      console.error("[saveLastAnalyze] bundles-only backup failed", err);
+    }
+
+    // 3) Micro only if nothing landed — last resort (still keep all section keys if possible)
+    if (!anySaved) {
+      try {
+        const micro = {
+          savedAt: Date.now(),
+          query: q,
+          chain: chainId,
+          mint: mintAddr,
+          bundleDelta: bundleDelta,
+          data: {
+            ok: true,
+            _restoredFromBrowserCache: true,
+            market: marketSlim,
+            token: tokenSlim,
+            bundles_view: summaryOnlyBundlesView(bundlesView || data.bundles_view),
+            sections: sectionPack(2000),
+            bundleDelta: bundleDelta,
+          },
+        };
+        if (
+          persistAnalyzePayload(
+            [LAST_BUNDLES_ONLY_KEY, LAST_ANALYZE_KEY, LAST_BUNDLES_ANALYZE_KEY],
+            micro
+          )
+        ) {
+          anySaved = true;
+        }
+      } catch (err) {
+        console.error("[saveLastAnalyze] micro backup failed", err);
       }
     }
 
@@ -6721,30 +6708,50 @@ function parseLastAnalyzeRaw(raw) {
   }
 }
 
+function scoreLastAnalyzePayload(parsed) {
+  if (!parsed || !parsed.data || !parsed.data.ok) return -1;
+  const d = parsed.data;
+  const sec = d.sections || {};
+  let score = 0;
+  if (d.bundles_view) score += 20;
+  if (d.bundles_view && d.bundles_view.summary) score += 10;
+  if (d.market) score += 3;
+  if (d.token) score += 3;
+  for (const k of ["overview", "holders", "bundles", "alerts", "maps", "about"]) {
+    if (sec[k] && String(sec[k]).length > 20) score += 5;
+    if (sec[k] && String(sec[k]).length > 500) score += 3;
+  }
+  if (parsed.bundleDelta && parsed.bundleDelta.htmlByKey) score += 4;
+  if (parsed.savedAt) score += Math.min(5, Number(parsed.savedAt) / 1e15);
+  return score;
+}
+
 function loadLastAnalyze() {
   const keys = [
     LAST_ANALYZE_KEY,
     LAST_BUNDLES_ANALYZE_KEY,
     LAST_BUNDLES_ONLY_KEY,
   ];
+  const candidates = [];
   try {
     for (const k of keys) {
-      const hit = parseLastAnalyzeRaw(localStorage.getItem(k));
-      if (hit) return hit;
+      try {
+        const hit = parseLastAnalyzeRaw(localStorage.getItem(k));
+        if (hit) candidates.push(hit);
+      } catch (_) {}
     }
-    // sessionStorage survives refresh in the same tab
     for (const k of keys) {
       try {
         const hit = parseLastAnalyzeRaw(sessionStorage.getItem(k));
-        if (hit) return hit;
-      } catch (_) {
-        /* ignore */
-      }
+        if (hit) candidates.push(hit);
+      } catch (_) {}
     }
   } catch (_) {
     /* ignore */
   }
-  return null;
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => scoreLastAnalyzePayload(b) - scoreLastAnalyzePayload(a));
+  return candidates[0];
 }
 
 /** Async load including IndexedDB (used on page boot). */
@@ -6853,12 +6860,20 @@ function restoreLastAnalyze(cachedOpt) {
     const sections = data.sections || {};
     for (const tab of TABS) {
       if (tab === "history" || tab === "ruggers" || tab === "bundles") continue;
-      if (sections[tab]) {
-        try {
+      try {
+        if (sections[tab] && String(sections[tab]).trim()) {
           setPanelText(tab, lastKnownLine + String(sections[tab]));
-        } catch (_) {
-          /* ignore */
+        } else {
+          // Do not leave the default "Run Analyze..." placeholder — explain cache miss
+          setPanelText(
+            tab,
+            lastKnownLine +
+              "(This tab was not kept in browser storage for the last Analyze.\n" +
+              "Run Analyze again to refill Overview / Holders / Alerts / Maps / About.)\n"
+          );
         }
+      } catch (_) {
+        /* ignore */
       }
     }
     // Bundles UI (cards)
@@ -7648,14 +7663,13 @@ function renderBundlesUi(data) {
   const htmlByKeyThisRun = {};
 
   /**
-   * Stats box. Delta is inlined after the % : 24% (d +24%)
+   * Stats box. Value should already include plain "(d +N%)" from withDelta.
    */
   function stat(label, valueHtml, subHtml) {
     let val = valueHtml == null ? "" : String(valueHtml);
-    if (val.indexOf("bun-stat-delta") < 0 && val.indexOf("(d ") < 0) {
-      val =
-        val +
-        ' <span class="bun-stat-delta bun-delta-flat" title="No change since last Analyze">(d =0%)</span>';
+    // Last-resort: if withDelta did not attach a marker, append plain text
+    if (val.indexOf("(d ") < 0 && val.indexOf("(d=") < 0) {
+      val = val + " (d =0%)";
     }
     return (
       '<div class="bun-stat" data-bun-stat="' +
@@ -7763,51 +7777,69 @@ function renderBundlesUi(data) {
 
   function withDelta(mainHtml, key, curOverride) {
     const kind = key === "risk" ? "score" : "pct";
-    let dHtml = "";
+    let parts = null;
     try {
       if (isRestore && frozenHtml && frozenHtml[key]) {
-        dHtml = String(frozenHtml[key]);
+        // Prefer recompute on live; on restore use frozen HTML span if present
+        const frozen = String(frozenHtml[key]);
+        if (frozen.indexOf("bun-stat-delta") >= 0 || frozen.indexOf("(d ") >= 0) {
+          htmlByKeyThisRun[key] = frozen;
+          // Still also bake plain text into the value for visibility
+          const plainMatch = frozen.match(/\(d[^)]*\)/);
+          const plain = plainMatch ? plainMatch[0] : "(d =0%)";
+          const main = String(mainHtml);
+          const m = main.match(/^(<span\b[^>]*>)([\s\S]*)(<\/span>)\s*$/i);
+          if (m) return m[1] + m[2] + " " + plain + m[3];
+          return main + " " + plain;
+        }
       }
-      if (
-        !dHtml ||
-        (dHtml.indexOf("bun-stat-delta") < 0 && dHtml.indexOf("(d ") < 0)
-      ) {
-        const curVal =
-          curOverride !== undefined
-            ? curOverride
-            : deltaCurStats
-              ? deltaCurStats[key]
-              : null;
-        const prevVal = prev ? prev[key] : 0;
-        dHtml = formatBundleStatDelta(
-          curVal != null && Number.isFinite(Number(curVal))
-            ? Number(curVal)
-            : 0,
-          prevVal != null && Number.isFinite(Number(prevVal))
-            ? Number(prevVal)
-            : 0,
-          kind === "score" ? "score" : "pct",
-          { coalesceNull: true }
-        );
-      }
+      const curVal =
+        curOverride !== undefined
+          ? curOverride
+          : deltaCurStats
+            ? deltaCurStats[key]
+            : null;
+      const prevVal = prev ? prev[key] : 0;
+      parts = computeBundleStatDeltaParts(
+        curVal != null && Number.isFinite(Number(curVal)) ? Number(curVal) : 0,
+        prevVal != null && Number.isFinite(Number(prevVal)) ? Number(prevVal) : 0,
+        kind === "score" ? "score" : "pct",
+        { coalesceNull: true }
+      );
     } catch (err) {
       console.warn("[withDelta]", key, err);
-      dHtml = "";
+      parts = null;
     }
-    if (
-      !dHtml ||
-      (dHtml.indexOf("bun-stat-delta") < 0 && dHtml.indexOf("(d ") < 0)
-    ) {
-      dHtml =
-        kind === "score"
-          ? '<span class="bun-stat-delta bun-delta-flat" title="No change since last Analyze">(d =0)</span>'
-          : '<span class="bun-stat-delta bun-delta-flat" title="No change since last Analyze">(d =0%)</span>';
+    if (!parts || !parts.text) {
+      parts = {
+        text: kind === "score" ? "d =0" : "d =0%",
+        cls: "bun-delta-flat",
+        title: "No change since last Analyze",
+      };
     }
+    const plain = "(" + parts.text + ")";
+    const dHtml =
+      '<span class="bun-stat-delta ' +
+      parts.cls +
+      '" title="' +
+      parts.title +
+      '">' +
+      plain +
+      "</span>";
     htmlByKeyThisRun[key] = dHtml;
-    return String(mainHtml) + " " + dHtml;
+    // Bake plain text INTO the same colored span as the % so it cannot disappear
+    const main = String(mainHtml);
+    const m = main.match(/^(<span\b[^>]*>)([\s\S]*)(<\/span>)\s*$/i);
+    if (m) {
+      return m[1] + m[2] + " " + plain + m[3];
+    }
+    return main + " " + plain;
   }
 
   let html = "";
+  html += '<div class="bun-delta-note">Since last Analyze · ' +
+    escHtml(typeof ADTC_CLIENT_VERSION !== "undefined" ? ADTC_CLIENT_VERSION : "?") +
+    '</div>';
   html += '<div class="bun-stats">';
   // Risk label + score share the 1–25 / 25–50 / 50–75 / 75–100 color scheme
   html += stat(
@@ -8703,12 +8735,10 @@ function renderBundlesUi(data) {
         ) {
           return;
         }
-        valEl.insertAdjacentHTML(
-          "beforeend",
-          ' <span class="bun-stat-delta bun-delta-flat">(d =0%)</span>'
-        );
+        // Plain text — no dependency on CSS classes
+        valEl.appendChild(document.createTextNode(" (d =0%)"));
       });
-      const n = root.querySelectorAll(".bun-stat-delta").length;
+      const n = (root.textContent || "").split("(d ").length - 1;
       console.info(
         "[bundles deltas]",
         "v=" +
