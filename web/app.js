@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v100";
+const ADTC_CLIENT_VERSION = "v101";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -5444,41 +5444,13 @@ function fmtMarketUpdatedAt(isoOrMs) {
 
 /**
  * Stamp under Fresh / Multi-send / Shared SOL (under % + delta) — NOT MC/Liq/Vol.
- *
- * Show only when that optional check is OFF (last-known / skipped mode):
- *  - page refresh restore with the check off, or
- *  - live Analyze that skipped the scan because the check was off
- * Never when that check is ON (live scan just ran).
+ * Always shown once we have an Analyze time; stays until the next live Analyze
+ * updates the timestamp (including across page refresh restore).
  */
-function optionalBundleUpdatedSub(whenRaw, opts) {
-  const o = opts || {};
-  if (!o.checkOff) return "";
+function optionalBundleUpdatedSub(whenRaw) {
   const when = fmtMarketUpdatedAt(whenRaw);
   if (!when) return "";
   return "Last updated · " + when;
-}
-
-/**
- * True when that optional scan check is off.
- * Checkbox state wins when present; otherwise fall back to scan-skipped payload.
- */
-function isOptionalScanCheckOff(checkboxId, skippedFromPayload) {
-  try {
-    const el = checkboxId ? $(checkboxId) : null;
-    if (el && "checked" in el) return !el.checked;
-  } catch (_) {}
-  return !!skippedFromPayload;
-}
-
-/**
- * Whether to paint “Last updated · …” under an optional Bundles box.
- * check off + (page restore OR scan skipped / from cache / last-known).
- */
-function shouldShowOptionalLastUpdated(checkOff, isRestore, skipped, fromCache) {
-  if (!checkOff) return false;
-  if (isRestore) return true;
-  if (skipped || fromCache) return true;
-  return false;
 }
 
 /** Clear any legacy MC/Liq/Vol market stamps left in old HTML / cache. */
@@ -8077,10 +8049,9 @@ function renderBundlesUi(data) {
 
   /**
    * Plain-text sub under Fresh / Multi / Shared SOL.
-   * Only when that check is off (refresh restore and/or scan skipped).
+   * Always show when we have a time (live Analyze or restore until re-Analyzed).
    */
-  function optionalUpdatedPlain(whenCandidates, show) {
-    if (!show) return "";
+  function optionalUpdatedPlain(whenCandidates) {
     let whenRaw = null;
     for (let i = 0; i < (whenCandidates || []).length; i++) {
       if (whenCandidates[i]) {
@@ -8095,7 +8066,9 @@ function renderBundlesUi(data) {
         (data && data._restoredSavedAt) ||
         null;
     }
-    return optionalBundleUpdatedSub(whenRaw, { checkOff: true });
+    // Live Analyze with no stamp yet — use now so the field always appears
+    if (!whenRaw && !isRestore) whenRaw = Date.now();
+    return optionalBundleUpdatedSub(whenRaw);
   }
 
   // Browser timestamps for optional scans (when server cache is gone)
@@ -8283,24 +8256,14 @@ function renderBundlesUi(data) {
     );
     const freshAt =
       s.fresh_cached_at || (optKnown.fresh && optKnown.fresh.at) || "";
-    const freshCheckOff = isOptionalScanCheckOff("useFresh", freshSkipped);
-    const showFreshUpdated = shouldShowOptionalLastUpdated(
-      freshCheckOff,
-      isRestore,
-      freshSkipped,
-      freshCached
-    );
-    // Under % + delta — only when Fresh check is off (restore and/or skipped)
+    // Always under % + delta until next Analyze updates the time
     const freshSubEsc = escHtml(
-      optionalUpdatedPlain(
-        [
-          freshAt,
-          optKnown.fresh && optKnown.fresh.at,
-          data && data.generated_at,
-          data && data._restoredSavedAt,
-        ],
-        showFreshUpdated
-      )
+      optionalUpdatedPlain([
+        freshAt,
+        optKnown.fresh && optKnown.fresh.at,
+        data && data.generated_at,
+        data && data._restoredSavedAt,
+      ])
     );
     if (freshSkipped && freshPct == null && !freshCached) {
       html += stat(
@@ -8335,23 +8298,13 @@ function renderBundlesUi(data) {
       s.multi_send_cached_at ||
       (optKnown.multi_send && optKnown.multi_send.at) ||
       "";
-    const msCheckOff = isOptionalScanCheckOff("useMultiSend", msSkipped);
-    const showMsUpdated = shouldShowOptionalLastUpdated(
-      msCheckOff,
-      isRestore,
-      msSkipped,
-      msCached
-    );
     const msSubEsc = escHtml(
-      optionalUpdatedPlain(
-        [
-          msAt,
-          optKnown.multi_send && optKnown.multi_send.at,
-          data && data.generated_at,
-          data && data._restoredSavedAt,
-        ],
-        showMsUpdated
-      )
+      optionalUpdatedPlain([
+        msAt,
+        optKnown.multi_send && optKnown.multi_send.at,
+        data && data.generated_at,
+        data && data._restoredSavedAt,
+      ])
     );
     if (msSkipped && msPct == null && !msCached) {
       html += stat(
@@ -8388,23 +8341,13 @@ function renderBundlesUi(data) {
     );
     const fundAt =
       s.funding_cached_at || (optKnown.funding && optKnown.funding.at) || "";
-    const fundCheckOff = isOptionalScanCheckOff("useSharedSol", fundSkipped);
-    const showFundUpdated = shouldShowOptionalLastUpdated(
-      fundCheckOff,
-      isRestore,
-      fundSkipped,
-      fundCached
-    );
     const fundSubEsc = escHtml(
-      optionalUpdatedPlain(
-        [
-          fundAt,
-          optKnown.funding && optKnown.funding.at,
-          data && data.generated_at,
-          data && data._restoredSavedAt,
-        ],
-        showFundUpdated
-      )
+      optionalUpdatedPlain([
+        fundAt,
+        optKnown.funding && optKnown.funding.at,
+        data && data.generated_at,
+        data && data._restoredSavedAt,
+      ])
     );
     let sharedSolVal;
     if (fundSkipped && !fundCached && fundPct == null) {
@@ -9143,27 +9086,12 @@ function renderBundlesUi(data) {
       freshDisp != null && Number.isFinite(Number(freshDisp))
         ? Number(freshDisp)
         : 0;
-    const freshSkippedDom = /scan off|enable .Fresh|Fresh wallets scan off/i.test(
-      String(s.fresh_error || "")
-    );
-    const freshCheckOffDom = isOptionalScanCheckOff(
-      "useFresh",
-      freshSkippedDom
-    );
-    const freshSubPlain = optionalUpdatedPlain(
-      [
-        s.fresh_cached_at,
-        optKnown.fresh && optKnown.fresh.at,
-        data && data.generated_at,
-        data && data._restoredSavedAt,
-      ],
-      shouldShowOptionalLastUpdated(
-        freshCheckOffDom,
-        isRestore,
-        freshSkippedDom,
-        !!s.fresh_from_cache
-      )
-    );
+    const freshSubPlain = optionalUpdatedPlain([
+      s.fresh_cached_at,
+      optKnown.fresh && optKnown.fresh.at,
+      data && data.generated_at,
+      data && data._restoredSavedAt,
+    ]);
     pushStat(
       "Fresh total",
       fmtSupplyPct(fp) || "0%",
@@ -9181,27 +9109,12 @@ function renderBundlesUi(data) {
     );
     const mp =
       msDisp != null && Number.isFinite(Number(msDisp)) ? Number(msDisp) : 0;
-    const msSkippedDom = /scan off|enable [“"]Multi|Multi-send scan off/i.test(
-      String(s.multi_send_error || "")
-    );
-    const msCheckOffDom = isOptionalScanCheckOff(
-      "useMultiSend",
-      msSkippedDom
-    );
-    const msSubPlain = optionalUpdatedPlain(
-      [
-        s.multi_send_cached_at,
-        optKnown.multi_send && optKnown.multi_send.at,
-        data && data.generated_at,
-        data && data._restoredSavedAt,
-      ],
-      shouldShowOptionalLastUpdated(
-        msCheckOffDom,
-        isRestore,
-        msSkippedDom,
-        !!s.multi_send_from_cache
-      )
-    );
+    const msSubPlain = optionalUpdatedPlain([
+      s.multi_send_cached_at,
+      optKnown.multi_send && optKnown.multi_send.at,
+      data && data.generated_at,
+      data && data._restoredSavedAt,
+    ]);
     pushStat(
       "Multi-send total",
       fmtSupplyPct(mp) || "0%",
@@ -9221,28 +9134,12 @@ function renderBundlesUi(data) {
       fundDisp != null && Number.isFinite(Number(fundDisp))
         ? Number(fundDisp)
         : 0;
-    const fundSkippedDom =
-      /scan off|enable .Shared SOL|Shared SOL funder scan off/i.test(
-        String(s.funding_error || "")
-      );
-    const fundCheckOffDom = isOptionalScanCheckOff(
-      "useSharedSol",
-      fundSkippedDom
-    );
-    const fundSubPlain = optionalUpdatedPlain(
-      [
-        s.funding_cached_at,
-        optKnown.funding && optKnown.funding.at,
-        data && data.generated_at,
-        data && data._restoredSavedAt,
-      ],
-      shouldShowOptionalLastUpdated(
-        fundCheckOffDom,
-        isRestore,
-        fundSkippedDom,
-        !!s.funding_from_cache
-      )
-    );
+    const fundSubPlain = optionalUpdatedPlain([
+      s.funding_cached_at,
+      optKnown.funding && optKnown.funding.at,
+      data && data.generated_at,
+      data && data._restoredSavedAt,
+    ]);
     pushStat(
       "Shared SOL total",
       fmtSupplyPct(fdp) || "0%",
