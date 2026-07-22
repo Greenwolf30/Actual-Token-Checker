@@ -6112,14 +6112,13 @@ function bunWalletTable(rows, cols) {
 }
 
 /**
- * Persist last successful Analyze enough to re-show Bundles after refresh.
+ * Persist last successful Analyze for all tabs after page refresh.
  * Replaced only when a new successful Analyze runs.
  */
-function saveLastBundlesAnalyze(data, query) {
+function saveLastAnalyze(data, query) {
   if (!data || !data.ok) return;
-  const isQuick = !!(data.quick || data._phase === "quick");
-  if (isQuick && !(data.bundles_view && data.bundles_view.ok)) return;
   try {
+    const sections = data.sections || {};
     const slim = {
       savedAt: Date.now(),
       query: (query || "").trim(),
@@ -6130,51 +6129,92 @@ function saveLastBundlesAnalyze(data, query) {
       data: {
         ok: true,
         _restoredFromBrowserCache: true,
-        quick: !!data.quick,
+        quick: !!(data.quick || data._phase === "quick"),
+        _phase: data._phase || null,
         market: data.market || null,
         token: data.token || null,
         links: data.links || null,
+        holders: data.holders || null,
+        bundles: data.bundles || null,
         bundles_view: data.bundles_view || null,
-        sections: data.sections
-          ? { bundles: data.sections.bundles || null }
-          : null,
+        alerts: data.alerts || null,
+        alerts_meta: data.alerts_meta || null,
+        history_meta: data.history_meta || null,
+        sections: {
+          overview: sections.overview || null,
+          holders: sections.holders || null,
+          bundles: sections.bundles || null,
+          alerts: sections.alerts || null,
+          maps: sections.maps || null,
+          about: sections.about || null,
+        },
       },
     };
     let raw = JSON.stringify(slim);
+    // Trim heavy fields if over ~4MB
     if (raw.length > 4 * 1024 * 1024) {
-      if (slim.data.sections) slim.data.sections.bundles = null;
+      slim.data.history_meta = null;
+      slim.data.alerts = null;
       raw = JSON.stringify(slim);
-      if (raw.length > 4 * 1024 * 1024) return;
     }
-    localStorage.setItem(LAST_BUNDLES_ANALYZE_KEY, raw);
+    if (raw.length > 4 * 1024 * 1024) {
+      if (slim.data.sections) {
+        slim.data.sections.about = null;
+        slim.data.sections.maps = null;
+      }
+      raw = JSON.stringify(slim);
+    }
+    if (raw.length > 4 * 1024 * 1024) return;
+    localStorage.setItem(LAST_ANALYZE_KEY, raw);
+    // Keep legacy key in sync for older code paths
+    try {
+      localStorage.setItem(LAST_BUNDLES_ANALYZE_KEY, raw);
+    } catch (_) {
+      /* ignore */
+    }
   } catch (_) {
     /* quota / private mode */
   }
 }
 
-function loadLastBundlesAnalyze() {
+/** @deprecated use saveLastAnalyze */
+function saveLastBundlesAnalyze(data, query) {
+  saveLastAnalyze(data, query);
+}
+
+function loadLastAnalyze() {
   try {
-    const raw = localStorage.getItem(LAST_BUNDLES_ANALYZE_KEY);
+    let raw = localStorage.getItem(LAST_ANALYZE_KEY);
+    if (!raw) raw = localStorage.getItem(LAST_BUNDLES_ANALYZE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed || !parsed.data || !parsed.data.ok) return null;
-    if (
-      !parsed.data.bundles_view &&
-      !(parsed.data.sections && parsed.data.sections.bundles)
-    ) {
-      return null;
-    }
+    const d = parsed.data;
+    const hasSections =
+      d.sections &&
+      (d.sections.overview ||
+        d.sections.holders ||
+        d.sections.bundles ||
+        d.sections.alerts ||
+        d.sections.about ||
+        d.sections.maps);
+    if (!hasSections && !d.bundles_view && !d.market) return null;
     return parsed;
   } catch (_) {
     return null;
   }
 }
 
+function loadLastBundlesAnalyze() {
+  return loadLastAnalyze();
+}
+
 /**
- * Restore Bundles (and summary) from browser last-known Analyze after refresh.
+ * Restore all Analyze tabs from browser last-known result after refresh.
+ * Does not re-log History or re-process Ruggers (lookup_count).
  */
-function restoreLastBundlesAnalyze() {
-  const cached = loadLastBundlesAnalyze();
+function restoreLastAnalyze() {
+  const cached = loadLastAnalyze();
   if (!cached || !cached.data) return false;
   try {
     const data = cached.data;
@@ -6190,26 +6230,84 @@ function restoreLastBundlesAnalyze() {
       }
     }
     renderSummary(data);
-    renderSections(data, cached.query || "");
+    // Apply all text sections (overview, holders, alerts, maps, about)
+    const sections = data.sections || {};
+    for (const tab of TABS) {
+      if (tab === "history" || tab === "ruggers" || tab === "bundles") continue;
+      if (sections[tab]) setPanelText(tab, sections[tab]);
+    }
+    try {
+      renderBundlesUi(data);
+    } catch (err) {
+      console.error("[bundles ui restore]", err);
+      if (sections.bundles) setPanelText("bundles", sections.bundles);
+    }
+    // Ruggers: show existing browser track for this mint (do not re-process)
+    try {
+      const mint =
+        (data.token && data.token.address) ||
+        (data.market && data.market.address) ||
+        "";
+      const chain =
+        (data.token && data.token.chain_id) ||
+        (data.market && data.market.chain_id) ||
+        "solana";
+      if (mint) {
+        const key = mintKeyFromToken(mint, chain);
+        refreshRuggersPanel(key);
+      } else {
+        refreshRuggersPanel();
+      }
+    } catch (_) {
+      try {
+        refreshRuggersPanel();
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    const when = cached.savedAt
+      ? new Date(cached.savedAt).toLocaleString()
+      : "previous Analyze";
+    const noteHtml =
+      '<div class="bun-hint" style="margin-bottom:10px"><strong>Last known result</strong> (page refresh) — showing Analyze from ' +
+      escHtml(when) +
+      ". Run <strong>Analyze</strong> again for a live update.</div>";
+    // Prefixed note on each main tab panel
+    for (const tab of [
+      "overview",
+      "holders",
+      "alerts",
+      "maps",
+      "about",
+    ]) {
+      const el = $("text-" + tab);
+      if (el && el.textContent && !el.dataset.lastKnownPrefixed) {
+        el.dataset.lastKnownPrefixed = "1";
+        // text panels are plain pre — prepend text line
+        el.textContent =
+          "── Last known (page refresh) · " +
+          when +
+          " · Run Analyze for live update ──\n\n" +
+          el.textContent;
+      }
+    }
     const root = $("bundlesUi");
-    if (root && root.firstChild) {
+    if (root && root.firstChild && !root.dataset.lastKnownPrefixed) {
+      root.dataset.lastKnownPrefixed = "1";
       const note = document.createElement("div");
-      note.className = "bun-hint";
-      note.style.marginBottom = "10px";
-      const when = cached.savedAt
-        ? new Date(cached.savedAt).toLocaleString()
-        : "previous Analyze";
-      note.innerHTML =
-        "<strong>Last known Bundles</strong> (page refresh) — showing result from " +
-        escHtml(when) +
-        ". Run <strong>Analyze</strong> again for a live update.";
-      root.insertBefore(note, root.firstChild);
+      note.innerHTML = noteHtml;
+      if (note.firstChild) root.insertBefore(note.firstChild, root.firstChild);
     }
     return true;
   } catch (err) {
-    console.error("[restore bundles]", err);
+    console.error("[restore analyze]", err);
     return false;
   }
+}
+
+/** @deprecated use restoreLastAnalyze */
+function restoreLastBundlesAnalyze() {
+  return restoreLastAnalyze();
 }
 
 /**
@@ -7067,8 +7165,9 @@ const RUGWATCH_PREF_KEY = "adtc_use_rugwatch";
 const FRESH_PREF_KEY = "adtc_use_fresh";
 const MULTI_SEND_PREF_KEY = "adtc_use_multi_send";
 const SHARED_SOL_PREF_KEY = "adtc_use_shared_sol";
-/** Last full Analyze payload for Bundles (survives page refresh until next Analyze). */
+/** Last full Analyze payload (all tabs; survives page refresh until next Analyze). */
 const LAST_BUNDLES_ANALYZE_KEY = "adtc_last_bundles_analyze";
+const LAST_ANALYZE_KEY = "adtc_last_analyze";
 /** Legacy combined pref — migrate once if present */
 const FRESH_MULTI_PREF_KEY_LEGACY = "adtc_use_fresh_multi";
 
@@ -7398,9 +7497,9 @@ async function analyze(ev) {
     }
     renderSummary(data);
     renderSections(data, query);
-    // Persist for page refresh (Bundles last known until next Analyze)
+    // Persist all tabs for page refresh until next Analyze
     try {
-      saveLastBundlesAnalyze(data, query);
+      saveLastAnalyze(data, query);
     } catch (_) {
       /* ignore */
     }
@@ -7461,8 +7560,8 @@ function init() {
     if (params.get("chain")) $("chain").value = params.get("chain");
     if (params.get("auto") === "1") analyze();
   } else {
-    // No auto-analyze: restore last Bundles after page refresh
-    restoreLastBundlesAnalyze();
+    // No auto-analyze: restore last Analyze (all tabs) after page refresh
+    restoreLastAnalyze();
   }
 }
 
