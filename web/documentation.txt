@@ -86,8 +86,9 @@ Analyze options (next to the search form)
   pings for that scan. They keep showing until you check the box again to
   re-scan live. (Also noted in the site bottom warning banner.)
 
-  Shared SOL is usually the largest Helius cost on a full Analyze. Prefer
-  unchecking it when you only need Fresh / Multi-send / holders.
+  Prefer to uncheck Shared SOL unless you need funder/funded wallets — it is
+  usually the largest Helius cost. Use Fresh / Multi-send / holders without it
+  for lighter Analyzes.
 
   One Analyze with Fresh + Multi-send + Shared SOL together uses FEWER total
   Helius pings than three separate Analyzes (holders base ~6 paid once).
