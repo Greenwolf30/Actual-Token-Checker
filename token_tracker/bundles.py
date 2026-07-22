@@ -2507,18 +2507,16 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
             str(r.get("wallet") or ""),
         )
     )
-    # Multi-send total = sum of flat list (token only) — always aligned with Holds
+    # Multi-send total MUST equal sum of flat list Holds (token multi-send only).
+    # Do not prefer a fusion summary that is 0/null while the list still has bags.
     ms_tot, ms_n = _sum_wallets_pct(ms_list)
-    # Prefer fusion summary when already set and non-null; if list has holds but
-    # summary is missing, keep the recomputed list sum so UI totals match Holds.
-    if s.get("multi_send_total_pct") is not None:
+    if ms_tot is None and s.get("multi_send_total_pct") is not None and not ms_list:
+        # No token wallets in list — allow fusion total only as empty fallback
         try:
-            s_tot = float(s.get("multi_send_total_pct"))
+            ms_tot = float(s.get("multi_send_total_pct"))
+            ms_n = int(s.get("multi_send_wallet_with_pct") or 0)
         except (TypeError, ValueError):
-            s_tot = None
-        if s_tot is not None and (ms_tot is None or s_tot > 0 or not ms_n):
-            ms_tot = s_tot
-            ms_n = int(s.get("multi_send_wallet_with_pct") or ms_n or 0)
+            pass
     # Build pct map from token clusters so split totals don't need holders map
     ms_pct_map: dict[str, float] = {}
     for r in ms_list:
@@ -2658,24 +2656,27 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
             else fresh_tot,
             "fresh_wallet_count": s.get("fresh_wallet_count") or len(fresh_out),
             "fresh_wallet_with_pct": s.get("fresh_wallet_with_pct") or fresh_n,
-            "multi_send_total_pct": s.get("multi_send_total_pct")
-            if s.get("multi_send_total_pct") is not None
-            else ms_tot,
-            "multi_send_wallet_with_pct": s.get("multi_send_wallet_with_pct") or ms_n,
-            "multi_send_sender_total_pct": s.get("multi_send_sender_total_pct")
-            if s.get("multi_send_sender_total_pct") is not None
-            else ms_split.get("sender_total_pct"),
-            "multi_send_sender_count": s.get("multi_send_sender_count")
-            if s.get("multi_send_sender_count") is not None
-            else ms_split.get("sender_count"),
-            "multi_send_receiver_total_pct": s.get("multi_send_receiver_total_pct")
-            if s.get("multi_send_receiver_total_pct") is not None
-            else ms_split.get("receiver_total_pct"),
-            "multi_send_receiver_count": s.get("multi_send_receiver_count")
-            if s.get("multi_send_receiver_count") is not None
-            else ms_split.get("receiver_count"),
-            "multi_send_hold_shape": s.get("multi_send_hold_shape")
-            or ms_split.get("hold_shape"),
+            # List-sum wins so Multi-send total always matches visible Holds
+            "multi_send_total_pct": ms_tot
+            if ms_tot is not None
+            else s.get("multi_send_total_pct"),
+            "multi_send_wallet_with_pct": ms_n
+            if ms_n
+            else (s.get("multi_send_wallet_with_pct") or 0),
+            "multi_send_sender_total_pct": ms_split.get("sender_total_pct")
+            if ms_split.get("sender_total_pct") is not None
+            else s.get("multi_send_sender_total_pct"),
+            "multi_send_sender_count": ms_split.get("sender_count")
+            if ms_split.get("sender_count") is not None
+            else s.get("multi_send_sender_count"),
+            "multi_send_receiver_total_pct": ms_split.get("receiver_total_pct")
+            if ms_split.get("receiver_total_pct") is not None
+            else s.get("multi_send_receiver_total_pct"),
+            "multi_send_receiver_count": ms_split.get("receiver_count")
+            if ms_split.get("receiver_count") is not None
+            else s.get("multi_send_receiver_count"),
+            "multi_send_hold_shape": ms_split.get("hold_shape")
+            or s.get("multi_send_hold_shape"),
             "multi_send_error": s.get("multi_send_error"),
             "funding_error": s.get("funding_error"),
             "funding_total_pct": s.get("funding_total_pct"),

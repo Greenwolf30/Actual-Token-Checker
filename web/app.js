@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v119";
+const ADTC_CLIENT_VERSION = "v120";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -7270,6 +7270,66 @@ function bunPctHtml(n) {
 }
 
 /**
+ * Unique-wallet sum of supply % (token multi-send list / clusters).
+ * Used so Multi-send total always matches visible Holds.
+ */
+function sumUniqueWalletSupplyPct(rows) {
+  const by = Object.create(null);
+  for (let i = 0; i < (rows || []).length; i++) {
+    const row = rows[i] || {};
+    const w = String(row.wallet || "").trim();
+    if (!w) continue;
+    const p = Number(row.pct_supply);
+    if (!Number.isFinite(p)) continue;
+    by[w] = Math.max(by[w] || 0, p);
+  }
+  const keys = Object.keys(by);
+  if (!keys.length) return null;
+  let t = 0;
+  for (let j = 0; j < keys.length; j++) t += by[keys[j]];
+  if (t > 100) t = 100;
+  return t > 0 ? Math.round(t * 10000) / 10000 : null;
+}
+
+/**
+ * Token multi-send total from bundles_view (ignores sol-* / Shared SOL wallets).
+ * Prefer server summary when it already matches; recompute when null/0 but wallets hold.
+ */
+function resolveTokenMultiSendTotalPct(view, summary) {
+  const s = summary || {};
+  const raw = (view && view.multi_send_wallets) || [];
+  const tokenMs = (view && view.multi_send_clusters) || [];
+  const wallets = raw.filter(function (r) {
+    const roles = (r && r.roles) || [];
+    if (!roles.length) return true;
+    return !roles.every(function (role) {
+      return String(role || "").toLowerCase().indexOf("sol") === 0;
+    });
+  });
+  const rows = wallets.slice();
+  for (let ci = 0; ci < tokenMs.length; ci++) {
+    const mc = tokenMs[ci] || {};
+    if (mc.sender) {
+      rows.push({ wallet: mc.sender, pct_supply: mc.sender_pct });
+    }
+    const recs = mc.receivers || [];
+    for (let ri = 0; ri < recs.length; ri++) rows.push(recs[ri]);
+  }
+  const recomputed = sumUniqueWalletSupplyPct(rows);
+  let tot = s.multi_send_total_pct;
+  if (
+    recomputed != null &&
+    (tot == null ||
+      !Number.isFinite(Number(tot)) ||
+      (Number(tot) === 0 && recomputed > 0))
+  ) {
+    tot = recomputed;
+  }
+  if (tot != null && Number.isFinite(Number(tot))) return Number(tot);
+  return recomputed;
+}
+
+/**
  * Hold-% colors for Bundles top boxes (Multi-send / Shared SOL / etc.).
  * Same bands as Holders, but any positive bag gets at least green so small
  * multi-send / shared SOL totals still show the scheme.
@@ -9300,19 +9360,23 @@ function renderBundlesUi(data) {
     const msErr = String(s.multi_send_error || "");
     const msSkipped = /scan off|enable [“"]Multi|Multi-send scan off/i.test(msErr);
     const msCached = !!s.multi_send_from_cache;
-    // Live Multi-send scan: always use server total (token multi-send only).
-    // Do not fall back to last-known — that was often the old Shared-SOL-combined %.
+    // Live Multi-send: token multi-send total (match Holds list / clusters).
+    // Do not fall back to last-known Shared-SOL-combined %.
     let msPct;
     if (!msSkipped && !msCached) {
+      const resolved = resolveTokenMultiSendTotalPct(view, s);
       msPct =
-        s.multi_send_total_pct != null && Number.isFinite(Number(s.multi_send_total_pct))
-          ? Number(s.multi_send_total_pct)
+        resolved != null && Number.isFinite(Number(resolved))
+          ? Number(resolved)
           : 0;
     } else {
+      const resolved = resolveTokenMultiSendTotalPct(view, s);
       msPct = resolveOptionalDisplayPct(
-        s.multi_send_total_pct != null
-          ? s.multi_send_total_pct
-          : deltaCurStats && deltaCurStats.multi_send_total_pct,
+        resolved != null
+          ? resolved
+          : s.multi_send_total_pct != null
+            ? s.multi_send_total_pct
+            : deltaCurStats && deltaCurStats.multi_send_total_pct,
         optKnown.multi_send
       );
     }
@@ -9777,9 +9841,9 @@ function renderBundlesUi(data) {
     );
   }
 
-  // Multi-send — token multi-send only in total + flat Holds list.
-  // SOL funder fan-outs (Shared SOL) may appear as clusters below but are NOT
-  // in multi_send_total_pct (that was why Holds ~4% with total empty/0%).
+  // Multi-send section = TOKEN multi-send only.
+  // SOL funder wallets/holds belong under Shared SOL. Showing them here made
+  // “Holds” look real while Multi-send total stayed 0% (e.g. 2V11cBst…pump).
   const msWalletsRaw = view.multi_send_wallets || [];
   const tokenMs = view.multi_send_clusters || [];
   const solMs = view.sol_multi_send_clusters || [];
@@ -9793,31 +9857,10 @@ function renderBundlesUi(data) {
     });
     return !onlySol;
   });
-  function sumUniqueWalletPct(rows) {
-    const by = Object.create(null);
-    for (let i = 0; i < (rows || []).length; i++) {
-      const row = rows[i] || {};
-      const w = String(row.wallet || "").trim();
-      if (!w) continue;
-      const p = Number(row.pct_supply);
-      if (!Number.isFinite(p)) continue;
-      by[w] = Math.max(by[w] || 0, p);
-    }
-    const vals = Object.keys(by).map(function (k) {
-      return by[k];
-    });
-    if (!vals.length) return null;
-    let t = 0;
-    for (let j = 0; j < vals.length; j++) t += vals[j];
-    if (t > 100) t = 100;
-    return t > 0 ? Math.round(t * 10000) / 10000 : null;
-  }
-  let msTotDisp = s.multi_send_total_pct;
-  if (msTotDisp == null || !Number.isFinite(Number(msTotDisp))) {
-    const recomputed = sumUniqueWalletPct(msWallets);
-    if (recomputed != null) msTotDisp = recomputed;
-  }
-  if (msWallets.length || tokenMs.length || solMs.length) {
+  // Total from the same wallets we display (list + token clusters)
+  const msTotDisp = resolveTokenMultiSendTotalPct(view, s);
+  // Only open Multi-send detail when there is token multi-send content
+  if (msWallets.length || tokenMs.length) {
     const shape = String(s.multi_send_hold_shape || "");
     let shapeNote = "";
     if (shape === "mostly_one_wallet_sender") {
@@ -9827,11 +9870,13 @@ function renderBundlesUi(data) {
       shapeNote =
         "Hold shape: mostly across receiver wallets — not one sender bag.";
     }
-    const msWalletN =
+    const msWalletN = Math.max(
+      msWallets.length || 0,
       s.multi_send_wallet_with_pct != null &&
-      Number.isFinite(Number(s.multi_send_wallet_with_pct))
+        Number.isFinite(Number(s.multi_send_wallet_with_pct))
         ? Number(s.multi_send_wallet_with_pct)
-        : msWallets.length || 0;
+        : 0
+    );
     html +=
       '<section class="bun-section"><div class="bun-section-head">' +
       '<span class="bun-section-title">Multi-send (one → many)' +
@@ -9850,7 +9895,7 @@ function renderBundlesUi(data) {
     }
     html +=
       '<p class="bun-sub">Token multi-send only (this mint sent one→many). ' +
-      "Senders: " +
+      "Total = sum of Holds below. Senders: " +
       bunPctHtml(s.multi_send_sender_total_pct) +
       " · " +
       escHtml(String(s.multi_send_sender_count != null ? s.multi_send_sender_count : "—")) +
@@ -9862,18 +9907,13 @@ function renderBundlesUi(data) {
           s.multi_send_receiver_count != null ? s.multi_send_receiver_count : "—"
         )
       ) +
-      ". LP/bonding-curve excluded. Shared SOL funders count under Shared SOL, not here.</p>";
+      ". LP/bonding-curve excluded. Shared SOL funders are under Shared SOL only.</p>";
     if (shapeNote) {
       html += '<p class="bun-sub">' + escHtml(shapeNote) + "</p>";
     }
-    if (!tokenMs.length && !msWallets.length && solMs.length) {
-      html +=
-        '<p class="bun-sub">No token multi-send this scan (Multi-send total 0%). ' +
-        "SOL funder clusters below are Shared SOL patterns — their holds are in Shared SOL total, not Multi-send.</p>";
-    }
     if (msWallets.length) {
       html +=
-        '<p class="bun-sub">Token multi-send wallets (by current supply % — same set as total)</p>';
+        '<p class="bun-sub">Wallets (by current supply % — same set as total above)</p>';
       html += bunWalletTable(msWallets, [
         { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
         { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
@@ -9916,39 +9956,6 @@ function renderBundlesUi(data) {
       ]);
       html += "</div>";
     }
-    if (solMs.length) {
-      html +=
-        '<p class="bun-sub">SOL funder fan-outs (Shared SOL data — not counted in Multi-send total above; see Shared SOL total)</p>';
-    }
-    for (const mc of solMs) {
-      const hs = String(mc.hold_shape || "");
-      const hsNote =
-        hs === "mostly_one_wallet_sender"
-          ? " · mostly still on funder"
-          : hs === "mostly_across_receivers"
-            ? " · mostly across funded wallets"
-            : "";
-      html +=
-        '<div class="bun-cluster"><div class="bun-cluster-head">SOL funder ' +
-        bunWalletLink(mc.sender) +
-        " holds " +
-        bunPctHtml(mc.sender_pct) +
-        " (one wallet) → " +
-        escHtml(String(mc.receiver_count || (mc.receivers || []).length || 0)) +
-        " wallets hold " +
-        bunPctHtml(
-          mc.receivers_total_pct != null ? mc.receivers_total_pct : null
-        ) +
-        " · cluster " +
-        bunPctHtml(mc.total_pct) +
-        escHtml(hsNote) +
-        "</div>";
-      html += bunWalletTable(mc.receivers || [], [
-        { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
-        { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
-      ]);
-      html += "</div>";
-    }
     html += "</div></section>";
   } else {
     const srcs = ((s.sources_used || []).join(" ") || "").toLowerCase();
@@ -9964,9 +9971,13 @@ function renderBundlesUi(data) {
         "None this scan — " +
         errS +
         " (set HELIUS_API_KEY on the API host, not in web/config.js).";
+    } else if (solMs.length) {
+      emptyMsg =
+        "No token multi-send this scan (Multi-send total 0%). " +
+        "Funded wallets that hold supply are under Shared SOL — their % is in Shared SOL total, not Multi-send.";
     } else if (heliusRan) {
       emptyMsg =
-        "None this scan — Helius ran, but no one→many token/SOL multi-send showed in the recent history window. " +
+        "None this scan — Helius ran, but no one→many token multi-send showed in the recent history window. " +
         "That is normal for many mints. LP/bonding-curve (~pool %) is never counted as a multi-send sender.";
     } else {
       emptyMsg =
@@ -10175,18 +10186,22 @@ function renderBundlesUi(data) {
       freshSubPlain
     );
 
-    // Live Multi-send: never show last-known Shared-SOL-combined total
+    // Live Multi-send: never show last-known Shared-SOL-combined total.
+    // Prefer sum of token multi-send Holds so top box matches list.
     let msDisp;
+    const msResolved = resolveTokenMultiSendTotalPct(view, s);
     if (msLive) {
       msDisp =
-        s.multi_send_total_pct != null && Number.isFinite(Number(s.multi_send_total_pct))
-          ? Number(s.multi_send_total_pct)
+        msResolved != null && Number.isFinite(Number(msResolved))
+          ? Number(msResolved)
           : 0;
     } else {
       msDisp = resolveOptionalDisplayPct(
-        s.multi_send_total_pct != null
-          ? s.multi_send_total_pct
-          : deltaCurStats && deltaCurStats.multi_send_total_pct,
+        msResolved != null
+          ? msResolved
+          : s.multi_send_total_pct != null
+            ? s.multi_send_total_pct
+            : deltaCurStats && deltaCurStats.multi_send_total_pct,
         optKnown.multi_send
       );
     }
