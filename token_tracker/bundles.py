@@ -1537,7 +1537,12 @@ def recompute_total_bundle_all_vectors(
       multi_account, insider
 
     Optional (only when the matching Analyze checkbox is ON):
-      multi_send, fresh, shared_funder
+      multi_send (token multi-send), fresh, shared_funder (Shared SOL)
+
+    Total = unique wallets across active vectors (each wallet once at max %).
+    So Fresh + Multi-send + Shared SOL bags are *included* in Total when their
+    checkboxes are on — not added as three independent sums (overlap is
+    deduped so Total ≤ Fresh% + Multi% + Shared%).
 
     When Fresh + Multi-send + Shared SOL are ALL off:
       multi_account + insider + similar_size + suspect
@@ -1712,22 +1717,54 @@ def recompute_total_bundle_all_vectors(
     by_vector["fresh"] = {"pct": p, "count": n}
     counted_maps["fresh"] = fr_map
 
-    # 6) Shared funder (funding clusters — funder + children)
+    # 6) Shared funder / Shared SOL — funder + children (+ SOL multi-send
+    #    clusters, which are the same pattern when funding was re-labeled).
+    #    These bags are token supply %; the link is shared SOL funding.
     fund_rows: list[tuple[str, Any]] = []
     for fc in data.get("funding_clusters") or []:
         if not isinstance(fc, dict):
             continue
-        fund_rows.append((fc.get("funder"), fc.get("funder_pct")))
+        fund_rows.append(
+            (
+                fc.get("funder") or fc.get("sender"),
+                fc.get("funder_pct")
+                if fc.get("funder_pct") is not None
+                else fc.get("sender_pct"),
+            )
+        )
         for row in fc.get("child_rows") or []:
             if isinstance(row, dict):
                 fund_rows.append((row.get("wallet"), row.get("pct_supply")))
             else:
                 fund_rows.append((row, None))
-        for c in fc.get("children") or []:
+        for c in fc.get("children") or fc.get("receivers") or []:
             if isinstance(c, dict):
                 fund_rows.append((c.get("wallet"), c.get("pct_supply")))
             else:
                 fund_rows.append((c, None))
+    # SOL multi-send clusters = Shared SOL fan-out; must count in Total bundle
+    # even when funding_clusters list is empty/stale (was dropping Shared SOL %).
+    for mc in data.get("sol_multi_send_clusters") or []:
+        if not isinstance(mc, dict):
+            continue
+        fund_rows.append(
+            (
+                mc.get("sender") or mc.get("funder"),
+                mc.get("sender_pct")
+                if mc.get("sender_pct") is not None
+                else mc.get("funder_pct"),
+            )
+        )
+        for row in mc.get("child_rows") or []:
+            if isinstance(row, dict):
+                fund_rows.append((row.get("wallet"), row.get("pct_supply")))
+            else:
+                fund_rows.append((row, None))
+        for r in mc.get("receivers") or mc.get("children") or []:
+            if isinstance(r, dict):
+                fund_rows.append((r.get("wallet"), r.get("pct_supply")))
+            else:
+                fund_rows.append((r, None))
     fund_map = _wallet_map(fund_rows)
     p, n = _sum_map(fund_map)
     by_vector["shared_funder"] = {"pct": p, "count": n}
@@ -2639,6 +2676,15 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
             "total_bundle_mode": s.get("total_bundle_mode"),
             "total_bundle_show_similar_suspect": s.get(
                 "total_bundle_show_similar_suspect"
+            ),
+            "total_bundle_unique_wallets": s.get("total_bundle_unique_wallets")
+            or s.get("flagged_wallets"),
+            "total_bundle_include_fresh": s.get("total_bundle_include_fresh"),
+            "total_bundle_include_multi_send": s.get(
+                "total_bundle_include_multi_send"
+            ),
+            "total_bundle_include_shared_sol": s.get(
+                "total_bundle_include_shared_sol"
             ),
             "total_bundle_crosslisted_count": s.get(
                 "total_bundle_crosslisted_count"

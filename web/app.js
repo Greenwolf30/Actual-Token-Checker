@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v120";
+const ADTC_CLIENT_VERSION = "v121";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -9506,7 +9506,8 @@ function renderBundlesUi(data) {
     ' · <span class="bun-client-ver" title="Client build for cache checks">' +
     escHtml(typeof ADTC_CLIENT_VERSION !== "undefined" ? ADTC_CLIENT_VERSION : "?") +
     "</span></p>";
-  // Total bundle = counted risk vectors only (similar-size + suspect excluded)
+  // Total bundle = multi-account + insider + Fresh + Multi-send + Shared SOL
+  // (unique wallets; similar/suspect only when all three optionals are off)
   if (s.total_bundle_additive || s.total_bundle_by_vector) {
     const bv = s.total_bundle_by_vector || {};
     const parts = [];
@@ -9516,7 +9517,7 @@ function renderBundlesUi(data) {
       insider: "insider",
       multi_send: "multi-send",
       fresh: "fresh",
-      shared_funder: "shared funder",
+      shared_funder: "shared SOL",
       suspect: "suspect",
     };
     for (const [k, lab] of Object.entries(labels)) {
@@ -9535,11 +9536,12 @@ function renderBundlesUi(data) {
         ? s.total_bundle_unique_wallets
         : s.flagged_wallets;
     html +=
-      '<p class="bun-meta">Total bundle = unique wallets across counted vectors ' +
-      "(each wallet once, max hold %; no double-count)" +
+      '<p class="bun-meta">Total bundle = unique wallets across multi-account, insider, ' +
+      "Fresh, Multi-send, and Shared SOL when those scans are on " +
+      "(each wallet once at max hold % — not a raw sum of the three boxes)" +
       (uniqN != null ? " · " + escHtml(String(uniqN)) + " wallet(s)" : "") +
       (parts.length
-        ? ". Per-vector (for reference): " + escHtml(parts.join(" + "))
+        ? ". In total: " + escHtml(parts.join(" + "))
         : "") +
       ".</p>";
   }
