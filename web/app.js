@@ -6433,12 +6433,6 @@ function renderBundlesUi(data) {
         parts.push(lab + " n/a%");
       }
     }
-    const fallbackSimSus =
-      s.total_bundle_mode === "fallback_similar_suspect" ||
-      s.total_bundle_show_similar_suspect === true;
-    const modeNote = fallbackSimSus
-      ? " Showing similar/suspect (primary categories empty)."
-      : " Similar-size and suspect hidden when primary categories have data.";
     const uniqN =
       s.total_bundle_unique_wallets != null
         ? s.total_bundle_unique_wallets
@@ -6446,14 +6440,11 @@ function renderBundlesUi(data) {
     html +=
       '<p class="bun-meta">Total bundle = unique wallets across counted vectors ' +
       "(each wallet once, max hold %; no double-count)" +
-      (fallbackSimSus ? " · showing similar/suspect" : "") +
       (uniqN != null ? " · " + escHtml(String(uniqN)) + " wallet(s)" : "") +
       (parts.length
         ? ". Per-vector (for reference): " + escHtml(parts.join(" + "))
         : "") +
-      "." +
-      modeNote +
-      "</p>";
+      ".</p>";
   }
 
   // Signals chips
