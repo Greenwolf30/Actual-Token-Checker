@@ -551,13 +551,19 @@ button, .ghost, .primary {
 .mono { font-family: var(--mono); }
 .sum-stats {
   display: grid;
-  grid-template-columns: repeat(5, minmax(72px, 1fr));
-  gap: 8px 18px;
+  grid-template-columns: repeat(5, minmax(64px, 1fr));
+  gap: 8px 14px;
+  flex: 1 1 320px;
+  min-width: min(100%, 340px);
+  max-width: 100%;
+  box-sizing: border-box;
 }
 .sum-stats > div {
   padding: 4px 0;
   border-left: 1px solid var(--border);
-  padding-left: 12px;
+  padding-left: 10px;
+  min-width: 0;
+  overflow: hidden;
 }
 .sum-stats > div:first-child {
   border-left: 0;

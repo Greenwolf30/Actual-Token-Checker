@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v102";
+const ADTC_CLIENT_VERSION = "v103";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -6084,6 +6084,123 @@ function switchTab(name) {
   });
 }
 
+/**
+ * When Analyze/restore leaves Liq, Vol 24h, or 24h % as "—", pull from
+ * public DexScreener token endpoint (no keys) and patch the summary bar.
+ */
+function enrichSummaryMarketFromDex(mint, data) {
+  const addr = String(mint || "").trim();
+  if (!addr || addr.length < 32) return;
+  const url =
+    "https://api.dexscreener.com/latest/dex/tokens/" + encodeURIComponent(addr);
+  fetch(url, { method: "GET", mode: "cors", cache: "no-store" })
+    .then(function (r) {
+      if (!r || !r.ok) return null;
+      return r.json();
+    })
+    .then(function (j) {
+      if (!j || !Array.isArray(j.pairs) || !j.pairs.length) return;
+      const want = addr.toLowerCase();
+      const pairs = j.pairs.filter(function (p) {
+        if (!p || typeof p !== "object") return false;
+        const base = ((p.baseToken || {}).address || "").toLowerCase();
+        const quote = ((p.quoteToken || {}).address || "").toLowerCase();
+        return base === want || quote === want;
+      });
+      const list = pairs.length ? pairs : j.pairs;
+      let bestLiq = 0;
+      let sumVol = 0;
+      let bestVol = 0;
+      let bestChg = null;
+      let bestChgVol = -1;
+      let bestPrice = null;
+      let bestMc = null;
+      for (let i = 0; i < list.length; i++) {
+        const p = list[i];
+        const liqObj = p.liquidity || {};
+        const pl =
+          liqObj && typeof liqObj === "object"
+            ? Number(liqObj.usd)
+            : Number(liqObj);
+        if (Number.isFinite(pl) && pl > bestLiq) bestLiq = pl;
+        const volObj = p.volume || {};
+        const pv =
+          volObj && typeof volObj === "object"
+            ? Number(volObj.h24)
+            : Number(volObj);
+        if (Number.isFinite(pv) && pv > 0) {
+          sumVol += pv;
+          if (pv > bestVol) bestVol = pv;
+        }
+        const pc = p.priceChange || {};
+        const ch =
+          pc && typeof pc === "object" ? Number(pc.h24) : Number(pc);
+        if (Number.isFinite(ch)) {
+          const score = Number.isFinite(pv) ? pv : 0;
+          if (score >= bestChgVol) {
+            bestChgVol = score;
+            bestChg = ch;
+          }
+        }
+        const pr = Number(p.priceUsd);
+        if (Number.isFinite(pr) && pr > 0 && bestPrice == null) bestPrice = pr;
+        const mc = Number(p.marketCap != null ? p.marketCap : p.fdv);
+        if (Number.isFinite(mc) && mc > 0 && bestMc == null) bestMc = mc;
+      }
+      const fillVol = sumVol > 0 ? sumVol : bestVol;
+      // Only patch empty cells — do not overwrite good server values
+      const elLiq = $("sumLiq");
+      const elVol = $("sumVol");
+      const elChg = $("sumChg");
+      const elPrice = $("sumPrice");
+      const elMc = $("sumMc");
+      const isBlank = function (el) {
+        if (!el) return true;
+        const t = String(el.textContent || "").trim();
+        return !t || t === "—" || t === "-" || t === "n/a";
+      };
+      if (elLiq && isBlank(elLiq) && bestLiq > 0) {
+        elLiq.textContent = fmtUsd(bestLiq);
+      }
+      if (elVol && isBlank(elVol) && fillVol > 0) {
+        elVol.textContent = fmtUsd(fillVol);
+      }
+      if (elChg && isBlank(elChg) && bestChg != null) {
+        elChg.textContent = fmtPct(bestChg);
+        elChg.classList.remove("up", "down");
+        if (Number(bestChg) > 0) elChg.classList.add("up");
+        if (Number(bestChg) < 0) elChg.classList.add("down");
+      }
+      if (elPrice && isBlank(elPrice) && bestPrice != null) {
+        elPrice.textContent = fmtUsd(bestPrice);
+      }
+      if (elMc && isBlank(elMc) && bestMc != null) {
+        elMc.textContent = fmtUsd(bestMc);
+      }
+      // Keep in-memory payload so refresh restore also has numbers
+      try {
+        if (data && typeof data === "object") {
+          if (!data.market || typeof data.market !== "object") data.market = {};
+          if (bestLiq > 0 && data.market.liquidity_usd == null) {
+            data.market.liquidity_usd = bestLiq;
+          }
+          if (fillVol > 0 && data.market.volume_h24_usd == null) {
+            data.market.volume_h24_usd = fillVol;
+          }
+          if (bestChg != null) {
+            if (!data.market.price_change_pct) data.market.price_change_pct = {};
+            if (data.market.price_change_pct.h24 == null) {
+              data.market.price_change_pct.h24 = bestChg;
+            }
+          }
+        }
+      } catch (_) {}
+    })
+    .catch(function () {
+      /* ignore network / CORS */
+    });
+}
+
 function renderSummary(data) {
   const bar = $("summaryBar");
   if (!data || !data.ok) {
@@ -6146,30 +6263,50 @@ function renderSummary(data) {
     elMc.textContent = fmtUsd(
       m.market_cap_usd != null ? m.market_cap_usd : m.fdv_usd
     );
-  // Defensive: some providers use alternate keys; never leave Liq/Vol blank if present
-  const liq =
-    m.liquidity_usd != null
-      ? m.liquidity_usd
-      : m.liquidityUsd != null
-        ? m.liquidityUsd
-        : m.liquidity != null && typeof m.liquidity === "object"
-          ? m.liquidity.usd
-          : m.liquidity;
-  const vol =
-    m.volume_h24_usd != null
-      ? m.volume_h24_usd
-      : m.volume24h != null
-        ? m.volume24h
-        : m.volume_h24 != null
-          ? m.volume_h24
-          : m.volume != null && typeof m.volume === "object"
-            ? m.volume.h24
-            : m.volume;
+  // Defensive multi-key extract for Liq / Vol 24h / 24h %
+  const pickNum = function () {
+    for (let i = 0; i < arguments.length; i++) {
+      const v = arguments[i];
+      if (v == null || v === "") continue;
+      const n = Number(v);
+      if (Number.isFinite(n)) return n;
+    }
+    return null;
+  };
+  const liq = pickNum(
+    m.liquidity_usd,
+    m.liquidityUsd,
+    m.liquidity != null && typeof m.liquidity === "object"
+      ? m.liquidity.usd
+      : m.liquidity,
+    m.tvl,
+    m.tvl_usd
+  );
+  const vol = pickNum(
+    m.volume_h24_usd,
+    m.volume24h,
+    m.volume_h24,
+    m.volume != null && typeof m.volume === "object" ? m.volume.h24 : m.volume,
+    m.v24hUSD,
+    m.volume24hUsd
+  );
+  const pcObj =
+    m.price_change_pct && typeof m.price_change_pct === "object"
+      ? m.price_change_pct
+      : m.priceChange && typeof m.priceChange === "object"
+        ? m.priceChange
+        : {};
+  const chg = pickNum(
+    pcObj.h24,
+    pcObj["24h"],
+    m.price_change_h24_pct,
+    m.priceChange24h,
+    typeof m.price_change_pct === "number" ? m.price_change_pct : null
+  );
   const elLiq = $("sumLiq");
   const elVol = $("sumVol");
   if (elLiq) elLiq.textContent = fmtUsd(liq);
   if (elVol) elVol.textContent = fmtUsd(vol);
-  const chg = (m.price_change_pct || {}).h24;
   const chgEl = $("sumChg");
   if (chgEl) {
     chgEl.textContent = fmtPct(chg);
@@ -6181,6 +6318,15 @@ function renderSummary(data) {
   // Last-updated belongs under Fresh / Multi-send / Shared SOL (Bundles), not MC/Liq/Vol
   try {
     clearPrimaryMarketUpdatedStamps();
+  } catch (_) {}
+
+  // If server left Liq / Vol / 24h blank, fill from public DexScreener (browser)
+  try {
+    const needFill =
+      liq == null || vol == null || chg == null;
+    if (needFill && mint && mint.length >= 32) {
+      enrichSummaryMarketFromDex(mint, data);
+    }
   } catch (_) {}
 
   const linkBar = $("linkBar");

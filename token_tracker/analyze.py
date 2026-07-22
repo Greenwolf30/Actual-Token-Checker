@@ -445,17 +445,24 @@ def analyze_token(
     token_addr = (pair_summary.get("base_token") or {}).get("address")
     base = pair_summary.get("base_token") or {}
 
-    # Last-resort: GeckoTerminal token endpoint (reserve + 24h volume)
+    # Last-resort: GeckoTerminal token endpoint (reserve + 24h volume + price % )
     try:
         need_liq = not pair_summary.get("liquidity_usd")
         need_vol = not pair_summary.get("volume_h24_usd")
-        if (need_liq or need_vol) and network and token_addr:
+        pc0 = pair_summary.get("price_change_pct")
+        if not isinstance(pc0, dict):
+            pc0 = {}
+            pair_summary["price_change_pct"] = pc0
+        need_chg = pc0.get("h24") is None
+        if (need_liq or need_vol or need_chg) and network and token_addr:
             gtok = gt.fetch_token(network, token_addr)
-            attrs = (
-                ((gtok or {}).get("data") or {}).get("attributes")
-                if isinstance(gtok, dict)
-                else None
-            )
+            # fetch_token may return attributes node or full {data:{attributes}}
+            attrs = None
+            if isinstance(gtok, dict):
+                if isinstance(gtok.get("attributes"), dict):
+                    attrs = gtok.get("attributes")
+                else:
+                    attrs = ((gtok.get("data") or {}).get("attributes"))
             if isinstance(attrs, dict):
                 if need_liq:
                     res = dx._f(  # noqa: SLF001 — shared float parser
@@ -472,6 +479,22 @@ def analyze_token(
                         gv = dx._f(vol_obj)
                     if gv is not None and gv > 0:
                         pair_summary["volume_h24_usd"] = gv
+                if need_chg:
+                    # Gecko: price_change_percentage.h24 or similar
+                    pcp = attrs.get("price_change_percentage") or {}
+                    ch = None
+                    if isinstance(pcp, dict):
+                        ch = dx._f(  # noqa: SLF001
+                            pcp.get("h24") or pcp.get("24h") or pcp.get("day")
+                        )
+                    if ch is None:
+                        ch = dx._f(  # noqa: SLF001
+                            attrs.get("price_change_percentage_h24")
+                            or attrs.get("price_change_24h")
+                        )
+                    if ch is not None:
+                        pc0["h24"] = ch
+                        pair_summary["price_change_pct"] = pc0
     except Exception:  # noqa: BLE001
         pass
 

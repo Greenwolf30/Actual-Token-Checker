@@ -501,26 +501,63 @@ def pair_volume_h24_usd(pair: dict[str, Any] | None) -> float | None:
     return _f(vol)
 
 
+def pair_price_change_h24(pair: dict[str, Any] | None) -> float | None:
+    """Extract 24h % price change from DexScreener-shaped or alt pair dicts."""
+    if not isinstance(pair, dict):
+        return None
+    chg = pair.get("priceChange") or pair.get("price_change_pct") or pair.get("priceChange24h")
+    if isinstance(chg, dict):
+        for k in ("h24", "h24Percentage", "day", "d24", "24h"):
+            v = _f(chg.get(k))
+            if v is not None:
+                return v
+        return None
+    v = _f(chg)
+    if v is not None:
+        return v
+    for k in (
+        "priceChange24h",
+        "price_change_h24",
+        "price_change_24h",
+        "h24ChangePercent",
+        "v24hChangePercent",
+    ):
+        v = _f(pair.get(k))
+        if v is not None:
+            return v
+    return None
+
+
 def enrich_summary_liquidity_volume(
     summary: dict[str, Any],
     pairs: list[dict[str, Any]] | None,
 ) -> dict[str, Any]:
     """
-    Fill missing/zero liquidity or 24h volume on the primary summary from
-    other pairs for the same token (Raydium/Birdeye/DexScreener alts).
+    Fill missing/zero liquidity, 24h volume, or 24h % change on the primary
+    summary from other pairs for the same token (Raydium/Birdeye/DexScreener).
     """
     if not isinstance(summary, dict):
         return summary
     liq = summary.get("liquidity_usd")
     vol = summary.get("volume_h24_usd")
+    pc = summary.get("price_change_pct")
+    if not isinstance(pc, dict):
+        pc = {}
+        summary["price_change_pct"] = pc
+    chg24 = pc.get("h24")
     need_liq = liq is None or (isinstance(liq, (int, float)) and float(liq) <= 0)
     need_vol = vol is None or (isinstance(vol, (int, float)) and float(vol) <= 0)
-    if not need_liq and not need_vol:
+    need_chg = chg24 is None
+
+    if not need_liq and not need_vol and not need_chg:
         return summary
 
     best_liq = float(liq or 0)
     best_vol = float(vol or 0)
     sum_vol = 0.0
+    best_chg = _f(chg24)
+    # Prefer the change from the pool with highest volume (most reliable)
+    best_chg_vol = -1.0
     for p in pairs or []:
         if not isinstance(p, dict):
             continue
@@ -532,6 +569,13 @@ def enrich_summary_liquidity_volume(
             sum_vol += pv
             if pv > best_vol:
                 best_vol = pv
+        if need_chg:
+            pch = pair_price_change_h24(p)
+            if pch is not None:
+                score = float(pv or 0)
+                if score >= best_chg_vol:
+                    best_chg_vol = score
+                    best_chg = pch
 
     if need_liq and best_liq > 0:
         summary["liquidity_usd"] = best_liq
@@ -540,6 +584,9 @@ def enrich_summary_liquidity_volume(
         fill = sum_vol if sum_vol > 0 else best_vol
         if fill > 0:
             summary["volume_h24_usd"] = fill
+    if need_chg and best_chg is not None:
+        pc["h24"] = best_chg
+        summary["price_change_pct"] = pc
     return summary
 
 
