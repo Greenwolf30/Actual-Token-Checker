@@ -12,8 +12,8 @@
   local + cloud.
 
   Everything here is a HEURISTIC from public data. Not financial advice.
-  Last major docs update: 2026-07-21 (wallet capacity §12c; Local database
-  mirror; product name Actual Data Token Checker; Ruggers / flags notes).
+  Last major docs update: 2026-07-22 (Helius Fresh/Multi-send checkbox ping
+  chart §6.3g; launch-window disabled; Total bundle % vector notes).
 ================================================================================
 
 
@@ -74,6 +74,12 @@ Analyze options (next to the search form)
                flagged wallets from Local database + cloud URL. When unchecked,
                that section is skipped for this lookup. Choice is remembered
                in this browser.
+  Fresh      — run Fresh / sole-token Helius scan (extra RPC cost; see §6.3g)
+  Multi-send — run token multi-send Helius scan (extra RPC cost; see §6.3g)
+
+  Do not check Fresh and Multi-send at the same time if you are on free Helius
+  (~10 RPS) — both on one Analyze can raise 429 rate limits. Prefer one at a
+  time. See §6.3g for approximate Helius ping counts.
 
 
 --------------------------------------------------------------------------------
@@ -836,6 +842,45 @@ What people often ask
     Bundles tab → summary “Fresh total” + ── FRESH WALLETS ──
     Bundles Signals → “Fresh wallets” when any are found
     Ruggers tab → Fresh wallets (sellers after ≥99% of first bag)
+
+
+6.3g Helius pings — Fresh / Multi-send checkboxes (full Analyze)
+
+  These are approximate JSON-RPC calls to Helius on a full Analyze (not Quick).
+  Free Helius is roughly ~10 requests/second; this app throttles near ~8/s and
+  retries 429s. Numbers are caps/typical ranges, not exact every mint.
+
+  Optional scans only (checkbox cost on top of the base stack)
+
+  ┌────────────────────────────┬──────────────────────────────────────────────┐
+  │ Checkbox setting           │ Approx Helius pings (that scan only)         │
+  ├────────────────────────────┼──────────────────────────────────────────────┤
+  │ Multi-send ON, Fresh OFF   │ up to ~21  (1 sig list + up to 20 getTx)     │
+  │ Multi-send OFF, Fresh ON   │ up to ~36  (12 wallets × 3 RPCs each)        │
+  │ Both Fresh + Multi-send ON │ up to ~57  (Fresh + Multi-send)              │
+  │ Both OFF                   │ 0 extra from these two scans                 │
+  └────────────────────────────┴──────────────────────────────────────────────┘
+
+  Full Analyze totals (includes base stack; launch-window is disabled)
+
+  Always (rough): holders paths ~6 · funding (“Shared SOL funder”) ~0–156 ·
+  launch-window 0 · RugWatch 0. Funding is often the largest remaining cost.
+
+  ┌────────────────────────────┬────────────────────┬─────────────────────────┐
+  │ Checkboxes (full Analyze)  │ Typical pings      │ Worst case (approx)     │
+  ├────────────────────────────┼────────────────────┼─────────────────────────┤
+  │ Neither Fresh nor Multi    │ ~50–100            │ ~162                    │
+  │ Multi-send only            │ ~70–120            │ ~183                    │
+  │ Fresh only                 │ ~80–130            │ ~198                    │
+  │ Both Fresh + Multi-send    │ ~90–150            │ ~220                    │
+  └────────────────────────────┴────────────────────┴─────────────────────────┘
+
+  Tips
+    - Prefer Fresh OR Multi-send one at a time on free Helius (site yellow
+      warning banner).
+    - Wait 30–60s after a 429 before re-clicking Analyze.
+    - Quick mode skips holders/bundles Helius-heavy paths (much lighter).
+    - HELIUS_API_KEY is server-side only (Render / .env), not web/config.js.
 
 
 6.4 Bundle % alert scheme (Alerts tab)
