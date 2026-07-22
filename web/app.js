@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v94";
+const ADTC_CLIENT_VERSION = "v95";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -6456,13 +6456,19 @@ function mountBundleStatsBar(mountEl, items, version) {
       dText === "+0" ||
       dText === "-0" ||
       /^[+\-]?0(\.0+)?%?$/.test(dText);
-    const isUp = /^UP\b/i.test(dText);
-    const isDn = /^DN\b/i.test(dText);
-    // Human-facing chip text
+    // Normalize legacy UP/DN text → arrows
+    dText = dText.replace(/^UP\s*/i, "▲ ").replace(/^DN\s*/i, "▼ ");
+    const isUp = /^▲/.test(dText) || /\bUP\b/i.test(dText);
+    const isDn = /^▼/.test(dText) || /\bDN\b/i.test(dText);
+    // Human-facing chip: arrows for movement, green 0 / 0% when flat
     let chip = dText;
     if (isFlat) chip = isScoreBox ? "0" : "0%";
-    else if (isUp) chip = dText.replace(/^UP\s*/i, "▲ ");
-    else if (isDn) chip = dText.replace(/^DN\s*/i, "▼ ");
+    // Ensure arrow is present on non-flat (in case only "+3%" arrived)
+    if (!isFlat && !/[▲▼]/.test(chip)) {
+      if (/^\s*\+/.test(chip) || isUp) chip = "▲ " + chip.replace(/^\s*\+/, "+");
+      else if (/^\s*-|^\s*−|^\s*–/.test(chip) || isDn)
+        chip = "▼ " + chip.replace(/^\s*[-−–]/, "-");
+    }
     const chipParen = "(" + chip + ")";
 
     const lab = document.createElement("span");
@@ -7555,6 +7561,7 @@ function loadBundleStatsPrev(mint) {
 function hasBundleDeltaMarker(text) {
   const t = String(text || "");
   return (
+    /[▲▼]/.test(t) ||
     /\bUP\s+[+\-]/.test(t) ||
     /\bDN\s+[+\-]/.test(t) ||
     /\(0%?\)/.test(t) ||
@@ -7608,7 +7615,8 @@ function computeBundleStatDeltaParts(cur, prev, kind, opts) {
     else if (mag >= 10) label = mag.toFixed(1).replace(/\.0$/, "") + "%";
     else label = mag.toFixed(1).replace(/\.0$/, "") + "%";
   }
-  const arrow = up ? "UP" : "DN";
+  // Arrows are the delta UI (▲ up / ▼ down) — not UP/DN text
+  const arrow = up ? "▲" : "▼";
   return {
     text: arrow + " " + sign + label,
     cls: cls,
@@ -8050,8 +8058,10 @@ function renderBundlesUi(data) {
         // Prefer recompute on live; on restore use frozen HTML span if present
         const frozen = String(frozenHtml[key]);
         if (hasBundleDeltaMarker(frozen)) {
-          // Only bake real UP/DN markers (never flat / no change)
-          const plainMatch = frozen.match(/\((?:UP[^)]*|DN[^)]*)\)/i);
+          // Only bake real arrow markers (▲ / ▼)
+          const plainMatch = frozen.match(
+            /\((?:[▲▼][^)]*|UP[^)]*|DN[^)]*)\)/i
+          );
           if (!plainMatch) {
             htmlByKeyThisRun[key] = "";
             // fall through to recompute
@@ -8896,12 +8906,16 @@ function renderBundlesUi(data) {
       if (isRestore && frozenHtml && frozenHtml[key]) {
         const fr = String(frozenHtml[key]);
         // Accept (0), (0%), (UP +8), (DN -3%), etc.
-        const m = fr.match(/\((?:UP[^)]*|DN[^)]*|0%?|[+\-]?\d+(?:\.\d+)?%?)\)/i);
+        const m = fr.match(
+          /\((?:[▲▼][^)]*|UP[^)]*|DN[^)]*|0%?|[+\-]?\d+(?:\.\d+)?%?)\)/i
+        );
         if (m) {
-          deltaText = m[0];
+          deltaText = m[0]
+            .replace(/\bUP\b/gi, "▲")
+            .replace(/\bDN\b/gi, "▼");
           if (isScore) deltaText = deltaText.replace(/%/g, "");
-          if (/UP/i.test(deltaText)) deltaCls = "bun-delta-green";
-          else if (/DN/i.test(deltaText)) deltaCls = "bun-delta-red";
+          if (/▲|UP/i.test(deltaText)) deltaCls = "bun-delta-green";
+          else if (/▼|DN/i.test(deltaText)) deltaCls = "bun-delta-red";
           else deltaCls = "bun-delta-green";
         }
       }
@@ -9280,7 +9294,7 @@ function renderBundlesUi(data) {
         if (!valEl) return;
         if (valEl.querySelector(".bun-stat-delta")) return;
         // Also check if value text already includes a delta paren
-        if (/\((?:0%|▲|▼|UP |DN )/i.test(valEl.textContent || "")) return;
+        if (/[▲▼]|\(0%?\)/i.test(valEl.textContent || "")) return;
         const s = document.createElement("span");
         s.className = "bun-stat-delta bun-delta-green";
         const lab = (

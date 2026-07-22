@@ -54,7 +54,7 @@
         var note = (document.getElementById("bunDeltaNote") || {}).textContent || "";
         var t1 = totalText();
         var hasPainted = /DELTAS PAINTED:\\s*9/i.test(note) || /DELTAS PAINTED: 9/i.test(note);
-        var hasUp = /\\+10%|UP \\+10|▲/.test(t1);
+        var hasUp = /▲/.test(t1) && /\+10/.test(t1);
         out.steps.push({ step: "A", note: note, total: t1, hasPainted: hasPainted, hasUp: hasUp });
         if (!hasPainted) out.errors.push("A: banner missing DELTAS PAINTED: 9 — got: " + note);
         if (!hasUp) out.errors.push("A: total missing UP +10 — got: " + t1);
@@ -65,27 +65,27 @@
 
         renderBundlesUi(makeData(25, 30));
         var t2 = totalText();
-        var hasUp15 = /\\+15%|UP \\+15|▲/.test(t2);
+        var hasUp15 = /▲/.test(t2) && /\+15/.test(t2);
         out.steps.push({ step: "B", total: t2, hasUp15: hasUp15 });
         if (!hasUp15) out.errors.push("B: expected +15% movement — got: " + t2);
 
         renderBundlesUi(makeData(25, 30));
         var t3 = totalText();
         var has0 = /\(0%\)/.test(t3);
-        var hasMove = /▲|▼|UP |DN /.test(t3);
+        var hasMove = /[▲▼]/.test(t3);
         out.steps.push({ step: "C", total: t3, has0: has0, hasMove: hasMove });
         if (!has0) out.errors.push("C: expected (0%) when flat — got: " + t3);
         if (hasMove) out.errors.push("C: should not show UP/DN when flat");
 
         renderBundlesUi(makeData(12, 30));
         var t4 = totalText();
-        var hasDn = /-13%|DN |▼/.test(t4);
+        var hasDn = /▼/.test(t4) && /13/.test(t4);
         out.steps.push({ step: "D", total: t4, hasDn: hasDn });
         if (!hasDn) out.errors.push("D: expected down move — got: " + t4);
 
-        out.ok = out.errors.length === 0 && String(out.version).indexOf("v94") >= 0;
-        if (String(out.version).indexOf("v94") < 0) {
-          out.errors.push("need v94, got " + out.version);
+        out.ok = out.errors.length === 0 && String(out.version).indexOf("v95") >= 0;
+        if (String(out.version).indexOf("v95") < 0) {
+          out.errors.push("need v95, got " + out.version);
           out.ok = false;
         }
       } catch (err) {
