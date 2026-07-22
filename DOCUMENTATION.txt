@@ -74,16 +74,16 @@ Analyze options (next to the search form)
                flagged wallets from Local database + cloud URL. When unchecked,
                that section is skipped for this lookup. Choice is remembered
                in this browser.
-  Fresh      — run Fresh / sole-token Helius scan (extra RPC cost; see §6.3g)
-  Multi-send — run token multi-send Helius scan (extra RPC cost; see §6.3g)
-  Shared SOL — run Shared SOL funder 1-hop scan (HEAVIEST Helius load, up to
-               ~156 RPCs; also powers SOL multi-send). Uncheck to save credits.
+  Fresh      — Fresh / sole-token Helius scan · up to ~36 pings (see §6.3g)
+  Multi-send — token multi-send Helius scan · up to ~21 pings (see §6.3g)
+  Shared SOL — Shared SOL funder 1-hop · HEAVIEST · up to ~156 pings (see §6.3g)
+               also powers SOL multi-send when Multi-send is on
 
   Shared SOL is usually the largest Helius cost on a full Analyze. Prefer
   unchecking it when you only need Fresh / Multi-send / holders.
   Do not check Fresh and Multi-send at the same time if you are on free Helius
   (~10 RPS) — both on one Analyze can raise 429 rate limits. Prefer one at a
-  time. See §6.3g for approximate Helius ping counts.
+  time. Full ping tables: §6.3g.
 
 
 --------------------------------------------------------------------------------
@@ -848,49 +848,87 @@ What people often ask
     Ruggers tab → Fresh wallets (sellers after ≥99% of first bag)
 
 
-6.3g Helius pings — Fresh / Multi-send / Shared SOL checkboxes (full Analyze)
+6.3g Helius pings — per feature / checkbox (full Analyze)
 
   These are approximate JSON-RPC calls to Helius on a full Analyze (not Quick).
-  Free Helius is roughly ~10 requests/second; this app throttles near ~8/s and
-  retries 429s. Numbers are caps/typical ranges, not exact every mint.
+  Free Helius: ~1M credits/month (reset monthly), ~10 req/s. This app throttles
+  near ~8/s and retries 429s. Caps/typical ranges — not exact every mint.
+  Most standard RPC methods cost ~1 credit each on Helius.
 
-  Optional scans only (checkbox cost on top of holders ~6)
+  ── A) Per feature (what each piece costs alone) ──────────────────────────
 
-  ┌────────────────────────────┬──────────────────────────────────────────────┐
-  │ Checkbox setting           │ Approx Helius pings (that scan only)         │
-  ├────────────────────────────┼──────────────────────────────────────────────┤
-  │ Shared SOL ON              │ up to ~156  (HEAVIEST — 12 wallets × ~13)    │
-  │ Multi-send ON (token)      │ up to ~21   (1 sig list + up to 20 getTx)    │
-  │ Fresh ON                   │ up to ~36   (12 wallets × 3 RPCs each)       │
-  │ Fresh + Multi-send (no SOL)│ up to ~57                                    │
-  │ All three ON               │ up to ~213 + holders                         │
-  │ All optional OFF           │ 0 from these scans (holders only ~6)         │
-  └────────────────────────────┴──────────────────────────────────────────────┘
+  ┌──────────────────────────┬──────────────┬────────────────────────────────┐
+  │ Feature / checkbox       │ Approx pings │ Notes                          │
+  ├──────────────────────────┼──────────────┼────────────────────────────────┤
+  │ Holders (tab + Bundles)  │ ~6           │ Always on full Analyze         │
+  │                          │              │ (~3 per path × 2 paths)        │
+  ├──────────────────────────┼──────────────┼────────────────────────────────┤
+  │ Shared SOL (checkbox)    │ 0 – ~156     │ HEAVIEST optional scan         │
+  │                          │              │ up to 12 wallets × (1 sig list │
+  │                          │              │ + up to 12 getTransaction)     │
+  │                          │              │ Powers Shared SOL funder +     │
+  │                          │              │ SOL multi-send                 │
+  ├──────────────────────────┼──────────────┼────────────────────────────────┤
+  │ Fresh (checkbox)         │ 0 – ~36      │ up to 12 wallets × 3 RPCs each │
+  │                          │              │ (token accounts ×2 + balance)  │
+  ├──────────────────────────┼──────────────┼────────────────────────────────┤
+  │ Multi-send (checkbox)    │ 0 – ~21      │ Token multi-send only:         │
+  │  · token multi-send      │              │ 1 getSignatures + ≤20 getTx    │
+  │  · SOL multi-send        │ +0           │ Reuses Shared SOL data (no     │
+  │                          │              │ extra pings if Shared SOL on)  │
+  ├──────────────────────────┼──────────────┼────────────────────────────────┤
+  │ RugWatch (checkbox)      │ 0            │ No Helius (local + cloud list) │
+  ├──────────────────────────┼──────────────┼────────────────────────────────┤
+  │ Multi-account clusters   │ 0 extra      │ From holders snapshot only     │
+  ├──────────────────────────┼──────────────┼────────────────────────────────┤
+  │ Similar-size / insider / │ 0 extra      │ From holders / Rugcheck data   │
+  │ suspect (display)        │              │                                │
+  ├──────────────────────────┼──────────────┼────────────────────────────────┤
+  │ Launch-window            │ 0            │ Disabled (not run)             │
+  └──────────────────────────┴──────────────┴────────────────────────────────┘
 
-  Shared SOL is the heaviest load. SOL multi-send in the Multi-send section
-  only fills when Shared SOL ran (same funding data). Token multi-send works
-  with Multi-send alone. Launch-window is disabled (0 RPCs).
+  Rank by load (high → low): Shared SOL ≫ Fresh > Multi-send (token) >
+  holders base. RugWatch / multi-account / similar-size add no Helius pings.
 
-  Full Analyze totals (examples)
+  ── B) Optional checkboxes only (add-on cost) ─────────────────────────────
 
-  ┌────────────────────────────┬────────────────────┬─────────────────────────┐
-  │ Checkboxes (full Analyze)  │ Typical pings      │ Worst case (approx)     │
-  ├────────────────────────────┼────────────────────┼─────────────────────────┤
-  │ Holders only (opts off)    │ ~6–20              │ ~20                     │
-  │ Shared SOL only            │ ~50–100            │ ~162                    │
-  │ Multi-send only            │ ~20–40             │ ~30                     │
-  │ Fresh only                 │ ~30–50             │ ~45                     │
-  │ Fresh + Multi (Shared off) │ ~50–80             │ ~65                     │
-  │ Fresh + Multi + Shared SOL │ ~90–150            │ ~220                    │
-  └────────────────────────────┴────────────────────┴─────────────────────────┘
+  ┌────────────────────────────────┬─────────────────────────────────────────┐
+  │ Checkboxes ON                  │ Approx extra Helius pings               │
+  ├────────────────────────────────┼─────────────────────────────────────────┤
+  │ Shared SOL only                │ up to ~156                              │
+  │ Fresh only                     │ up to ~36                               │
+  │ Multi-send only                │ up to ~21  (token; SOL multi empty)     │
+  │ Fresh + Multi-send             │ up to ~57  (Shared SOL off)             │
+  │ Shared SOL + Multi-send        │ up to ~177 (token multi + funding)      │
+  │ Shared SOL + Fresh             │ up to ~192                              │
+  │ All three (Fresh+Multi+Shared) │ up to ~213                              │
+  │ All optional OFF               │ 0 extra                                 │
+  └────────────────────────────────┴─────────────────────────────────────────┘
 
-  Tips
-    - Uncheck Shared SOL when you do not need funder/receiver clusters (saves
-      the most credits).
+  ── C) Full Analyze totals (holders ~6 + optional) ────────────────────────
+
+  ┌────────────────────────────────┬──────────────────┬──────────────────────┐
+  │ Checkboxes (full Analyze)      │ Typical pings    │ Worst case (approx)  │
+  ├────────────────────────────────┼──────────────────┼──────────────────────┤
+  │ All optional OFF               │ ~6–20            │ ~20                  │
+  │ Multi-send only                │ ~20–40           │ ~30                  │
+  │ Fresh only                     │ ~30–50           │ ~45                  │
+  │ Fresh + Multi (Shared off)     │ ~50–80           │ ~65                  │
+  │ Shared SOL only                │ ~50–100          │ ~162                 │
+  │ Shared SOL + Multi             │ ~70–130          │ ~185                 │
+  │ Shared SOL + Fresh             │ ~80–140          │ ~200                 │
+  │ Fresh + Multi + Shared SOL     │ ~90–150          │ ~220                 │
+  └────────────────────────────────┴──────────────────┴──────────────────────┘
+
+  Notes
+    - Shared SOL is the heaviest load. Uncheck it to save the most credits.
+    - Token multi-send works with Multi-send alone (needs Helius).
+    - SOL multi-send only fills when Shared SOL also ran (same funding data).
     - Prefer Fresh OR Multi-send one at a time on free Helius if you hit 429s.
     - Wait 30–60s after a 429 before re-clicking Analyze.
     - Quick mode skips holders/bundles Helius-heavy paths (much lighter).
     - HELIUS_API_KEY is server-side only (Render / .env), not web/config.js.
+    - Free plan: 1M credits refresh monthly (see Helius dashboard).
 
 
 6.4 Bundle % alert scheme (Alerts tab)
