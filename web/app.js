@@ -2312,13 +2312,18 @@ function processRuggersFromAnalyze(data) {
   // Bug fix: after a sell, wallet drops off the holder list → current snapshot
   // no longer marks in_similar, so Similar count shrank every re-Analyze.
   // Once similar (first, previous status, or any later snap), stay similar.
+  // Same sticky idea for Shared SOL (funding) tags when later snaps drop them.
   if (!rec.first_wallets || typeof rec.first_wallets !== "object") {
     rec.first_wallets = {};
   }
   for (const [w, info] of Object.entries(snap.wallets || {})) {
-    if (!info || !info.in_similar) continue;
-    if (rec.first_wallets[w]) {
+    if (!info) continue;
+    if (info.in_similar && rec.first_wallets[w]) {
       rec.first_wallets[w].in_similar = true;
+    }
+    if (info.in_funding && rec.first_wallets[w]) {
+      rec.first_wallets[w].in_funding = true;
+      rec.first_wallets[w].exclude_from_single = true;
     }
   }
   // Also from similar_groups members on this snap
@@ -7790,10 +7795,11 @@ function mountBundleStatsBar(mountEl, items, version) {
     box.appendChild(lab);
     box.appendChild(val);
 
-    if (it.sub) {
+    if (it.sub != null && String(it.sub).trim() !== "") {
       const sub = document.createElement("span");
       sub.className = "bun-stat-sub";
       sub.textContent = String(it.sub);
+      sub.title = String(it.sub).replace(/\n/g, " ");
       box.appendChild(sub);
     }
     grid.appendChild(box);
@@ -9258,6 +9264,11 @@ function renderBundlesUi(data) {
   function stat(label, valueHtml, subHtml) {
     let val = valueHtml == null ? "" : String(valueHtml);
     // Do not force "(no change)" here — that hid real UP/DN when assembly missed a marker.
+    const subRaw = subHtml == null ? "" : String(subHtml);
+    const subTitle = subRaw
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
     return (
       '<div class="bun-stat" data-bun-stat="' +
       escHtml(label) +
@@ -9266,8 +9277,12 @@ function renderBundlesUi(data) {
       '</span><span class="bun-stat-value">' +
       val +
       "</span>" +
-      (subHtml
-        ? '<span class="bun-stat-sub">' + subHtml + "</span>"
+      (subRaw
+        ? '<span class="bun-stat-sub"' +
+          (subTitle ? ' title="' + escHtml(subTitle) + '"' : "") +
+          ">" +
+          subRaw +
+          "</span>"
         : "") +
       "</div>"
     );
@@ -9291,13 +9306,11 @@ function renderBundlesUi(data) {
   }
 
   function lastKnownSub(fromCache, serverAt, browserAt) {
-    // Legacy helper — stamps only via optionalUpdatedPlain (restore + check off)
+    // Legacy helper — prefer optionalUpdatedPlain; keep both label + time
     if (!fromCache && !browserAt && !serverAt) return "";
-    const when = fmtLastKnownAt(serverAt || browserAt);
-    if (!when) {
-      return fromCache ? escHtml("Last updated") : "";
-    }
-    return escHtml("Last updated · " + when);
+    const when = fmtLastKnownAt(serverAt || browserAt) || fmtLastKnownAt(Date.now());
+    if (!when) return escHtml("Last updated");
+    return escHtml("Last updated\n" + when);
   }
 
   /**

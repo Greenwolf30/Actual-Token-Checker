@@ -691,6 +691,76 @@ def _ruggers_track_snapshot(
         row["exclude_from_single"] = True
         wallet_rows.append(row)
 
+    # Shared SOL (funding) funder + children not already listed.
+    # Without this, only top holders get in_funding — most Shared SOL bags
+    # never freeze into Ruggers, so sells never appear under Shared SOL section.
+    for addr in funding_wallets:
+        if addr in seen:
+            continue
+        seen.add(addr)
+        pct_f = None
+        for fc in list(bundles.get("funding_clusters") or []):
+            if not isinstance(fc, dict):
+                continue
+            funder = (fc.get("funder") or fc.get("sender") or "").strip()
+            if funder == addr:
+                try:
+                    pct_f = (
+                        float(fc["funder_pct"])
+                        if fc.get("funder_pct") is not None
+                        else (
+                            float(fc["sender_pct"])
+                            if fc.get("sender_pct") is not None
+                            else None
+                        )
+                    )
+                except (TypeError, ValueError):
+                    pct_f = None
+                break
+            for row_c in list(fc.get("child_rows") or []):
+                if isinstance(row_c, dict) and (row_c.get("wallet") or "").strip() == addr:
+                    try:
+                        pct_f = (
+                            float(row_c["pct_supply"])
+                            if row_c.get("pct_supply") is not None
+                            else None
+                        )
+                    except (TypeError, ValueError):
+                        pct_f = None
+                    break
+            if pct_f is not None:
+                break
+            for c in list(fc.get("children") or []):
+                cw = (
+                    (c.get("wallet") or "").strip()
+                    if isinstance(c, dict)
+                    else str(c or "").strip()
+                )
+                if cw == addr:
+                    if isinstance(c, dict):
+                        try:
+                            pct_f = (
+                                float(c["pct_supply"])
+                                if c.get("pct_supply") is not None
+                                else None
+                            )
+                        except (TypeError, ValueError):
+                            pct_f = None
+                    break
+            if pct_f is not None:
+                break
+        row = {
+            "wallet": addr,
+            "pct_supply": pct_f,
+            "balance": None,
+            "rank": None,
+            "label": "shared SOL funder",
+        }
+        row.update(_bundle_tags(addr))
+        row["in_funding"] = True
+        row["exclude_from_single"] = True
+        wallet_rows.append(row)
+
     if creator and creator not in seen:
         c_pct = None
         c_bal = None
