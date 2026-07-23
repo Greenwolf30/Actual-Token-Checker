@@ -2034,6 +2034,8 @@ function resolveRuggersOriginLane(rec, w, first, prev, cur, uploadedSimilar) {
 
   const primary = primaryLaneFromBaselineFlags(first, false);
   if (primary) return primary;
+  // Measurable bag with no special category → Single (sellers must have a lane)
+  if (hasRuggersFirstBag(first)) return "single";
   return "excluded";
 }
 
@@ -2446,14 +2448,19 @@ function processRuggersFromAnalyze(data) {
     }
   }
 
-  // ── Subsequent Analyzes: enroll NEW holders into baseline ─────────────
+  // ── Subsequent Analyzes: enroll NEW holders + upgrade null first bags ─
   // First sight freezes their bag. If they sell later → Similar / Single / …
   // or Flagged if on RugWatch. Flagged wallets that show up as holders are
   // enrolled the same way so a later dump lands in Flagged.
   if (!isFirstLookup) {
     for (const [w, info] of Object.entries(snap.wallets || {})) {
       if (!w || !info) continue;
-      if (rec.first_wallets[w]) continue;
+      if (rec.first_wallets[w]) {
+        // Was enrolled with null bag (e.g. multi-send inject) — fill bag while
+        // they still hold so a later dump can register as sold.
+        upgradeRuggersFirstBag(rec.first_wallets[w], info);
+        continue;
+      }
       // Prefer measurable bag (or creator)
       enrollRuggersBaselineWallet(rec, w, info, now);
     }
@@ -2572,24 +2579,12 @@ function processRuggersFromAnalyze(data) {
       cur.balance = 0;
     }
 
-    // Fill first bag on first *observed* hold (creator often missing from top-N
-    // on first lookup with null pct — don't invent a dump later).
+    // Fill first bag on first *observed* hold (creator / inject with null bag).
+    // Without a measurable first bag, sold detection is always false.
     if (rec.first_wallets[w] && cur.listed) {
       const fw = rec.first_wallets[w];
-      if (
-        (fw.pct_supply == null || !Number.isFinite(Number(fw.pct_supply))) &&
-        cur.pct_supply != null &&
-        Number(cur.pct_supply) > 0
-      ) {
-        fw.pct_supply = Number(cur.pct_supply);
+      if (upgradeRuggersFirstBag(fw, cur)) {
         first.pct_supply = fw.pct_supply;
-      }
-      if (
-        (fw.balance == null || !Number.isFinite(Number(fw.balance))) &&
-        cur.balance != null &&
-        Number(cur.balance) > 0
-      ) {
-        fw.balance = Number(cur.balance);
         first.balance = fw.balance;
       }
     }
@@ -3428,6 +3423,28 @@ function processRuggersFromAnalyze(data) {
   } catch (err) {
     console.warn("[ruggers] save store failed", err);
   }
+
+  try {
+    const nTrack = Object.keys(rec.first_wallets || {}).length;
+    const nMeas = countMeasurableRuggersBags(rec.first_wallets);
+    let nSellers = 0;
+    let nHolding = 0;
+    for (const st of Object.values(rec.status || {})) {
+      if (!st) continue;
+      if (st.tag === "seller" || st.ever_sold) nSellers++;
+      else if (st.tag === "holding") nHolding++;
+    }
+    console.info(
+      "[ruggers]",
+      mintBare.slice(0, 6) + "…",
+      "tracked=" + nTrack,
+      "measurable_bags=" + nMeas,
+      "sellers=" + nSellers,
+      "holding=" + nHolding,
+      "lookups=" + (rec.lookup_count || 1),
+      isFirstLookup ? "(baseline freeze)" : "(compare)"
+    );
+  } catch (_) {}
 
   // Cloud unflag only for non-lineage cleanup (flagged identity stays for loop)
   if (unflagNow.length) {
@@ -5703,13 +5720,30 @@ function _refreshRuggersPanelImpl(focusKey) {
       ? " · CA " + escHtml(mintAddr.slice(0, 6) + "…" + mintAddr.slice(-4))
       : "") +
     "</div>";
+  const nMeasBags = countMeasurableRuggersBags(rec.first_wallets);
   if (nTracked === 0 || rec.seeded_empty) {
     html +=
       '<p class="rug-rules" style="border-color:rgba(230,208,122,0.4)">' +
       "<strong>Baseline open for this mint</strong> — holder bag list is empty or thin. " +
-      "Run a <strong>full Analyze</strong> (not Quick) so top holders freeze. " +
+      "Run a <strong>full Analyze</strong> (not Quick) so holders freeze with a real bag %. " +
       "Seller sections stay empty until a <strong>later</strong> full Analyze of the same mint " +
       "after wallets sell ≥99% of their first bag." +
+      "</p>";
+  } else if (nMeasBags === 0) {
+    html +=
+      '<p class="rug-rules" style="border-color:rgba(230,208,122,0.4)">' +
+      "<strong>No measurable first bags</strong> — " +
+      nTracked +
+      " wallet(s) tracked but none have supply % / balance frozen. " +
+      "Sells cannot be proven. Re-run <strong>full Analyze</strong> while holders still have bags." +
+      "</p>";
+  } else if ((rec.lookup_count || 1) < 2) {
+    html +=
+      '<p class="rug-rules" style="border-color:rgba(120,180,140,0.35)">' +
+      "<strong>Baseline frozen</strong> — " +
+      nMeasBags +
+      " wallet(s) with bags. Seller lists stay empty until a <strong>second</strong> full Analyze " +
+      "after they dump ≥99% of that first bag." +
       "</p>";
   }
   html +=
