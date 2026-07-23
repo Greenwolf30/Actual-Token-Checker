@@ -7327,38 +7327,32 @@ function externalLinkMeta(key, url) {
     u.indexOf("pumpfun") >= 0;
 
   if (isDex) {
-    // DexScreener brand: frontal white eagle head (seeklogo-style silhouette)
+    // DexScreener brand (seeklogo): frontal white eagle head on dark
     return {
       slug: "dexscreener",
       label: "DexScreener",
       iconSvg:
-        '<svg viewBox="0 0 32 32" width="12" height="12" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-        // White eagle head face-on: crest, horns, brows, cheeks, beak, neck feathers
-        '<path fill="#FFFFFF" d="' +
-        // Outer silhouette (head + cheeks + neck points)
-        "M16 2.2c3.2 0 5.6 1.55 6.9 3.6 1.05-.35 2.35-.2 3.15.55.55.5.7 1.15.45 1.75" +
-        "-.35.85-1.25 1.35-2.35 1.45.7 1.55 1.05 3.25.95 4.95-.15 2.6-1.55 4.85-3.85 6.15" +
-        "L16 28.8l-5.25-8.15C8.45 19.35 7.05 17.1 6.9 14.5c-.1-1.7.25-3.4.95-4.95" +
-        "-1.1-.1-2-.6-2.35-1.45-.25-.6-.1-1.25.45-1.75.8-.75 2.1-.9 3.15-.55" +
-        "C10.4 3.75 12.8 2.2 16 2.2Z" +
+        '<svg viewBox="0 0 32 32" width="12" height="12" xmlns="http://www.w3.org/2000/svg">' +
+        // Outer white head silhouette (horns, dome, cheeks, jagged neck)
+        '<path fill="#fff" d="' +
+        "M16 3c2.6 0 4.7 1.1 5.9 2.85 1.15-.55 2.55-.5 3.35.45.55.65.45 1.45-.15 2.05" +
+        "-.55.55-1.35.8-2.15.75.55 1.35.85 2.85.75 4.35-.2 2.9-1.85 5.35-4.55 6.85" +
+        "L16 29l-3.15-8.7C10.15 18.8 8.5 16.35 8.3 13.45c-.1-1.5.2-3 .75-4.35" +
+        "-.8.05-1.6-.2-2.15-.75-.6-.6-.7-1.4-.15-2.05.8-.95 2.2-1 3.35-.45" +
+        "C11.3 4.1 13.4 3 16 3z" +
         '"/>' +
-        // Black eye sockets / brow cutouts (read as negative space)
-        '<path fill="#1a1a1a" d="' +
-        "M9.6 10.2c1.35-1.55 3.1-2.35 5.05-2.35h1.1c-.25 1.15-.95 2.1-2.05 2.75" +
-        "-.55.35-1.15.55-1.75.65L9.6 10.2Z" +
-        "M22.4 10.2c-1.35-1.55-3.1-2.35-5.05-2.35H16.25c.25 1.15.95 2.1 2.05 2.75" +
-        ".55.35 1.15.55 1.75.65L22.4 10.2Z" +
-        '"/>' +
+        // Brow / eye cutouts (dark)
+        '<path fill="#1a1a1a" d="M10.2 10.6c1.5-1.4 3.2-2.1 5-2.1.15 1.2-.25 2.25-1.15 3.05' +
+        "-.7.6-1.55.95-2.45 1.05l-1.4-2zM21.8 10.6c-1.5-1.4-3.2-2.1-5-2.1-.15 1.2.25 2.25 1.15 3.05" +
+        '.7.6 1.55.95 2.45 1.05l1.4-2z"/>' +
         // Eyes
-        '<ellipse cx="12.35" cy="12.1" rx="1.55" ry="1.15" fill="#1a1a1a"/>' +
-        '<ellipse cx="19.65" cy="12.1" rx="1.55" ry="1.15" fill="#1a1a1a"/>' +
-        // Beak (dark cutout shape pointing down)
-        '<path fill="#1a1a1a" d="M16 13.4c1.35.35 2.15 1.35 2.35 2.85.15 1.15-.35 2.45-1.35 3.55L16 21.6l-1-1.8' +
-        'c-1-1.1-1.5-2.4-1.35-3.55.2-1.5 1-2.5 2.35-2.85Z"/>' +
-        // Neck V feather cutout
-        '<path fill="#1a1a1a" d="M11.2 22.4L16 26.6l4.8-4.2c-.9.55-1.95.9-3.05 1.05-.55.08-1.1.1-1.75.1' +
-        "-.65 0-1.2-.02-1.75-.1-1.1-.15-2.15-.5-3.05-1.05Z" +
-        '"/>' +
+        '<ellipse cx="12.4" cy="12.35" rx="1.65" ry="1.2" fill="#1a1a1a"/>' +
+        '<ellipse cx="19.6" cy="12.35" rx="1.65" ry="1.2" fill="#1a1a1a"/>' +
+        // Beak pointing down
+        '<path fill="#1a1a1a" d="M16 13.6c1.2.25 2 1.15 2.2 2.55.15 1.1-.25 2.35-1.2 3.4L16 21.5' +
+        'l-1-1.95c-.95-1.05-1.35-2.3-1.2-3.4.2-1.4 1-2.3 2.2-2.55z"/>' +
+        // Lower neck V
+        '<path fill="#1a1a1a" d="M11.5 22.2 16 26.3l4.5-4.1c-1.2.85-2.75 1.3-4.5 1.3s-3.3-.45-4.5-1.3z"/>' +
         "</svg>",
     };
   }
