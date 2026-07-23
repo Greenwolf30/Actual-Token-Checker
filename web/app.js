@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v150";
+const ADTC_CLIENT_VERSION = "v151";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -10994,14 +10994,31 @@ function renderBundlesUi(data) {
   }
 
   // Single holders — non-category bags ≥0.01% (list + total with hold-% colors)
+  // Hard-exclude any wallet already in Similar-sized (bags or Rugcheck insider).
   {
+    const similarBlock = Object.create(null);
+    for (const g of sims) {
+      const mems = (g && (g.wallets || g.members)) || [];
+      for (const m of mems) {
+        const w =
+          typeof m === "string"
+            ? String(m).trim()
+            : String((m && (m.wallet || m.address)) || "").trim();
+        if (w) similarBlock[w] = true;
+      }
+    }
+    for (const h of insiders) {
+      const w = String((h && (h.wallet || h.address)) || "").trim();
+      if (w) similarBlock[w] = true;
+    }
+
     const singles = Array.isArray(view.single_holders) ? view.single_holders : [];
     // Dedupe by wallet (max bag) in case API/cache double-listed
     const byW = Object.create(null);
     for (const row of singles) {
       if (!row || typeof row !== "object") continue;
       const w = String(row.wallet || "").trim();
-      if (!w) continue;
+      if (!w || similarBlock[w]) continue; // similar-sized → Similar section only
       const p =
         row.pct_supply != null && Number.isFinite(Number(row.pct_supply))
           ? Number(row.pct_supply)
@@ -11020,18 +11037,10 @@ function renderBundlesUi(data) {
       const pb = b.pct_supply != null ? Number(b.pct_supply) : -1;
       return pb - pa;
     });
-    let singleTot =
-      s.single_holders_total_pct != null &&
-      Number.isFinite(Number(s.single_holders_total_pct))
-        ? Number(s.single_holders_total_pct)
-        : null;
-    if (singleTot == null) {
-      singleTot = sumUniqueWalletSupplyPct(singleRows);
-    }
-    const singleN =
-      s.single_holders_wallet_count != null
-        ? Number(s.single_holders_wallet_count)
-        : singleRows.length;
+    // Always recompute total from filtered list (never use a total that included similar)
+    let singleTot = sumUniqueWalletSupplyPct(singleRows);
+    if (singleTot == null) singleTot = 0;
+    const singleN = singleRows.length;
     if (singleRows.length) {
       html +=
         '<section class="bun-section bun-section-single"><div class="bun-section-head">' +
@@ -11044,6 +11053,7 @@ function renderBundlesUi(data) {
       html +=
         '<p class="bun-sub">Non-LP bags ≥0.01% that are <strong>not</strong> in multi-account, ' +
         "similar-sized, multi-send, Shared SOL, or Fresh. " +
+        "Similar-sized wallets are listed only under Similar-sized above. " +
         "Hold % uses the same low → critical color bands as other Bundles sections.</p>";
       html += bunWalletTable(singleRows, [
         {

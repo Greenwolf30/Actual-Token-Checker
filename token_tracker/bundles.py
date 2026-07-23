@@ -1297,37 +1297,80 @@ def _sum_wallets_pct(
 _SINGLE_HOLDERS_MIN_PCT = 0.01
 
 
+def _wallet_addr(w: Any) -> str:
+    """Normalize a wallet field that may be a string or {wallet|owner|address}."""
+    if w is None:
+        return ""
+    if isinstance(w, dict):
+        a = (
+            w.get("wallet")
+            or w.get("owner")
+            or w.get("address")
+            or w.get("funder")
+            or w.get("sender")
+            or ""
+        )
+        return str(a).strip()
+    return str(w).strip()
+
+
+def _similar_sized_wallet_set(data: dict[str, Any] | None) -> set[str]:
+    """
+    Every wallet that belongs in Similar-sized section:
+      • near-exact bag groups (members + wallets lists)
+      • Rugcheck insider-flagged
+    Never Single.
+    """
+    data = data if isinstance(data, dict) else {}
+    out: set[str] = set()
+
+    def _add(w: Any) -> None:
+        a = _wallet_addr(w)
+        if a and len(a) >= 20:
+            out.add(a)
+
+    for g in data.get("similar_size_groups") or []:
+        if not isinstance(g, dict):
+            continue
+        for m in g.get("members") or []:
+            _add(m)
+        for w in g.get("wallets") or []:
+            _add(w)
+    for h in data.get("insider_wallets") or []:
+        _add(h)
+    # Legacy flat suspect list (if present) = similar-sized lineage
+    for s in data.get("suspect_wallets") or []:
+        _add(s)
+    return out
+
+
 def _collect_bundled_wallet_set(data: dict[str, Any] | None) -> set[str]:
     """Wallets that sit in any Bundles risk / category list (not Single)."""
     data = data if isinstance(data, dict) else {}
     out: set[str] = set()
 
     def _add(w: Any) -> None:
-        a = (str(w) if w is not None else "").strip()
+        a = _wallet_addr(w)
         if a:
             out.add(a)
+
+    # Similar-sized first (near-exact bags + Rugcheck insiders) — never Single
+    out |= _similar_sized_wallet_set(data)
 
     for c in data.get("clusters") or []:
         if isinstance(c, dict):
             _add(c.get("wallet") or c.get("owner"))
+        else:
+            _add(c)
     for h in data.get("insider_wallets") or []:
-        if isinstance(h, dict):
-            _add(h.get("wallet"))
-        else:
-            _add(h)
+        _add(h)
     for s in data.get("suspect_wallets") or []:
-        if isinstance(s, dict):
-            _add(s.get("wallet"))
-        else:
-            _add(s)
+        _add(s)
     for g in data.get("similar_size_groups") or []:
         if not isinstance(g, dict):
             continue
         for m in g.get("members") or []:
-            if isinstance(m, dict):
-                _add(m.get("wallet"))
-            else:
-                _add(m)
+            _add(m)
         for w in g.get("wallets") or []:
             _add(w)
     for fw in data.get("fresh_wallets") or []:
@@ -1376,21 +1419,36 @@ def _single_holders_rows(
 ) -> list[dict[str, Any]]:
     """
     Non-LP holders with bag ≥ min_pct that are NOT in any other Bundles category
-    (multi / similar / insider / suspect / fresh / multi-send / shared SOL).
+    (multi / similar-sized / insider / suspect / fresh / multi-send / shared SOL).
+
+    Similar-sized wallets (near-exact bags + Rugcheck insiders) are always
+    excluded here — they belong only under Similar-sized.
 
     Unique by wallet (max bag %). Sorted largest bag first.
     Matches Ruggers “Single” idea: standalone holders in the top snapshot.
     """
     data = data if isinstance(data, dict) else {}
     excluded = _collect_bundled_wallet_set(data)
+    # Hard gate: similar-sized set even if category collect missed a shape
+    similar_only = _similar_sized_wallet_set(data)
+    excluded |= similar_only
     by_w: dict[str, dict[str, Any]] = {}
     for h in data.get("holders") or []:
         if not isinstance(h, dict):
             continue
         if h.get("is_known_program") or is_known_lp_label(h.get("label")):
             continue
-        w = (h.get("wallet") or "").strip()
-        if not w or w in excluded:
+        w = _wallet_addr(h.get("wallet") or h.get("owner") or h)
+        if not w or w in excluded or w in similar_only:
+            continue
+        # Extra safety: holder flagged as similar/insider/suspect on the row
+        if (
+            h.get("in_similar")
+            or h.get("in_insider")
+            or h.get("in_suspect")
+            or h.get("similar")
+            or h.get("insider")
+        ):
             continue
         try:
             pct = float(h["pct_supply"]) if h.get("pct_supply") is not None else None
@@ -2630,29 +2688,64 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
             }
         )
 
-    # Similar-size groups (UI renames to "Suspect")
+    # Similar-size groups → Similar-sized section (list all members, not top-10 only)
     similar_out: list[dict[str, Any]] = []
-    for g in list(data.get("similar_size_groups") or [])[:8]:
+    for g in list(data.get("similar_size_groups") or [])[:12]:
         if not isinstance(g, dict):
             continue
         members: list[dict[str, Any]] = []
         member_rows = list(g.get("members") or [])
         if not member_rows:
             for w in g.get("wallets") or []:
-                member_rows.append({"wallet": w, "pct_supply": g.get("avg_pct")})
-        for m in member_rows[:10]:
+                if isinstance(w, dict):
+                    member_rows.append(
+                        {
+                            "wallet": w.get("wallet") or w.get("address"),
+                            "pct_supply": w.get("pct_supply")
+                            if w.get("pct_supply") is not None
+                            else g.get("avg_pct"),
+                        }
+                    )
+                else:
+                    member_rows.append(
+                        {"wallet": w, "pct_supply": g.get("avg_pct")}
+                    )
+        seen_m: set[str] = set()
+        for m in member_rows[:60]:
             if isinstance(m, dict):
-                r = _wallet_row(m.get("wallet"), m.get("pct_supply"))
+                r = _wallet_row(
+                    m.get("wallet") or m.get("address"),
+                    m.get("pct_supply"),
+                )
             else:
                 r = _wallet_row(m, g.get("avg_pct"))
-            if r:
-                members.append(r)
+            if not r:
+                continue
+            ww = r["wallet"]
+            if ww in seen_m:
+                continue
+            seen_m.add(ww)
+            members.append(r)
+        members.sort(
+            key=lambda r: (
+                -(
+                    float(r["pct_supply"])
+                    if r.get("pct_supply") is not None
+                    else -1.0
+                ),
+                str(r.get("wallet") or ""),
+            )
+        )
+        # Prefer unique-wallet sum for group total
+        g_tot, _g_n = _sum_wallets_pct(members)
         similar_out.append(
             {
                 "avg_pct": g.get("avg_pct"),
                 "min_pct": g.get("min_pct"),
                 "max_pct": g.get("max_pct"),
-                "total_pct": g.get("total_pct"),
+                "total_pct": g_tot
+                if g_tot is not None
+                else g.get("total_pct"),
                 "wallets": members,
                 "count": len(members)
                 or len(g.get("wallets") or [])
@@ -2930,6 +3023,19 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
         sus_n = 0
 
     # Single holders list (non-category ≥0.01%) — full table for Bundles UI
+    # Never include Similar-sized wallets (near-exact bags + Rugcheck insiders).
+    similar_block = _similar_sized_wallet_set(data)
+    # Also block anything already listed in similar_out / insiders_out this paint
+    for g in similar_out:
+        for m in g.get("wallets") or []:
+            a = _wallet_addr(m)
+            if a:
+                similar_block.add(a)
+    for h in insiders_out:
+        a = _wallet_addr(h)
+        if a:
+            similar_block.add(a)
+
     single_src = list(data.get("single_holders") or [])
     if not single_src:
         try:
@@ -2951,10 +3057,27 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
         if not r:
             continue
         w = r["wallet"]
-        if w in seen_single:
+        if not w or w in seen_single or w in similar_block:
             continue
         seen_single.add(w)
         single_out.append(r)
+    # Rebuild from holders if cached single_holders still had similar bleed
+    if not single_out and (data.get("holders") or []):
+        try:
+            for h in _single_holders_rows(data):
+                r = _wallet_row(
+                    h.get("wallet"),
+                    h.get("pct_supply"),
+                    rank=h.get("rank"),
+                    balance=h.get("balance"),
+                    label=h.get("label"),
+                )
+                if not r or r["wallet"] in similar_block or r["wallet"] in seen_single:
+                    continue
+                seen_single.add(r["wallet"])
+                single_out.append(r)
+        except Exception:  # noqa: BLE001
+            pass
     single_out.sort(
         key=lambda r: (
             -(float(r["pct_supply"]) if r.get("pct_supply") is not None else -1.0),
@@ -2962,10 +3085,10 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
         )
     )
     single_tot, single_n = _sum_wallets_pct(single_out)
-    if s.get("single_holders_total_pct") is None and single_tot is not None:
-        s = dict(s)
-        s["single_holders_total_pct"] = single_tot
-        s["single_holders_wallet_count"] = single_n
+    # Always stamp cleaned totals (never keep a stale total that included similar)
+    s = dict(s)
+    s["single_holders_total_pct"] = single_tot
+    s["single_holders_wallet_count"] = single_n
 
     # Signals
     signals_out: list[dict[str, Any]] = []
