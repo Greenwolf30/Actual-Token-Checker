@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v149";
+const ADTC_CLIENT_VERSION = "v150";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -1401,33 +1401,43 @@ function migrateRuggersStore(store) {
       copy.rules_version = RUGGERS_RULES_VERSION;
       changed = true;
     } else {
-      // Even on current version: drop invalid sticky Flagged rows
+      // Current rules: keep Flagged rows from the sold-while-flagged path (v9+).
+      // Do NOT require rules_v === current — that wiped legit v9 rows after v10 bump.
       const fs = copy.flagged_sellers;
       if (fs && typeof fs === "object") {
         const cleaned = {};
+        let fsChanged = false;
         for (const [w, metaW] of Object.entries(fs)) {
-          if (
-            metaW &&
-            typeof metaW === "object" &&
-            metaW.entered_via === "sold_while_flagged" &&
-            Number(metaW.rules_v) >= RUGGERS_RULES_VERSION
-          ) {
-            // Collapse to a single initial mint (no consecutive mint lists)
-            const sealed = withSingleFlaggedFromMint(metaW);
-            if (
-              JSON.stringify(metaW.flagged_from_mints || []) !==
-              JSON.stringify(sealed.flagged_from_mints || [])
-            ) {
-              changed = true;
-            }
-            cleaned[w] = sealed;
-          } else {
-            changed = true;
+          if (!metaW || typeof metaW !== "object") {
+            fsChanged = true;
+            continue;
           }
+          const via = String(metaW.entered_via || "");
+          const rv = Number(metaW.rules_v) || 0;
+          // Accept v9+ Flagged path; also accept missing rules_v if via is correct
+          const ok =
+            via === "sold_while_flagged" && (rv >= 9 || rv === 0);
+          if (!ok) {
+            fsChanged = true;
+            continue;
+          }
+          const sealed = withSingleFlaggedFromMint(metaW);
+          if (
+            JSON.stringify(metaW.flagged_from_mints || []) !==
+            JSON.stringify(sealed.flagged_from_mints || [])
+          ) {
+            fsChanged = true;
+          }
+          // Stamp current rules so future bumps don't re-scrub needlessly
+          if (Number(sealed.rules_v) !== RUGGERS_RULES_VERSION) {
+            sealed.rules_v = RUGGERS_RULES_VERSION;
+            fsChanged = true;
+          }
+          cleaned[w] = sealed;
         }
         if (
-          Object.keys(cleaned).length !== Object.keys(fs).length ||
-          changed
+          fsChanged ||
+          Object.keys(cleaned).length !== Object.keys(fs).length
         ) {
           copy.flagged_sellers = cleaned;
           copy.flagged_known = { ...cleaned };
@@ -8492,6 +8502,19 @@ function summaryOnlyBundlesView(bv) {
     summary: c.summary && typeof c.summary === "object" ? c.summary : {},
   };
   if (out.summary) delete out.summary._ui_stats_bar_html;
+  // Keep short list slices so Single / Multi / Similar still paint after quota slim
+  function keepList(key, n) {
+    if (Array.isArray(c[key]) && c[key].length) {
+      out[key] = c[key].slice(0, n);
+    }
+  }
+  keepList("single_holders", 80);
+  keepList("clusters", 8);
+  keepList("similar_size_groups", 4);
+  keepList("insider_wallets", 12);
+  keepList("fresh_wallets", 12);
+  keepList("multi_send_wallets", 16);
+  keepList("funding_clusters", 4);
   return out;
 }
 
@@ -11036,10 +11059,15 @@ function renderBundlesUi(data) {
       ]);
       html += "</div></section>";
     } else {
-      html += bunEmptySection(
-        "Single holders",
-        "None found — no standalone bags ≥0.01% outside multi / similar-sized / optionals."
-      );
+      html +=
+        '<section class="bun-section bun-section-single">' +
+        '<div class="bun-section-head">' +
+        '<span class="bun-section-title">Single holders</span>' +
+        '<span class="bun-section-total">total ' +
+        bunPctHtml(0) +
+        " · 0 wallet(s)</span></div>" +
+        '<p class="bun-empty">None found — no standalone bags ≥0.01% outside multi / similar-sized / optionals.</p>' +
+        "</section>";
     }
   }
 

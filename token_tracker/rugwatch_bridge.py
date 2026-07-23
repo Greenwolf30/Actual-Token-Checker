@@ -682,7 +682,6 @@ def _load_local_wallets(
     mint = (mint or "").strip()
     linked: list[dict[str, Any]] = []
     in_top: list[dict[str, Any]] = []
-    all_flagged: list[dict[str, Any]] = []
     by_addr: dict[str, dict[str, Any]] = {}
     total = 0
 
@@ -712,15 +711,15 @@ def _load_local_wallets(
                     for r in rows:
                         w = _wallet_row(r)
                         w["origin"] = "local"
-                        a = w.get("address") or ""
+                        a = (w.get("address") or "").strip()
                         if not a:
                             continue
+                        w["address"] = a
                         prev = by_addr.get(a)
                         if prev is None or int(w.get("risk_score") or 0) >= int(
                             prev.get("risk_score") or 0
                         ):
                             by_addr[a] = w
-                        all_flagged.append(w)
                 except sqlite3.Error as exc:
                     out["error"] = (out.get("error") or "") + f" wallets: {exc}; "
 
@@ -817,7 +816,7 @@ def _load_local_wallets(
                         if cur:
                             w["flagged_from_mint"] = cur[0]
 
-                    for bucket in (all_flagged, in_top, linked):
+                    for bucket in (in_top, linked):
                         for w in bucket:
                             _enrich_from_links(w)
                     for w in by_addr.values():

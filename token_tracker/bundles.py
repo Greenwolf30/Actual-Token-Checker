@@ -400,6 +400,23 @@ def format_bundles_text(data: dict[str, Any]) -> str:
     else:
         lines.append(_empty_line("Top10 ex-LP"))
 
+    # Single holders total (non-category ≥0.01%)
+    single_pct = s.get("single_holders_total_pct")
+    single_n = s.get("single_holders_wallet_count")
+    if single_pct is None:
+        try:
+            single_pct, single_n = _single_holders_total(data)
+        except Exception:  # noqa: BLE001
+            single_pct, single_n = None, 0
+    single_f = _num(single_pct)
+    if single_f is not None and single_f > 0:
+        lines.append(
+            f"  Single holders:  {_pct(single_pct)}"
+            + (f"  ({single_n} wallet(s))" if single_n else "")
+        )
+    else:
+        lines.append(_empty_line("Single holders"))
+
     # Fresh total % (category sum of unique sole-token wallets)
     fresh_pct = s.get("fresh_total_pct")
     fresh_n = s.get("fresh_wallet_with_pct")
@@ -988,6 +1005,67 @@ def format_bundles_text(data: dict[str, Any]) -> str:
 
     # Old Rugcheck-only suspect list removed (Suspect section = similar-size above)
 
+    # Single holders list (same as UI cards)
+    lines.append("")
+    lines.append("── SINGLE HOLDERS ──")
+    single_rows = list(data.get("single_holders") or [])
+    if not single_rows:
+        try:
+            single_rows = _single_holders_rows(data)
+        except Exception:  # noqa: BLE001
+            single_rows = []
+    # Unique by wallet (max bag)
+    by_single: dict[str, dict[str, Any]] = {}
+    for r in single_rows:
+        if not isinstance(r, dict):
+            continue
+        w = (r.get("wallet") or "").strip()
+        if not w:
+            continue
+        try:
+            p = float(r["pct_supply"]) if r.get("pct_supply") is not None else None
+        except (TypeError, ValueError):
+            p = None
+        prev = by_single.get(w)
+        if prev is None or (
+            p is not None
+            and (
+                prev.get("pct_supply") is None
+                or float(p) > float(prev.get("pct_supply") or 0)
+            )
+        ):
+            by_single[w] = {"wallet": w, "pct_supply": p, "rank": r.get("rank")}
+    single_list = list(by_single.values())
+    single_list.sort(
+        key=lambda r: (
+            -(float(r["pct_supply"]) if r.get("pct_supply") is not None else -1.0),
+            str(r.get("wallet") or ""),
+        )
+    )
+    s_tot, s_n = _sum_wallets_pct(single_list)
+    if s.get("single_holders_total_pct") is not None:
+        try:
+            s_tot = float(s.get("single_holders_total_pct"))
+        except (TypeError, ValueError):
+            pass
+    if single_list:
+        lines.append(
+            f"  Non-LP bags ≥0.01% not in multi / similar-sized / optionals — "
+            f"total {_pct(s_tot)} across {len(single_list)} wallet(s):"
+        )
+        for i, row in enumerate(single_list[:80], start=1):
+            rk = row.get("rank")
+            rk_s = f"#{rk}  " if rk is not None else f"#{i}  "
+            lines.append(
+                f"    {rk_s}{row['wallet']}  holds {_pct(row.get('pct_supply'))}"
+            )
+        if len(single_list) > 80:
+            lines.append(f"    … +{len(single_list) - 80} more")
+    else:
+        lines.append(
+            "  (none — no standalone bags ≥0.01% outside multi / similar-sized / optionals)"
+        )
+
     if data.get("notes"):
         lines.append("")
         lines.append(f"  Note: {data['notes']}")
@@ -1003,12 +1081,15 @@ def _empty(msg: str) -> dict[str, Any]:
             "flagged_wallets": 0,
             "suspect_total_pct": None,
             "suspect_wallet_count": 0,
+            "single_holders_total_pct": None,
+            "single_holders_wallet_count": 0,
         },
         "signals": [],
         "clusters": [],
         "similar_size_groups": [],
         "insider_wallets": [],
         "suspect_wallets": [],
+        "single_holders": [],
         "notes": msg,
     }
 
