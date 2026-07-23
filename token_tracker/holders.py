@@ -2,17 +2,22 @@
 Holder / wallet concentration analysis.
 
 Solana multi-source fusion:
-  - Helius / Solana RPC (getTokenLargestAccounts)
+  - Helius DAS getTokenAccounts (paginated full-ish holder list when Helius key set)
+  - Helius / Solana RPC (getTokenLargestAccounts) as fallback (~20 largest ATAs)
   - Rugcheck report (top holders + insiders + risks)
   - Solscan Pro/public token holders (optional SOLSCAN_API_KEY)
   - Birdeye holders + security (optional BIRDEYE_API_KEY)
 
 Bundles still have a separate comprehensive path; Holders tab uses this fusion.
+
+Env:
+  HOLDERS_MAX_ACCOUNTS  max token accounts to page via DAS (default 2000, max 10000)
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import ssl
 import urllib.request
@@ -22,6 +27,15 @@ from .env_config import has_helius, helius_api_key, load_dotenv, solana_rpc_url
 from .http_util import DEFAULT_HEADERS
 
 load_dotenv()
+
+
+def _holders_max_accounts() -> int:
+    """Cap DAS pagination (token accounts, before owner-aggregate)."""
+    try:
+        n = int((os.environ.get("HOLDERS_MAX_ACCOUNTS") or "2000").strip() or "2000")
+    except (TypeError, ValueError):
+        n = 2000
+    return max(50, min(n, 10000))
 
 
 def _ssl_context() -> ssl.SSLContext:
@@ -615,7 +629,8 @@ def analyze_holders_helius_only(
     pair_address: str | None = None,
 ) -> dict[str, Any]:
     """
-    Top holders **only** via Helius JSON-RPC (getTokenLargestAccounts).
+    Holders via Helius: prefer DAS getTokenAccounts (paginated, broad list),
+    fall back to getTokenLargestAccounts (~20 largest ATAs).
 
     Used as the sole input for bundle analysis. No Rugcheck, no free RPCs.
     """
@@ -634,15 +649,22 @@ def analyze_holders_helius_only(
         result = _solana_via_rpc_url(
             token_address, pair_address=pair_address, rpc_url=url
         )
-        result["source"] = "helius_rpc"
-        result["notes"] = (
-            "Holder snapshot from Helius RPC only (getTokenLargestAccounts). "
-            "Used for bundle heuristics — no Rugcheck merge on this path."
-        )
         meta = dict(result.get("meta") or {})
         meta["rpc_endpoint_host"] = "mainnet.helius-rpc.com"
         meta["bundle_source"] = "helius_only"
         result["meta"] = meta
+        src = str(result.get("source") or "helius_rpc")
+        result["source"] = src
+        if "das" not in src:
+            result["notes"] = (
+                "Holder snapshot from Helius getTokenLargestAccounts (~20 ATAs). "
+                "DAS full-list path unavailable — used for bundle heuristics."
+            )
+        else:
+            result["notes"] = (
+                "Holder snapshot from Helius DAS getTokenAccounts (paginated). "
+                "Used for bundle heuristics — no Rugcheck merge on this path."
+            )
         return result
     except Exception as exc:  # noqa: BLE001
         return _empty(f"Helius holder scan failed: {exc}")
@@ -750,11 +772,11 @@ def _solana_holders(
         return _solana_via_rugcheck(mint, pair_address=pair_address)
 
     def _solscan() -> dict[str, Any]:
-        # Slightly larger page so Solscan can carry the list if Helius/RPC fails
-        return hsrc.fetch_solscan_holders(mint, limit=50)
+        # Larger page when Helius DAS is missing so fusion still has depth
+        return hsrc.fetch_solscan_holders(mint, limit=100)
 
     def _birdeye() -> dict[str, Any]:
-        return hsrc.fetch_birdeye_holders(mint, limit=40)
+        return hsrc.fetch_birdeye_holders(mint, limit=100)
 
     def _totals() -> dict[str, Any]:
         return hsrc.fetch_holder_totals(mint)
@@ -1504,6 +1526,16 @@ def _source_label(rpc_url: str) -> str:
 
 
 def _solana_via_rpc(mint: str, *, pair_address: str | None = None) -> dict[str, Any]:
+    # Prefer Helius DAS full-list when a Helius endpoint is available
+    for url in _rpc_endpoints():
+        if "helius" not in (url or "").lower():
+            continue
+        try:
+            return _solana_via_helius_das(
+                mint, pair_address=pair_address, rpc_url=url
+            )
+        except Exception:  # noqa: BLE001
+            break
     largest, used_url = _rpc_any("getTokenLargestAccounts", [mint])
     supply_res, _ = _rpc_any("getTokenSupply", [mint])
     return _holders_from_largest(
@@ -1522,6 +1554,13 @@ def _solana_via_rpc_url(
     rpc_url: str,
 ) -> dict[str, Any]:
     """RPC path forced to a single endpoint (e.g. Helius only)."""
+    if "helius" in (rpc_url or "").lower():
+        try:
+            return _solana_via_helius_das(
+                mint, pair_address=pair_address, rpc_url=rpc_url
+            )
+        except Exception:  # noqa: BLE001
+            pass
     largest = _rpc(rpc_url, "getTokenLargestAccounts", [mint])
     supply_res = _rpc(rpc_url, "getTokenSupply", [mint])
     return _holders_from_largest(
@@ -1532,6 +1571,172 @@ def _solana_via_rpc_url(
         used_url=rpc_url,
         owners_rpc_url=rpc_url,
     )
+
+
+def _solana_via_helius_das(
+    mint: str,
+    *,
+    pair_address: str | None = None,
+    rpc_url: str,
+) -> dict[str, Any]:
+    """
+    Paginated Helius DAS getTokenAccounts by mint → aggregate by owner.
+
+    getTokenLargestAccounts only returns ~20 ATAs. DAS pages up to
+    HOLDERS_MAX_ACCOUNTS (default 2000) for Ruggers / Holders / Bundles.
+    """
+    supply_res = _rpc(rpc_url, "getTokenSupply", [mint])
+    supply_ui = None
+    supply_raw = None
+    decimals = 0
+    try:
+        s = (supply_res or {}).get("value") or {}
+        supply_ui = float(s.get("uiAmount") or 0) or None
+        supply_raw = int(s.get("amount") or 0) or None
+        decimals = int(s.get("decimals") or 0)
+    except (TypeError, ValueError):
+        pass
+
+    max_acc = _holders_max_accounts()
+    page_limit = 1000
+    page = 1
+    token_rows: list[dict[str, Any]] = []
+    pages_scanned = 0
+    while len(token_rows) < max_acc and page <= 20:
+        need = max_acc - len(token_rows)
+        lim = min(page_limit, need)
+        try:
+            result = _rpc(
+                rpc_url,
+                "getTokenAccounts",
+                {
+                    "mint": mint,
+                    "page": page,
+                    "limit": lim,
+                    "options": {"showZeroBalance": False},
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            if not token_rows:
+                raise RuntimeError(f"Helius DAS getTokenAccounts failed: {exc}") from exc
+            break
+        batch = []
+        if isinstance(result, dict):
+            batch = list(result.get("token_accounts") or result.get("tokenAccounts") or [])
+        elif isinstance(result, list):
+            batch = list(result)
+        if not batch:
+            break
+        for row in batch:
+            if isinstance(row, dict):
+                token_rows.append(row)
+        pages_scanned += 1
+        if len(batch) < lim:
+            break
+        page += 1
+
+    if not token_rows:
+        raise RuntimeError("Helius DAS returned no token accounts for mint")
+
+    # Aggregate ATAs → owner wallet (max bag for multi-ATA owners)
+    owner_bal: dict[str, float] = {}
+    owner_ata_n: dict[str, int] = {}
+    owner_atas: dict[str, list[str]] = {}
+    for row in token_rows:
+        owner = (row.get("owner") or "").strip()
+        if not owner:
+            continue
+        amt_raw = row.get("amount")
+        ui = None
+        try:
+            if row.get("uiAmount") is not None:
+                ui = float(row["uiAmount"])
+            elif amt_raw is not None:
+                ui = float(amt_raw) / (10 ** max(0, decimals))
+        except (TypeError, ValueError):
+            ui = 0.0
+        ui = float(ui or 0.0)
+        if ui <= 0:
+            continue
+        owner_bal[owner] = owner_bal.get(owner, 0.0) + ui
+        owner_ata_n[owner] = owner_ata_n.get(owner, 0) + 1
+        ata = (row.get("address") or row.get("pubkey") or "").strip()
+        if ata:
+            owner_atas.setdefault(owner, []).append(ata)
+
+    if not owner_bal:
+        raise RuntimeError("Helius DAS: no positive balances after aggregate")
+
+    ordered = sorted(owner_bal.items(), key=lambda x: -x[1])
+    holders: list[dict[str, Any]] = []
+    for i, (owner, ui) in enumerate(ordered):
+        label = _KNOWN_OWNERS.get(owner)
+        if pair_address and owner == pair_address:
+            label = label or "Liquidity pair"
+        pct = (ui / supply_ui * 100.0) if supply_ui else None
+        holders.append(
+            {
+                "rank": i + 1,
+                "token_account": (owner_atas.get(owner) or [""])[0] or "",
+                "wallet": owner,
+                "balance": ui,
+                "pct_supply": pct,
+                "label": label,
+                "is_known_program": bool(label),
+                "insider": False,
+                "accounts": owner_ata_n.get(owner) or 1,
+            }
+        )
+
+    result = _build_result(
+        mint=mint,
+        holders=holders,
+        owner_totals=dict(owner_bal),
+        supply_ui=supply_ui,
+        supply_raw=supply_raw,
+        decimals=decimals,
+        source="helius_das",
+        pair_address=pair_address,
+        extra={
+            "rpc_endpoint_host": _host_only(rpc_url),
+            "das_pages": pages_scanned,
+            "das_token_accounts": len(token_rows),
+            "das_unique_owners": len(owner_bal),
+            "das_max_accounts": max_acc,
+        },
+    )
+    # Multi-account clusters from ATA counts (DAS has full multi-ATA picture)
+    multi = [
+        {
+            "wallet": w,
+            "combined_balance": bal,
+            "accounts": owner_ata_n.get(w) or 1,
+            "token_accounts": list(owner_atas.get(w) or [])[:8],
+            "pct_supply": (
+                (bal / supply_ui * 100.0) if supply_ui and supply_ui > 0 else None
+            ),
+            "combined_pct": (
+                (bal / supply_ui * 100.0) if supply_ui and supply_ui > 0 else None
+            ),
+        }
+        for w, bal in sorted(owner_bal.items(), key=lambda x: -x[1])
+        if (owner_ata_n.get(w) or 0) > 1
+    ]
+    if multi:
+        result["owner_clusters"] = multi[:40]
+    notes = (
+        f"Holder list from Helius DAS getTokenAccounts "
+        f"({len(token_rows)} ATAs → {len(owner_bal)} unique wallets"
+        f"{', capped' if len(token_rows) >= max_acc else ''}). "
+        "Not every dust account on huge mints; set HOLDERS_MAX_ACCOUNTS to raise cap."
+    )
+    result["notes"] = notes
+    s = dict(result.get("summary") or {})
+    s["accounts_returned"] = len(holders)
+    s["unique_wallets_in_top"] = len(holders)
+    s["holder_source"] = "helius_das"
+    result["summary"] = s
+    return result
 
 
 def _holders_from_largest(
@@ -1812,7 +2017,8 @@ def _build_result(
         "flags": flags,
         "meta": extra or {},
         "notes": (
-            "Holder data is a top-wallet snapshot (not every holder)."
+            "Holder data from the active source snapshot "
+            "(Helius DAS paginated list when available; otherwise top largest ATAs)."
             + helius_note
             + " Bundle/sniper detection is heuristic — multi-account same owner + concentration + "
             "Rugcheck insider flags when available."

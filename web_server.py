@@ -580,10 +580,10 @@ def _ruggers_track_snapshot(
 
     wallet_rows: list[dict[str, Any]] = []
     seen: set[str] = set()
-    # All non-LP holders in snapshot:
-    #  - include if supply % ≥ 0.01% (Single cutoff), OR
-    #  - include if % unknown but balance > 0 (still track; Single needs % later)
-    # Dust below 0.01% with known % is skipped (unless similar/creator added below).
+    # Full holder snapshot (not just top 15–20):
+    #  - any positive bag (pct > 0 or balance > 0)
+    #  - Single lane still requires ≥ 0.01% (exclude_from_single otherwise)
+    #  - LP / known programs skipped
     for h in list(holders.get("holders") or []):
         if not isinstance(h, dict):
             continue
@@ -602,8 +602,10 @@ def _ruggers_track_snapshot(
             bal_f = float(bal) if bal is not None else None
         except (TypeError, ValueError):
             bal_f = None
-        if pct_f is not None and pct_f < SINGLE_MIN_PCT:
-            continue
+        # Skip zero / empty bags only
+        if pct_f is not None and pct_f <= 0:
+            if bal_f is None or bal_f <= 0:
+                continue
         if pct_f is None and (bal_f is None or bal_f <= 0):
             continue
         seen.add(w)
@@ -615,7 +617,7 @@ def _ruggers_track_snapshot(
             "label": h.get("label"),
         }
         row.update(_bundle_tags(w))
-        # Single lane needs known % ≥ cutoff; balance-only rows track but not Single
+        # Single lane needs known % ≥ cutoff; smaller bags still track for Ruggers
         if pct_f is None or pct_f < SINGLE_MIN_PCT:
             row["exclude_from_single"] = True
         wallet_rows.append(row)
@@ -878,20 +880,24 @@ def _ruggers_track_snapshot(
                 if len(flagged_addresses) >= 80:
                     break
 
-    # Cap payload size (holders ≥0.01% + similar/creator extras)
+    # Sort by bag size; keep full snapshot for Ruggers (not top-15/20 only).
+    # Soft cap protects JSON size on huge mints (HOLDERS_MAX / DAS already caps source).
     wallet_rows.sort(
         key=lambda r: (
             -(float(r["pct_supply"]) if r.get("pct_supply") is not None else -1.0),
             str(r.get("wallet") or ""),
         )
     )
+    max_track = 5000
     return {
         # ok if holders succeeded OR we at least have some wallet rows
         # (empty rows still return a track so the client can seed this mint)
         "ok": bool(holders.get("ok")) or bool(wallet_rows),
         "creator": creator,
         "single_min_pct": SINGLE_MIN_PCT,
-        "wallets": wallet_rows[:200],
+        "wallets": wallet_rows[:max_track],
+        "wallet_count": len(wallet_rows),
+        "wallets_capped": len(wallet_rows) > max_track,
         "similar_groups": similar_groups,
         "flagged_addresses": flagged_addresses,
     }
