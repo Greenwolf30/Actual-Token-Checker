@@ -612,27 +612,68 @@ button, .ghost, .primary {
 .links {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   margin-top: 14px;
   padding-top: 12px;
   border-top: 1px solid var(--border);
+  align-items: center;
 }
-.links a {
+.links a,
+.links a.ext-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--text-secondary);
   text-decoration: none;
   font-size: 0.75rem;
-  font-weight: 500;
+  font-weight: 600;
   border: 1px solid var(--border);
   background: var(--bg-input);
-  padding: 4px 11px;
+  padding: 5px 11px 5px 8px;
   border-radius: 999px;
-  text-transform: capitalize;
-  transition: color 0.12s, border-color 0.12s, background 0.12s;
+  text-transform: none;
+  letter-spacing: 0.01em;
+  transition: color 0.12s, border-color 0.12s, background 0.12s, box-shadow 0.12s;
+  line-height: 1.2;
+  max-width: 100%;
 }
-.links a:hover {
+.links a:hover,
+.links a.ext-link-btn:hover {
   color: var(--accent);
   border-color: var(--accent-border);
   background: var(--accent-soft);
+}
+.links .ext-link-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+}
+.links .ext-link-icon svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+.links .ext-link-label {
+  white-space: nowrap;
+}
+/* Brand-tinted hover accents */
+.links a.ext-link-dexscreener:hover {
+  border-color: rgba(104, 247, 163, 0.45);
+  box-shadow: 0 0 0 1px rgba(104, 247, 163, 0.12);
+}
+.links a.ext-link-solscan:hover {
+  border-color: rgba(76, 141, 255, 0.45);
+  box-shadow: 0 0 0 1px rgba(76, 141, 255, 0.12);
+}
+.links a.ext-link-twitter:hover {
+  border-color: rgba(231, 233, 234, 0.35);
+}
+.links a.ext-link-pumpfun:hover {
+  border-color: rgba(134, 239, 42, 0.5);
+  box-shadow: 0 0 0 1px rgba(134, 239, 42, 0.12);
 }
 
 /* ── Tab bar (segmented + underline hybrid) ─────────────── */
