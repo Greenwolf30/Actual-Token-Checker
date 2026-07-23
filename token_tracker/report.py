@@ -264,7 +264,7 @@ def format_pretty(report: dict[str, Any]) -> str:
             st = (bundles.get("summary") or {}).get("suspect_total_pct")
             sn = (bundles.get("summary") or {}).get("suspect_wallet_count") or len(suspects)
             lines.append(
-                f"  Suspect wallets — total {_pct(st)} across {sn} wallet(s):"
+                f"  Similar-sized wallets — total {_pct(st)} across {sn} wallet(s):"
             )
             for sw in suspects[:10]:
                 reasons = ", ".join(sw.get("reasons") or [])

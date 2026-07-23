@@ -1107,9 +1107,8 @@ def comprehensive_bundle_check(
             "Rugcheck insiders/risks + Birdeye (if key) + 1-hop SOL funding + "
             "fresh/sole-token wallets + token multi-send (one sender → many). "
             "Multi-account is its own category (always in Total). "
-            "Suspect = similar-size + Rugcheck insider; same Total rules as the old "
-            "similar-size and suspect categories — counts only when Fresh / Multi-send / "
-            "Shared SOL are all off (with multi; unique wallets). "
+            "Similar-sized wallets = near-exact bags + Rugcheck insider; counts in Total "
+            "only when Fresh / Multi-send / Shared SOL are all off (with multi; unique wallets). "
             "Optionals enter Total when checked. No double-count. "
             "Not a full commercial sniper graph. "
             + (base.get("notes") or "")

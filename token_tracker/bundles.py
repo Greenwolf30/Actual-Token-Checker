@@ -287,10 +287,10 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
         },
         "notes": (
             "Bundle detection is heuristic from a top-holder snapshot only. "
-            "Multi-account is its own category. Suspect = similar-size bags + "
-            "Rugcheck insider-flagged wallets. Total = unique wallets: multi always; "
-            "Suspect only when Fresh/Multi-send/Shared SOL are all off; optionals when "
-            "checked. No double-count. Not a full commercial sniper graph."
+            "Multi-account is its own category. Similar-sized wallets = near-exact "
+            "bags + Rugcheck insider-flagged. Total = unique wallets: multi always; "
+            "Similar-sized only when Fresh/Multi-send/Shared SOL are all off; optionals "
+            "when checked. No double-count. Not a full commercial sniper graph."
         ),
     }
 
@@ -1840,7 +1840,7 @@ def recompute_total_bundle_all_vectors(
         by_vector["similar_size"] = dict(by_vector["similar_size"])
         by_vector["similar_size"]["fallback_only"] = True
         by_vector["similar_size"]["shown"] = True
-        by_vector["similar_size"]["ui_label"] = "suspect"
+        by_vector["similar_size"]["ui_label"] = "similar-sized"
         by_vector["similar_size"]["part_of"] = "suspect"
         by_vector["similar_size"]["excluded_from_total"] = True
         by_vector["similar_size"]["pct"] = p_sim
