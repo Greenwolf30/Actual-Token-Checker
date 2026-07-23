@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v143";
+const ADTC_CLIENT_VERSION = "v144";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -7327,13 +7327,19 @@ function externalLinkMeta(key, url) {
     u.indexOf("pumpfun") >= 0;
 
   if (isDex) {
+    // DexScreener brand mark: eagle head (simplified silhouette, dark + lime)
     return {
       slug: "dexscreener",
       label: "DexScreener",
       iconSvg:
         '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-        '<rect x="1" y="1" width="14" height="14" rx="3" fill="#1B1F2A"/>' +
-        '<path d="M3.5 11.5V8.2M6.2 11.5V5.5M8.9 11.5V7.1M11.6 11.5V4.2" stroke="#68F7A3" stroke-width="1.5" stroke-linecap="round"/>' +
+        '<rect x="1" y="1" width="14" height="14" rx="3" fill="#0D1117"/>' +
+        // Eagle head facing right — crest, beak, neck
+        '<path d="M4.2 10.2c.3-1.9 1.4-3.4 2.8-4.1.5-.25 1.05-.4 1.55-.4.55 0 1 .15 1.35.45l1.9-1.55c.2-.15.5 0 .45.25l-.55 2.1c.7.55 1.15 1.35 1.25 2.25.05.45-.3.85-.75.85H9.6c-.15 1.05-.7 1.9-1.55 2.45-.2.12-.45 0-.5-.22l-.25-1.08H6.1c-.9 0-1.65-.55-1.9-1.35-.1-.3 0-.6.2-.75l.8-.5Z" fill="#A8F06A"/>' +
+        // Beak tip accent
+        '<path d="M11.9 5.6l1.35-.9c.18-.12.4.05.32.25l-.55 1.35-1.12-.7Z" fill="#68F7A3"/>' +
+        // Eye
+        '<circle cx="8.15" cy="7.35" r="0.55" fill="#0D1117"/>' +
         "</svg>",
     };
   }
