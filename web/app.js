@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v144";
+const ADTC_CLIENT_VERSION = "v145";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -7327,19 +7327,22 @@ function externalLinkMeta(key, url) {
     u.indexOf("pumpfun") >= 0;
 
   if (isDex) {
-    // DexScreener brand mark: eagle head (simplified silhouette, dark + lime)
+    // DexScreener mark: white eagle head silhouette (facing right)
     return {
       slug: "dexscreener",
       label: "DexScreener",
       iconSvg:
         '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-        '<rect x="1" y="1" width="14" height="14" rx="3" fill="#0D1117"/>' +
-        // Eagle head facing right — crest, beak, neck
-        '<path d="M4.2 10.2c.3-1.9 1.4-3.4 2.8-4.1.5-.25 1.05-.4 1.55-.4.55 0 1 .15 1.35.45l1.9-1.55c.2-.15.5 0 .45.25l-.55 2.1c.7.55 1.15 1.35 1.25 2.25.05.45-.3.85-.75.85H9.6c-.15 1.05-.7 1.9-1.55 2.45-.2.12-.45 0-.5-.22l-.25-1.08H6.1c-.9 0-1.65-.55-1.9-1.35-.1-.3 0-.6.2-.75l.8-.5Z" fill="#A8F06A"/>' +
-        // Beak tip accent
-        '<path d="M11.9 5.6l1.35-.9c.18-.12.4.05.32.25l-.55 1.35-1.12-.7Z" fill="#68F7A3"/>' +
-        // Eye
-        '<circle cx="8.15" cy="7.35" r="0.55" fill="#0D1117"/>' +
+        // Solid white eagle head — crest, brow, hooked beak, neck
+        '<path fill="#FFFFFF" d="' +
+        "M3.4 11.2c.15-2.35 1.55-4.15 3.45-4.95.55-.22 1.15-.35 1.7-.32.5.02.95.18 1.3.48" +
+        "l.15-.12 1.85-1.85c.22-.22.58-.08.55.25l-.35 2.45c.15.08.28.18.4.28" +
+        "l1.55-1.05c.25-.18.58.05.48.35l-.75 2.15c.55.7.85 1.55.8 2.4-.05.7-.55 1.2-1.25 1.2H9.85" +
+        "c-.12.95-.65 1.75-1.5 2.25-.22.12-.48-.02-.52-.28l-.2-1.12H5.55c-1.05 0-1.95-.7-2.15-1.7" +
+        "-.08-.35.05-.7.3-.9l.7-.45z" +
+        '"/>' +
+        // Eye cutout (dark so it reads on any bg)
+        '<circle cx="8.05" cy="7.55" r="0.65" fill="#1a1a1a"/>' +
         "</svg>",
     };
   }
@@ -7368,22 +7371,22 @@ function externalLinkMeta(key, url) {
     };
   }
   if (isPump) {
-    // Pump.fun brand mark: horizontal pill — left white, right green
+    // Pump.fun brand mark: pill capsule, left white / right green, rotated −13°
     return {
       slug: "pumpfun",
       label: "Pump.fun",
       iconSvg:
         '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-        // Capsule outline
-        '<rect x="1.5" y="4.5" width="13" height="7" rx="3.5" fill="#1A1A1A"/>' +
-        // Left half (white)
-        '<path d="M5 4.5h3v7H5A3.5 3.5 0 0 1 5 4.5Z" fill="#FFFFFF"/>' +
-        '<path d="M1.5 8A3.5 3.5 0 0 1 5 4.5v7A3.5 3.5 0 0 1 1.5 8Z" fill="#FFFFFF"/>' +
-        // Right half (green)
-        '<path d="M8 4.5h3a3.5 3.5 0 0 1 0 7H8V4.5Z" fill="#86EF2A"/>' +
-        '<path d="M11 4.5a3.5 3.5 0 0 1 0 7V4.5Z" fill="#86EF2A"/>' +
-        // Subtle divider
-        '<path d="M8 5v6" stroke="rgba(0,0,0,0.18)" stroke-width="0.6"/>' +
+        '<g transform="rotate(-13 8 8)">' +
+        // Full capsule base
+        '<rect x="1.5" y="4.75" width="13" height="6.5" rx="3.25" fill="#1A1A1A"/>' +
+        // Left half white
+        '<path d="M1.5 8A3.25 3.25 0 0 1 4.75 4.75H8v6.5H4.75A3.25 3.25 0 0 1 1.5 8Z" fill="#FFFFFF"/>' +
+        // Right half green
+        '<path d="M8 4.75h3.25A3.25 3.25 0 0 1 14.5 8a3.25 3.25 0 0 1-3.25 3.25H8V4.75Z" fill="#86EF2A"/>' +
+        // Center seam
+        '<path d="M8 5.15v5.7" stroke="rgba(0,0,0,0.2)" stroke-width="0.55"/>' +
+        "</g>" +
         "</svg>",
     };
   }
