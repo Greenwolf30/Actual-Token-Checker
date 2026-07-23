@@ -2135,7 +2135,9 @@ def _similar_size_groups(holders: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if len(rows) < 3:
         return []
 
-    # Greedy clustering: relative similarity within 12%
+    # Greedy clustering: near-exact bag sizes only.
+    # Real same-size bundles usually fund exact (or float-noise) amounts —
+    # not a ~10–12% spread (e.g. 2.0% vs 2.2% is not a default bundle match).
     used: set[int] = set()
     groups: list[dict[str, Any]] = []
     for i, a in enumerate(rows):
@@ -2176,16 +2178,37 @@ def _similar_size_groups(holders: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(groups, key=lambda g: -int(g.get("count") or 0))
 
 
-def _similar(a: dict[str, Any], b: dict[str, Any], tol: float = 0.12) -> bool:
-    """Relative match on pct preferred, else balance."""
+def _similar(
+    a: dict[str, Any],
+    b: dict[str, Any],
+    *,
+    rel_tol: float = 0.005,
+    abs_tol_pct: float = 0.02,
+    rel_tol_bal: float = 0.005,
+) -> bool:
+    """
+    Near-exact bag match (coordinated same-size wallets).
+
+    Bundle tooling typically sends the *same* amount to many wallets (exact),
+    or intentionally scrambles sizes. A loose 10–12% band (e.g. 2.0% vs 2.2%)
+    is not a default same-send fingerprint — treat those as different bags.
+
+    Match if either:
+      • absolute supply-% gap ≤ abs_tol_pct (default 0.02 percentage points), or
+      • relative gap ≤ rel_tol (default 0.5%) for float noise on larger bags
+    Same idea on raw balance when % is missing.
+    """
     if a.get("pct") is not None and b.get("pct") is not None:
         pa, pb = float(a["pct"]), float(b["pct"])
+        gap = abs(pa - pb)
+        if gap <= abs_tol_pct:
+            return True
         base = max(pa, pb, 1e-9)
-        return abs(pa - pb) / base <= tol
+        return (gap / base) <= rel_tol
     if a.get("bal") is not None and b.get("bal") is not None:
         ba, bb = float(a["bal"]), float(b["bal"])
         base = max(ba, bb, 1e-9)
-        return abs(ba - bb) / base <= tol
+        return abs(ba - bb) / base <= rel_tol_bal
     return False
 
 
