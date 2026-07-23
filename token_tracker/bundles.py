@@ -2201,14 +2201,15 @@ def _similar(
     if a.get("pct") is not None and b.get("pct") is not None:
         pa, pb = float(a["pct"]), float(b["pct"])
         gap = abs(pa - pb)
-        if gap <= abs_tol_pct:
+        # tiny epsilon so 2.00 vs 2.02 is not lost to float noise
+        if gap <= abs_tol_pct + 1e-9:
             return True
         base = max(pa, pb, 1e-9)
-        return (gap / base) <= rel_tol
+        return (gap / base) <= rel_tol + 1e-12
     if a.get("bal") is not None and b.get("bal") is not None:
         ba, bb = float(a["bal"]), float(b["bal"])
         base = max(ba, bb, 1e-9)
-        return abs(ba - bb) / base <= rel_tol_bal
+        return abs(ba - bb) / base <= rel_tol_bal + 1e-12
     return False
 
 
