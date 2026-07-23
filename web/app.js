@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v147";
+const ADTC_CLIENT_VERSION = "v148";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -86,13 +86,27 @@ function statsAlmostEqual(a, b) {
 
 /** Bump when Flagged-wallet rules change so sticky junk is wiped once. */
 /** v9: Upload marks only from Ruggers Upload button on THAT mint (no cloud bleed). */
-const RUGGERS_RULES_VERSION = 9;
+/** v10: compact persist + wallet cap so localStorage quota no longer drops baselines. */
+const RUGGERS_RULES_VERSION = 10;
 /** Sold ≥ this fraction of first-lookup bag → list as seller (99%). */
 const RUGGERS_SOLD_FRAC = 0.99;
 /** Remaining bag must be ≤ (1 - RUGGERS_SOLD_FRAC) of first_pct to count as sold. */
 const RUGGERS_REMAIN_FRAC = 1 - RUGGERS_SOLD_FRAC;
 /** Single sellers: min first bag % of supply (top → least holder cutoff). */
 const RUGGERS_SINGLE_MIN_PCT = 0.01;
+/**
+ * Max wallets frozen per mint. Full DAS (~2000) × status blob blew localStorage
+ * (~2.7MB/mint, dual-key ~5.4MB) so saves failed silently and every Analyze
+ * re-froze as first lookup → sellers never stuck.
+ */
+const RUGGERS_MAX_TRACK_WALLETS = 450;
+/** Keep this many most-recent mint tracks when pruning for quota. */
+const RUGGERS_MAX_MINTS = 12;
+/**
+ * In-page overlay of Ruggers tracks (survives same-session save failures).
+ * Keyed by canonical store key (solana:CA) and bare CA.
+ */
+const __ruggersMem = Object.create(null);
 
 /**
  * Ruggers origin lanes (sticky sell ↔ swing loop, labels kept on Swing).
@@ -1094,15 +1108,220 @@ function initHistory() {
 // ── Ruggers tab: first-lookup sell tracking (browser localStorage) ───
 
 function loadRuggersStore() {
+  let data = {};
   try {
     const raw = localStorage.getItem(RUGGERS_KEY);
-    if (!raw) return {};
-    const data = JSON.parse(raw);
-    if (!data || typeof data !== "object" || Array.isArray(data)) return {};
-    return migrateRuggersStore(data);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        data = parsed;
+      }
+    }
   } catch {
-    return {};
+    data = {};
   }
+  // Overlay in-memory tracks (newer / recovered after quota fail)
+  try {
+    for (const [k, rec] of Object.entries(__ruggersMem)) {
+      if (!k || k === "__meta" || !rec || typeof rec !== "object") continue;
+      data[k] = rec;
+    }
+  } catch (_) {
+    /* ignore */
+  }
+  return migrateRuggersStore(data);
+}
+
+/** Keep last processed rec in RAM so panel refresh works even if localStorage fails. */
+function rememberRuggersRec(storeKey, rec, mintBare) {
+  if (!rec || typeof rec !== "object") return;
+  const bare = bareMintAddr(mintBare || rec.address || "");
+  const key =
+    String(storeKey || rec.mint_key || "").trim() ||
+    (bare ? mintKeyFromToken(bare, rec.chain || "solana") : "");
+  if (key) __ruggersMem[key] = rec;
+  if (bare) __ruggersMem[bare] = rec;
+}
+
+/**
+ * Whether a snap wallet should enter the Ruggers baseline.
+ * Categories always; plain holders only with bag ≥ Single min (0.01%).
+ * Dust without a category is not frozen — bloated baselines kill persistence.
+ */
+function shouldTrackRuggersWallet(info, opts) {
+  if (!info || typeof info !== "object") return false;
+  const o = opts || {};
+  if (o.force) return true;
+  if (info.label === "creator" || info.is_creator) return true;
+  if (
+    info.in_similar ||
+    info.in_multi ||
+    info.in_multi_send ||
+    info.in_insider ||
+    info.in_suspect ||
+    info.in_funding ||
+    info.in_launch ||
+    info.in_fresh
+  ) {
+    return true;
+  }
+  const pct =
+    info.pct_supply != null && Number.isFinite(Number(info.pct_supply))
+      ? Number(info.pct_supply)
+      : null;
+  if (pct != null && pct >= RUGGERS_SINGLE_MIN_PCT) return true;
+  // Balance-only measurable without category: skip (can't rank Single)
+  return false;
+}
+
+/**
+ * Pick up to RUGGERS_MAX_TRACK_WALLETS from a snap wallet map.
+ * Priority: creator/categories/measurable bags by size, then rest of categories.
+ */
+function selectRuggersTrackWallets(wallets, extraKeep) {
+  const src = wallets && typeof wallets === "object" ? wallets : {};
+  const keep = new Set();
+  if (extraKeep) {
+    for (const w of extraKeep) {
+      if (w) keep.add(w);
+    }
+  }
+  const scored = [];
+  for (const [w, info] of Object.entries(src)) {
+    if (!w || !info) continue;
+    if (!shouldTrackRuggersWallet(info) && !keep.has(w)) continue;
+    const pct =
+      info.pct_supply != null && Number.isFinite(Number(info.pct_supply))
+        ? Number(info.pct_supply)
+        : 0;
+    let pri = 0;
+    if (info.label === "creator" || info.is_creator) pri = 100;
+    else if (info.in_similar || info.in_insider || info.in_suspect) pri = 80;
+    else if (info.in_multi) pri = 70;
+    else if (info.in_multi_send || info.in_funding) pri = 60;
+    else if (info.in_fresh) pri = 50;
+    else if (pct >= RUGGERS_SINGLE_MIN_PCT) pri = 40;
+    else pri = 10;
+    scored.push({ w, pri, pct });
+  }
+  scored.sort((a, b) => b.pri - a.pri || b.pct - a.pct || a.w.localeCompare(b.w));
+  const out = {};
+  let n = 0;
+  // Always include force-keep (sticky sellers etc.) even if not in snap
+  for (const w of keep) {
+    if (src[w]) {
+      out[w] = src[w];
+      n++;
+    }
+  }
+  for (const row of scored) {
+    if (out[row.w]) continue;
+    if (n >= RUGGERS_MAX_TRACK_WALLETS) break;
+    out[row.w] = src[row.w];
+    n++;
+  }
+  return out;
+}
+
+/** Drop pure-holding status rows; keep seller/swing/ever_sold for buy-back. */
+function compactRuggersStatusForStore(status) {
+  if (!status || typeof status !== "object") return {};
+  const out = {};
+  for (const [w, st] of Object.entries(status)) {
+    if (!w || !st || typeof st !== "object") continue;
+    if (
+      st.tag === "seller" ||
+      st.tag === "swing" ||
+      st.ever_sold ||
+      st.sticky_lane_seller ||
+      st.is_flagged ||
+      st.ever_flagged_on_mint
+    ) {
+      out[w] = st;
+    }
+  }
+  return out;
+}
+
+/** Slim bool flags (omit false) on first_wallets for smaller JSON. */
+function compactRuggersFirstWalletsForStore(firstWallets) {
+  if (!firstWallets || typeof firstWallets !== "object") return {};
+  const out = {};
+  for (const [w, fw] of Object.entries(firstWallets)) {
+    if (!w || !fw || typeof fw !== "object") continue;
+    const row = {
+      pct_supply: fw.pct_supply != null ? fw.pct_supply : null,
+      balance: fw.balance != null ? fw.balance : null,
+    };
+    if (fw.rank != null) row.rank = fw.rank;
+    if (fw.label) row.label = fw.label;
+    if (fw.origin_lane) row.origin_lane = fw.origin_lane;
+    if (fw.first_seen_at) row.first_seen_at = fw.first_seen_at;
+    if (fw.in_similar) row.in_similar = true;
+    if (fw.in_multi) row.in_multi = true;
+    if (fw.in_multi_send) row.in_multi_send = true;
+    if (fw.in_insider) row.in_insider = true;
+    if (fw.in_suspect) row.in_suspect = true;
+    if (fw.in_funding) row.in_funding = true;
+    if (fw.in_launch) row.in_launch = true;
+    if (fw.in_fresh) row.in_fresh = true;
+    if (fw.exclude_from_single) row.exclude_from_single = true;
+    if (fw.is_creator) row.is_creator = true;
+    if (fw.enrolled_after_baseline) row.enrolled_after_baseline = true;
+    out[w] = row;
+  }
+  return out;
+}
+
+/** Prepare a mint rec for localStorage (compact + no dual bulk). */
+function compactRuggersRecForStore(rec) {
+  if (!rec || typeof rec !== "object") return rec;
+  const c = { ...rec };
+  c.first_wallets = compactRuggersFirstWalletsForStore(rec.first_wallets);
+  c.status = compactRuggersStatusForStore(rec.status);
+  // Cap similar groups
+  if (Array.isArray(c.first_similar_groups) && c.first_similar_groups.length > 12) {
+    c.first_similar_groups = c.first_similar_groups.slice(0, 12);
+  }
+  return c;
+}
+
+/** Canonical mint keys only — bare CA dual-keys doubled JSON size past quota. */
+function ruggersStoreKeysForPersist(store) {
+  const s = store && typeof store === "object" ? store : {};
+  const byBare = Object.create(null);
+  const meta = s.__meta && typeof s.__meta === "object" ? s.__meta : {};
+  for (const [k, rec] of Object.entries(s)) {
+    if (k === "__meta" || !rec || typeof rec !== "object") continue;
+    if (rec.first_wallets == null && !rec.address) continue;
+    const bare = bareMintAddr(rec.address || k);
+    if (!bare) continue;
+    const canon = mintKeyFromToken(bare, rec.chain || "solana");
+    const prev = byBare[bare];
+    if (!prev) {
+      byBare[bare] = { key: canon, rec };
+      continue;
+    }
+    // Prefer newer last_ts / higher lookup_count
+    const tPrev = String(prev.rec.last_ts || prev.rec.first_ts || "");
+    const tCur = String(rec.last_ts || rec.first_ts || "");
+    const nPrev = Number(prev.rec.lookup_count) || 0;
+    const nCur = Number(rec.lookup_count) || 0;
+    if (nCur > nPrev || (nCur === nPrev && tCur >= tPrev)) {
+      byBare[bare] = { key: canon, rec };
+    }
+  }
+  // Sort by recency, keep newest RUGGERS_MAX_MINTS
+  const rows = Object.values(byBare).sort((a, b) => {
+    const ta = String(a.rec.last_ts || a.rec.first_ts || "");
+    const tb = String(b.rec.last_ts || b.rec.first_ts || "");
+    return tb.localeCompare(ta);
+  });
+  const out = { __meta: { ...meta, rules_version: RUGGERS_RULES_VERSION } };
+  for (const row of rows.slice(0, RUGGERS_MAX_MINTS)) {
+    out[row.key] = compactRuggersRecForStore(row.rec);
+  }
+  return out;
 }
 
 /**
@@ -1125,13 +1344,11 @@ function migrateRuggersStore(store) {
     const copy = { ...rec };
 
     if (ver < RUGGERS_RULES_VERSION) {
-      // Full Flagged wipe on rules bump
-      copy.flagged_known = {};
-      copy.flagged_sellers = {};
-      copy.rugwatch_known = {};
-      // v9: wipe false Upload marks (cloud bleed treated as this-mint upload)
-      // Keep permanent Similar-Upload pins only
+      // Pre-v9: full Flagged + false-Upload wipe (cloud bleed)
       if (ver < 9) {
+        copy.flagged_known = {};
+        copy.flagged_sellers = {};
+        copy.rugwatch_known = {};
         const keepSim = {};
         if (copy.uploaded_similar && typeof copy.uploaded_similar === "object") {
           for (const [w, meta] of Object.entries(copy.uploaded_similar)) {
@@ -1157,34 +1374,30 @@ function migrateRuggersStore(store) {
             delete st.ruggers_uploaded_section;
           }
         }
+        // map legacy "excluded" lanes
+        if (copy.first_wallets && typeof copy.first_wallets === "object") {
+          for (const fw of Object.values(copy.first_wallets)) {
+            if (!fw || typeof fw !== "object") continue;
+            if (fw.origin_lane === "excluded" || fw.origin_lane === "single") {
+              delete fw.origin_lane;
+            }
+          }
+        }
+        if (copy.status && typeof copy.status === "object") {
+          const st = {};
+          for (const [w, row] of Object.entries(copy.status)) {
+            if (!row || typeof row !== "object") continue;
+            const nextRow = { ...row, is_flagged: false };
+            if (nextRow.origin_lane === "excluded") delete nextRow.origin_lane;
+            delete nextRow.ruggers_uploaded;
+            delete nextRow.ruggers_uploaded_section;
+            st[w] = nextRow;
+          }
+          copy.status = st;
+        }
         changed = true;
       }
-      // v8: map legacy "excluded" / re-resolve multi·funding·insider·launch·suspect lanes
-      if (copy.first_wallets && typeof copy.first_wallets === "object") {
-        for (const fw of Object.values(copy.first_wallets)) {
-          if (!fw || typeof fw !== "object") continue;
-          if (fw.origin_lane === "excluded" || fw.origin_lane === "single") {
-            // Re-resolve on next Analyze from baseline flags
-            delete fw.origin_lane;
-            changed = true;
-          }
-        }
-      }
-      if (copy.status && typeof copy.status === "object") {
-        const st = {};
-        for (const [w, row] of Object.entries(copy.status)) {
-          if (!row || typeof row !== "object") continue;
-          const nextRow = { ...row, is_flagged: false };
-          if (nextRow.origin_lane === "excluded") {
-            delete nextRow.origin_lane;
-            changed = true;
-          }
-          delete nextRow.ruggers_uploaded;
-          delete nextRow.ruggers_uploaded_section;
-          st[w] = nextRow;
-        }
-        copy.status = st;
-      }
+      // v10+: compact persist only — keep sellers / sticky / flagged intact
       copy.rules_version = RUGGERS_RULES_VERSION;
       changed = true;
     } else {
@@ -1232,7 +1445,20 @@ function migrateRuggersStore(store) {
   };
   if (changed) {
     try {
-      localStorage.setItem(RUGGERS_KEY, JSON.stringify(next));
+      // Compact persist (no dual bare keys) so migrate itself doesn't blow quota
+      const payload = ruggersStoreKeysForPersist(next);
+      payload.__meta = {
+        ...(payload.__meta || {}),
+        ...(next.__meta || {}),
+        rules_version: RUGGERS_RULES_VERSION,
+        migrated_at: new Date().toISOString(),
+      };
+      const raw = JSON.stringify(payload);
+      if (typeof safeLocalStorageSet === "function") {
+        safeLocalStorageSet(RUGGERS_KEY, raw);
+      } else {
+        localStorage.setItem(RUGGERS_KEY, raw);
+      }
     } catch {
       /* ignore */
     }
@@ -1241,14 +1467,122 @@ function migrateRuggersStore(store) {
 }
 
 function saveRuggersStore(store) {
+  const s = store && typeof store === "object" ? store : {};
+  // Always remember full in-memory copies before compacting to disk
   try {
-    const s = store && typeof store === "object" ? store : {};
-    if (!s.__meta || typeof s.__meta !== "object") s.__meta = {};
-    s.__meta.rules_version = RUGGERS_RULES_VERSION;
-    localStorage.setItem(RUGGERS_KEY, JSON.stringify(s));
-  } catch {
-    /* quota / private mode */
+    for (const [k, rec] of Object.entries(s)) {
+      if (k === "__meta" || !rec || typeof rec !== "object") continue;
+      rememberRuggersRec(k, rec, rec.address);
+    }
+  } catch (_) {
+    /* ignore */
   }
+
+  // Progressive persist: full compact → fewer mints → sellers-only
+  const attempts = [];
+  try {
+    attempts.push(ruggersStoreKeysForPersist(s));
+  } catch (_) {
+    attempts.push({ __meta: { rules_version: RUGGERS_RULES_VERSION } });
+  }
+  // Fewer mints
+  try {
+    const slim = ruggersStoreKeysForPersist(s);
+    const keys = Object.keys(slim).filter((k) => k !== "__meta");
+    keys.sort((a, b) => {
+      const ta = String((slim[a] && (slim[a].last_ts || slim[a].first_ts)) || "");
+      const tb = String((slim[b] && (slim[b].last_ts || slim[b].first_ts)) || "");
+      return tb.localeCompare(ta);
+    });
+    const cut = { __meta: slim.__meta };
+    for (const k of keys.slice(0, 4)) cut[k] = slim[k];
+    attempts.push(cut);
+  } catch (_) {
+    /* ignore */
+  }
+  // Sellers-only per mint (drop pure first_wallets holding bags)
+  try {
+    const base = ruggersStoreKeysForPersist(s);
+    const sellersOnly = { __meta: base.__meta };
+    for (const [k, rec] of Object.entries(base)) {
+      if (k === "__meta" || !rec) continue;
+      const fwKeep = {};
+      const st = rec.status || {};
+      const sticky = rec.sticky_lane_sellers || {};
+      const flagged = rec.flagged_sellers || {};
+      for (const w of Object.keys(st)) {
+        if (rec.first_wallets && rec.first_wallets[w]) fwKeep[w] = rec.first_wallets[w];
+      }
+      for (const w of Object.keys(sticky)) {
+        if (rec.first_wallets && rec.first_wallets[w]) fwKeep[w] = rec.first_wallets[w];
+      }
+      for (const w of Object.keys(flagged)) {
+        if (rec.first_wallets && rec.first_wallets[w]) fwKeep[w] = rec.first_wallets[w];
+      }
+      // Keep creator + category baselines even if not yet sold
+      if (rec.first_wallets) {
+        let nCat = 0;
+        for (const [w, fw] of Object.entries(rec.first_wallets)) {
+          if (fwKeep[w]) continue;
+          if (
+            fw &&
+            (fw.label === "creator" ||
+              fw.is_creator ||
+              fw.in_similar ||
+              fw.in_multi ||
+              fw.in_multi_send ||
+              fw.in_funding ||
+              fw.in_insider ||
+              fw.in_suspect ||
+              fw.in_fresh)
+          ) {
+            fwKeep[w] = fw;
+            nCat++;
+            if (nCat >= 200) break;
+          }
+        }
+      }
+      sellersOnly[k] = {
+        ...rec,
+        first_wallets: fwKeep,
+        status: compactRuggersStatusForStore(rec.status),
+      };
+    }
+    attempts.push(sellersOnly);
+  } catch (_) {
+    /* ignore */
+  }
+
+  let saved = false;
+  for (const payload of attempts) {
+    try {
+      if (!payload.__meta || typeof payload.__meta !== "object") {
+        payload.__meta = {};
+      }
+      payload.__meta.rules_version = RUGGERS_RULES_VERSION;
+      payload.__meta.saved_at = new Date().toISOString();
+      const raw = JSON.stringify(payload);
+      if (typeof safeLocalStorageSet === "function") {
+        if (safeLocalStorageSet(RUGGERS_KEY, raw)) {
+          saved = true;
+          break;
+        }
+      } else {
+        localStorage.setItem(RUGGERS_KEY, raw);
+        saved = true;
+        break;
+      }
+    } catch (err) {
+      console.warn("[ruggers] save attempt failed", err && err.name);
+    }
+  }
+  if (!saved) {
+    console.error(
+      "[ruggers] localStorage save failed — using in-memory track only this session. " +
+        "Sellers still work until you close the tab; free space or clear old mints."
+    );
+  }
+  return saved;
 }
 
 /** Bare mint CA (no chain: prefix), trimmed. */
@@ -2147,18 +2481,22 @@ function ensureRuggersMintTrack(address, meta) {
     if (meta && meta.symbol) rec0.symbol = meta.symbol;
     if (meta && meta.name) rec0.name = meta.name;
     store[storeKey] = rec0;
-    // Also write bare key so old resolvers find it
-    store[mintBare] = rec0;
-    if (found.key && found.key !== storeKey && found.key !== mintBare) {
+    // Drop bare dual-key (doubled JSON past localStorage quota)
+    if (found.key && found.key !== storeKey) {
       try {
         delete store[found.key];
       } catch (_) {}
     }
     try {
+      if (store[mintBare] && store[mintBare] !== rec0) delete store[mintBare];
+      else if (store[mintBare] === rec0) delete store[mintBare];
+    } catch (_) {}
+    try {
       saveRuggersStore(store);
     } catch (e) {
       console.warn("[ruggers] ensure save failed", e);
     }
+    rememberRuggersRec(storeKey, rec0, mintBare);
     return { key: storeKey, rec: rec0 };
   }
   const now = new Date().toISOString();
@@ -2184,13 +2522,16 @@ function ensureRuggersMintTrack(address, meta) {
     seeded_empty: true,
   };
   store[storeKey] = rec;
-  store[mintBare] = rec; // dual-key so lookup never misses
+  try {
+    if (store[mintBare]) delete store[mintBare];
+  } catch (_) {}
   try {
     saveRuggersStore(store);
   } catch (e) {
     console.warn("[ruggers] ensure save failed", e);
     // Still return in-memory so this page session can show the panel
   }
+  rememberRuggersRec(storeKey, rec, mintBare);
   return { key: storeKey, rec };
 }
 
@@ -2280,7 +2621,12 @@ function processRuggersFromAnalyze(data) {
       rules_version: RUGGERS_RULES_VERSION,
       mint_key: storeKey,
     };
-    for (const [w, info] of Object.entries(snap.wallets || {})) {
+    // Cap freeze: category wallets + ≥0.01% holders (not all ~2000 DAS dust)
+    const freezeMap = selectRuggersTrackWallets(snap.wallets || {}, [
+      snap.creator,
+      ...Object.keys(snap.flagged_known || {}),
+    ]);
+    for (const [w, info] of Object.entries(freezeMap)) {
       rec.first_wallets[w] = {
         pct_supply: info.pct_supply,
         balance: info.balance,
@@ -2453,6 +2799,16 @@ function processRuggersFromAnalyze(data) {
   // or Flagged if on RugWatch. Flagged wallets that show up as holders are
   // enrolled the same way so a later dump lands in Flagged.
   if (!isFirstLookup) {
+    const nExisting = Object.keys(rec.first_wallets || {}).length;
+    const room = Math.max(0, RUGGERS_MAX_TRACK_WALLETS - nExisting);
+    // Cap new enrolls; always upgrade bags on already-tracked wallets
+    const enrollCandidates = selectRuggersTrackWallets(snap.wallets || {}, [
+      snap.creator,
+      ...Object.keys(snap.flagged_known || {}),
+      ...Object.keys(rec.sticky_lane_sellers || {}),
+      ...Object.keys(rec.flagged_sellers || {}),
+    ]);
+    let enrolledNew = 0;
     for (const [w, info] of Object.entries(snap.wallets || {})) {
       if (!w || !info) continue;
       if (rec.first_wallets[w]) {
@@ -2461,8 +2817,9 @@ function processRuggersFromAnalyze(data) {
         upgradeRuggersFirstBag(rec.first_wallets[w], info);
         continue;
       }
-      // Prefer measurable bag (or creator)
-      enrollRuggersBaselineWallet(rec, w, info, now);
+      if (!enrollCandidates[w] && !shouldTrackRuggersWallet(info)) continue;
+      if (enrolledNew >= room && room >= 0) continue;
+      if (enrollRuggersBaselineWallet(rec, w, info, now)) enrolledNew++;
     }
     // RugWatch-known addresses currently holding but missing from snap.wallets
     // (edge: server tagged them but holder row thin) — still enroll if current
@@ -3414,15 +3771,17 @@ function processRuggersFromAnalyze(data) {
   }
 
   store[storeKey] = rec;
-  // Remove legacy bare-key duplicate if present
+  // Never dual-write bare CA key (quota blow-up). Memory overlay covers lookup.
   try {
-    if (store[mintBare] && store[mintBare] !== rec) delete store[mintBare];
+    if (store[mintBare]) delete store[mintBare];
   } catch (_) {}
+  let savedOk = false;
   try {
-    saveRuggersStore(store);
+    savedOk = !!saveRuggersStore(store);
   } catch (err) {
     console.warn("[ruggers] save store failed", err);
   }
+  rememberRuggersRec(storeKey, rec, mintBare);
 
   try {
     const nTrack = Object.keys(rec.first_wallets || {}).length;
@@ -3442,6 +3801,7 @@ function processRuggersFromAnalyze(data) {
       "sellers=" + nSellers,
       "holding=" + nHolding,
       "lookups=" + (rec.lookup_count || 1),
+      savedOk ? "saved" : "mem-only",
       isFirstLookup ? "(baseline freeze)" : "(compare)"
     );
   } catch (_) {}
@@ -4286,6 +4646,16 @@ function ruggersBuckets(rec) {
     }
     if (lane === "single") {
       pushLaneSeller("single", row, singleSeen, singleSellers);
+      continue;
+    }
+    // excluded / unknown lane with proven sell → Single (never drop a seller)
+    if (!isRuggersExcludedLpWallet(row)) {
+      pushLaneSeller(
+        "single",
+        { ...row, origin_lane: "single", lane_label: "single" },
+        singleSeen,
+        singleSellers
+      );
     }
   }
 
@@ -5532,11 +5902,26 @@ function _refreshRuggersPanelImpl(focusKey) {
     store = {};
   }
 
+  // Prefer full in-memory recs (include holding status) over compact disk copies
+  try {
+    for (const [k, recM] of Object.entries(__ruggersMem)) {
+      if (!k || !recM || typeof recM !== "object") continue;
+      store[k] = recM;
+    }
+  } catch (_) {
+    /* ignore */
+  }
+
   const keys = Object.keys(store)
     .filter((k) => {
       if (k === "__meta") return false;
       const r = store[k];
-      return !!(r && typeof r === "object" && r.first_wallets != null);
+      if (!(r && typeof r === "object" && r.first_wallets != null)) return false;
+      // Dedupe bare CA vs solana:CA — keep canonical only for dropdown
+      const bare = bareMintAddr(r.address || k);
+      const canon = bare ? mintKeyFromToken(bare, r.chain || "solana") : "";
+      if (canon && k !== canon && store[canon]) return false;
+      return true;
     })
     .sort((a, b) => {
       const ta = (store[a] && (store[a].last_ts || store[a].first_ts)) || "";
@@ -5554,8 +5939,18 @@ function _refreshRuggersPanelImpl(focusKey) {
   let activeKey = "";
   let rec = null;
 
+  // 0) In-memory exact key / bare (post-Analyze before disk catch-up)
+  if (!rec && focusHint && __ruggersMem[focusHint]) {
+    activeKey = focusHint;
+    rec = __ruggersMem[focusHint];
+  }
+  if (!rec && focusBare && __ruggersMem[focusBare]) {
+    activeKey = mintKeyFromToken(focusBare, "solana");
+    rec = __ruggersMem[focusBare];
+  }
+
   // 1) Explicit store key (Analyze rugKey or dropdown data-value)
-  if (focusHint && store[focusHint] && typeof store[focusHint] === "object") {
+  if (!rec && focusHint && store[focusHint] && typeof store[focusHint] === "object") {
     activeKey = focusHint;
     rec = store[focusHint];
   }
@@ -5744,6 +6139,17 @@ function _refreshRuggersPanelImpl(focusKey) {
       nMeasBags +
       " wallet(s) with bags. Seller lists stay empty until a <strong>second</strong> full Analyze " +
       "after they dump ≥99% of that first bag." +
+      "</p>";
+  }
+  // Cap note when near limit (persistence needs this)
+  if (nTracked >= RUGGERS_MAX_TRACK_WALLETS - 5) {
+    html +=
+      '<p class="rug-rules" style="border-color:rgba(120,160,200,0.3)">' +
+      "Tracking cap " +
+      nTracked +
+      "/" +
+      RUGGERS_MAX_TRACK_WALLETS +
+      " wallets (categories + ≥0.01% bags). Dust-only bags are skipped so the baseline can save." +
       "</p>";
   }
   html +=
