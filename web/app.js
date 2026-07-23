@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v135";
+const ADTC_CLIENT_VERSION = "v136";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -6283,8 +6283,8 @@ function fmtUsd(n) {
 }
 
 /**
- * Compact Analyze time for Bundles box stamp (must fit ~140px grid cells).
- * e.g. "Mar 22 · 3:45 PM"
+ * Compact time for Bundles optional box stamp (must fit ~140px grid cells).
+ * ASCII-safe: "Jul 22, 6:52 PM"
  */
 function fmtMarketUpdatedAt(isoOrMs) {
   if (isoOrMs == null || isoOrMs === "") return "";
@@ -6300,20 +6300,25 @@ function fmtMarketUpdatedAt(isoOrMs) {
       hour: "numeric",
       minute: "2-digit",
     });
-    return mon + " " + day + " · " + time;
+    return mon + " " + day + ", " + time;
   } catch (_) {
     return String(isoOrMs).slice(0, 16);
   }
 }
 
 /**
- * Stamp under Fresh / Multi-send / Shared SOL (under % + delta) — NOT MC/Liq/Vol.
- * Shown when that optional was unchecked on Analyze (last known) or on restore.
- * Compact two-line so it fits inside the bun-stat box.
+ * Stamp under Fresh / Multi-send / Shared SOL — always BOTH lines:
+ *   Last updated
+ *   Jul 22, 6:52 PM
+ * Fits inside the bun-stat box (white-space: pre-line).
  */
 function optionalBundleUpdatedSub(whenRaw) {
-  const when = fmtMarketUpdatedAt(whenRaw);
-  if (!when) return "";
+  let when = fmtMarketUpdatedAt(whenRaw);
+  if (!when) {
+    // Always have a timestamp when we stamp the box
+    when = fmtMarketUpdatedAt(Date.now());
+  }
+  if (!when) return "Last updated";
   return "Last updated\n" + when;
 }
 
@@ -9312,9 +9317,8 @@ function renderBundlesUi(data) {
 
   /**
    * Plain-text sub under Fresh / Multi / Shared SOL.
-   * When boxOff (unchecked this Analyze / last-known / skipped): always show
-   * “Last updated” + timestamp. Also on page restore.
-   * Hidden when that optional was scanned live this run (checkbox on).
+   * When boxOff (unchecked this Analyze): always "Last updated" + timestamp.
+   * Also on page restore. Hidden when that optional was live-scanned (on).
    */
   function optionalUpdatedPlain(whenCandidates, boxOff) {
     if (!boxOff && !isRestore) return "";
@@ -9330,12 +9334,10 @@ function renderBundlesUi(data) {
         (data && data.generated_at) ||
         (data && data._marketUpdatedAt) ||
         (data && data._restoredSavedAt) ||
-        null;
+        Date.now();
     }
-    const stamp = optionalBundleUpdatedSub(whenRaw);
-    // Unchecked with no prior scan yet — still label the box
-    if (!stamp && boxOff) return "Last updated\n—";
-    return stamp || "";
+    // Always both lines: "Last updated" + formatted time
+    return optionalBundleUpdatedSub(whenRaw);
   }
 
   // Browser timestamps for optional scans (when server cache is gone)
