@@ -12,8 +12,9 @@
   local + cloud.
 
   Everything here is a HEURISTIC from public data. Not financial advice.
-  Last major docs update: 2026-07-22 (Helius Fresh/Multi-send checkbox ping
-  chart §6.3g; launch-window disabled; Total bundle % vector notes).
+  Last major docs update: 2026-07-23 (Total = multi + Similar-sized rules;
+  Similar near-exact + Rugcheck insider; Single holders list + no similar bleed;
+  Ruggers measurable baseline / storage; RugWatch unique-by-address merge).
 ================================================================================
 
 
@@ -220,8 +221,8 @@ Solana
   Those addresses are excluded from:
     - Holders risk flags / concentration “flagged whale” lines
     - Alerts over-2% / whale priority lists
-    - Bundles similar-size, multi-account risk clusters, launch-window multi-buys
-    - Ruggers sellers / launch tags / Upload-Export payloads
+    - Bundles similar-sized / multi-account / Single / optional categories
+    - Ruggers sellers / Upload-Export payloads
   They may still appear in Top Holders with an LP label (for context only).
 
 Other chains (Ethereum, Base, Robinhood, …)
@@ -259,20 +260,30 @@ What people often ask
   coordinated wallets,” not a proof that one person owns those wallets.
 
   The app looks at top-holder snapshots and risk tags, then estimates a
-  total_bundle_pct. On full Analyze that number is the SUM of CURRENT supply %
-  of UNIQUE wallets from PRIMARY risk vectors (multi-account, insider,
-  multi-send, fresh, shared funder). Each wallet counts once (max % if it
-  appears in more than one category) — Shared SOL and Multi-send do not
-  double-count the same address. Cap 100%.
+  total_bundle_pct. Cap 100%. Each wallet counts once (max hold % if it
+  appears in more than one category) — no double-count across sections.
 
-  FALLBACK only — Similar-size groups and Suspect wallets:
-    - Shown in Bundles AND counted in Total bundle % ONLY when every primary
-      category above is empty (0) this scan.
-    - If multi-account, insider, multi-send, fresh, or shared SOL has any hits,
-      similar-size and suspect sections are HIDDEN and not added to Total.
-    - Fallback total is also unique-wallet deduped.
+  Total (multi + similar-sized) — unique wallets only
 
-  Launch-window is disabled. That number drives Alerts “bundle band” messages.
+    Always in Total
+      • Multi-account (one owner, several large Associated Token Accounts)
+
+    Similar-sized in Total only when Fresh, Multi-send, AND Shared SOL are
+    ALL unchecked this Analyze:
+      • Near-exact same bag size groups (§6.3h)
+      • Rugcheck insider-flagged (same Similar-sized section — not multi-account)
+
+    When any of Fresh / Multi-send / Shared SOL is checked this Analyze:
+      • That optional’s wallets enter Total (if the box is on this run)
+      • Similar-sized is still LISTED for reference but excluded from Total
+      • Unchecked optionals do not enter Total even if “(last known)” is shown
+
+    Never in Total
+      • Single holders (standalone bags — list only; see §6.3h)
+      • Launch-window (disabled)
+      • LP / known program wallets
+
+  Launch-window is disabled. Total % drives Alerts “bundle band” messages.
 
   This is NOT:
     - A professional sniper-graph product
@@ -301,57 +312,94 @@ What people often ask
   is Solana-focused.
 
 6.3 What the Bundles tab shows
-  Section titles use dim-green ── TITLE ── markers (website).
+  Section titles use dim-green markers (website card UI). Hold % uses the same
+  low → medium → high → critical color bands as Holders.
 
-  - Summary: estimated total bundle % of supply (when available)
-  - Similar-size total %: combined supply of unique wallets in similar-size groups
-  - Fresh total %: combined supply of unique fresh / sole-token wallets
-  - Multi-send total %: combined supply of unique multi-send wallets (token + SOL)
-  - ── MULTI-ACCOUNT CLUSTERS ──  one owner, several large Associated Token
-                                  Accounts — NOT multi-send (see §6.3b, §6.3e)
-  - ── SIMILAR-SIZE GROUPS ──     nearly same bag size among top wallets
-  - ── INSIDER-FLAGGED ──         Rugcheck insider tags (not RugWatch)
-  - ── SHARED SOL FUNDER ──       1-hop common SOL funder (Helius when available)
-  - ── FRESH / SOLE-TOKEN ──      Hold this mint with almost no other SPL tokens
-                                  (see §6.3f). Summary “Fresh total” + section
-                                  total %; flat list by hold %. Helius; full Analyze.
-  - ── MULTI-SEND (ONE → MANY) ── One wallet sent this mint or SOL to many others
-                                  — NOT multi-account clusters (see §6.3e).
-                                  Summary “Multi-send total” + flat list by hold %;
-                                  per-cluster total % + receivers by %.
-  - ── LAUNCH-WINDOW ──           same-slot multi-buys; full slot pipeline,
-                                  UI layout map, % / n/a (§6.3c)
-  - ── SUSPECT WALLETS ──         union of signals (heuristic)
-  - Signals: multi Associated Token Account clusters, similar-size, insiders,
-    funder, fresh/sole-token, multi-send, launch-window, Birdeye tags, rugged
+  Summary boxes (top stats bar)
+  - Total (multi + similar-sized) — unique wallets; rules in §6.1
+  - Multi-account total %
+  - Similar-sized total % (near-exact bags + Rugcheck insider combined)
+  - Fresh / Multi-send / Shared SOL totals (live or last-known when box off)
+  - Single holders total % (standalone bags — NOT in Total)
   - Top10 ex-LP (see §6.3a)
-  - Notes that methods are partial
+  - Bundle risk score
 
-  Display (website) — % color bands (same as Holders priority scheme)
-  - Total % bundles, Similar-size total, Fresh total, Multi-send total,
-    Suspect total: colored by %
-  - Each wallet’s percent holdings in every group is colored the same way
-      (lines look like “wallet  holds X%”)
-  - Similar-size group header (right side): “sum X%” = combined group holdings
-  - Fresh / Multi-send section headers: “total X% across N wallet(s)”
-  - Group headers (≈ avg % / range) also use the bands
-  - Cluster balances ("bal …") shown in yellow
+  List sections (website cards)
+  - Multi-account clusters — one owner, several large ATAs (§6.3b, §6.3e)
+  - Shared SOL funder — 1-hop common SOL funder (Helius; checkbox)
+  - Fresh wallets — almost only this mint (§6.3f)
+  - Multi-send (one → many) — token multi-send only here (§6.3e);
+    Shared SOL stays in its own section
+  - Similar-sized wallets — near-exact bag groups + Rugcheck insiders (§6.3h)
+  - Single holders — full list of standalone bags ≥0.01% not in any category
+    above; section total + hold-% colors (§6.3h). Never includes similar
+    cluster members.
+
+  Launch-window: disabled (no Helius same-slot scan; no Bundles section).
+
+  Display notes
+  - Section headers: “total X% · N wallet(s)” (or cluster counts)
+  - Similar group head: wallets ≈ avg % each · sum group total
+  - Single holders: slate accent panel; total recomputed after excluding Similar
   - Top10 ex-LP stays uncolored (summary only — see §6.3a)
 
-  Bundles signals compared (not interchangeable)
+  Bundles categories compared (not interchangeable)
     | Section              | What it tracks                              |
     |----------------------|---------------------------------------------|
-    | Launch-window        | Many buys in the same slot / short launch   |
-    |                      | time window (not “same bag size”) — §6.3c   |
-    | Similar-size         | Same holding size, not necessarily same time|
     | Multi-account        | Same owner, multiple large Associated Token |
     |                      | Accounts under that one owner — §6.3b       |
-    | Multi-send           | One wallet sent this mint (or SOL) to many  |
-    |                      | different wallets — §6.3e  (NOT multi-acct) |
+    | Multi-send           | One wallet sent this mint to many others    |
+    |                      | — §6.3e  (NOT multi-account)                |
     | Fresh / sole-token   | Holder whose bag is almost only this mint   |
     |                      | (few/no other SPL tokens) — §6.3f           |
-    | Shared SOL funder    | Same funding parent (1-hop SOL), not slot   |
-    | Insider (Rugcheck)   | Rugcheck insider flag on top holders        |
+    | Shared SOL funder    | Same funding parent (1-hop SOL)             |
+    | Similar-sized        | Exact / near-exact bag clusters (≥3) plus   |
+    |                      | Rugcheck insider — §6.3h (NOT multi)        |
+    | Single holders       | Standalone ≥0.01% bags in no category above |
+    |                      | — list only; not in Total — §6.3h           |
+    | Insider (Rugcheck)   | Shown inside Similar-sized (not its own Total)|
+
+6.3h Similar-sized vs Single holders
+  Website section: Similar-sized wallets  |  Single holders
+
+  Similar-sized = two sources in ONE section
+    A) Near-exact bag clusters among non-LP top holders
+    B) Rugcheck insider-flagged wallets (same section; not multi-account)
+
+  Near-exact / exact bag matching (A)
+    Two wallets match if either:
+      • absolute supply-% gap ≤ 0.02 percentage points
+        (exact same bag always matches — e.g. 2.00% vs 2.00%), OR
+      • relative gap ≤ 0.5% of the larger bag (float noise on bigger holds)
+    Same idea on raw balance when % is missing.
+
+  Gates to form a cluster
+    • Non-LP / non-known-program
+    • Each bag ≥ 0.15% of supply (smaller exact bags are ignored as dust)
+    • At least 3 wallets that all match each other (2 exact wallets ≠ a group)
+
+  Examples
+    Three wallets at exactly 2.0%     → Similar-sized group
+    Three at 1.50 / 1.51 / 1.52%      → Similar-sized (within 0.02 pp)
+    Two wallets at exactly 2.0%       → NOT a group (need 3+) → may be Single
+    Ten wallets at exactly 0.05%      → NOT similar (under 0.15% dust gate)
+
+  Single holders (list + total)
+    Non-LP bags ≥ 0.01% of supply that are NOT in:
+      multi-account · multi-send · Shared SOL · Fresh · Similar-sized
+      (including Rugcheck insider)
+    Shown as a full wallet table with total % and hold-% color bands.
+    Standalone only — never counted in Total (multi + similar-sized).
+
+  Hard rule (v151+)
+    Any wallet that is a member of a Similar-sized group (or Rugcheck insider)
+    is stripped from Single on the server and again in the browser. Similar
+    cluster wallets appear only under Similar-sized.
+
+  Total interaction
+    Similar-sized enters Total only when Fresh, Multi-send, and Shared SOL
+    are all unchecked (§6.1). Single never enters Total.
+
 
 6.3a What “Top10 ex-LP” means
   Top10 ex-LP = combined % of supply held by the top non-LP / non-program
@@ -1012,8 +1060,9 @@ What people often ask
     accounts — §6.3b) — not multi-send
   - Multi-send one → many (token and/or SOL fan-out — §6.3e) — not multi-account
   - Fresh / sole-token wallets (almost only this mint — §6.3f)
-  - Similar-sized top wallets
-  - Launch-window same-slot multi-buys (Jito-style / Helius — §6.3c)
+  - Similar-sized top wallets (exact / near-exact clusters + Rugcheck insider — §6.3h)
+  - Single holders list (standalone ≥0.01%; not in Total — §6.3h)
+  - Launch-window same-slot multi-buys — disabled (see §6.3c for historical notes)
   - Rugcheck insider_count, rugged=true, risk names (bundle/sniper/insider/…)
   - Birdeye bundler/sniper/insider/dev % tags (if API key set)
   - Mint/freeze authority style security flags (Birdeye)
@@ -1359,30 +1408,37 @@ What Ruggers is for
 How tracking starts (first lookup)
   After a successful full Analyze (Quick OFF) with holders:
 
-  1. Non-LP holders (bag ≥ 0.01% when % known) are stored as baseline.
-  2. Bundles tags attach: similar-size, multi-account (multiple Associated
-     Token Accounts under one owner), insider, shared funder,
-     launch-window same-slot multi-buys, suspect.
+  1. Category wallets + plain holders with measurable bag ≥ 0.01% are frozen
+     as baseline (cap ~450 wallets per mint so the browser can save the track).
+  2. Bundles tags attach: similar-sized (near-exact + Rugcheck insider),
+     multi-account, multi-send, shared funder, fresh.
   3. Creator wallet (when known) is included.
   4. Each wallet’s first supply % (and balance when known) is frozen.
+     Without a measurable first bag, a later dump cannot be proven.
   5. Origin lane is frozen once (see chart below). Later Analyzes do not
-     rename the wallet to another lane (except promote to similar in rare cases).
+     rename the wallet to another lane (except promote into similar-sized
+     in rare cases).
+
+  Seller lists stay empty until a SECOND full Analyze of the same mint after
+  dumps. Console may show “baseline freeze” then “compare”.
 
 New holders on later Analyzes (after the first full Analyze)
   On each subsequent full Analyze:
 
-  1. Any NEW wallet currently holding (not already in the baseline) is
-     enrolled into the track — first bag = what they hold on that first sight.
+  1. Any NEW trackable wallet currently holding is enrolled — first bag =
+     what they hold on that first sight (null bags may be filled while listed).
   2. RugWatch-flagged wallets that show up as holders later are enrolled too.
   3. If they later sell ≥99% of that first-sight bag (or drop off holders):
        · On RugWatch list → Ruggers Flagged (RugWatch) ↔ Swing
-       · Similar-size (and not forced Flagged) → Similar ↔ Swing
+       · Similar-sized (and not forced Flagged) → Similar-sized ↔ Swing
        · Otherwise plain holder → Single ↔ Swing
        · Creator still only the one mint creator address
   4. Wallets Uploaded from this mint’s Ruggers sections still stay in their
      origin section on this mint (not re-routed to Flagged here).
 
   Quick mode does not start or update Ruggers (no full holder scan).
+  Track is stored in this browser (localStorage + in-memory fallback). Old
+  dual-key / huge freezes were trimmed so baselines actually save (v148+).
 
 Where each Ruggers section comes from (Holders / Bundles)
 
@@ -1390,28 +1446,26 @@ Where each Ruggers section comes from (Holders / Bundles)
   |-----------------------------------------|-------------------------------------------|
   | Creator (sold ≥99%)                     | The one mint creator wallet only          |
   |                                         | (never a list of many “creators”)         |
-  | Similar wallets (sellers)               | Bundles similar-size groups               |
+  | Similar-sized wallets (sellers)         | Bundles near-exact bag groups + Rugcheck  |
+  |                                         | insider — same as Bundles Similar-sized   |
+  |                                         | (§6.3h); NOT multi-account                |
   | Multi-account clusters (1 Owner)        | Holders/Bundles owner clusters (multiple  |
   |                                         | Associated Token Accounts — §6.3b)        |
   | Multi-send (one → many)                 | Bundles multi-send (token + SOL fan-out)  |
   |                                         | — NOT multi-account (§6.3e)               |
   | Shared SOL funder clusters (1-Owner)    | Bundles funding clusters (1-hop SOL)      |
-  | Insider-flagged wallets (Rugcheck)      | Rugcheck insider flag (NOT RugWatch)      |
-  | Same-slot multi-buys (bots) (launch-window) | Bundles launch-window / same-slot buys|
-  |   (yellow banner on Ruggers)            | (§6.3c). Possibly bots, snipers, MEV/     |
-  |                                         | bundle entry, team multi-wallet — not     |
-  |                                         | proof of automation or shared ownership.  |
   | Fresh wallets                           | Bundles fresh wallets (almost only this   |
   |                                         | mint) — §6.3f; same sell/swing identity   |
-  | Suspect wallets                         | Bundles suspect union (if not more specific)|
   | Single wallets (sellers)                | Plain holders ≥0.01%, none of the above   |
   |                                         | (see “Lane: Single” below)                |
   | Flagged wallets (RugWatch)              | YOUR RugWatch cloud/local + sold ≥99%     |
   | Swing traders                           | Buy-back after ≥99% sell (any origin lane)|
 
+  Launch-window lane: disabled (no same-slot multi-buy Ruggers section).
+
   Priority if a wallet fits more than one lane at first discovery:
-    creator → similar → multi → multi_send → funding → insider → launch →
-    fresh → suspect → single
+    creator → similar-sized (similar/insider) → multi → multi_send →
+    funding → fresh → single
 
   Every lane keeps the same wallet identity fields: first bag %, sold % of
   supply, holds % on Swing, seen/sold/swing times, sticky origin label,
@@ -1426,14 +1480,14 @@ Lane: Single (Single wallets (sellers))
 
   Who lands here (at FIRST full Analyze of this mint):
     - Non-LP holder with a measurable bag ≥ ~0.01% of supply, AND
-    - Not creator, not similar-size, not multi-account, not multi-send,
-      not shared funder, not Rugcheck insider, not launch same-slot multi-buy,
-      not fresh wallets, not suspect (after the priority list above).
+    - Not creator, not similar-sized (near-exact cluster or Rugcheck insider),
+      not multi-account, not multi-send, not shared funder, not fresh
+      (after the priority list above).
 
   Meaning in plain language:
     A “normal-looking” plain holder who later dumped ≥99% of that first bag
     (or dropped off the holder list). No special Bundles/cluster tag beat
-    them into a higher lane.
+    them into a higher lane. Matches Bundles Single holders (§6.3h).
 
   Sticky like other origin lanes:
     - Once Single on this mint, later Analyzes do not re-lane them just
@@ -1442,9 +1496,10 @@ Lane: Single (Single wallets (sellers))
       sell swing bag → back to Single.
 
   Not Single:
-    - Creator, Similar, Multi, Funder, Insider, Launch, Suspect (higher priority)
+    - Creator, Similar-sized (exact/near-exact groups + Rugcheck insider),
+      Multi, Multi-send, Shared funder, Fresh (higher priority)
     - Flagged (RugWatch) path (separate — sold while already on your list)
-    - Holders who never reached ≥0.01% on first full Analyze
+    - Holders who never had a measurable first bag on first full Analyze
 
 Does the number of lookups before they sell matter?
   NO. Lookup count does not matter.
@@ -1513,9 +1568,10 @@ Sell ↔ Swing loop (all sticky origin lanes)
   (this browser’s localStorage; until you clear site data).
 
 Labels (examples)
-  multi-account · seller   similar · seller   same-slot multi-buys (bots) · seller
-  single · seller          creator · seller   flagged · seller
+  multi-account · seller   similar-sized · seller   single · seller
+  creator · seller         flagged · seller
   multi-account · swing    flagged · swing    creator · swing   single · swing
+  similar-sized · swing
   seller / swing heuristics only — not legal proof of collusion
 
   Section titles (each Ruggers category head)
@@ -1652,6 +1708,13 @@ Wallet counts on the Actual Data Token Checker site (RugWatch wallets bar)
   Analyze matching when RugWatch checkbox is ON:
     local wallets = GET RugWatch /api/wallets (server list)
     + cloud shards. Tags [local] / [cloud] / [both].
+
+  Unique by address (no double pulls)
+    The same CA is never listed twice. Local DB shards, cloud shards, and
+    remote /api/wallets are merged into one row per address (highest risk
+    score kept; [both] when local and cloud both know it). Holders flagged
+    totals and combined bag % also dedupe by address so one wallet cannot
+    inflate still-holding count or combined %.
 
   API: GET /api/rugwatch-counts
        JSON: { local: {count, source: rugwatch_site|…, …}, cloud: {…} }
@@ -2032,6 +2095,19 @@ Q: If a wallet sells on my 10th lookup, do they still count as a seller?
 A: Yes. Lookup count does not matter. Sales are always measured against
    the first full Analyze bag (see §11).
 
+Q: Why are seller lists empty after one Analyze?
+A: First full Analyze freezes the baseline only. Sellers appear on a later
+   full Analyze after wallets dump ≥99% of that first bag (Quick does not
+   update Ruggers). Need a measurable first bag (supply % or balance).
+
+Q: Are exact same-size bags in Similar-sized?
+A: Yes. Exact bags match; also near-exact (≤0.02 pp or ≤0.5% relative).
+   Need ≥3 wallets and each bag ≥0.15% supply (§6.3h).
+
+Q: Can similar-cluster wallets appear under Single holders?
+A: No (v151+). Server and UI strip any Similar-sized / Rugcheck insider
+   address from Single. Two exact wallets alone are not a cluster (need 3+).
+
 
 --------------------------------------------------------------------------------
 16b. FEATURE CHECKLIST (Actual Data Token Checker — vs what is documented)
@@ -2054,6 +2130,13 @@ Congruence notes (code vs older wording)
   - Ruggers toolbar Clear mint / Clear all / Refresh: **removed** (doc §11).
   - Logs: website may log successful **Quick** runs too (not only full).
   - Docs page loads web/documentation.txt (+ GitHub fallback).
+  - Total = multi-account always + Similar-sized only when Fresh / Multi-send /
+    Shared SOL are all off (§6.1). Single holders list is never in Total.
+  - Similar-sized = near-exact bags (≥3, ≥0.15%) + Rugcheck insider (§6.3h).
+    Exact bags included. No similar-cluster wallets in Single (v151+).
+  - Launch-window Bundles / Ruggers scans: **disabled**.
+  - Ruggers needs two full Analyzes + measurable first bag; Quick skips Ruggers.
+  - RugWatch merge is unique by address across local + cloud (§12b).
 
 If a button exists on the RugWatch site only, it belongs in RugWatch docs.
 
