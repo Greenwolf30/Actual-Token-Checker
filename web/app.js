@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v142";
+const ADTC_CLIENT_VERSION = "v143";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -7362,16 +7362,22 @@ function externalLinkMeta(key, url) {
     };
   }
   if (isPump) {
+    // Pump.fun brand mark: horizontal pill — left white, right green
     return {
       slug: "pumpfun",
       label: "Pump.fun",
       iconSvg:
         '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-        '<circle cx="8" cy="8" r="7" fill="#1A1A1A"/>' +
-        '<circle cx="8" cy="8.2" r="5.2" fill="#86EF2A"/>' +
-        '<circle cx="6.1" cy="7.4" r="0.85" fill="#111"/>' +
-        '<circle cx="9.9" cy="7.4" r="0.85" fill="#111"/>' +
-        '<path d="M5.6 9.6c.7.9 1.5 1.35 2.4 1.35s1.7-.45 2.4-1.35" stroke="#111" stroke-width="1.1" stroke-linecap="round"/>' +
+        // Capsule outline
+        '<rect x="1.5" y="4.5" width="13" height="7" rx="3.5" fill="#1A1A1A"/>' +
+        // Left half (white)
+        '<path d="M5 4.5h3v7H5A3.5 3.5 0 0 1 5 4.5Z" fill="#FFFFFF"/>' +
+        '<path d="M1.5 8A3.5 3.5 0 0 1 5 4.5v7A3.5 3.5 0 0 1 1.5 8Z" fill="#FFFFFF"/>' +
+        // Right half (green)
+        '<path d="M8 4.5h3a3.5 3.5 0 0 1 0 7H8V4.5Z" fill="#86EF2A"/>' +
+        '<path d="M11 4.5a3.5 3.5 0 0 1 0 7V4.5Z" fill="#86EF2A"/>' +
+        // Subtle divider
+        '<path d="M8 5v6" stroke="rgba(0,0,0,0.18)" stroke-width="0.6"/>' +
         "</svg>",
     };
   }
