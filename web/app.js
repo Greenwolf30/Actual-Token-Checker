@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v146";
+const ADTC_CLIENT_VERSION = "v147";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -1668,6 +1668,53 @@ function hasRuggersFirstBag(first) {
   return (fp != null && fp > 0) || (fb != null && fb > 0);
 }
 
+function countMeasurableRuggersBags(firstWallets) {
+  let n = 0;
+  for (const w of Object.keys(firstWallets || {})) {
+    if (hasRuggersFirstBag(firstWallets[w])) n++;
+  }
+  return n;
+}
+
+function snapHasMeasurableRuggersBags(wallets) {
+  for (const info of Object.values(wallets || {})) {
+    if (hasRuggersFirstBag(info)) return true;
+  }
+  return false;
+}
+
+/** Fill null first bag from a later sighting while still holding (enables sell detection). */
+function upgradeRuggersFirstBag(fw, info) {
+  if (!fw || !info) return false;
+  let changed = false;
+  if (
+    !hasRuggersFirstBag(fw) ||
+    (fw.pct_supply == null &&
+      info.pct_supply != null &&
+      Number.isFinite(Number(info.pct_supply)) &&
+      Number(info.pct_supply) > 0)
+  ) {
+    if (
+      info.pct_supply != null &&
+      Number.isFinite(Number(info.pct_supply)) &&
+      Number(info.pct_supply) > 0
+    ) {
+      fw.pct_supply = Number(info.pct_supply);
+      changed = true;
+    }
+  }
+  if (
+    (fw.balance == null || !Number.isFinite(Number(fw.balance)) || Number(fw.balance) <= 0) &&
+    info.balance != null &&
+    Number.isFinite(Number(info.balance)) &&
+    Number(info.balance) > 0
+  ) {
+    fw.balance = Number(info.balance);
+    changed = true;
+  }
+  return changed;
+}
+
 /**
  * Sold ≥99% of first bag when:
  *  - we *know* first bag, AND
@@ -2180,8 +2227,28 @@ function processRuggersFromAnalyze(data) {
   }
 
   const now = snap.ts || new Date().toISOString();
+  const measurableFirst = rec
+    ? countMeasurableRuggersBags(rec.first_wallets)
+    : 0;
+  const snapMeasurable = snapHasMeasurableRuggersBags(snap.wallets);
+  // First freeze, or thin seed (wallets enrolled with null bags) when snap now
+  // has real holds — without bags, sells can never be proven.
   const isFirstLookup =
-    !rec || !rec.first_wallets || !Object.keys(rec.first_wallets).length;
+    !rec ||
+    !rec.first_wallets ||
+    !Object.keys(rec.first_wallets).length ||
+    (measurableFirst === 0 &&
+      snapMeasurable &&
+      !(
+        rec.sticky_lane_sellers &&
+        Object.keys(rec.sticky_lane_sellers).length
+      ) &&
+      !(
+        rec.status &&
+        Object.values(rec.status).some(
+          (s) => s && (s.tag === "seller" || s.ever_sold || s.tag === "swing")
+        )
+      ));
 
   if (isFirstLookup) {
     // First lookup baseline — empty sellers until later sells on THIS mint only.
