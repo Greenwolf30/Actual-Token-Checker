@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v140";
+const ADTC_CLIENT_VERSION = "v141";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -7331,7 +7331,7 @@ function externalLinkMeta(key, url) {
       slug: "dexscreener",
       label: "DexScreener",
       iconSvg:
-        '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<svg viewBox="0 0 16 16" width="11" height="11" fill="none" xmlns="http://www.w3.org/2000/svg">' +
         '<rect x="1" y="1" width="14" height="14" rx="3" fill="#1B1F2A"/>' +
         '<path d="M3.5 11.5V8.2M6.2 11.5V5.5M8.9 11.5V7.1M11.6 11.5V4.2" stroke="#68F7A3" stroke-width="1.5" stroke-linecap="round"/>' +
         "</svg>",
@@ -7342,7 +7342,7 @@ function externalLinkMeta(key, url) {
       slug: "solscan",
       label: "Solscan",
       iconSvg:
-        '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<svg viewBox="0 0 16 16" width="11" height="11" fill="none" xmlns="http://www.w3.org/2000/svg">' +
         '<circle cx="8" cy="8" r="7" fill="#14203A" stroke="#4C8DFF" stroke-width="1.2"/>' +
         '<path d="M5 6.2h6M5 8h6M5 9.8h4.2" stroke="#7EB6FF" stroke-width="1.2" stroke-linecap="round"/>' +
         '<circle cx="11.2" cy="11.2" r="2.1" stroke="#4C8DFF" stroke-width="1.1"/>' +
@@ -7355,7 +7355,7 @@ function externalLinkMeta(key, url) {
       slug: "twitter",
       label: "Twitter",
       iconSvg:
-        '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<svg viewBox="0 0 16 16" width="11" height="11" fill="none" xmlns="http://www.w3.org/2000/svg">' +
         '<rect x="1" y="1" width="14" height="14" rx="3" fill="#0F1419"/>' +
         '<path d="M3.6 3.6h2.2l2.05 2.85L10.2 3.6H12.4L9.05 7.55 12.55 12.4H10.35L7.95 9.15 5.2 12.4H3L6.7 7.7 3.6 3.6Z" fill="#E7E9EA"/>' +
         "</svg>",
@@ -7366,7 +7366,7 @@ function externalLinkMeta(key, url) {
       slug: "pumpfun",
       label: "Pump.fun",
       iconSvg:
-        '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<svg viewBox="0 0 16 16" width="11" height="11" fill="none" xmlns="http://www.w3.org/2000/svg">' +
         '<circle cx="8" cy="8" r="7" fill="#1A1A1A"/>' +
         '<circle cx="8" cy="8.2" r="5.2" fill="#86EF2A"/>' +
         '<circle cx="6.1" cy="7.4" r="0.85" fill="#111"/>' +
@@ -7386,7 +7386,7 @@ function externalLinkMeta(key, url) {
     slug: "generic",
     label: pretty,
     iconSvg:
-      '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+      '<svg viewBox="0 0 16 16" width="11" height="11" fill="none" xmlns="http://www.w3.org/2000/svg">' +
       '<path d="M6.5 4H4.2A2.2 2.2 0 0 0 2 6.2v5.6A2.2 2.2 0 0 0 4.2 14h5.6A2.2 2.2 0 0 0 12 11.8V9.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>' +
       '<path d="M9 2h5v5M14 2L7.5 8.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>' +
       "</svg>",

@@ -622,19 +622,19 @@ button, .ghost, .primary {
 .links a.ext-link-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   color: var(--text-secondary);
   text-decoration: none;
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   font-weight: 600;
   border: 1px solid var(--border);
   background: var(--bg-input);
-  padding: 5px 11px 5px 8px;
+  padding: 3px 8px 3px 5px;
   border-radius: 999px;
   text-transform: none;
   letter-spacing: 0.01em;
   transition: color 0.12s, border-color 0.12s, background 0.12s, box-shadow 0.12s;
-  line-height: 1.2;
+  line-height: 1.15;
   max-width: 100%;
 }
 .links a:hover,
@@ -646,15 +646,15 @@ button, .ghost, .primary {
 .links .ext-link-icon {
   display: inline-flex;
   flex-shrink: 0;
-  width: 16px;
-  height: 16px;
+  width: 12px;
+  height: 12px;
   align-items: center;
   justify-content: center;
 }
 .links .ext-link-icon svg {
   display: block;
-  width: 14px;
-  height: 14px;
+  width: 11px;
+  height: 11px;
 }
 .links .ext-link-label {
   white-space: nowrap;
