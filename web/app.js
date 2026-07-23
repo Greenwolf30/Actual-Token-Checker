@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v136";
+const ADTC_CLIENT_VERSION = "v137";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
