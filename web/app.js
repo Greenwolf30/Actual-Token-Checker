@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v148";
+const ADTC_CLIENT_VERSION = "v149";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -8320,7 +8320,7 @@ function slimBundlesViewForStorage(bv) {
     sol_multi_send_clusters: 6,
     suspect_wallets: 16,
     signals: 8,
-    single_holders: 16,
+    single_holders: 200,
   };
   for (const [k, n] of Object.entries(caps)) {
     if (Array.isArray(c[k]) && c[k].length > n) c[k] = c[k].slice(0, n);
@@ -10968,6 +10968,79 @@ function renderBundlesUi(data) {
       "Similar-sized wallets",
       "None found — no near-exact same-size bags or Rugcheck insider-flagged wallets."
     );
+  }
+
+  // Single holders — non-category bags ≥0.01% (list + total with hold-% colors)
+  {
+    const singles = Array.isArray(view.single_holders) ? view.single_holders : [];
+    // Dedupe by wallet (max bag) in case API/cache double-listed
+    const byW = Object.create(null);
+    for (const row of singles) {
+      if (!row || typeof row !== "object") continue;
+      const w = String(row.wallet || "").trim();
+      if (!w) continue;
+      const p =
+        row.pct_supply != null && Number.isFinite(Number(row.pct_supply))
+          ? Number(row.pct_supply)
+          : null;
+      const prev = byW[w];
+      if (
+        !prev ||
+        (p != null &&
+          (prev.pct_supply == null || p > Number(prev.pct_supply || 0)))
+      ) {
+        byW[w] = { ...row, wallet: w, pct_supply: p != null ? p : row.pct_supply };
+      }
+    }
+    const singleRows = Object.values(byW).sort((a, b) => {
+      const pa = a.pct_supply != null ? Number(a.pct_supply) : -1;
+      const pb = b.pct_supply != null ? Number(b.pct_supply) : -1;
+      return pb - pa;
+    });
+    let singleTot =
+      s.single_holders_total_pct != null &&
+      Number.isFinite(Number(s.single_holders_total_pct))
+        ? Number(s.single_holders_total_pct)
+        : null;
+    if (singleTot == null) {
+      singleTot = sumUniqueWalletSupplyPct(singleRows);
+    }
+    const singleN =
+      s.single_holders_wallet_count != null
+        ? Number(s.single_holders_wallet_count)
+        : singleRows.length;
+    if (singleRows.length) {
+      html +=
+        '<section class="bun-section bun-section-single"><div class="bun-section-head">' +
+        '<span class="bun-section-title">Single holders</span>' +
+        '<span class="bun-section-total">total ' +
+        bunPctHtml(singleTot) +
+        " · " +
+        escHtml(String(singleRows.length || singleN || 0)) +
+        " wallet(s)</span></div><div class=\"bun-section-body\">";
+      html +=
+        '<p class="bun-sub">Non-LP bags ≥0.01% that are <strong>not</strong> in multi-account, ' +
+        "similar-sized, multi-send, Shared SOL, or Fresh. " +
+        "Hold % uses the same low → critical color bands as other Bundles sections.</p>";
+      html += bunWalletTable(singleRows, [
+        {
+          key: "rank",
+          label: "#",
+          render: (v) =>
+            v != null && Number.isFinite(Number(v))
+              ? escHtml(String(v))
+              : "—",
+        },
+        { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
+        { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
+      ]);
+      html += "</div></section>";
+    } else {
+      html += bunEmptySection(
+        "Single holders",
+        "None found — no standalone bags ≥0.01% outside multi / similar-sized / optionals."
+      );
+    }
   }
 
   root.innerHTML = html;

@@ -243,7 +243,8 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
         "insider_wallets": insiders,
         "suspect_wallets": [],
     }
-    single_pct, single_n = _single_holders_total(_base_for_single)
+    single_rows = _single_holders_rows(_base_for_single)
+    single_pct, single_n = _sum_wallets_pct(single_rows)
 
     return {
         "ok": True,
@@ -280,6 +281,7 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
         "insider_wallets": insider_rows[:15],
         # Flat suspect list not used; UI builds from similar + insider
         "suspect_wallets": [],
+        "single_holders": single_rows,
         "meta": {
             "holder_source": holders_data.get("source"),
             "rpc_endpoint_host": meta.get("rpc_endpoint_host"),
@@ -1286,20 +1288,21 @@ def _collect_bundled_wallet_set(data: dict[str, Any] | None) -> set[str]:
     return out
 
 
-def _single_holders_total(
+def _single_holders_rows(
     data: dict[str, Any] | None,
     *,
     min_pct: float = _SINGLE_HOLDERS_MIN_PCT,
-) -> tuple[float | None, int]:
+) -> list[dict[str, Any]]:
     """
     Non-LP holders with bag ≥ min_pct that are NOT in any other Bundles category
     (multi / similar / insider / suspect / fresh / multi-send / shared SOL).
 
+    Unique by wallet (max bag %). Sorted largest bag first.
     Matches Ruggers “Single” idea: standalone holders in the top snapshot.
     """
     data = data if isinstance(data, dict) else {}
     excluded = _collect_bundled_wallet_set(data)
-    rows: list[dict[str, Any]] = []
+    by_w: dict[str, dict[str, Any]] = {}
     for h in data.get("holders") or []:
         if not isinstance(h, dict):
             continue
@@ -1314,8 +1317,37 @@ def _single_holders_total(
             pct = None
         if pct is None or pct < min_pct:
             continue
-        rows.append({"wallet": w, "pct_supply": pct})
-    return _sum_wallets_pct(rows)
+        try:
+            bal = float(h["balance"]) if h.get("balance") is not None else None
+        except (TypeError, ValueError):
+            bal = None
+        rank = h.get("rank")
+        prev = by_w.get(w)
+        if prev is None or float(pct) > float(prev.get("pct_supply") or 0):
+            by_w[w] = {
+                "wallet": w,
+                "pct_supply": pct,
+                "balance": bal,
+                "rank": rank,
+                "label": h.get("label"),
+            }
+    rows = list(by_w.values())
+    rows.sort(
+        key=lambda r: (
+            -(float(r["pct_supply"]) if r.get("pct_supply") is not None else -1.0),
+            str(r.get("wallet") or ""),
+        )
+    )
+    return rows
+
+
+def _single_holders_total(
+    data: dict[str, Any] | None,
+    *,
+    min_pct: float = _SINGLE_HOLDERS_MIN_PCT,
+) -> tuple[float | None, int]:
+    """Total supply % + count for single holders (unique wallets)."""
+    return _sum_wallets_pct(_single_holders_rows(data, min_pct=min_pct))
 
 
 def _multi_send_total_percent(
@@ -1957,13 +1989,15 @@ def recompute_total_bundle_all_vectors(
             pass
 
     # Single holders: non-LP ≥0.01% not in any category vector
-    single_pct, single_n = _single_holders_total(data)
-    # Write onto data.summary so UI payload / fusion see it
+    single_rows = _single_holders_rows(data)
+    single_pct, single_n = _sum_wallets_pct(single_rows)
+    # Write onto data so UI payload / fusion see list + totals
     try:
         s_sum2 = dict(data.get("summary") or {})
         s_sum2["single_holders_total_pct"] = single_pct
         s_sum2["single_holders_wallet_count"] = single_n
         data["summary"] = s_sum2
+        data["single_holders"] = single_rows
     except Exception:  # noqa: BLE001
         pass
 
@@ -1982,6 +2016,7 @@ def recompute_total_bundle_all_vectors(
         "total_bundle_crosslisted_count": len(crosslisted),
         "single_holders_total_pct": single_pct,
         "single_holders_wallet_count": single_n,
+        "single_holders": single_rows,
     }
     result["total_bundle_pct"] = grand if any_data else 0.0
     result["flagged_wallets"] = slot_count
@@ -2813,6 +2848,44 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
     except (TypeError, ValueError):
         sus_n = 0
 
+    # Single holders list (non-category ≥0.01%) — full table for Bundles UI
+    single_src = list(data.get("single_holders") or [])
+    if not single_src:
+        try:
+            single_src = _single_holders_rows(data)
+        except Exception:  # noqa: BLE001
+            single_src = []
+    single_out: list[dict[str, Any]] = []
+    seen_single: set[str] = set()
+    for h in single_src:
+        if not isinstance(h, dict):
+            continue
+        r = _wallet_row(
+            h.get("wallet"),
+            h.get("pct_supply"),
+            rank=h.get("rank"),
+            balance=h.get("balance"),
+            label=h.get("label"),
+        )
+        if not r:
+            continue
+        w = r["wallet"]
+        if w in seen_single:
+            continue
+        seen_single.add(w)
+        single_out.append(r)
+    single_out.sort(
+        key=lambda r: (
+            -(float(r["pct_supply"]) if r.get("pct_supply") is not None else -1.0),
+            str(r.get("wallet") or ""),
+        )
+    )
+    single_tot, single_n = _sum_wallets_pct(single_out)
+    if s.get("single_holders_total_pct") is None and single_tot is not None:
+        s = dict(s)
+        s["single_holders_total_pct"] = single_tot
+        s["single_holders_wallet_count"] = single_n
+
     # Signals
     signals_out: list[dict[str, Any]] = []
     for sig in list(data.get("signals") or [])[:20]:
@@ -2926,8 +2999,12 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
             "sol_multi_send_clusters": s.get("sol_multi_send_clusters") or len(sol_ms),
             "suspect_total_pct": sus_tot,
             "suspect_wallet_count": sus_n if sus_n else len(suspects_out),
-            "single_holders_total_pct": s.get("single_holders_total_pct"),
-            "single_holders_wallet_count": s.get("single_holders_wallet_count"),
+            "single_holders_total_pct": s.get("single_holders_total_pct")
+            if s.get("single_holders_total_pct") is not None
+            else single_tot,
+            "single_holders_wallet_count": s.get("single_holders_wallet_count")
+            if s.get("single_holders_wallet_count") is not None
+            else (single_n if single_n else len(single_out)),
             "sources_used": list(s.get("sources_used") or [])[:16],
         },
         "providers": providers,
@@ -2942,4 +3019,5 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
         "sol_multi_send_clusters": sol_ms,
         "same_slot_groups": [],  # launch-window disabled
         "suspect_wallets": suspects_out,
+        "single_holders": single_out,
     }

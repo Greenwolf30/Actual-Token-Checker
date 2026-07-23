@@ -1079,6 +1079,8 @@ def comprehensive_bundle_check(
                 s["single_holders_wallet_count"] = tb.get(
                     "single_holders_wallet_count"
                 )
+            if tb.get("single_holders") is not None:
+                base["single_holders"] = list(tb.get("single_holders") or [])
             # recompute mutates base similar/suspect lists + their summary totals
             if base.get("summary"):
                 for k in (

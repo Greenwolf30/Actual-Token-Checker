@@ -247,16 +247,39 @@ def fetch_cloud_wallets() -> dict[str, Any]:
             wallets = _parse_wallet_items(payload)
             result["shards"] = 1 if wallets or payload else 0
 
-        # de-dupe by address (keep highest score)
+        # de-dupe by address (keep highest score); never list the same CA twice
         by_addr: dict[str, dict[str, Any]] = {}
         for w in wallets:
-            a = w["address"]
+            a = (w.get("address") or "").strip()
+            if not a:
+                continue
+            w["address"] = a
             prev = by_addr.get(a)
-            if prev is None or int(w.get("risk_score") or 0) > int(prev.get("risk_score") or 0):
+            if prev is None or int(w.get("risk_score") or 0) > int(
+                prev.get("risk_score") or 0
+            ):
                 by_addr[a] = w
+            else:
+                # merge times_flagged / notes mints into the kept row
+                try:
+                    prev["times_flagged"] = max(
+                        int(prev.get("times_flagged") or 0),
+                        int(w.get("times_flagged") or 0),
+                    )
+                except (TypeError, ValueError):
+                    pass
+                mset = list(prev.get("flagged_from_mints") or [])
+                for mm in list(w.get("flagged_from_mints") or []):
+                    if mm and mm not in mset:
+                        mset.append(mm)
+                if mset:
+                    prev["flagged_from_mints"] = mset
+                    if not prev.get("flagged_from_mint"):
+                        prev["flagged_from_mint"] = mset[0]
         merged = list(by_addr.values())
         result["wallets"] = merged
         result["count"] = len(merged)
+        result["deduped"] = True
         result["ok"] = True
         if isinstance(payload, dict) and isinstance(payload.get("total_count"), int):
             # prefer index total when larger parse failed partially
@@ -354,7 +377,7 @@ def fetch_remote_rugwatch_wallets(
         if not isinstance(rows, list):
             out["error"] = "RugWatch /api/wallets missing wallets list"
             return out
-        wallets: list[dict[str, Any]] = []
+        by_addr: dict[str, dict[str, Any]] = {}
         for it in rows:
             if not isinstance(it, dict):
                 continue
@@ -391,21 +414,30 @@ def fetch_remote_rugwatch_wallets(
                 )
             except (TypeError, ValueError):
                 times_flagged = 0
-            wallets.append(
-                {
-                    "address": addr,
-                    "label": it.get("label") or "remote_local",
-                    "risk_score": score,
-                    "times_seen": int(it.get("times_seen") or times_flagged or 0),
-                    "times_flagged": times_flagged,
-                    "notes": notes,
-                    "source": it.get("source") or "rugwatch_site",
-                    "last_seen_at": it.get("last_seen_at"),
-                    "origin": "local",
-                    "flagged_from_mints": [initial] if initial else [],
-                    "flagged_from_mint": initial,
-                }
-            )
+            row = {
+                "address": addr,
+                "label": it.get("label") or "remote_local",
+                "risk_score": score,
+                "times_seen": int(it.get("times_seen") or times_flagged or 0),
+                "times_flagged": times_flagged,
+                "notes": notes,
+                "source": it.get("source") or "rugwatch_site",
+                "last_seen_at": it.get("last_seen_at"),
+                "origin": "local",
+                "flagged_from_mints": [initial] if initial else [],
+                "flagged_from_mint": initial,
+            }
+            prev = by_addr.get(addr)
+            if prev is None or score > int(prev.get("risk_score") or 0):
+                by_addr[addr] = row
+            else:
+                try:
+                    prev["times_flagged"] = max(
+                        int(prev.get("times_flagged") or 0), times_flagged
+                    )
+                except (TypeError, ValueError):
+                    pass
+        wallets = list(by_addr.values())
         out["wallets"] = wallets
         out["count"] = len(wallets)
         out["ok"] = True
@@ -616,17 +648,27 @@ def _load_local_wallets(
             )
             return out
         by_addr: dict[str, dict[str, Any]] = {}
-        all_flagged: list[dict[str, Any]] = []
-        in_top: list[dict[str, Any]] = []
         holder_set = holder_set or set()
         for w in remote.get("wallets") or []:
             a = (w.get("address") or "").strip()
             if not a:
                 continue
-            by_addr[a] = w
-            all_flagged.append(w)
-            if a in holder_set:
-                in_top.append(w)
+            w = dict(w)
+            w["address"] = a
+            prev = by_addr.get(a)
+            if prev is None or int(w.get("risk_score") or 0) >= int(
+                prev.get("risk_score") or 0
+            ):
+                by_addr[a] = w
+        all_flagged = list(by_addr.values())
+        all_flagged.sort(
+            key=lambda x: (
+                -int(x.get("risk_score") or 0),
+                str(x.get("address") or ""),
+            )
+        )
+        in_top = [by_addr[a] for a in holder_set if a in by_addr]
+        in_top.sort(key=lambda x: -int(x.get("risk_score") or 0))
         out["db_wallet_count"] = int(remote.get("count") or len(by_addr))
         out["by_address"] = by_addr
         out["all_flagged"] = all_flagged[: max(limit, 200)]
@@ -787,21 +829,31 @@ def _load_local_wallets(
         except Exception as exc:  # noqa: BLE001
             out["error"] = (out.get("error") or "") + f"{path.name}: {exc}; "
 
-    # de-dupe lists
+    # de-dupe lists by address (prefer higher risk_score already in by_addr)
     def _dedupe(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         seen: set[str] = set()
         out_rows: list[dict[str, Any]] = []
         for w in rows:
-            a = w.get("address") or ""
-            if a and a not in seen:
-                seen.add(a)
-                out_rows.append(w)
+            a = (w.get("address") or "").strip()
+            if not a or a in seen:
+                continue
+            seen.add(a)
+            # Prefer merged by_addr row when present (best score across shards)
+            out_rows.append(by_addr.get(a) or w)
         return out_rows
 
     out["db_wallet_count"] = total
     out["linked_to_mint"] = _dedupe(linked)
     out["in_top_holders"] = _dedupe(in_top)
-    out["all_flagged"] = _dedupe(all_flagged)[: max(limit, 200)]
+    # all_flagged from unique map — not the raw multi-shard append list
+    uniq_all = list(by_addr.values())
+    uniq_all.sort(
+        key=lambda x: (
+            -int(x.get("risk_score") or 0),
+            str(x.get("address") or ""),
+        )
+    )
+    out["all_flagged"] = uniq_all[: max(limit, 200)]
     out["by_address"] = by_addr
     out["ok"] = True
     return out
@@ -891,14 +943,18 @@ def fetch_rugwatch_flagged(
         row["solscan_url"] = f"https://solscan.io/account/{addr}" if addr else None
         return row
 
-    # Prefer richer local row when both
-    merged_all: list[dict[str, Any]] = []
+    # Prefer richer local row when both — one row per address only
+    merged_by: dict[str, dict[str, Any]] = {}
     all_addrs = set(local_map) | set(cloud_map)
     for a in all_addrs:
+        a = (a or "").strip()
+        if not a or a in merged_by:
+            continue
         base = local_map.get(a) or cloud_map.get(a) or {}
         if a in local_map and a in cloud_map:
             # merge notes/score
             base = dict(local_map[a])
+            base["address"] = a
             base["risk_score"] = max(
                 int(local_map[a].get("risk_score") or 0),
                 int(cloud_map[a].get("risk_score") or 0),
@@ -916,31 +972,52 @@ def fetch_rugwatch_flagged(
                     mset.append(mm)
             base["flagged_from_mints"] = mset
             base["flagged_from_mint"] = mset[0] if mset else None
+            try:
+                base["times_flagged"] = max(
+                    int(local_map[a].get("times_flagged") or 0),
+                    int(cloud_map[a].get("times_flagged") or 0),
+                    int(local_map[a].get("times_seen") or 0),
+                    int(cloud_map[a].get("times_seen") or 0),
+                )
+            except (TypeError, ValueError):
+                pass
         else:
+            base = dict(base)
+            base["address"] = a
             # ensure cloud-only notes mint parse
             if not base.get("flagged_from_mints"):
                 mset = mints_from_notes(base.get("notes"))
                 base["flagged_from_mints"] = mset
                 base["flagged_from_mint"] = mset[0] if mset else None
-        merged_all.append(_tag(a, base))
+        merged_by[a] = _tag(a, base)
 
+    merged_all = list(merged_by.values())
     merged_all.sort(
         key=lambda w: (-int(w.get("risk_score") or 0), str(w.get("address") or ""))
     )
 
-    # linked (local only — links live in primary DB)
-    linked = []
+    # linked (local only — links live in primary DB) — unique addresses
+    linked: list[dict[str, Any]] = []
+    linked_seen: set[str] = set()
     for w in local.get("linked_to_mint") or []:
-        a = w.get("address") or ""
-        linked.append(_tag(a, w))
+        a = (w.get("address") or "").strip()
+        if not a or a in linked_seen:
+            continue
+        linked_seen.add(a)
+        linked.append(_tag(a, merged_by.get(a) or w))
     out["linked_to_mint"] = linked
 
-    # in top holders: match holders against local ∪ cloud
+    # in top holders: match holders against local ∪ cloud — one per address
     in_top: list[dict[str, Any]] = []
+    top_seen: set[str] = set()
     for a in holder_set:
-        if a in local_map or a in cloud_map:
-            base = local_map.get(a) or cloud_map.get(a) or {}
-            in_top.append(_tag(a, base))
+        a = (a or "").strip()
+        if not a or a in top_seen:
+            continue
+        if a in merged_by or a in local_map or a in cloud_map:
+            top_seen.add(a)
+            base = merged_by.get(a) or local_map.get(a) or cloud_map.get(a) or {}
+            in_top.append(merged_by.get(a) or _tag(a, base))
     in_top.sort(key=lambda w: -int(w.get("risk_score") or 0))
     out["in_top_holders"] = in_top
 
@@ -949,14 +1026,17 @@ def fetch_rugwatch_flagged(
         w for w in out["all_flagged"] if int(w.get("risk_score") or 0) >= 40
     ][:30]
 
+    linked_addrs = { (x.get("address") or "").strip() for x in linked }
     for w in out["all_flagged"]:
-        a = w.get("address") or ""
-        w["on_this_mint"] = any(x.get("address") == a for x in linked)
+        a = (w.get("address") or "").strip()
+        w["on_this_mint"] = a in linked_addrs
         w["in_top_holders"] = a in holder_set
 
-    match_addrs = {w.get("address") for w in linked if w.get("address")}
-    match_addrs |= {w.get("address") for w in in_top if w.get("address")}
+    match_addrs = set(linked_addrs)
+    match_addrs |= { (w.get("address") or "").strip() for w in in_top if w.get("address") }
+    match_addrs.discard("")
     out["match_count"] = len(match_addrs)
+    out["unique_addresses"] = len(merged_by)
 
     out["ok"] = bool(local.get("ok") or cloud.get("ok"))
     if not out["ok"] and not out["error"]:

@@ -1682,6 +1682,35 @@ a.copy-mint:hover,
   color: #6a9e78; /* dim green section titles */
   letter-spacing: 0.02em;
 }
+/* Single holders — cool slate accent (distinct from multi/similar greens) */
+.bun-section-single {
+  border-color: rgba(120, 160, 200, 0.35);
+}
+.bun-section-single .bun-section-head {
+  background: linear-gradient(
+    90deg,
+    rgba(90, 140, 190, 0.14) 0%,
+    var(--bg-elevated) 55%
+  );
+  border-bottom-color: rgba(120, 160, 200, 0.28);
+}
+.bun-section-single .bun-section-title {
+  color: #8eb4d4;
+}
+.bun-section-single .bun-section-total {
+  color: #a8c4dc;
+}
+.bun-section-single .bun-sub {
+  background: rgba(90, 140, 190, 0.08);
+  border-top-color: rgba(120, 160, 200, 0.2);
+}
+.bun-section-single .bun-table th {
+  background: rgba(90, 140, 190, 0.12);
+  color: #9bb8d0;
+}
+.bun-section-single .bun-table tr:nth-child(even) td {
+  background: rgba(90, 140, 190, 0.04);
+}
 .bun-section-total {
   font-size: 0.78rem;
   font-weight: 600;

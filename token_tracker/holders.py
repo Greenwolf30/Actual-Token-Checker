@@ -2335,19 +2335,65 @@ def collect_flagged_holder_pcts(
         except (TypeError, ValueError):
             bal_by[w] = None
 
-    all_flagged = list(rw.get("all_flagged") or [])
-    if not all_flagged:
-        seen: set[str] = set()
-        for group in (
-            list(rw.get("linked_to_mint") or []),
-            list(rw.get("in_top_holders") or []),
-            list(rw.get("high_risk_db") or []),
-        ):
-            for w in group:
-                a = (w.get("address") or "").strip()
-                if a and a not in seen:
-                    seen.add(a)
-                    all_flagged.append(w)
+    # Merge all RugWatch buckets then hard-dedupe by address (no double pull)
+    all_flagged_raw: list[dict[str, Any]] = list(rw.get("all_flagged") or [])
+    for group in (
+        list(rw.get("linked_to_mint") or []),
+        list(rw.get("in_top_holders") or []),
+        list(rw.get("high_risk_db") or []),
+    ):
+        all_flagged_raw.extend(group)
+
+    by_addr: dict[str, dict[str, Any]] = {}
+    for w in all_flagged_raw:
+        if not isinstance(w, dict):
+            continue
+        a = (w.get("address") or w.get("wallet") or "").strip()
+        if not a:
+            continue
+        prev = by_addr.get(a)
+        if prev is None:
+            row = dict(w)
+            row["address"] = a
+            by_addr[a] = row
+            continue
+        # Keep higher score; union mint links / flags
+        try:
+            if int(w.get("risk_score") or 0) > int(prev.get("risk_score") or 0):
+                merged = dict(w)
+                merged["address"] = a
+                # preserve richer flags from prev
+                if prev.get("on_this_mint"):
+                    merged["on_this_mint"] = True
+                if prev.get("in_top_holders"):
+                    merged["in_top_holders"] = True
+                by_addr[a] = merged
+                prev = by_addr[a]
+        except (TypeError, ValueError):
+            pass
+        if w.get("on_this_mint"):
+            prev["on_this_mint"] = True
+        if w.get("in_top_holders"):
+            prev["in_top_holders"] = True
+        mset = list(prev.get("flagged_from_mints") or [])
+        for mm in list(w.get("flagged_from_mints") or []):
+            if mm and mm not in mset:
+                mset.append(mm)
+        if mset:
+            prev["flagged_from_mints"] = mset
+            if not prev.get("flagged_from_mint"):
+                prev["flagged_from_mint"] = mset[0]
+        try:
+            prev["times_flagged"] = max(
+                int(prev.get("times_flagged") or 0),
+                int(w.get("times_flagged") or 0),
+                int(prev.get("times_seen") or 0),
+                int(w.get("times_seen") or 0),
+            )
+        except (TypeError, ValueError):
+            pass
+
+    all_flagged = list(by_addr.values())
 
     def _sort_key(w: dict[str, Any]) -> tuple:
         on_mint = 1 if w.get("on_this_mint") else 0
@@ -2358,20 +2404,24 @@ def collect_flagged_holder_pcts(
     ordered = sorted(all_flagged, key=_sort_key)
     shown: list[dict[str, Any]] = []
     skipped_lp = 0
+    shown_seen: set[str] = set()
     for w in ordered:
         addr = (w.get("address") or "").strip()
-        if not addr:
+        if not addr or addr in shown_seen:
             continue
         lab = w.get("label") or w.get("role") or label_by.get(addr)
         if is_known_lp_or_program(addr, label=str(lab) if lab else None):
             skipped_lp += 1
             continue
+        shown_seen.add(addr)
         shown.append(w)
 
     wallets_out: list[dict[str, Any]] = []
     previously_out: list[dict[str, Any]] = []
     still_addrs: list[str] = []
     prev_addrs: list[str] = []
+    still_seen: set[str] = set()
+    prev_seen: set[str] = set()
     total_pct = 0.0
     with_pct = 0
     skipped_sold = 0
@@ -2438,6 +2488,9 @@ def collect_flagged_holder_pcts(
         }
 
         if still_holds:
+            if addr in still_seen:
+                continue
+            still_seen.add(addr)
             still_addrs.append(addr)
             wallets_out.append(row)
             if owns_f is not None and owns_f >= _FLAGGED_STILL_HOLD_MIN_PCT:
@@ -2445,6 +2498,9 @@ def collect_flagged_holder_pcts(
                 with_pct += 1
         else:
             # Sold ≥99% / left list / not in top — count as previously holding
+            if addr in prev_seen or addr in still_seen:
+                continue
+            prev_seen.add(addr)
             skipped_sold += 1
             prev_addrs.append(addr)
             previously_out.append(row)
