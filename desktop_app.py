@@ -1399,7 +1399,7 @@ def run_gui() -> None:
 
     def _bundle_colorable_ranges(content: str) -> list[tuple[int, int]]:
         """
-        Bundles tab: only Total % bundles + Suspect wallets TOTAL line get % colors.
+        Bundles tab: only Total % bundles + Similar-sized wallets TOTAL line get % colors.
         Per-wallet suspect rows stay uncolored.
         """
         ranges: list[tuple[int, int]] = []
@@ -1409,7 +1409,11 @@ def run_gui() -> None:
             end = pos + len(line)
             if re.search(r"Total\s*%\s*bundles\s*:", line, re.I):
                 ranges.append((pos, end))
-            elif re.search(r"Suspect\s+wallets", line, re.I) and re.search(
+            elif re.search(
+                r"(Suspect\s+wallets|Similar-sized\s+wallets|Similar-size\s+total)",
+                line,
+                re.I,
+            ) and re.search(
                 r"total", line, re.I
             ):
                 ranges.append((pos, end))

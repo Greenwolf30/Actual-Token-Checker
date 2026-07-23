@@ -362,10 +362,10 @@ def format_bundles_text(data: dict[str, Any]) -> str:
     else:
         lines.append(_empty_line("Clusters"))
     if sg_n > 0:
-        lines.append(f"  Suspect groups:  {sg_n}")
+        lines.append(f"  Similar-sized groups: {sg_n}")
     else:
-        lines.append(_empty_line("Suspect groups"))
-    # Suspect total = similar-size bags (UI rename)
+        lines.append(_empty_line("Similar-sized groups"))
+    # Similar-sized total = near-exact bags + Rugcheck insiders
     sim_pct = s.get("suspect_total_pct")
     if sim_pct is None:
         sim_pct = s.get("similar_size_total_pct")
@@ -379,11 +379,11 @@ def format_bundles_text(data: dict[str, Any]) -> str:
     sim_f = _num(sim_pct)
     if sim_f is not None and sim_f > 0:
         lines.append(
-            f"  Suspect total:   {_pct(sim_pct)}"
+            f"  Similar-sized total: {_pct(sim_pct)}"
             + (f"  ({sim_n} wallet(s))" if sim_n else "")
         )
     else:
-        lines.append(_empty_line("Suspect total"))
+        lines.append(_empty_line("Similar-sized total"))
     try:
         ins_n = int(s.get("insider_accounts") or 0)
     except (TypeError, ValueError):
@@ -525,10 +525,10 @@ def format_bundles_text(data: dict[str, Any]) -> str:
     groups = data.get("similar_size_groups") or []
     insiders = data.get("insider_wallets") or []
     lines.append("")
-    lines.append("── SUSPECT WALLETS (similar-size + Rugcheck insider) ──")
+    lines.append("── SIMILAR-SIZED WALLETS (near-exact + Rugcheck insider) ──")
     sus_tot_txt, sus_n_txt = _suspect_union_percent(groups, insiders)
     in_total_note = (
-        " · in Total (multi + suspect)"
+        " · in Total (multi + similar-sized)"
         if _show_sim_sus
         else " · listed only (not in Total while optionals on)"
     )
@@ -538,7 +538,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             f"{in_total_note}"
         )
     if groups:
-        lines.append("  Similar-size bags:")
+        lines.append("  Similar-sized bags:")
         for g in groups[:6]:
             # Prefer members (wallet + pct); fall back to address-only list
             member_rows = list(g.get("members") or [])
