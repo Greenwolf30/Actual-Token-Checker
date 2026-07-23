@@ -541,6 +541,13 @@ def comprehensive_bundle_check(
                 "skipped": True,
                 "error": "Fresh wallets scan off (enable “Fresh” to run).",
             }
+            # Always surface scan-off on summary so UI can stamp Last updated
+            if base.get("ok"):
+                base = dict(base)
+                s_fr = dict(base.get("summary") or {})
+                s_fr["fresh_error"] = fresh_report["error"]
+                s_fr["fresh_from_cache"] = False
+                base["summary"] = s_fr
     if include_multi_send:
         try:
             # Wider history: newest + older mint txs (not only last ~20 swaps)
@@ -878,6 +885,13 @@ def comprehensive_bundle_check(
             s0["fresh_from_cache"] = True
             if fresh_report.get("scanned_at"):
                 s0["fresh_cached_at"] = fresh_report.get("scanned_at")
+            s0.pop("fresh_error", None)
+        elif not include_fresh:
+            s0["fresh_error"] = (
+                fresh_report.get("error")
+                or "Fresh wallets scan off (enable “Fresh” to run.)"
+            )
+            s0["fresh_from_cache"] = False
         # Multi-send total = TOKEN multi-send only (Multi-send checkbox).
         # Do NOT fold SOL multi-send / Shared SOL funders into this total —
         # that made Multi-send % == Shared SOL % and look "broken" until Shared SOL was on.

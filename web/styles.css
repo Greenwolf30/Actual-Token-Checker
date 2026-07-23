@@ -1488,13 +1488,15 @@ a.copy-mint:hover,
   letter-spacing: 0.01em;
   max-width: 100%;
   min-width: 0;
-  max-height: 2.6em;
+  max-height: 2.8em;
   overflow: hidden;
   overflow-wrap: anywhere;
   word-break: break-word;
   white-space: pre-line;
   hyphens: auto;
   box-sizing: border-box;
+  visibility: visible;
+  opacity: 1;
 }
 /* Since-last-Analyze relative change (1–25 green · 25–50 yellow · 50–75 orange · 75–99 red) */
 /* Delta sits next to the %: 24% (d +24%) — always visible */

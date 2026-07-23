@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v134";
+const ADTC_CLIENT_VERSION = "v135";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -9296,10 +9296,25 @@ function renderBundlesUi(data) {
   }
 
   /**
+   * Was this optional unchecked / not live-scanned on this Analyze?
+   * Prefer server include flags, then checkbox, then cache / scan-off errors.
+   */
+  function optionalBoxIsOff(includeKey, fromCache, errStr, checkboxFn) {
+    if (s[includeKey] === false) return true;
+    if (fromCache) return true;
+    const err = String(errStr || "");
+    if (/scan off|skipped/i.test(err)) return true;
+    try {
+      if (typeof checkboxFn === "function" && !checkboxFn()) return true;
+    } catch (_) {}
+    return false;
+  }
+
+  /**
    * Plain-text sub under Fresh / Multi / Shared SOL.
-   * When boxOff (checkbox off this Analyze / last-known / skipped): always show
-   * “Last updated” + timestamp so the box reflects the last scan of that check.
-   * Also on page restore. Hidden when that optional was scanned live this run.
+   * When boxOff (unchecked this Analyze / last-known / skipped): always show
+   * “Last updated” + timestamp. Also on page restore.
+   * Hidden when that optional was scanned live this run (checkbox on).
    */
   function optionalUpdatedPlain(whenCandidates, boxOff) {
     if (!boxOff && !isRestore) return "";
@@ -9318,9 +9333,9 @@ function renderBundlesUi(data) {
         null;
     }
     const stamp = optionalBundleUpdatedSub(whenRaw);
-    // Unchecked with no prior scan yet — still label last-known state briefly
+    // Unchecked with no prior scan yet — still label the box
     if (!stamp && boxOff) return "Last updated\n—";
-    return stamp;
+    return stamp || "";
   }
 
   // Browser timestamps for optional scans (when server cache is gone)
@@ -9369,29 +9384,45 @@ function renderBundlesUi(data) {
   const fundLive =
     !s.funding_from_cache &&
     !/scan off|enable .Shared SOL|Shared SOL funder scan off/i.test(fundErr0);
-  // On live scan: always write last known (including 0) so boxes match Total
-  // and stale last-known cannot outrank this scan’s 0%.
+  // On live scan: always write last known (including 0) + timestamp so an
+  // unchecked re-Analyze can show Last updated under that box.
   if (!isRestore && mint) {
+    const nowIso = new Date().toISOString();
     if (freshLive) {
       const frWrite =
         s.fresh_total_pct != null && Number.isFinite(Number(s.fresh_total_pct))
           ? Number(s.fresh_total_pct)
           : 0;
-      saveOptionalLastKnown(mint, "fresh", frWrite, s.fresh_cached_at);
+      saveOptionalLastKnown(
+        mint,
+        "fresh",
+        frWrite,
+        s.fresh_cached_at || nowIso
+      );
     }
     if (msLive) {
       const msWrite =
         s.multi_send_total_pct != null && Number.isFinite(Number(s.multi_send_total_pct))
           ? Number(s.multi_send_total_pct)
           : 0;
-      saveOptionalLastKnown(mint, "multi_send", msWrite, s.multi_send_cached_at);
+      saveOptionalLastKnown(
+        mint,
+        "multi_send",
+        msWrite,
+        s.multi_send_cached_at || nowIso
+      );
     }
     if (fundLive) {
       const fundWrite =
         s.funding_total_pct != null && Number.isFinite(Number(s.funding_total_pct))
           ? Number(s.funding_total_pct)
           : 0;
-      saveOptionalLastKnown(mint, "funding", fundWrite, s.funding_cached_at);
+      saveOptionalLastKnown(
+        mint,
+        "funding",
+        fundWrite,
+        s.funding_cached_at || nowIso
+      );
     }
   }
 
@@ -9526,30 +9557,39 @@ function renderBundlesUi(data) {
     );
   }
   // ── Fresh / Multi-send / Shared SOL (optional) ─────────────────────
+  // Unchecked on this Analyze → always show Last updated + timestamp.
   {
     const freshCached = !!s.fresh_from_cache;
     const freshErr = String(s.fresh_error || "");
     const freshSkipped = /scan off|enable .Fresh|Fresh wallets scan off/i.test(
       freshErr
     );
+    const freshOff = optionalBoxIsOff(
+      "total_bundle_include_fresh",
+      freshCached,
+      freshErr,
+      useFreshEnabled
+    );
     const freshPct = resolveOptionalBoxPct(
-      freshLive,
+      freshLive && !freshOff,
       s.fresh_total_pct,
       optKnown.fresh,
       deltaCurStats && deltaCurStats.fresh_total_pct
     );
     const freshAt =
       s.fresh_cached_at || (optKnown.fresh && optKnown.fresh.at) || "";
-    // Always under % + delta until next Analyze updates the time
     const freshSubEsc = escHtml(
-      optionalUpdatedPlain([
-        freshAt,
-        optKnown.fresh && optKnown.fresh.at,
-        data && data.generated_at,
-        data && data._restoredSavedAt,
-      ])
+      optionalUpdatedPlain(
+        [
+          freshAt,
+          optKnown.fresh && optKnown.fresh.at,
+          data && data.generated_at,
+          data && data._restoredSavedAt,
+        ],
+        freshOff
+      )
     );
-    if (freshSkipped && freshPct == null && !freshCached) {
+    if ((freshSkipped || freshOff) && freshPct == null && !freshCached) {
       html += stat(
         "Fresh total",
         withDelta(
@@ -9574,7 +9614,13 @@ function renderBundlesUi(data) {
     const msCached = !!s.multi_send_from_cache;
     // Live Multi-send: token multi-send only (never Shared SOL last-known).
     const msResolved = resolveTokenMultiSendTotalPct(view, s);
-    const msLiveBox = !msSkipped && !msCached;
+    const msOff = optionalBoxIsOff(
+      "total_bundle_include_multi_send",
+      msCached,
+      msErr,
+      useMultiSendEnabled
+    );
+    const msLiveBox = !msOff && !msSkipped && !msCached;
     let msPct = resolveOptionalBoxPct(
       msLiveBox,
       msResolved != null ? msResolved : s.multi_send_total_pct,
@@ -9589,14 +9635,17 @@ function renderBundlesUi(data) {
       (optKnown.multi_send && optKnown.multi_send.at) ||
       "";
     const msSubEsc = escHtml(
-      optionalUpdatedPlain([
-        msAt,
-        optKnown.multi_send && optKnown.multi_send.at,
-        data && data.generated_at,
-        data && data._restoredSavedAt,
-      ])
+      optionalUpdatedPlain(
+        [
+          msAt,
+          optKnown.multi_send && optKnown.multi_send.at,
+          data && data.generated_at,
+          data && data._restoredSavedAt,
+        ],
+        msOff
+      )
     );
-    if (msSkipped && msPct == null && !msCached) {
+    if ((msSkipped || msOff) && msPct == null && !msCached) {
       html += stat(
         "Multi-send total",
         withDelta(
@@ -9622,8 +9671,14 @@ function renderBundlesUi(data) {
       fundErr
     );
     const fundCached = !!s.funding_from_cache;
+    const fundOff = optionalBoxIsOff(
+      "total_bundle_include_shared_sol",
+      fundCached,
+      fundErr,
+      useSharedSolEnabled
+    );
     const fundPct = resolveOptionalBoxPct(
-      fundLive,
+      fundLive && !fundOff,
       s.funding_total_pct,
       optKnown.funding,
       (deltaCurStats && deltaCurStats.funding_total_pct != null
@@ -9633,15 +9688,18 @@ function renderBundlesUi(data) {
     const fundAt =
       s.funding_cached_at || (optKnown.funding && optKnown.funding.at) || "";
     const fundSubEsc = escHtml(
-      optionalUpdatedPlain([
-        fundAt,
-        optKnown.funding && optKnown.funding.at,
-        data && data.generated_at,
-        data && data._restoredSavedAt,
-      ])
+      optionalUpdatedPlain(
+        [
+          fundAt,
+          optKnown.funding && optKnown.funding.at,
+          data && data.generated_at,
+          data && data._restoredSavedAt,
+        ],
+        fundOff
+      )
     );
     let sharedSolVal;
-    if (fundSkipped && !fundCached && fundPct == null) {
+    if ((fundSkipped || fundOff) && !fundCached && fundPct == null) {
       sharedSolVal = withDelta(
         '<span style="color:var(--text-muted)">skipped</span>',
         "funding_total_pct",
@@ -10341,19 +10399,28 @@ function renderBundlesUi(data) {
       susN
     );
 
+    const freshOffDom = optionalBoxIsOff(
+      "total_bundle_include_fresh",
+      !!s.fresh_from_cache,
+      s.fresh_error,
+      useFreshEnabled
+    );
     const fp =
       resolveOptionalBoxPct(
-        freshLive,
+        freshLive && !freshOffDom,
         s.fresh_total_pct,
         optKnown.fresh,
         deltaCurStats && deltaCurStats.fresh_total_pct
       ) || 0;
-    const freshSubPlain = optionalUpdatedPlain([
-      s.fresh_cached_at,
-      optKnown.fresh && optKnown.fresh.at,
-      data && data.generated_at,
-      data && data._restoredSavedAt,
-    ]);
+    const freshSubPlain = optionalUpdatedPlain(
+      [
+        s.fresh_cached_at,
+        optKnown.fresh && optKnown.fresh.at,
+        data && data.generated_at,
+        data && data._restoredSavedAt,
+      ],
+      freshOffDom
+    );
     pushStat(
       "Fresh total",
       fmtSupplyPct(fp) || "0%",
@@ -10363,20 +10430,29 @@ function renderBundlesUi(data) {
       freshSubPlain
     );
 
+    const msOffDom = optionalBoxIsOff(
+      "total_bundle_include_multi_send",
+      !!s.multi_send_from_cache,
+      s.multi_send_error,
+      useMultiSendEnabled
+    );
     const msResolvedDom = resolveTokenMultiSendTotalPct(view, s);
     const mp =
       resolveOptionalBoxPct(
-        msLive,
+        msLive && !msOffDom,
         msResolvedDom != null ? msResolvedDom : s.multi_send_total_pct,
         optKnown.multi_send,
         deltaCurStats && deltaCurStats.multi_send_total_pct
       ) || 0;
-    const msSubPlain = optionalUpdatedPlain([
-      s.multi_send_cached_at,
-      optKnown.multi_send && optKnown.multi_send.at,
-      data && data.generated_at,
-      data && data._restoredSavedAt,
-    ]);
+    const msSubPlain = optionalUpdatedPlain(
+      [
+        s.multi_send_cached_at,
+        optKnown.multi_send && optKnown.multi_send.at,
+        data && data.generated_at,
+        data && data._restoredSavedAt,
+      ],
+      msOffDom
+    );
     pushStat(
       "Multi-send total",
       fmtSupplyPct(mp) || "0%",
@@ -10386,19 +10462,28 @@ function renderBundlesUi(data) {
       msSubPlain
     );
 
+    const fundOffDom = optionalBoxIsOff(
+      "total_bundle_include_shared_sol",
+      !!s.funding_from_cache,
+      s.funding_error,
+      useSharedSolEnabled
+    );
     const fdp =
       resolveOptionalBoxPct(
-        fundLive,
+        fundLive && !fundOffDom,
         s.funding_total_pct,
         optKnown.funding,
         deltaCurStats && deltaCurStats.funding_total_pct
       ) || 0;
-    const fundSubPlain = optionalUpdatedPlain([
-      s.funding_cached_at,
-      optKnown.funding && optKnown.funding.at,
-      data && data.generated_at,
-      data && data._restoredSavedAt,
-    ]);
+    const fundSubPlain = optionalUpdatedPlain(
+      [
+        s.funding_cached_at,
+        optKnown.funding && optKnown.funding.at,
+        data && data.generated_at,
+        data && data._restoredSavedAt,
+      ],
+      fundOffDom
+    );
     pushStat(
       "Shared SOL total",
       fmtSupplyPct(fdp) || "0%",
