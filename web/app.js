@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v171";
+const ADTC_CLIENT_VERSION = "v172";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 // Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
 try {
@@ -5974,12 +5974,150 @@ function rugwatchApiBase() {
   const cfg = window.ADTC_CONFIG || {};
   let u = (cfg.rugwatchUrl || "https://rugwatch.onrender.com/").trim();
   if (!u) u = "https://rugwatch.onrender.com/";
+  // Guard: never leave https page calling plain-http localhost (mixed content = Failed to fetch)
+  try {
+    if (
+      typeof location !== "undefined" &&
+      location.protocol === "https:" &&
+      /^http:\/\//i.test(u) &&
+      /127\.0\.0\.1|localhost/i.test(u)
+    ) {
+      console.warn(
+        "[ruggers] rugwatchUrl is local HTTP on an HTTPS page — using live RugWatch instead"
+      );
+      u = "https://rugwatch.onrender.com/";
+    }
+  } catch (_) {
+    /* ignore */
+  }
   return u.replace(/\/+$/, "");
+}
+
+/** Sleep helper for retries / cold-start wake. */
+function rugwatchSleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Human-readable network error for RugWatch fetch failures.
+ * Browser "Failed to fetch" usually means CORS, offline, or 502 HTML without CORS.
+ */
+function formatRugwatchFetchError(err, base, phase) {
+  const raw = String((err && err.message) || err || "Failed to fetch");
+  const low = raw.toLowerCase();
+  const isNet =
+    low.includes("failed to fetch") ||
+    low.includes("networkerror") ||
+    low.includes("load failed") ||
+    low.includes("network request failed") ||
+    low.includes("aborted");
+  let msg =
+    (phase ? phase + ": " : "") +
+    raw +
+    "\n\nTarget: " +
+    base;
+  if (isNet) {
+    msg +=
+      "\n\n“Failed to fetch” means the browser never got a usable response from RugWatch.\n" +
+      "Common causes:\n" +
+      "• RugWatch is sleeping / restarting (Render free tier) — wait 30–60s and retry\n" +
+      "• RugWatch returned 502 Bad Gateway (server crashed or cold start)\n" +
+      "• Wrong rugwatchUrl / offline / extension blocking\n\n" +
+      "Open " +
+      base +
+      " in a tab first. When it loads, try Upload again.\n" +
+      "Or use Export → import manually in RugWatch → Push cloud.";
+  }
+  return msg;
+}
+
+/**
+ * Wake RugWatch (Render free tier) and fetch with retries.
+ * Returns { ok, response, text, data, error, attempts }.
+ */
+async function rugwatchFetchJson(url, options, opts) {
+  const attempts = Math.max(1, (opts && opts.attempts) || 3);
+  const wake = opts && opts.wake !== false;
+  const base = rugwatchApiBase();
+  const label = (opts && opts.label) || "request";
+  let lastErr = null;
+
+  if (wake) {
+    // Best-effort wake: ignore failures (CORS/HTML still count as "host is up")
+    for (let w = 0; w < 2; w++) {
+      try {
+        await fetch(base + "/api/health", {
+          method: "GET",
+          mode: "cors",
+          cache: "no-store",
+        });
+        break;
+      } catch (_) {
+        try {
+          await fetch(base + "/", { method: "GET", mode: "cors", cache: "no-store" });
+          break;
+        } catch (e2) {
+          lastErr = e2;
+          if (w === 0) await rugwatchSleep(2500);
+        }
+      }
+    }
+  }
+
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(url, options);
+      const text = await res.text();
+      let data = null;
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch (_) {
+        data = null;
+      }
+      // Retry hard gateway / cold-start errors
+      if (
+        (res.status === 502 || res.status === 503 || res.status === 504) &&
+        i < attempts - 1
+      ) {
+        lastErr = new Error(
+          "RugWatch HTTP " + res.status + " (retrying cold start / restart…)"
+        );
+        await rugwatchSleep(3000 + i * 2000);
+        continue;
+      }
+      return {
+        ok: res.ok,
+        response: res,
+        text: text,
+        data: data,
+        error: null,
+        attempts: i + 1,
+      };
+    } catch (e) {
+      lastErr = e;
+      if (i < attempts - 1) {
+        await rugwatchSleep(2500 + i * 2000);
+        continue;
+      }
+    }
+  }
+  return {
+    ok: false,
+    response: null,
+    text: "",
+    data: null,
+    error: lastErr || new Error("Failed to fetch"),
+    attempts: attempts,
+    label: label,
+  };
 }
 
 /**
  * Upload Ruggers section wallets → live RugWatch DB + Push cloud (GitHub wallet list).
  * Default: https://rugwatch.onrender.com (override with config.js rugwatchUrl).
+ *
+ * Import and push are separate requests so a GitHub push crash/502 cannot wipe
+ * a successful import (and so the browser gets CORS JSON instead of HTML 502).
  */
 async function uploadRuggersSectionToCloud(exportKey) {
   const allRows = ruggersRowsForExportKey(exportKey);
@@ -6084,30 +6222,40 @@ async function uploadRuggersSectionToCloud(exportKey) {
       throw new Error("No wallet addresses in payload after filter.");
     }
 
-    const up = await fetch(base + "/api/upload", {
-      method: "POST",
-      mode: "cors",
-      headers,
-      body: JSON.stringify({
-        format: payload.format || "rugwatch_wallets_v1",
-        wallets: payload.wallets,
-        text: addrLines,
-        source: "adtc_ruggers_" + section,
-        push_cloud: true,
-      }),
-    });
-    let upData = {};
-    const upText = await up.text();
-    try {
-      upData = upText ? JSON.parse(upText) : {};
-    } catch (_) {
+    // Import ONLY (push_cloud false). Inline push was crashing RugWatch on Render
+    // (502 HTML without CORS → browser “Failed to fetch”).
+    if (btn) btn.textContent = "Uploading…";
+    const upResult = await rugwatchFetchJson(
+      base + "/api/upload",
+      {
+        method: "POST",
+        mode: "cors",
+        headers,
+        body: JSON.stringify({
+          format: payload.format || "rugwatch_wallets_v1",
+          wallets: payload.wallets,
+          text: addrLines,
+          source: "adtc_ruggers_" + section,
+          push_cloud: false,
+        }),
+      },
+      { attempts: 3, wake: true, label: "upload" }
+    );
+    if (upResult.error) {
+      throw new Error(
+        formatRugwatchFetchError(upResult.error, base, "Upload")
+      );
+    }
+    const up = upResult.response;
+    let upData = upResult.data;
+    if (!upData || typeof upData !== "object") {
       throw new Error(
         "RugWatch upload returned non-JSON (HTTP " +
-          up.status +
+          (up && up.status) +
           "). Is " +
           base +
-          " awake? Body: " +
-          String(upText || "").slice(0, 120)
+          " awake?\nBody: " +
+          String(upResult.text || "").slice(0, 160)
       );
     }
     if (!up.ok || !upData.ok) {
@@ -6121,37 +6269,49 @@ async function uploadRuggersSectionToCloud(exportKey) {
       );
     }
 
-    // Explicit push if server did not auto-push — do NOT fail the whole upload
-    // when wallets already imported but GitHub push is misconfigured.
+    // Separate Push cloud — never fail the whole upload if push dies
     let cloud = upData.cloud || null;
     let pushWarning = "";
-    if (!cloud || !cloud.ok) {
-      try {
-        const push = await fetch(base + "/api/push-cloud", {
+    if (btn) btn.textContent = "Pushing cloud…";
+    try {
+      const pushResult = await rugwatchFetchJson(
+        base + "/api/push-cloud",
+        {
           method: "POST",
           mode: "cors",
           headers,
           body: JSON.stringify({}),
-        });
-        const pushText = await push.text();
-        try {
-          cloud = pushText ? JSON.parse(pushText) : { ok: false };
-        } catch (_) {
-          cloud = { ok: false, error: "Push cloud bad response" };
-        }
-        if (!push.ok || !cloud.ok) {
+        },
+        { attempts: 2, wake: false, label: "push-cloud" }
+      );
+      if (pushResult.error) {
+        pushWarning =
+          "Push cloud network error: " +
+          String(
+            (pushResult.error && pushResult.error.message) || pushResult.error
+          ) +
+          " — wallets may still be in RugWatch local DB. Open RugWatch and click Push cloud.";
+        console.warn("[ruggers upload] push-cloud", pushWarning);
+        cloud = cloud || { ok: false, error: pushWarning };
+      } else {
+        const pushData =
+          pushResult.data && typeof pushResult.data === "object"
+            ? pushResult.data
+            : { ok: false, error: "Push cloud bad response" };
+        cloud = pushData;
+        if (!pushResult.ok || !cloud.ok) {
           pushWarning =
             (cloud && cloud.error) ||
             "Push cloud failed — wallets may still be in RugWatch local DB. Open RugWatch and click Push cloud.";
           console.warn("[ruggers upload] push-cloud", pushWarning, cloud);
         }
-      } catch (pushErr) {
-        pushWarning = String(
-          (pushErr && pushErr.message) || pushErr || "Push cloud network error"
-        );
-        console.warn("[ruggers upload] push-cloud", pushWarning);
-        cloud = cloud || { ok: false, error: pushWarning };
       }
+    } catch (pushErr) {
+      pushWarning = String(
+        (pushErr && pushErr.message) || pushErr || "Push cloud network error"
+      );
+      console.warn("[ruggers upload] push-cloud", pushWarning);
+      cloud = cloud || { ok: false, error: pushWarning };
     }
 
     const imported = upData.imported != null ? upData.imported : 0;
@@ -6242,13 +6402,22 @@ async function uploadRuggersSectionToCloud(exportKey) {
                 "They do not move to Flagged on this mint. Buy-back → Swing (label kept) · sell again → same category.")
     );
   } catch (e) {
+    const baseHint = rugwatchApiBase();
+    const msg = String(e.message || e);
+    // formatRugwatchFetchError already embeds tips for network failures
+    const hasTips = /Failed to fetch|Target:|Common causes/i.test(msg);
     alert(
       "RugWatch Upload failed:\n\n" +
-        String(e.message || e) +
-        "\n\nTips:\n• Live RugWatch: https://rugwatch.onrender.com\n" +
-        "• GITHUB_TOKEN must be set on that server\n" +
-        "• Check config.js rugwatchUrl\n" +
-        "• Free tier: first request after sleep can take ~60s"
+        msg +
+        (hasTips
+          ? ""
+          : "\n\nTips:\n• Open " +
+            baseHint +
+            " and wait until it loads\n" +
+            "• Live RugWatch: https://rugwatch.onrender.com\n" +
+            "• Check web/config.js rugwatchUrl\n" +
+            "• Free tier: cold start / 502 can take 30–60s — retry\n" +
+            "• Workaround: Export → import in RugWatch → Push cloud")
     );
   } finally {
     if (btn) {
