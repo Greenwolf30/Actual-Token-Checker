@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v161";
+const ADTC_CLIENT_VERSION = "v162";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 // Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
 try {
@@ -12589,26 +12589,59 @@ async function finishAnalyzeHeavyWork(data, query) {
 }
 
 async function analyze(ev) {
-  if (ev) ev.preventDefault();
+  if (ev) {
+    try {
+      ev.preventDefault();
+      ev.stopPropagation();
+    } catch (_) {}
+  }
   showError("");
-  const query = $("query").value.trim();
+  const queryEl = $("query");
+  const query = queryEl ? String(queryEl.value || "").trim() : "";
   if (!query) {
     showError("Enter a mint, symbol, or name.");
     return;
   }
-  const chain = $("chain").value || null;
-  const quick = $("quick").checked;
+  const chain = $("chain") ? $("chain").value || null : null;
+  // Opera: force quick unless user opted into ?full=1
+  let quick = $("quick") ? $("quick").checked : false;
+  if (isOperaBrowser() && !wantFullHeavyUi()) {
+    quick = true;
+    try {
+      if ($("quick")) $("quick").checked = true;
+    } catch (_) {}
+  }
   const include_rugwatch = useRugwatchEnabled();
-  const include_fresh = useFreshEnabled();
-  const include_multi_send = useMultiSendEnabled();
-  const include_shared_sol = useSharedSolEnabled();
+  let include_fresh = useFreshEnabled();
+  let include_multi_send = useMultiSendEnabled();
+  let include_shared_sol = useSharedSolEnabled();
+  if (isOperaBrowser() && !wantFullHeavyUi()) {
+    // Heavy Helius scans produce huge JSON that freezes Opera after return
+    include_fresh = false;
+    include_multi_send = false;
+    include_shared_sol = false;
+  }
   const btn = $("analyzeBtn");
-  btn.disabled = true;
-  btn.textContent = quick ? "Quick…" : "Analyzing…";
-  setPanelText(
-    "overview",
-    "Loading… this can take up to ~90s for holders/about."
-  );
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = quick ? "Quick…" : "Analyzing…";
+  }
+  // Status only in error/status area — do not blank the whole overview forever
+  try {
+    const st = $("serverStatus");
+    if (st) {
+      st.textContent = quick ? "quick analyze…" : "analyzing…";
+      st.className = "pill muted";
+    }
+  } catch (_) {}
+  try {
+    setPanelText(
+      "overview",
+      quick
+        ? "Quick Analyze running… usually a few seconds."
+        : "Full Analyze running… can take up to ~90s. On Opera GX use Quick for best results."
+    );
+  } catch (_) {}
 
   const ctrl = new AbortController();
   const analyzeTimer = setTimeout(() => ctrl.abort(), quick ? 45000 : 120000);
@@ -12620,8 +12653,10 @@ async function analyze(ev) {
       clearTimeout(analyzeTimer);
     } catch (_) {}
     try {
-      btn.disabled = false;
-      btn.textContent = "Analyze";
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Analyze";
+      }
     } catch (_) {}
   }
 
@@ -12644,9 +12679,30 @@ async function analyze(ev) {
     });
     let data;
     try {
-      data = await r.json();
-    } catch (_e) {
+      // text then parse — allows size check before JSON.parse on huge bodies
+      const rawText = await r.text();
+      if (rawText.length > 2500000 && isOperaBrowser()) {
+        throw new Error(
+          "Response too large for Opera GX (" +
+            Math.round(rawText.length / 1024) +
+            " KB). Turn on Quick and uncheck Fresh/Multi/Shared SOL, or use Edge/Chrome."
+        );
+      }
+      data = JSON.parse(rawText);
+    } catch (pe) {
+      if (pe && pe.message && /too large|JSON|parse/i.test(pe.message)) throw pe;
       throw new Error("Bad response from server");
+    }
+    // Shrink payload ASAP on Opera so later work cannot freeze the tab
+    if (isOperaBrowser() && data && typeof data === "object") {
+      try {
+        if (data.history_meta && data.history_meta.ruggers_track) {
+          const tr = data.history_meta.ruggers_track;
+          if (tr && Array.isArray(tr.wallets) && tr.wallets.length > 40) {
+            tr.wallets = tr.wallets.slice(0, 40);
+          }
+        }
+      } catch (_) {}
     }
     if (r.status === 401) {
       showError(data.error || "Unauthorized — set site passcode (⚙).");
@@ -12667,6 +12723,9 @@ async function analyze(ev) {
     // Unlock clicks BEFORE heavy paint/persist (Opera GX freezes on sync work)
     unlockBtn();
     unstickPointerLayer();
+    try {
+      checkHealth();
+    } catch (_) {}
 
     if (!data.generated_at) data.generated_at = new Date().toISOString();
     data._marketUpdatedAt = data.generated_at;
@@ -12926,8 +12985,37 @@ async function init() {
   safe("tabs", initTabs);
   safe("settings", initSettings);
   const searchForm = $("searchForm");
-  if (searchForm) searchForm.addEventListener("submit", analyze);
-  else console.warn("[init] searchForm missing");
+  const analyzeBtn = $("analyzeBtn");
+  if (searchForm) {
+    searchForm.addEventListener("submit", (ev) => {
+      if (ev) ev.preventDefault();
+      analyze(ev);
+    });
+  } else console.warn("[init] searchForm missing");
+  // type=button Analyze — never relies on form navigation
+  if (analyzeBtn) {
+    analyzeBtn.addEventListener("click", (ev) => {
+      if (ev) ev.preventDefault();
+      analyze(ev);
+    });
+  }
+
+  // Opera GX: default to Quick + light scans so the tab does not freeze / blank
+  try {
+    if (isOperaBrowser() && !wantFullHeavyUi()) {
+      const qEl = $("quick");
+      if (qEl) qEl.checked = true;
+      const f = $("useFresh");
+      if (f) f.checked = false;
+      const m = $("useMultiSend");
+      if (m) m.checked = false;
+      const s = $("useSharedSol");
+      if (s) s.checked = false;
+      console.info(
+        "[boot] Opera defaults: Quick on, Fresh/Multi/Shared SOL off (use ?full=1 for heavy)"
+      );
+    }
+  } catch (_) {}
 
   // 2) Light wiring only (no heavy panel paints)
   safe("history", initHistory);

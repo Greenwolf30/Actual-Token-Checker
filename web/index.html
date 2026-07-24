@@ -47,19 +47,19 @@
     }
   </style>
   <!-- Normal stylesheet (required for correct fonts/layout). Same-origin; not Google Fonts. -->
-  <link rel="stylesheet" href="/styles.css?v=opera-boot-v161" />
+  <link rel="stylesheet" href="/styles.css?v=opera-boot-v162" />
   <!-- defer = download in parallel, run after HTML parse — keeps UI clickable while JS loads -->
   <script
     defer
-    src="/config.js?v=opera-boot-v161"
+    src="/config.js?v=opera-boot-v162"
     onerror="window.__adtcBootError && window.__adtcBootError('failed to load config.js — hard-refresh or disable Opera blocker')"
   ></script>
   <script
     defer
-    src="/app.js?v=opera-boot-v161"
+    src="/app.js?v=opera-boot-v162"
     onerror="window.__adtcBootError && window.__adtcBootError('failed to load app.js — hard-refresh or disable Opera blocker')"
   ></script>
-  <!-- app cache: opera-boot-v161 — no heavy boot restore on Opera; clicks first -->
+  <!-- app cache: opera-boot-v162 — no heavy boot restore on Opera; clicks first -->
   <script>
     // Boot helpers only — no blocking external deps
     window.__adtcBootError = function (msg) {
@@ -216,7 +216,8 @@
     </section>
 
     <section class="search-panel">
-      <form id="searchForm" autocomplete="off">
+      <!-- method/action prevent accidental full-page reload if JS is late/frozen -->
+      <form id="searchForm" autocomplete="off" method="post" action="javascript:void(0)" onsubmit="return false;">
         <label class="sr-only" for="query">Token mint, symbol, or name</label>
         <input
           id="query"
@@ -269,7 +270,7 @@
           <input type="checkbox" id="useSharedSol" checked />
           Shared SOL
         </label>
-        <button type="submit" id="analyzeBtn">Analyze</button>
+        <button type="button" id="analyzeBtn">Analyze</button>
       </form>
       <p id="errorBox" class="error" hidden></p>
     </section>
@@ -481,7 +482,7 @@
   </dialog>
 
   <script>
-    // Visible boot check — if this is not v161+, hard-refresh / redeploy
+    // Visible boot check — if this is not v162+, hard-refresh / redeploy
     // (config.js + app.js load via defer in <head>)
     document.addEventListener("DOMContentLoaded", function () {
       var v = window.__ADTC_CLIENT__ || "(app.js not loaded)";
