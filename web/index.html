@@ -8,12 +8,12 @@
   <link rel="icon" href="/logo.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/logo.svg" />
   <!--
-    Do NOT load fonts.googleapis.com as a render-blocking stylesheet.
-    Opera GX shield / tracker block often hangs that request → pure white
-    blank screen with zero console errors. System fonts already fall back
-    in styles.css (Segoe UI / system-ui / monospace).
+    Opera GX black/white screen notes:
+    - Never load fonts.googleapis.com (shield hang → blank).
+    - Never put parser-blocking external scripts in <head> (config.js hang → body never paints → pure black).
+    - Never use a sole render-blocking stylesheet if it can hang (styles.css hang → black shell only).
+    Critical CSS below paints the shell; full styles.css is non-blocking.
   -->
-  <!-- Critical first paint: never depend on external CSS/fonts to leave white void -->
   <style>
     html, body {
       margin: 0;
@@ -27,15 +27,18 @@
       margin: 0 auto;
       padding: 20px 16px 40px;
       min-height: 100%;
+      position: relative;
+      z-index: 1;
     }
+    /* High-contrast boot chrome — visible even if styles.css never arrives */
     #bootStatus {
       margin: 0 0 12px;
-      padding: 8px 12px;
-      border: 1px solid #323a48;
+      padding: 10px 12px;
+      border: 1px solid #4f8cff;
       background: #141820;
-      color: #a8b0bd;
+      color: #e8eef8;
       border-radius: 8px;
-      font: 13px/1.4 system-ui, sans-serif;
+      font: 14px/1.45 system-ui, sans-serif;
     }
     #bootStatus[hidden],
     #bootError[hidden] {
@@ -43,20 +46,54 @@
     }
     #bootError {
       margin: 0 0 12px;
-      padding: 10px 12px;
-      border: 1px solid #b86b66;
+      padding: 12px 14px;
+      border: 2px solid #ff6b63;
       background: #2a1818;
-      color: #f0d0d0;
+      color: #ffe8e6;
       border-radius: 8px;
-      font: 13px/1.4 system-ui, sans-serif;
+      font: 14px/1.45 system-ui, sans-serif;
+      white-space: pre-wrap;
+    }
+    /* Minimal shell if full CSS is blocked/hung */
+    .site-nav, .search-panel, .tabs-shell, .top, .rw-wallet-counts {
+      border: 1px solid #323a48;
+      background: #11141a;
+      border-radius: 10px;
+      margin: 0 0 12px;
+      padding: 10px 12px;
+    }
+    .top h1 { margin: 0 0 4px; font-size: 1.25rem; color: #f0f2f5; }
+    .tag, .help, .muted, .foot { color: #a8b0bd; }
+    a { color: #7eb0ff; }
+    button, .primary {
+      background: #4f8cff;
+      color: #fff;
+      border: 0;
+      border-radius: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+    input, select {
+      background: #0d1016;
+      color: #f0f2f5;
+      border: 1px solid #323a48;
+      border-radius: 8px;
+      padding: 8px 10px;
     }
   </style>
-  <link rel="stylesheet" href="/styles.css?v=opera-boot-v154" />
-  <!-- app cache: opera-boot-v154 — no Google Fonts (Opera GX white-screen fix) -->
-  <!-- Public API base only — never put provider keys in config.js -->
-  <script src="/config.js?v=opera-boot-v154" onerror="window.__adtcBootError && window.__adtcBootError('failed to load config.js')"></script>
+  <!-- Non-blocking CSS: if styles.css hangs under Opera shield, body still paints -->
+  <link
+    rel="stylesheet"
+    href="/styles.css?v=opera-boot-v155"
+    media="print"
+    onload="this.media='all'"
+  />
+  <noscript>
+    <link rel="stylesheet" href="/styles.css?v=opera-boot-v155" />
+  </noscript>
+  <!-- app cache: opera-boot-v155 — no head blockers (Opera GX black-screen fix) -->
   <script>
-    // Surface script/load failures (Opera adblock / cache / syntax) before app.js runs
+    // Boot helpers only — no external deps in <head>
     window.__adtcBootError = function (msg) {
       try {
         var status = document.getElementById("bootStatus");
@@ -73,7 +110,7 @@
         el.textContent =
           "Site script issue: " +
           String(msg || "unknown") +
-          " — try hard-refresh (Ctrl+Shift+R), disable Opera adblock/VPN for this site, or open in a private window.";
+          " — try hard-refresh (Ctrl+Shift+R), disable Opera GX adblock/VPN for this site, or open a private window.";
       } catch (e) {
         console.error("[boot]", msg, e);
       }
@@ -87,15 +124,17 @@
       }
     };
     window.addEventListener("error", function (ev) {
-      if (ev && (ev.filename || "").indexOf("app.js") !== -1) {
-        window.__adtcBootError((ev.message || "app.js error") + " (line " + (ev.lineno || "?") + ")");
+      if (!ev) return;
+      var f = String(ev.filename || "");
+      if (f.indexOf("app.js") !== -1 || f.indexOf("config.js") !== -1) {
+        window.__adtcBootError((ev.message || "script error") + " (line " + (ev.lineno || "?") + ")");
       }
     });
-    // If app.js never runs (blocked / hung), surface it instead of a silent white shell
+    // If app.js never runs (blocked / hung), surface it instead of a silent black shell
     setTimeout(function () {
       if (!window.__ADTC_CLIENT__ && window.__adtcBootError) {
         window.__adtcBootError(
-          "app.js did not run within 12s (blocked, hung network, or syntax error). Hard-refresh Ctrl+Shift+R."
+          "app.js did not run within 12s (blocked, hung network, or syntax error). Hard-refresh Ctrl+Shift+R. In Opera GX: disable adblocker for this site or try private window."
         );
       }
     }, 12000);
@@ -108,7 +147,9 @@
     </div>
   </noscript>
   <div class="app">
-    <div id="bootStatus" role="status">Loading Actual Data Token Checker…</div>
+    <div id="bootStatus" role="status">
+      Loading Actual Data Token Checker… If this stays black, press Ctrl+Shift+R or disable Opera GX blocker for this site.
+    </div>
     <div id="bootError" role="alert" hidden></div>
     <nav class="site-nav site-nav-compact" aria-label="Main">
       <div class="site-nav-inner">
@@ -469,9 +510,28 @@
     </form>
   </dialog>
 
-  <script src="/app.js?v=opera-boot-v154" onerror="window.__adtcBootError && window.__adtcBootError('failed to load app.js — hard-refresh or disable Opera blocker')"></script>
+  <!-- Scripts at end of body only — never in <head> (Opera GX hang → black screen) -->
   <script>
-    // Visible boot check — if this is not v154+, hard-refresh / redeploy
+    // Ensure non-blocking stylesheet applies even if link onload was stripped by a blocker
+    (function () {
+      try {
+        var links = document.querySelectorAll('link[rel="stylesheet"][media="print"]');
+        for (var i = 0; i < links.length; i++) links[i].media = "all";
+      } catch (e) {
+        /* ignore */
+      }
+    })();
+  </script>
+  <script
+    src="/config.js?v=opera-boot-v155"
+    onerror="window.__adtcBootError && window.__adtcBootError('failed to load config.js — hard-refresh or disable Opera blocker')"
+  ></script>
+  <script
+    src="/app.js?v=opera-boot-v155"
+    onerror="window.__adtcBootError && window.__adtcBootError('failed to load app.js — hard-refresh or disable Opera blocker')"
+  ></script>
+  <script>
+    // Visible boot check — if this is not v155+, hard-refresh / redeploy
     document.addEventListener("DOMContentLoaded", function () {
       var v = window.__ADTC_CLIENT__ || "(app.js not loaded)";
       console.info("[ADTC boot]", v);
@@ -479,7 +539,7 @@
         if (window.__adtcBootReady) window.__adtcBootReady();
       } else if (window.__adtcBootError) {
         window.__adtcBootError(
-          "app.js did not run (blocked, cached old file, or syntax error). Hard-refresh Ctrl+Shift+R."
+          "app.js did not run (blocked, cached old file, or syntax error). Hard-refresh Ctrl+Shift+R. Opera GX: turn off adblock for this site."
         );
       }
       var bar = document.querySelector(".history-bar-label");
