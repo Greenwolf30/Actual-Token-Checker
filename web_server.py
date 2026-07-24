@@ -904,7 +904,64 @@ def _ruggers_track_snapshot(
 
 
 
-def build_public_payload(report: dict[str, Any]) -> dict[str, Any]:
+def apply_lite_response(payload: dict[str, Any]) -> dict[str, Any]:
+    """Shrink an analyze payload for Opera GX / low-power browsers.
+
+    Drops ruggers wallet lists, long snapshots, and full Bundles tables so
+    JSON.parse + first paint stay interactive.
+    """
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        return payload
+    out = dict(payload)
+    out["lite"] = True
+    # Sections: keep short overview/alerts only
+    secs = out.get("sections") if isinstance(out.get("sections"), dict) else {}
+    slim_secs: dict[str, str] = {}
+    for key, max_len in (
+        ("overview", 3500),
+        ("alerts", 2500),
+        ("maps", 1500),
+        ("about", 2500),
+        ("holders", 2000),
+        ("bundles", 1500),
+    ):
+        val = secs.get(key)
+        if val is None:
+            continue
+        s = redact_text(str(val))
+        if len(s) > max_len:
+            s = s[:max_len] + "\n\n… truncated (lite mode) …"
+        slim_secs[key] = s
+    out["sections"] = slim_secs
+    # Bundles cards: summary numbers only
+    bv = out.get("bundles_view")
+    if isinstance(bv, dict):
+        out["bundles_view"] = {
+            "ok": bv.get("ok"),
+            "error": bv.get("error"),
+            "summary": bv.get("summary") if isinstance(bv.get("summary"), dict) else {},
+            "token_address": bv.get("token_address"),
+        }
+    # history_meta: counts only — no ruggers_track / huge snapshots
+    hm = out.get("history_meta") if isinstance(out.get("history_meta"), dict) else {}
+    out["history_meta"] = {
+        "holders_ok": hm.get("holders_ok"),
+        "flagged_still_holding": hm.get("flagged_still_holding"),
+        "flagged_previously_holding": hm.get("flagged_previously_holding"),
+        "concentration_risk": hm.get("concentration_risk"),
+        "top1_pct": hm.get("top1_pct"),
+        "top5_pct": hm.get("top5_pct"),
+        "top10_pct": hm.get("top10_pct"),
+        "bundle_risk": hm.get("bundle_risk"),
+        "bundle_pct": hm.get("bundle_pct"),
+        "dex_id": hm.get("dex_id"),
+        "pumpfun": hm.get("pumpfun"),
+        "lite": True,
+    }
+    return out
+
+
+def build_public_payload(report: dict[str, Any], *, lite: bool = False) -> dict[str, Any]:
     """Client-safe analyze response (formatted tabs + summary, no keys)."""
     if not report.get("ok"):
         return {
@@ -944,7 +1001,7 @@ def build_public_payload(report: dict[str, Any]) -> dict[str, Any]:
             "error": "Bundles UI payload failed — use full Analyze on Solana.",
         }
 
-    return {
+    payload = {
         "ok": True,
         "query": report.get("query"),
         "generated_at": report.get("generated_at"),
@@ -1018,6 +1075,9 @@ def build_public_payload(report: dict[str, Any]) -> dict[str, Any]:
             )
         ),
     }
+    if lite:
+        return apply_lite_response(payload)
+    return payload
 
 
 def run_analyze(
@@ -1030,6 +1090,7 @@ def run_analyze(
     include_multi_send: bool = True,
     include_shared_sol: bool = True,
     include_fresh_multi_send: bool | None = None,
+    lite: bool = False,
 ) -> dict[str, Any]:
     load_dotenv()
     from token_tracker.analyze import analyze_token
@@ -1062,7 +1123,8 @@ def run_analyze(
                 "error": redact_text(f"Analyze failed: {exc}"),
                 "detail": redact_text(traceback.format_exc()[-800:]),
             }
-        return build_public_payload(report)
+        # Always build full payload for cache; lite strip applied after
+        return build_public_payload(report, lite=False)
 
     try:
         payload, source = analyze_cached(
@@ -1084,6 +1146,8 @@ def run_analyze(
     if isinstance(payload, dict):
         # Non-secret debug: helps confirm cache is working (safe for clients)
         payload.setdefault("cache", source)
+        if lite:
+            payload = apply_lite_response(payload)
         return payload
     return {"ok": False, "error": "Analyze returned empty result"}
 
@@ -1387,6 +1451,7 @@ class WebHandler(BaseHTTPRequestHandler):
             chain = body.get("chain")
             chain_s = str(chain).strip() if chain else None
             quick = bool(body.get("quick"))
+            lite = bool(body.get("lite"))
             # Default True; explicit false/0/off disables RugWatch flags
             if "include_rugwatch" in body:
                 include_rugwatch = bool(body.get("include_rugwatch"))
@@ -1432,6 +1497,12 @@ class WebHandler(BaseHTTPRequestHandler):
                     if not bool(body.get("fresh_multi")):
                         include_fresh = False
                         include_multi_send = False
+            # Lite clients (Opera GX): force quick + skip heavy Helius scans
+            if lite:
+                quick = True
+                include_fresh = False
+                include_multi_send = False
+                include_shared_sol = False
             return self._handle_analyze(
                 q,
                 chain=chain_s,
@@ -1440,6 +1511,7 @@ class WebHandler(BaseHTTPRequestHandler):
                 include_fresh=include_fresh,
                 include_multi_send=include_multi_send,
                 include_shared_sol=include_shared_sol,
+                lite=lite,
             )
 
         return self._json(404, {"ok": False, "error": "not found"})
@@ -1454,6 +1526,7 @@ class WebHandler(BaseHTTPRequestHandler):
         include_fresh: bool = True,
         include_multi_send: bool = True,
         include_shared_sol: bool = True,
+        lite: bool = False,
     ) -> None:
         if not self._check_gate():
             return self._json(
@@ -1499,6 +1572,7 @@ class WebHandler(BaseHTTPRequestHandler):
                 include_fresh=include_fresh,
                 include_multi_send=include_multi_send,
                 include_shared_sol=include_shared_sol,
+                lite=lite,
             )
         finally:
             _release_inflight(ip)

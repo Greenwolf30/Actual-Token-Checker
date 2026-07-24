@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v162";
+const ADTC_CLIENT_VERSION = "v163";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 // Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
 try {
@@ -53,7 +53,7 @@ function isOperaBrowser() {
   return false;
 }
 
-/** Force full heavy UI even on Opera (opt-in). */
+/** Force full heavy UI (opt-in via ?full=1 or window.__ADTC_FULL_UI__). */
 function wantFullHeavyUi() {
   try {
     if (window.__ADTC_FULL_UI__) return true;
@@ -62,6 +62,14 @@ function wantFullHeavyUi() {
   } catch (_) {
     return false;
   }
+}
+
+/**
+ * Lite mode is the DEFAULT for everyone (especially Opera GX).
+ * Full wallet tables / ruggers / huge JSON require ?full=1.
+ */
+function useLiteUi() {
+  return !wantFullHeavyUi();
 }
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -7653,10 +7661,9 @@ function setPanelText(tab, text) {
   if (!el) return;
   let raw = text == null || text === "" ? "(empty)" : String(text);
 
-  // Opera GX freezes after Analyze when we regex-color + innerHTML huge
-  // Holders/Alerts reports (often 100k–1M+ chars). Plain text stays clickable.
+  // Plain text by default in lite mode / large panels (rich HTML freezes GX)
   const usePlain =
-    (isOperaBrowser() && !wantFullHeavyUi()) ||
+    useLiteUi() ||
     raw.length > 60000 ||
     (tab === "holders" && raw.length > 25000);
 
@@ -10067,14 +10074,13 @@ function renderBundlesUiOperaLite(data) {
 }
 
 function renderBundlesUi(data) {
-  // Opera: default to lite summary (full tables on demand only)
-  if (isOperaBrowser() && !wantFullHeavyUi()) {
+  // Default lite summary (full tables only with ?full=1)
+  if (useLiteUi()) {
     try {
       renderBundlesUiOperaLite(data);
       return;
     } catch (err) {
       console.warn("[bundles lite]", err);
-      // fall through to full if lite fails
     }
   }
 
@@ -12462,8 +12468,8 @@ function initRugwatchCounts() {
 async function finishAnalyzeHeavyWork(data, query) {
   await yieldToUi(0);
 
-  // ── Opera / low-power path ─────────────────────────────────────────
-  if (isOperaBrowser() && !wantFullHeavyUi()) {
+  // ── Lite / low-power path ──────────────────────────────────────────
+  if (useLiteUi()) {
     try {
       // Log mint only — do not rebuild Logs DOM
       const qArg = String(
@@ -12603,48 +12609,37 @@ async function analyze(ev) {
     return;
   }
   const chain = $("chain") ? $("chain").value || null : null;
-  // Opera: force quick unless user opted into ?full=1
+  const lite = useLiteUi();
+  // Lite (default): always Quick + no heavy Helius options
   let quick = $("quick") ? $("quick").checked : false;
-  if (isOperaBrowser() && !wantFullHeavyUi()) {
+  if (lite) {
     quick = true;
     try {
       if ($("quick")) $("quick").checked = true;
+      if ($("useFresh")) $("useFresh").checked = false;
+      if ($("useMultiSend")) $("useMultiSend").checked = false;
+      if ($("useSharedSol")) $("useSharedSol").checked = false;
     } catch (_) {}
   }
   const include_rugwatch = useRugwatchEnabled();
-  let include_fresh = useFreshEnabled();
-  let include_multi_send = useMultiSendEnabled();
-  let include_shared_sol = useSharedSolEnabled();
-  if (isOperaBrowser() && !wantFullHeavyUi()) {
-    // Heavy Helius scans produce huge JSON that freezes Opera after return
-    include_fresh = false;
-    include_multi_send = false;
-    include_shared_sol = false;
-  }
+  const include_fresh = lite ? false : useFreshEnabled();
+  const include_multi_send = lite ? false : useMultiSendEnabled();
+  const include_shared_sol = lite ? false : useSharedSolEnabled();
   const btn = $("analyzeBtn");
   if (btn) {
     btn.disabled = true;
-    btn.textContent = quick ? "Quick…" : "Analyzing…";
+    btn.textContent = lite || quick ? "Quick…" : "Analyzing…";
   }
-  // Status only in error/status area — do not blank the whole overview forever
   try {
     const st = $("serverStatus");
     if (st) {
-      st.textContent = quick ? "quick analyze…" : "analyzing…";
+      st.textContent = lite ? "lite analyze…" : quick ? "quick analyze…" : "analyzing…";
       st.className = "pill muted";
     }
   } catch (_) {}
-  try {
-    setPanelText(
-      "overview",
-      quick
-        ? "Quick Analyze running… usually a few seconds."
-        : "Full Analyze running… can take up to ~90s. On Opera GX use Quick for best results."
-    );
-  } catch (_) {}
 
   const ctrl = new AbortController();
-  const analyzeTimer = setTimeout(() => ctrl.abort(), quick ? 45000 : 120000);
+  const analyzeTimer = setTimeout(() => ctrl.abort(), lite || quick ? 60000 : 120000);
   let unlocked = false;
   function unlockBtn() {
     if (unlocked) return;
@@ -12669,44 +12664,35 @@ async function analyze(ev) {
         query,
         chain,
         quick,
+        lite,
         include_rugwatch,
         include_fresh,
         include_multi_send,
         include_shared_sol,
-        // legacy combined flag (true only if both on)
         include_fresh_multi_send: include_fresh && include_multi_send,
       }),
     });
     let data;
     try {
-      // text then parse — allows size check before JSON.parse on huge bodies
       const rawText = await r.text();
-      if (rawText.length > 2500000 && isOperaBrowser()) {
+      if (rawText.length > 800000 && lite) {
         throw new Error(
-          "Response too large for Opera GX (" +
+          "Response still too large (" +
             Math.round(rawText.length / 1024) +
-            " KB). Turn on Quick and uncheck Fresh/Multi/Shared SOL, or use Edge/Chrome."
+            " KB). Try another mint or open in Edge/Chrome with ?full=1."
         );
       }
       data = JSON.parse(rawText);
     } catch (pe) {
-      if (pe && pe.message && /too large|JSON|parse/i.test(pe.message)) throw pe;
+      if (pe && pe.message && /too large|JSON|parse/i.test(String(pe.message)))
+        throw pe;
       throw new Error("Bad response from server");
-    }
-    // Shrink payload ASAP on Opera so later work cannot freeze the tab
-    if (isOperaBrowser() && data && typeof data === "object") {
-      try {
-        if (data.history_meta && data.history_meta.ruggers_track) {
-          const tr = data.history_meta.ruggers_track;
-          if (tr && Array.isArray(tr.wallets) && tr.wallets.length > 40) {
-            tr.wallets = tr.wallets.slice(0, 40);
-          }
-        }
-      } catch (_) {}
     }
     if (r.status === 401) {
       showError(data.error || "Unauthorized — set site passcode (⚙).");
-      $("settingsDialog").showModal();
+      try {
+        $("settingsDialog").showModal();
+      } catch (_) {}
       return;
     }
     if (r.status === 429) {
@@ -12715,12 +12701,16 @@ async function analyze(ev) {
     }
     if (!data.ok) {
       showError(data.error || "Analyze failed");
-      setPanelText("overview", data.error || "Analyze failed");
-      $("summaryBar").hidden = true;
+      try {
+        setPanelText("overview", data.error || "Analyze failed");
+      } catch (_) {}
+      try {
+        $("summaryBar").hidden = true;
+      } catch (_) {}
       return;
     }
 
-    // Unlock clicks BEFORE heavy paint/persist (Opera GX freezes on sync work)
+    // Unlock immediately — user must stay able to click
     unlockBtn();
     unstickPointerLayer();
     try {
@@ -12730,26 +12720,41 @@ async function analyze(ev) {
     if (!data.generated_at) data.generated_at = new Date().toISOString();
     data._marketUpdatedAt = data.generated_at;
 
+    // 1) Summary bar only (price / MC / liq) — smallest paint
     try {
       renderSummary(data);
     } catch (err) {
       console.error("[renderSummary]", err);
     }
     await yieldToUi(0);
+    try {
+      switchTab("overview");
+    } catch (_) {}
 
-    // Text tabs one-at-a-time with yields (Holders rich HTML was freezing Opera)
+    // 2) Lite: overview text only; skip holders/alerts/maps/about/bundles tables
+    if (lite) {
+      try {
+        const ov =
+          (data.sections && data.sections.overview) ||
+          "Lite Analyze complete. Summary bar shows market data. Open ?full=1 for full tabs (may freeze on Opera GX).";
+        setPanelText("overview", ov);
+      } catch (_) {}
+      try {
+        renderBundlesUiOperaLite(data);
+      } catch (err) {
+        console.warn("[bundles lite]", err);
+      }
+      await yieldToUi(0);
+      unstickPointerLayer();
+      // No finishAnalyzeHeavyWork on lite — that was freezing Opera
+      console.info("[analyze] lite path done — skipped heavy finish");
+      return;
+    }
+
+    // Full path (only with ?full=1)
     try {
       const sections = (data && data.sections) || {};
-      const paintOrder = [
-        "overview",
-        "alerts",
-        "maps",
-        "about",
-        "holders",
-        "bundles",
-      ];
-      for (const tab of paintOrder) {
-        if (tab === "bundles") continue; // cards UI below
+      for (const tab of ["overview", "alerts", "maps", "about", "holders"]) {
         if (sections[tab]) {
           try {
             setPanelText(tab, sections[tab]);
@@ -12766,28 +12771,23 @@ async function analyze(ev) {
       console.error("[sections text]", err);
     }
     await yieldToUi(0);
-
     try {
       renderBundlesUi(data);
     } catch (err) {
       console.error("[renderBundlesUi]", err);
     }
     await yieldToUi(0);
-    try {
-      unstickPointerLayer();
-    } catch (_) {}
-
-    // Heavy work after paint — never block the Analyze button again
+    unstickPointerLayer();
     setTimeout(() => {
       finishAnalyzeHeavyWork(data, query).catch((err) =>
         console.error("[finishAnalyzeHeavyWork]", err)
       );
-    }, isOperaBrowser() ? 400 : 0);
+    }, 0);
   } catch (e) {
     const msg = String(e && e.message ? e.message : e);
     showError(
       e && e.name === "AbortError"
-        ? "Analyze timed out — try Quick mode or retry."
+        ? "Analyze timed out — try again or use Quick mode."
         : msg
     );
   } finally {
@@ -13000,19 +13000,15 @@ async function init() {
     });
   }
 
-  // Opera GX: default to Quick + light scans so the tab does not freeze / blank
+  // Default lite: Quick on, heavy Helius options off (use ?full=1 for heavy)
   try {
-    if (isOperaBrowser() && !wantFullHeavyUi()) {
-      const qEl = $("quick");
-      if (qEl) qEl.checked = true;
-      const f = $("useFresh");
-      if (f) f.checked = false;
-      const m = $("useMultiSend");
-      if (m) m.checked = false;
-      const s = $("useSharedSol");
-      if (s) s.checked = false;
+    if (useLiteUi()) {
+      if ($("quick")) $("quick").checked = true;
+      if ($("useFresh")) $("useFresh").checked = false;
+      if ($("useMultiSend")) $("useMultiSend").checked = false;
+      if ($("useSharedSol")) $("useSharedSol").checked = false;
       console.info(
-        "[boot] Opera defaults: Quick on, Fresh/Multi/Shared SOL off (use ?full=1 for heavy)"
+        "[boot] lite UI defaults (Quick on). Add ?full=1 for full Analyze tables."
       );
     }
   } catch (_) {}
