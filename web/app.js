@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v178";
+const ADTC_CLIENT_VERSION = "v179";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 // Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
 try {
@@ -138,7 +138,8 @@ function statsAlmostEqual(a, b) {
 /** v9: Upload marks only from Ruggers Upload button on THAT mint (no cloud bleed). */
 /** v10: compact persist + wallet cap so localStorage quota no longer drops baselines. */
 /** v11: Flagged section = foreign origin mint only; same-mint stay in category lanes. */
-const RUGGERS_RULES_VERSION = 11;
+/** v12: Hard ban — unstamped cloud/list matches NEVER go to Flagged on this mint. */
+const RUGGERS_RULES_VERSION = 12;
 /** Sold ≥ this fraction of first-lookup bag → list as seller (99%). */
 const RUGGERS_SOLD_FRAC = 0.99;
 /** Remaining bag must be ≤ (1 - RUGGERS_SOLD_FRAC) of first_pct to count as sold. */
@@ -1714,12 +1715,21 @@ function flaggedOriginIsForeignMint(meta, mint) {
 
 /**
  * May this wallet appear under Ruggers Flagged on `mint`?
- * Requires an explicit foreign origin mint. Never trusts cross_mint alone
- * (v174 could set cross_mint without a real foreign mint → same-mint junk).
- * Same-mint Creator / Multi / Multi-send / Similar / Single never qualify.
+ *
+ * HARD RULE (v12): Flagged ONLY when flagged_from_mint is a *different* mint.
+ * Everything else stays in Creator / Similar / Single / Multi / Multi-send / …:
+ *  - unstamped cloud / rugwatch list matches
+ *  - origin == this mint
+ *  - this-mint Upload / Similar pin
+ *  - real mint creator
+ * Never trusts cross_mint / tracked / times_flagged alone.
  */
 function ruggersQualifiesForFlaggedSection(meta, mint, rec, wallet) {
   if (!meta || !mint) return false;
+  // Sole gate: explicit foreign origin mint address
+  if (!flaggedOriginIsForeignMint(meta, mint)) return false;
+  if (flaggedOriginIsThisMint(meta, mint)) return false;
+  if (String(meta.origin || "") === "uploaded") return false;
   if (wallet && rec) {
     if (isUploadedSimilarOnThisMint(rec, wallet)) return false;
     if (isRuggersAlreadyUploaded(rec, wallet)) return false;
@@ -1733,11 +1743,70 @@ function ruggersQualifiesForFlaggedSection(meta, mint, rec, wallet) {
     ) {
       return false;
     }
+    // Sticky this-mint category lane with same-mint (or no) origin → never Flagged
+    const fw = rec.first_wallets && rec.first_wallets[wallet];
+    const st = rec.status && rec.status[wallet];
+    const lane =
+      (st && st.origin_lane) ||
+      (fw && fw.origin_lane) ||
+      "";
+    if (
+      lane &&
+      RUGGERS_STICKY_LANES.has(String(lane)) &&
+      !flaggedOriginIsForeignMint(meta, mint)
+    ) {
+      return false;
+    }
   }
-  if (flaggedOriginIsThisMint(meta, mint)) return false;
-  if (!flaggedOriginIsForeignMint(meta, mint)) return false;
-  if (String(meta.origin || "") === "uploaded") return false;
   return true;
+}
+
+/**
+ * Resolve whether a sell on this mint is "foreign Flagged" or "same-mint category".
+ * Returns { foreign, sealed } — foreign true only with explicit other mint stamp.
+ */
+function ruggersResolveSellFlagOrigin(rec, w, mintBare, snap, rwKnown, prior, prev) {
+  const sealed = withSingleFlaggedFromMint(
+    { ...(rwKnown && rwKnown[w] ? rwKnown[w] : {}), ...(prior || {}) },
+    prior,
+    rwKnown && rwKnown[w],
+    snap && snap.flagged_known && snap.flagged_known[w],
+    prev,
+    { symbol: rec && rec.symbol, flagged_from_symbol: rec && rec.symbol }
+  );
+  // Only these sources may prove a foreign mint — never "cloud" without mint
+  const foreign =
+    flaggedOriginIsForeignMint(sealed, mintBare) ||
+    flaggedOriginIsForeignMint(rwKnown && rwKnown[w], mintBare) ||
+    flaggedOriginIsForeignMint(prior, mintBare) ||
+    flaggedOriginIsForeignMint(
+      snap && snap.flagged_known && snap.flagged_known[w],
+      mintBare
+    );
+  if (foreign) {
+    // Prefer a sealed foreign stamp from rwKnown if sealed lost it
+    if (
+      !flaggedOriginIsForeignMint(sealed, mintBare) &&
+      flaggedOriginIsForeignMint(rwKnown && rwKnown[w], mintBare)
+    ) {
+      sealed.flagged_from_mint = rwKnown[w].flagged_from_mint;
+      sealed.flagged_from_mints = rwKnown[w].flagged_from_mints || [
+        rwKnown[w].flagged_from_mint,
+      ];
+      if (rwKnown[w].flagged_from_symbol) {
+        sealed.flagged_from_symbol = rwKnown[w].flagged_from_symbol;
+      }
+    }
+    return { foreign: true, sealed };
+  }
+  // Same-mint path: stamp THIS mint so later re-analyze never re-routes to Flagged
+  if (!sealed.flagged_from_mint && rec && rec.address) {
+    sealed.flagged_from_mint = rec.address;
+    sealed.flagged_from_mints = [rec.address];
+    const sym = normalizeFlaggedTicker(rec.symbol);
+    if (sym) sealed.flagged_from_symbol = sym;
+  }
+  return { foreign: false, sealed };
 }
 
 /**
@@ -3411,74 +3480,69 @@ function processRuggersFromAnalyze(data) {
     );
     const onRugWatch = onRugWatchEarly || everFlaggedOnMint;
 
-    // Sold ≥99% while on RugWatch:
-    //  • OTHER mint origin → Flagged section
-    //  • SAME mint origin → stay in Similar / Single / Multi / Multi-send / Creator
-    const soldWhileFlaggedPath =
+    // Sold ≥99% while on RugWatch / cloud list:
+    //  • Explicit OTHER mint origin → Flagged
+    //  • Same mint / unstamped / Creator / Multi / Similar / Single → category sticky
+    //    (never Flagged — eliminates unstamped cloud-list variables)
+    const soldWhileOnList =
       tag === "seller" &&
       !uploadedSimilar &&
       !uploadedOnThisMint &&
-      originLane !== "creator" &&
-      !isCreator &&
-      (onRugWatch || everFlaggedOnMint);
+      (onRugWatch || everFlaggedOnMint || wasFlaggedSeller);
 
-    if (soldWhileFlaggedPath) {
+    if (soldWhileOnList) {
       const prior = flaggedSellers[w] || prev.flagged_meta || {};
-      const sealed = withSingleFlaggedFromMint(
-        { ...(rwKnown[w] || {}), ...prior },
+      const resolved = ruggersResolveSellFlagOrigin(
+        rec,
+        w,
+        mintBare,
+        snap,
+        rwKnown,
         prior,
-        rwKnown[w],
-        snap.flagged_known && snap.flagged_known[w],
-        prev,
-        { symbol: rec.symbol, flagged_from_symbol: rec.symbol }
+        prev
       );
-      // Foreign only if an explicit other mint is stamped (never "cloud" alone)
-      const foreignOrigin =
-        flaggedOriginIsForeignMint(sealed, mintBare) ||
-        flaggedOriginIsForeignMint(rwKnown[w], mintBare) ||
-        flaggedOriginIsForeignMint(prior, mintBare) ||
-        flaggedOriginIsForeignMint(
-          snap.flagged_known && snap.flagged_known[w],
-          mintBare
-        );
-      // Same-mint: stamp THIS mint + keep category lane (Similar/Single/Multi/…)
-      if (!foreignOrigin) {
-        if (!sealed.flagged_from_mint && rec.address) {
-          sealed.flagged_from_mint = rec.address;
-          sealed.flagged_from_mints = [rec.address];
-          const sym = normalizeFlaggedTicker(rec.symbol);
-          if (sym) sealed.flagged_from_symbol = sym;
-        }
+      const sealed = resolved.sealed;
+      // Creator always stays Creator on this mint (even if cloud has other notes)
+      const allowFlagged =
+        resolved.foreign &&
+        !isCreator &&
+        originLane !== "creator" &&
+        ruggersQualifiesForFlaggedSection(sealed, mintBare, rec, w);
+
+      if (!allowFlagged) {
         if (flaggedSellers[w]) delete flaggedSellers[w];
-        // Pin sticky origin lane so Creator/Multi/Multi-send/Similar/Single hold
-        if (isRuggersStickyOriginLane(originLane)) {
-          stickyLane[w] = {
-            ...(stickyLane[w] || {}),
-            origin_lane: originLane,
-            entered_at: (stickyLane[w] && stickyLane[w].entered_at) || now,
-            last_update: now,
-            sold_pct:
-              soldState.sold_pct != null
-                ? soldState.sold_pct
-                : (stickyLane[w] && stickyLane[w].sold_pct) || 100,
-            first_pct: first.pct_supply,
-            reason: soldState.reason || "sold_99",
-            indefinite: true,
-            source_mint: mintBare,
-            same_mint_rugwatch: true,
-          };
+        // Pin sticky origin lane — Creator / Multi / Multi-send / Similar / Single
+        const lanePin =
+          isCreator || originLane === "creator"
+            ? "creator"
+            : isRuggersStickyOriginLane(originLane)
+              ? originLane
+              : similarLineageOnMint
+                ? "similar"
+                : "single";
+        stickyLane[w] = {
+          ...(stickyLane[w] || {}),
+          origin_lane: lanePin,
+          entered_at: (stickyLane[w] && stickyLane[w].entered_at) || now,
+          last_update: now,
+          sold_pct:
+            soldState.sold_pct != null
+              ? soldState.sold_pct
+              : (stickyLane[w] && stickyLane[w].sold_pct) || 100,
+          first_pct: first.pct_supply,
+          reason: soldState.reason || "sold_99",
+          indefinite: true,
+          source_mint: mintBare,
+          same_mint_category: true,
+        };
+        if (rec.first_wallets && rec.first_wallets[w]) {
+          rec.first_wallets[w].origin_lane = lanePin;
+          if (lanePin === "creator") {
+            rec.first_wallets[w].is_creator = true;
+            rec.first_wallets[w].label = "creator";
+          }
         }
       } else {
-        // Prefer foreign mint stamp from sealed / rwKnown
-        if (
-          !flaggedOriginIsForeignMint(sealed, mintBare) &&
-          flaggedOriginIsForeignMint(rwKnown[w], mintBare)
-        ) {
-          sealed.flagged_from_mint = rwKnown[w].flagged_from_mint;
-          sealed.flagged_from_mints = rwKnown[w].flagged_from_mints || [
-            rwKnown[w].flagged_from_mint,
-          ];
-        }
         flaggedSellers[w] = {
           ...sealed,
           origin:
@@ -3507,26 +3571,29 @@ function processRuggersFromAnalyze(data) {
       }
     }
 
-    // Buy-back swing: Flagged identity only for foreign origin
+    // Buy-back swing: Flagged identity only for proven foreign origin
     if (
       tag === "swing" &&
       !uploadedSimilar &&
       !uploadedOnThisMint &&
+      !isCreator &&
       (everFlaggedOnMint || flaggedSellers[w])
     ) {
       const prior = flaggedSellers[w] || prev.flagged_meta || {};
-      const sealed = withSingleFlaggedFromMint(
-        { ...prior, ...(rwKnown[w] || {}) },
+      const resolved = ruggersResolveSellFlagOrigin(
+        rec,
+        w,
+        mintBare,
+        snap,
+        rwKnown,
         prior,
-        rwKnown[w],
-        prev,
-        { symbol: rec.symbol, flagged_from_symbol: rec.symbol }
+        prev
       );
-      const foreignSwing =
-        ruggersQualifiesForFlaggedSection(sealed, mintBare, rec, w) ||
-        ruggersQualifiesForFlaggedSection(prior, mintBare, rec, w) ||
-        flaggedOriginIsForeignMint(rwKnown[w], mintBare);
-      if (!foreignSwing) {
+      const sealed = resolved.sealed;
+      if (
+        !resolved.foreign ||
+        !ruggersQualifiesForFlaggedSection(sealed, mintBare, rec, w)
+      ) {
         if (flaggedSellers[w]) delete flaggedSellers[w];
       } else {
         flaggedSellers[w] = {
@@ -3551,8 +3618,15 @@ function processRuggersFromAnalyze(data) {
       }
     }
 
-    // Permanent Similar-Upload / this-mint Upload: never Flagged on this mint
+    // Absolute bans: Creator / this-mint Upload / Similar pin never Flagged here
     if ((uploadedSimilar || uploadedOnThisMint || isCreator) && flaggedSellers[w]) {
+      delete flaggedSellers[w];
+    }
+    // Drop any Flagged row that fails the hard foreign-mint gate
+    if (
+      flaggedSellers[w] &&
+      !ruggersQualifiesForFlaggedSection(flaggedSellers[w], mintBare, rec, w)
+    ) {
       delete flaggedSellers[w];
     }
 
@@ -3966,7 +4040,8 @@ function processRuggersFromAnalyze(data) {
     }
   }
 
-  // Hard filter: Flagged = foreign origin mint ONLY
+  // Hard filter (v12): Flagged = explicit foreign origin mint ONLY.
+  // Wipe same-mint / unstamped / Creator / Upload from flagged_sellers + status.
   for (const w of Object.keys(flaggedSellers)) {
     const meta = flaggedSellers[w] || {};
     if (ruggersQualifiesForFlaggedSection(meta, mintBare, rec, w)) continue;
@@ -3977,6 +4052,20 @@ function processRuggersFromAnalyze(data) {
       delete status[w].flagged_meta;
       delete status[w].flagged_phase;
     }
+  }
+  // Clear sticky Flagged identity on status even when flagged_sellers already empty
+  for (const [w, st] of Object.entries(status)) {
+    if (!st || !st.is_flagged) continue;
+    if (
+      flaggedSellers[w] &&
+      ruggersQualifiesForFlaggedSection(flaggedSellers[w], mintBare, rec, w)
+    ) {
+      continue;
+    }
+    st.is_flagged = false;
+    st.ever_flagged_on_mint = false;
+    delete st.flagged_meta;
+    delete st.flagged_phase;
   }
 
   // Sticky flagged sellers not in first_wallets — foreign origin only
@@ -4737,34 +4826,17 @@ function ruggersBuckets(rec) {
   }
 
   function isFlaggedSold(w, st) {
-    // Flagged UI only for OTHER-mint origin. Same-mint → Similar/Single/Multi/…
-    if (isUploadedSimilarOnThisMint(rec, w)) return false;
-    if (isRuggersAlreadyUploaded(rec, w)) return false;
-    if (
-      isRuggersCreatorWallet(
-        rec,
-        w,
-        rec.first_wallets && rec.first_wallets[w],
-        st
-      )
-    ) {
-      return false;
-    }
-    const meta = flaggedSellers[w] || st.flagged_meta || {};
-    if (!ruggersQualifiesForFlaggedSection(meta, rec.address, rec, w)) {
-      return false;
-    }
-    if (
-      flaggedSellers[w] &&
-      String(flaggedSellers[w].phase || "sold") === "sold" &&
-      st.tag === "seller"
-    ) {
-      return true;
-    }
-    if (st.is_flagged && st.tag === "seller" && st.ever_flagged_on_mint) {
-      return !!flaggedSellers[w];
-    }
-    return false;
+    // Flagged UI ONLY with proven foreign flagged_from_mint.
+    // Unstamped cloud / same-mint / Creator / Upload → never Flagged section.
+    if (!flaggedSellers[w]) return false;
+    if (st.tag !== "seller") return false;
+    if (String(flaggedSellers[w].phase || "sold") !== "sold") return false;
+    return ruggersQualifiesForFlaggedSection(
+      flaggedSellers[w],
+      rec.address,
+      rec,
+      w
+    );
   }
 
   for (const [w, st] of Object.entries(rec.status)) {
