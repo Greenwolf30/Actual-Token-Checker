@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v176";
+const ADTC_CLIENT_VERSION = "v177";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 // Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
 try {
@@ -6418,6 +6418,7 @@ async function uploadRuggersSectionToCloud(exportKey) {
     }
 
     if (btn) btn.textContent = "Uploading…";
+    const nSent = (payload.wallets || []).length;
     const upResult = await postRuggersToRugwatch(
       "upload",
       {
@@ -6436,120 +6437,145 @@ async function uploadRuggersSectionToCloud(exportKey) {
       );
     }
     const upData = upResult.data;
+    const imported = Number(upData.imported) || 0;
+    const skipCloudN = Number(upData.skipped_cloud) || 0;
+    const skipLocalN = Number(upData.skipped_local) || 0;
+    const skipLpN = Number(upData.skipped_lp) || 0;
+    const cloudChecked = upData.cloud_checked === true;
 
-    // Separate Push cloud — never fail the whole upload if push dies
-    let cloud = upData.cloud || null;
+    // Push cloud is required for GitHub. Free Render local DB is ephemeral —
+    // import-only is NOT "on the cloud". Retry push a few times.
+    let cloud = null;
     let pushWarning = "";
+    let pushOk = false;
     if (btn) btn.textContent = "Pushing cloud…";
-    try {
-      const pushResult = await postRuggersToRugwatch("push", {}, headers);
-      if (!pushResult.ok) {
-        pushWarning =
-          "Push cloud failed: " +
-          String(pushResult.error || "unknown") +
-          " — wallets may be in RugWatch local DB only. Open RugWatch → Push cloud.";
-        console.warn("[ruggers upload] push-cloud", pushWarning, pushResult);
-        cloud = (pushResult.data && typeof pushResult.data === "object")
-          ? pushResult.data
-          : { ok: false, error: pushWarning };
-      } else {
-        cloud = pushResult.data || { ok: true };
+    for (let pi = 0; pi < 3; pi++) {
+      try {
+        if (pi > 0) await rugwatchSleep(2000 + pi * 2000);
+        const pushResult = await postRuggersToRugwatch("push", {}, headers);
+        if (pushResult.ok && pushResult.data) {
+          cloud = pushResult.data;
+          pushOk = cloud.ok !== false;
+          if (pushOk) break;
+          pushWarning = String(
+            (cloud && cloud.error) || pushResult.error || "Push returned not ok"
+          );
+        } else {
+          pushWarning = String(
+            pushResult.error || "Push cloud failed"
+          );
+          cloud =
+            pushResult.data && typeof pushResult.data === "object"
+              ? pushResult.data
+              : { ok: false, error: pushWarning };
+        }
+      } catch (pushErr) {
+        pushWarning = String(
+          (pushErr && pushErr.message) || pushErr || "Push cloud network error"
+        );
+        cloud = { ok: false, error: pushWarning };
       }
-    } catch (pushErr) {
-      pushWarning = String(
-        (pushErr && pushErr.message) || pushErr || "Push cloud network error"
-      );
-      console.warn("[ruggers upload] push-cloud", pushWarning);
-      cloud = cloud || { ok: false, error: pushWarning };
     }
 
-    const imported = upData.imported != null ? upData.imported : 0;
-    const skipCloudRaw =
-      upData.skipped_cloud != null ? upData.skipped_cloud : null;
-    const skipCloudN = Number(skipCloudRaw);
-    const alreadyOnCloud =
-      Number.isFinite(skipCloudN) && skipCloudN >= 1;
-    const skipCloud =
-      skipCloudRaw != null ? skipCloudRaw : "?";
-    const skipLocal = upData.skipped_local != null ? upData.skipped_local : "?";
-    const cloudChecked = upData.cloud_checked === true ? "yes" : "no / failed";
+    const addedCloudN =
+      cloud && cloud.added_from_local != null
+        ? Number(cloud.added_from_local)
+        : null;
     const cloudN =
       cloud && cloud.wallet_count != null
         ? cloud.wallet_count
         : cloud && cloud.count != null
           ? cloud.count
-          : "?";
+          : null;
     const cloudBefore =
-      cloud && cloud.cloud_before != null ? cloud.cloud_before : "?";
-    const addedCloud =
-      cloud && cloud.added_from_local != null ? cloud.added_from_local : "?";
-    const pushed =
-      cloud && cloud.skipped_push
-        ? "skipped"
-        : cloud && cloud.ok
-          ? "merge-push OK"
-          : cloud && cloud.error
-            ? "failed: " + cloud.error
-            : "n/a";
+      cloud && cloud.cloud_before != null ? cloud.cloud_before : null;
 
-    // ONLY mark after RugWatch accepted the request (ok:true).
-    // Failed / network errors never reach here — Upload (N) stays the same.
-    try {
-      markRuggersUploadedAsFlagged(exportKey, rows);
-      markedOk = true;
-      if (_lastRuggersKey) refreshRuggersPanel(_lastRuggersKey);
-    } catch (_) {
-      /* ignore */
+    // Real success on cloud:
+    //  A) merge-push OK (new or re-sync), OR
+    //  B) every sent wallet was already on the GitHub list (skipped_cloud)
+    const allAlreadyOnCloud =
+      cloudChecked && skipCloudN >= nSent && nSent > 0 && imported === 0;
+    const cloudReallyUpdated =
+      pushOk &&
+      (addedCloudN == null ||
+        addedCloudN > 0 ||
+        imported > 0 ||
+        skipLocalN > 0 ||
+        allAlreadyOnCloud);
+    const trulyOnCloud = !!(pushOk || allAlreadyOnCloud);
+
+    // NEVER mark wallets uploaded unless they are truly on the cloud list
+    // (or push merge succeeded). Import-only / skip-local is NOT enough.
+    if (trulyOnCloud) {
+      try {
+        markRuggersUploadedAsFlagged(exportKey, rows);
+        markedOk = true;
+        if (_lastRuggersKey) refreshRuggersPanel(_lastRuggersKey);
+      } catch (_) {
+        /* ignore */
+      }
     }
 
-    const alreadyCloudLine = alreadyOnCloud
-      ? skipCloudN === 1
-        ? "1 or more wallets are already on the cloud (1 wallet skipped).\n\n"
-        : "1 or more wallets are already on the cloud (" +
-          skipCloudN +
-          " wallets skipped).\n\n"
-      : "";
     const viaLine = upResult.via ? "Path: " + upResult.via + "\n" : "";
+    let headline = "";
+    if (trulyOnCloud && allAlreadyOnCloud) {
+      headline =
+        "✓ These wallets were already on the GitHub cloud list (" +
+        skipCloudN +
+        "). Nothing new to push.\n\n";
+    } else if (trulyOnCloud && pushOk) {
+      headline =
+        "✓ Cloud push OK" +
+        (addedCloudN != null && addedCloudN > 0
+          ? " — added " + addedCloudN + " wallet(s) to cloud from local.\n\n"
+          : " — cloud list re-synced (may already have had them).\n\n");
+    } else {
+      headline =
+        "✗ NOT fully on cloud yet — Upload count was NOT reduced.\n" +
+        "Import reached RugWatch, but GitHub Push cloud did not succeed " +
+        "(or nothing was confirmed on the cloud list).\n\n";
+    }
 
     alert(
       "RugWatch upload result\n\n" +
-        alreadyCloudLine +
+        headline +
         viaLine +
         "Section: " +
         section +
         "\nWallets sent: " +
-        rows.length +
-        "\nNew into local DB: " +
+        nSent +
+        "\nNew into RugWatch server DB: " +
         imported +
-        "\nSkipped (already on cloud list): " +
-        skipCloud +
-        "\nSkipped (already on this RugWatch server DB): " +
-        skipLocal +
-        "\nCloud address list checked: " +
-        cloudChecked +
-        "\nCloud before merge: " +
-        cloudBefore +
+        "\nAlready on GitHub cloud list: " +
+        skipCloudN +
+        "\nAlready in RugWatch server DB only: " +
+        skipLocalN +
+        (skipLpN ? "\nSkipped LP/vault: " + skipLpN : "") +
+        "\nCloud list checked: " +
+        (cloudChecked ? "yes" : "no / failed") +
+        "\nCloud before: " +
+        (cloudBefore != null ? cloudBefore : "?") +
         "\nCloud now: " +
-        cloudN +
-        "\nAdded to cloud from local: " +
-        addedCloud +
+        (cloudN != null ? cloudN : "?") +
+        "\nAdded to cloud this push: " +
+        (addedCloudN != null ? addedCloudN : "?") +
         "\nCloud push: " +
-        pushed +
-        (pushWarning ? "\n\n⚠ " + pushWarning : "") +
-        (upData && upData.note ? "\n\n" + upData.note : "") +
-        (cloud && cloud.note ? "\n\n" + cloud.note : "") +
+        (pushOk ? "OK" : "FAILED — " + (pushWarning || "see logs")) +
+        (!trulyOnCloud
+          ? "\n\nWhat to do:\n" +
+            "1) Open https://rugwatch.onrender.com and wait until it loads\n" +
+            "2) Click Push cloud there, or retry Upload here\n" +
+            "3) Free tier often kills long pushes — retry 1–2 times"
+          : "") +
         (exportKey === "similar"
-          ? "\n\nSimilar sellers stay under Similar wallets on this mint (also on cloud). " +
-            "On other mints they go to Flagged when they sell ≥99%."
+          ? "\n\nSimilar sellers stay under Similar on this mint."
           : exportKey === "creator"
-            ? "\n\nUploaded Creator sellers stay under Creator on this mint (also on cloud). " +
-              "They do not move to Flagged on this mint. Buy-back → Swing (creator label kept)."
+            ? "\n\nCreator sellers stay under Creator on this mint."
             : exportKey === "single"
-              ? "\n\nUploaded Single sellers stay under Single wallets on this mint (also on cloud). " +
-                "They do not move to Flagged on this mint. Buy-back → Swing · sell again → Single."
-              : "\n\nUploaded sellers stay under their Ruggers category on this mint (also on cloud). " +
-                "They do not move to Flagged on this mint. Buy-back → Swing (label kept) · sell again → same category.")
+              ? "\n\nSingle sellers stay under Single on this mint."
+              : "\n\nSellers stay under their category on this mint.")
     );
+    // If cloud didn't succeed, leave Upload (N) alone (already did not mark)
   } catch (e) {
     const baseHint = rugwatchApiBase();
     const msg = String(e.message || e);
