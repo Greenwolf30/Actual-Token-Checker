@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v159";
+const ADTC_CLIENT_VERSION = "v160";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 // Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
 try {
@@ -51,6 +51,17 @@ function isOperaBrowser() {
     }
   } catch (_) {}
   return false;
+}
+
+/** Force full heavy UI even on Opera (opt-in). */
+function wantFullHeavyUi() {
+  try {
+    if (window.__ADTC_FULL_UI__) return true;
+    const p = new URLSearchParams(location.search || "");
+    return p.get("full") === "1";
+  } catch (_) {
+    return false;
+  }
 }
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -9944,7 +9955,104 @@ function resolveBundleStatsPrev(mint) {
  * Card UI for Bundles tab from structured bundles_view.
  * Never dumps raw JSON / monospaced report into the main panel.
  */
+/**
+ * Opera GX freezes building full wallet tables (1000s of DOM nodes).
+ * Show summary stats only; optional expand via ?full=1 or button.
+ */
+function renderBundlesUiOperaLite(data) {
+  const root = $("bundlesUi");
+  if (!root) return;
+  const view = (data && data.bundles_view) || null;
+  const textFallback =
+    (data && data.sections && data.sections.bundles) || "";
+  const textEl = $("text-bundles");
+  if (textEl && textFallback) textEl.textContent = String(textFallback);
+
+  if (!view) {
+    root.innerHTML =
+      '<p class="logs-empty">Run a <strong>full Analyze</strong> (not Quick) on a Solana mint to load Bundles cards.</p>';
+    return;
+  }
+  if (!view.ok) {
+    root.innerHTML =
+      '<div class="bun-hint"><strong>Bundles unavailable</strong><br />' +
+      escHtml(view.error || "No data") +
+      "</div>";
+    return;
+  }
+  const s = view.summary || {};
+  const risk =
+    s.bundle_risk_score != null && Number.isFinite(Number(s.bundle_risk_score))
+      ? Number(s.bundle_risk_score)
+      : null;
+  function row(label, val) {
+    return (
+      '<div class="bun-stat"><span class="bun-stat-label">' +
+      escHtml(label) +
+      '</span><span class="bun-stat-value">' +
+      (val == null || val === "" ? "—" : val) +
+      "</span></div>"
+    );
+  }
+  function pct(n) {
+    if (n == null || !Number.isFinite(Number(n))) return "—";
+    return Number(n).toFixed(2) + "%";
+  }
+  let html =
+    '<p class="bun-delta-note" data-adtc-ver="1">Bundles · Opera lite mode · ' +
+    escHtml(
+      typeof ADTC_CLIENT_VERSION !== "undefined" ? ADTC_CLIENT_VERSION : "?"
+    ) +
+    " — full wallet tables deferred so the page stays clickable</p>";
+  html += '<div class="bun-stats">';
+  html += row("Risk", risk != null ? String(Math.round(risk)) : "—");
+  html += row("Total bundle", pct(s.total_bundle_pct));
+  html += row("Similar-sized", pct(s.similar_size_total_pct));
+  html += row("Fresh", pct(s.fresh_total_pct));
+  html += row("Multi-send", pct(s.multi_send_total_pct));
+  html += row("Shared SOL", pct(s.funding_total_pct));
+  html += row("Single holders", pct(s.single_holders_total_pct));
+  html += "</div>";
+  html +=
+    '<p class="bun-hint" style="margin-top:12px">Overview / Holders / Alerts tabs have full text. ' +
+    "Building every Bundles wallet table freezes Opera GX, so they stay collapsed here.</p>";
+  html +=
+    '<p style="margin-top:10px"><button type="button" class="primary" id="bunExpandFullOpera">' +
+    "Load full Bundles tables (may freeze briefly)</button></p>";
+  root.innerHTML = html;
+  const btn = $("bunExpandFullOpera");
+  if (btn) {
+    btn.addEventListener("click", () => {
+      try {
+        window.__ADTC_FULL_UI__ = true;
+      } catch (_) {}
+      btn.disabled = true;
+      btn.textContent = "Building…";
+      setTimeout(() => {
+        try {
+          renderBundlesUi(data);
+        } catch (err) {
+          console.error("[bundles full expand]", err);
+          btn.disabled = false;
+          btn.textContent = "Retry full tables";
+        }
+      }, 30);
+    });
+  }
+}
+
 function renderBundlesUi(data) {
+  // Opera: default to lite summary (full tables on demand only)
+  if (isOperaBrowser() && !wantFullHeavyUi()) {
+    try {
+      renderBundlesUiOperaLite(data);
+      return;
+    } catch (err) {
+      console.warn("[bundles lite]", err);
+      // fall through to full if lite fails
+    }
+  }
+
   const root = $("bundlesUi");
   if (!root) return;
 
@@ -12322,9 +12430,98 @@ function initRugwatchCounts() {
 /**
  * After light UI is shown: logs → ruggers → disk persist, each yielding so
  * Opera GX can process clicks between steps.
+ *
+ * Opera GX: skip Ruggers wallet scan + full persist + history panel rebuild.
+ * Those are the post-result freezes (data already painted).
  */
 async function finishAnalyzeHeavyWork(data, query) {
   await yieldToUi(0);
+
+  // ── Opera / low-power path ─────────────────────────────────────────
+  if (isOperaBrowser() && !wantFullHeavyUi()) {
+    try {
+      // Log mint only — do not rebuild Logs DOM
+      const qArg = String(
+        query ||
+          (data && data.query) ||
+          (data && data.token && data.token.address) ||
+          ""
+      ).trim();
+      let entry = null;
+      try {
+        entry = buildHistoryEntry(data, qArg);
+      } catch (_) {
+        entry = null;
+      }
+      if (entry) {
+        try {
+          pushHistoryLog(entry);
+        } catch (_) {}
+      }
+    } catch (logErr) {
+      console.warn("[logs] opera lite", logErr);
+    }
+
+    await yieldToUi(32);
+    // Seed mint name only — no 450-wallet freeze/compare/save
+    try {
+      const mintAddr =
+        bareMintAddr(
+          (data.token && data.token.address) || data.query || query || ""
+        ) || "";
+      if (mintAddr) {
+        ensureRuggersMintTrack(mintAddr, {
+          chain: (data.token && data.token.chain_id) || "solana",
+          symbol: (data.token && data.token.symbol) || null,
+          name: (data.token && data.token.name) || null,
+        });
+      }
+    } catch (err) {
+      console.warn("[ruggers] opera seed", err);
+    }
+
+    await yieldToUi(32);
+    // Tiny session snapshot only (not multi-MB localStorage)
+    try {
+      const mini = {
+        savedAt: Date.now(),
+        query: String(query || "").trim(),
+        chain: (data.token && data.token.chain_id) || "",
+        data: {
+          ok: true,
+          generated_at: data.generated_at || new Date().toISOString(),
+          market: data.market || null,
+          token: data.token || null,
+          quick: !!(data.quick || data._phase === "quick"),
+          sections: {
+            overview: truncateSectionText(
+              (data.sections && data.sections.overview) || "",
+              4000
+            ),
+          },
+          bundles_view: data.bundles_view
+            ? summaryOnlyBundlesView(data.bundles_view)
+            : null,
+        },
+      };
+      const raw = JSON.stringify(mini);
+      if (raw.length < 200000) {
+        try {
+          sessionStorage.setItem(LAST_ANALYZE_KEY, raw);
+        } catch (_) {}
+      }
+    } catch (err) {
+      console.warn("[save] opera mini", err);
+    }
+
+    try {
+      unstickPointerLayer();
+    } catch (_) {}
+    console.info("[boot] Opera lite finishAnalyze — skipped heavy ruggers/save");
+    return;
+  }
+
+  // ── Full browsers ──────────────────────────────────────────────────
   try {
     recordAnalyzeInLogs(data, query);
   } catch (logErr) {
@@ -12353,18 +12550,7 @@ async function finishAnalyzeHeavyWork(data, query) {
     console.error("[saveLastAnalyze]", err);
   }
 
-  // IDB last — never block UI; skip re-loadLastAnalyze stringify storm on Opera
   await yieldToUi(0);
-  if (isOperaBrowser()) {
-    // Opera: fire-and-forget slim persist only; skip dual full re-read
-    try {
-      const raw = sessionStorage.getItem(LAST_ANALYZE_KEY);
-      if (raw && raw.length < 500000) {
-        idbSet(LAST_ANALYZE_KEY, raw).catch(() => {});
-      }
-    } catch (_) {}
-    return;
-  }
   try {
     const snap = loadLastAnalyze();
     if (snap) {
@@ -12467,17 +12653,38 @@ async function analyze(ev) {
     }
     await yieldToUi(0);
 
+    // Text tabs first (fast), then Bundles (Opera uses lite tables)
     try {
-      renderSectionsLight(data, query);
+      const sections = (data && data.sections) || {};
+      for (const tab of TABS) {
+        if (tab === "history" || tab === "ruggers" || tab === "bundles") continue;
+        if (sections[tab]) setPanelText(tab, sections[tab]);
+      }
+      const n = (data.alerts_meta && data.alerts_meta.priority_count) || 0;
+      if (n > 0) switchTab("alerts");
+      else switchTab("overview");
     } catch (err) {
-      console.error("[renderSectionsLight]", err);
+      console.error("[sections text]", err);
     }
     await yieldToUi(0);
 
+    try {
+      renderBundlesUi(data);
+    } catch (err) {
+      console.error("[renderBundlesUi]", err);
+    }
+    await yieldToUi(0);
+    try {
+      unstickPointerLayer();
+    } catch (_) {}
+
     // Heavy work after paint — never block the Analyze button again
-    finishAnalyzeHeavyWork(data, query).catch((err) =>
-      console.error("[finishAnalyzeHeavyWork]", err)
-    );
+    // Extra delay on Opera so first clicks after results land
+    setTimeout(() => {
+      finishAnalyzeHeavyWork(data, query).catch((err) =>
+        console.error("[finishAnalyzeHeavyWork]", err)
+      );
+    }, isOperaBrowser() ? 200 : 0);
   } catch (e) {
     const msg = String(e && e.message ? e.message : e);
     showError(
