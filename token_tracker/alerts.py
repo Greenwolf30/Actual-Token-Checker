@@ -330,81 +330,23 @@ def build_alerts(
             }
         )
 
-    if whales:
-        top = whales[0]
-        more = f" (+{len(whales) - 1} more over 5%)" if len(whales) > 1 else ""
-        total_clause = ""
-        if single_total_pct is not None and single_total_pct > 0:
-            n_bit = (
-                f" · {single_total_n} single-holder wallet(s)"
-                if single_total_n
-                else ""
-            )
-            total_clause = (
-                f" Single holders total {single_total_pct:.2f}% of supply"
-                f"{n_bit} (from Bundles)."
-            )
-        alerts.append(
-            {
-                "id": "single_holder_over_5",
-                "priority": "top",
-                "severity": "high" if top["pct"] >= 15 else "medium",
-                "title": (
-                    f"Single holder over 5%"
-                    + (
-                        f" · single holders total {single_total_pct:.2f}%"
-                        if single_total_pct is not None and single_total_pct > 0
-                        else ""
-                    )
-                ),
-                "detail": (
-                    f"Wallet holds {top['pct']:.2f}% of supply "
-                    f"(rank #{top.get('rank')}){more}."
-                    + total_clause
-                ),
-                # Full list so UI can color-code each address by bag %
-                "wallets": whales[:12],
-                # Same totals as Bundles → Single holders
-                "single_holders_total_pct": single_total_pct,
-                "single_holders_wallet_count": single_total_n,
-            }
-        )
+    # ── 2b) Single holders total (Bundles → Single holders) ───────────
+    # Show whenever Bundles has a single-holders total, or any wallet >5%.
+    single_alert = _single_holders_alert(
+        whales=whales,
+        single_total_pct=single_total_pct,
+        single_total_n=single_total_n,
+    )
+    if single_alert:
+        alerts.append(single_alert)
 
-    # ── 3) Similar wallets with large % ───────────────────────────────
-    groups = list(bundles_data.get("similar_size_groups") or []) if bundles_data.get("ok") else []
-    large_groups = []
-    for g in groups:
-        try:
-            n = int(g.get("count") or len(g.get("wallets") or []))
-            avg = float(g.get("avg_pct")) if g.get("avg_pct") is not None else None
-        except (TypeError, ValueError):
-            continue
-        if avg is None or n < 3:
-            continue
-        combined = avg * n
-        # "large percent" — combined group footprint or each already big
-        if combined >= 5.0 or avg >= 2.0:
-            large_groups.append({**g, "combined_pct_est": combined})
-    if large_groups:
-        large_groups.sort(key=lambda x: -float(x.get("combined_pct_est") or 0))
-        g0 = large_groups[0]
-        alerts.append(
-            {
-                "id": "similar_wallets_large",
-                "priority": "top",
-                "severity": "high" if (g0.get("combined_pct_est") or 0) >= 15 else "medium",
-                "title": "Similar wallets with large combined share",
-                "detail": (
-                    f"{g0.get('count')} wallets hold nearly the same size "
-                    f"(~{float(g0.get('avg_pct') or 0):.2f}% each, "
-                    f"combined ≈ {float(g0.get('combined_pct_est') or 0):.1f}%). "
-                    "Can look like a coordinated bundle."
-                ),
-                "groups": large_groups[:4],
-            }
-        )
+    # ── 3) Similar-sized total (Bundles → Similar-sized total) ────────
+    # Must use suspect_total_pct / similar_size_total_pct — same as Bundles tab.
+    similar_alert = _similar_wallets_alert(bundles_data)
+    if similar_alert:
+        alerts.append(similar_alert)
 
-    # ── 4) Bundle supply % thresholds (from Bundles tab total) ────────
+    # ── 4) Bundle supply % (Bundles → Total % bundles) ────────────────
     #   >20%  → elevated risk
     #   >27%  → danger / most likely rug
     #   ≥50%  → rug imminent
@@ -620,6 +562,230 @@ def _single_holders_from_bundles(
                     pass
 
     return total_pct, total_n, whales
+
+
+def _similar_total_from_bundles(
+    bundles_data: dict[str, Any] | None,
+) -> tuple[float | None, int | None]:
+    """
+    Similar-sized total % + wallet count — same fields as Bundles tab.
+
+    Prefer suspect_total_pct (similar-size ∪ Rugcheck insiders), then
+    similar_size_total_pct, then recompute from similar_size_groups.
+    """
+    bundles_data = bundles_data or {}
+    if not bundles_data.get("ok"):
+        return None, None
+    summary = bundles_data.get("summary") or {}
+
+    # Same preference order as format_bundles_text / Bundles stats bar
+    raw_pct = summary.get("suspect_total_pct")
+    if raw_pct is None:
+        raw_pct = summary.get("similar_size_total_pct")
+    raw_n = summary.get("suspect_wallet_count")
+    if raw_n is None:
+        raw_n = summary.get("similar_size_wallet_count")
+
+    total_pct: float | None
+    total_n: int | None
+    try:
+        total_pct = float(raw_pct) if raw_pct is not None else None
+    except (TypeError, ValueError):
+        total_pct = None
+    try:
+        total_n = int(raw_n) if raw_n is not None else None
+    except (TypeError, ValueError):
+        total_n = None
+
+    if total_pct is None:
+        groups = list(bundles_data.get("similar_size_groups") or [])
+        if groups:
+            try:
+                from .bundles import _similar_size_total_percent  # type: ignore[attr-defined]
+
+                total_pct, total_n = _similar_size_total_percent(groups)
+            except Exception:  # noqa: BLE001
+                # Fallback: unique wallets × avg per group (no double-count)
+                seen: set[str] = set()
+                total = 0.0
+                for g in groups:
+                    try:
+                        avg = (
+                            float(g.get("avg_pct"))
+                            if g.get("avg_pct") is not None
+                            else None
+                        )
+                    except (TypeError, ValueError):
+                        avg = None
+                    if avg is None:
+                        continue
+                    for w in g.get("wallets") or []:
+                        addr = str(w or "").strip()
+                        if not addr or addr in seen:
+                            continue
+                        seen.add(addr)
+                        total += avg
+                if seen:
+                    total_pct = min(100.0, round(total, 4))
+                    total_n = len(seen)
+
+    if total_pct is not None and total_pct <= 0:
+        return None, total_n
+    return total_pct, total_n
+
+
+def _single_holders_alert(
+    *,
+    whales: list[dict[str, Any]],
+    single_total_pct: float | None,
+    single_total_n: int | None,
+) -> dict[str, Any] | None:
+    """
+    Single holders alert using Bundles single_holders_total_pct.
+
+    Fires when total > 0 (matches Bundles) and/or any non-LP bag > 5%.
+    """
+    has_total = single_total_pct is not None and float(single_total_pct) > 0
+    if not whales and not has_total:
+        return None
+
+    top_pct = float(whales[0]["pct"]) if whales else 0.0
+    if top_pct >= 15 or (
+        has_total and single_total_pct is not None and float(single_total_pct) >= 15
+    ):
+        severity = "high"
+    elif top_pct > 5 or (
+        has_total and single_total_pct is not None and float(single_total_pct) > 5
+    ):
+        severity = "medium"
+    else:
+        severity = "info"
+
+    if has_total and single_total_pct is not None:
+        title = f"Single holders total {float(single_total_pct):.2f}%"
+        if whales:
+            title = f"Single holder over 5% · single holders total {float(single_total_pct):.2f}%"
+    elif whales:
+        title = "Single holder over 5%"
+    else:
+        return None
+
+    detail_bits: list[str] = []
+    if whales:
+        top = whales[0]
+        more = f" (+{len(whales) - 1} more over 5%)" if len(whales) > 1 else ""
+        detail_bits.append(
+            f"Wallet holds {top['pct']:.2f}% of supply "
+            f"(rank #{top.get('rank')}){more}."
+        )
+    if has_total and single_total_pct is not None:
+        n_bit = (
+            f" · {int(single_total_n)} single-holder wallet(s)"
+            if single_total_n is not None
+            else ""
+        )
+        detail_bits.append(
+            f"Single holders total {float(single_total_pct):.2f}% of supply"
+            f"{n_bit} (same as Bundles → Single holders)."
+        )
+
+    return {
+        "id": "single_holder_over_5",
+        "priority": "top",
+        "severity": severity,
+        "title": title,
+        "detail": " ".join(detail_bits),
+        "wallets": whales[:12],
+        "single_holders_total_pct": single_total_pct,
+        "single_holders_wallet_count": single_total_n,
+        "hide_wallets": not bool(whales),
+    }
+
+
+def _similar_wallets_alert(
+    bundles_data: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """
+    Similar wallets alert using Bundles Similar-sized total %.
+
+    Uses suspect_total_pct / similar_size_total_pct (same as Bundles stats bar),
+    not just avg×n of one group.
+    """
+    bundles_data = bundles_data or {}
+    if not bundles_data.get("ok"):
+        return None
+
+    sim_pct, sim_n = _similar_total_from_bundles(bundles_data)
+    groups = list(bundles_data.get("similar_size_groups") or [])
+    large_groups: list[dict[str, Any]] = []
+    for g in groups:
+        try:
+            n = int(g.get("count") or len(g.get("wallets") or []))
+            avg = float(g.get("avg_pct")) if g.get("avg_pct") is not None else None
+        except (TypeError, ValueError):
+            continue
+        if avg is None or n < 2:
+            continue
+        combined = avg * n
+        if combined >= 5.0 or avg >= 2.0 or n >= 3:
+            large_groups.append({**g, "combined_pct_est": combined})
+    large_groups.sort(key=lambda x: -float(x.get("combined_pct_est") or 0))
+
+    has_total = sim_pct is not None and float(sim_pct) > 0
+    if not has_total and not large_groups:
+        return None
+
+    # Severity from Bundles similar total when available, else largest group
+    score = float(sim_pct) if has_total and sim_pct is not None else 0.0
+    if not score and large_groups:
+        score = float(large_groups[0].get("combined_pct_est") or 0)
+    if score >= 15:
+        severity = "high"
+    elif score >= 5:
+        severity = "medium"
+    else:
+        severity = "info"
+
+    if has_total and sim_pct is not None:
+        n_bit = f" ({int(sim_n)} wallet(s))" if sim_n is not None else ""
+        title = f"Similar-sized total {float(sim_pct):.2f}%{n_bit}"
+        detail = (
+            f"Similar-sized total {float(sim_pct):.2f}% of supply{n_bit} "
+            "(same as Bundles → Similar-sized total — near-exact bags + "
+            "Rugcheck insiders, unique wallets)."
+        )
+    else:
+        g0 = large_groups[0]
+        title = "Similar wallets with large combined share"
+        detail = (
+            f"{g0.get('count')} wallets hold nearly the same size "
+            f"(~{float(g0.get('avg_pct') or 0):.2f}% each, "
+            f"combined ≈ {float(g0.get('combined_pct_est') or 0):.1f}%). "
+            "Can look like a coordinated bundle."
+        )
+
+    if large_groups and has_total:
+        g0 = large_groups[0]
+        detail += (
+            f" Largest group: {g0.get('count')} wallets "
+            f"~{float(g0.get('avg_pct') or 0):.2f}% each "
+            f"(group ≈ {float(g0.get('combined_pct_est') or 0):.1f}%)."
+        )
+
+    return {
+        "id": "similar_wallets_large",
+        "priority": "top",
+        "severity": severity,
+        "title": title,
+        "detail": detail,
+        "groups": large_groups[:4],
+        # Same totals as Bundles → Similar-sized total
+        "similar_size_total_pct": sim_pct,
+        "similar_size_wallet_count": sim_n,
+        "suspect_total_pct": sim_pct,
+        "suspect_wallet_count": sim_n,
+        "hide_wallets": True,
+    }
 
 
 def _bundle_pct_alert(bundles_data: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -866,6 +1032,34 @@ def format_alerts_text(data: dict[str, Any]) -> str:
                     )
             except (TypeError, ValueError):
                 pass
+        # Similar-sized total — same number as Bundles → Similar-sized total
+        if aid == "similar_wallets_large":
+            sp = a.get("similar_size_total_pct")
+            if sp is None:
+                sp = a.get("suspect_total_pct")
+            sn = a.get("similar_size_wallet_count")
+            if sn is None:
+                sn = a.get("suspect_wallet_count")
+            try:
+                if sp is not None and float(sp) > 0:
+                    n_s = f" ({int(sn)} wallet(s))" if sn is not None else ""
+                    lines.append(
+                        f"     Similar-sized total: {float(sp):.2f}%{n_s}"
+                    )
+            except (TypeError, ValueError):
+                pass
+            # Optional group breakdown under the total
+            for g in (a.get("groups") or [])[:3]:
+                try:
+                    n = int(g.get("count") or len(g.get("wallets") or []) or 0)
+                    avg = float(g.get("avg_pct") or 0)
+                    comb = float(g.get("combined_pct_est") or (avg * n))
+                    lines.append(
+                        f"     · group {n} wallets ~{avg:.2f}% each "
+                        f"(≈ {comb:.1f}% combined)"
+                    )
+                except (TypeError, ValueError):
+                    continue
         # Total bundle % — same number as Bundles → Total % bundles
         if aid.startswith("bundle_pct"):
             bp = a.get("total_bundle_pct")
