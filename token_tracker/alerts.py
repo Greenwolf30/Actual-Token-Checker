@@ -514,10 +514,12 @@ def _bonded_status_alert(
     """
     Bonded yes/no for Pump.fun-style mints.
 
-    Bonded: no  = still on bonding curve (not graduated)
-    Bonded: yes = graduated off bonding curve
+    Bonded: yes = graduated off bonding curve (PumpSwap / Raydium / etc.)
+    Bonded: no  = still on bonding curve only
     Bonded: unknown = pump mint without clear pair signal
     Non-pump tokens: no alert.
+
+    Prefer graduated=True / has_graduated_pair over a leftover pumpfun pair.
     """
     pf = pumpfun or {}
     is_mint = pf.get("is_pump_mint")
@@ -533,11 +535,15 @@ def _bonded_status_alert(
 
     graduated = pf.get("graduated")
     on_bonding = pf.get("on_bonding_curve")
-    if graduated is True:
+    has_grad_pair = pf.get("has_graduated_pair")
+    native_complete = pf.get("native_complete")
+
+    # Priority: native complete → graduated flag → graduated pair → bonding only
+    if native_complete is True or graduated is True or has_grad_pair is True:
         label = "yes"
     elif graduated is False or on_bonding is True:
         label = "no"
-    elif on_bonding is False:
+    elif on_bonding is False and graduated is not False:
         label = "yes"
     else:
         gl = str(pf.get("graduated_label") or "unknown").strip().lower()
@@ -554,6 +560,8 @@ def _bonded_status_alert(
         "bonded": label,
         "on_bonding_curve": bool(on_bonding) if on_bonding is not None else None,
         "graduated": graduated,
+        "has_graduated_pair": has_grad_pair,
+        "native_complete": native_complete,
         "hide_wallets": True,
     }
 
@@ -562,7 +570,13 @@ def _dexscreener_paid_alert(
     paid_info: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
     """
-    DexScreener paid profile yes/no (orders API: tokenProfile / tokenAd).
+    DexScreener paid profile yes/no.
+
+    Source: public DexScreener Orders API
+      GET https://api.dexscreener.com/orders/v1/{chainId}/{tokenAddress}
+    paid=yes when an order type tokenProfile / tokenAd / communityTakeover
+    has an approved (or processing) status / paymentTimestamp.
+    Not the same as bonding/graduation — unpaid graduated tokens are common.
 
     Always shows when we know paid True/False. Unknown (fetch failed) shows
     as DexScreener paid: unknown so the slot is not empty after Analyze.
@@ -589,6 +603,7 @@ def _dexscreener_paid_alert(
         "detail": "",
         "dexscreener_paid": label,
         "paid": paid,
+        "source": "dexscreener_orders_v1",
         "hide_wallets": True,
     }
 

@@ -77,24 +77,33 @@ def classify_graduation(
     *,
     pairs: list[dict[str, Any]] | None = None,
     primary_dex_id: str | None = None,
+    native_complete: bool | None = None,
 ) -> dict[str, Any]:
     """
-    Decide bonding-curve vs graduated for a Pump.fun-style mint.
+    Decide bonding-curve vs graduated (Bonded yes/no) for a Pump.fun-style mint.
 
-    Rules (DexScreener-based; free public index):
-      - dexId == pumpfun  → still on bonding curve → graduated = no
-      - pump mint on pumpswap / raydium / meteora / orca (and no pumpfun pair)
-        → graduated = yes
-      - pump mint with no clear DEX signal → graduated = unknown
+    Rules (priority order):
+      1) Pump.fun native `complete=true` → graduated / Bonded: yes
+      2) Any open DEX pair (pumpswap / raydium / meteora / orca / …)
+         → graduated / Bonded: yes
+         (even if a leftover dexId=pumpfun pair still appears on DexScreener)
+      3) Only pumpfun bonding-curve pairs → still on curve / Bonded: no
+      4) Pump mint with no clear pair signal → unknown
+
+    IMPORTANT: Graduated tokens often still list a historical pumpfun pair.
+    Never treat "pumpfun anywhere in dexes" as decisive if a graduated venue exists.
     """
     mint = (token_address or "").strip()
     is_mint = is_pump_mint(mint)
-    dex_primary = (primary_dex_id or "").lower()
+    dex_primary = (primary_dex_id or "").lower().replace("_", "").replace("-", "")
     pair_dexes: list[str] = []
     for p in pairs or []:
-        d = (p.get("dexId") or "").lower()
-        if d:
-            pair_dexes.append(d)
+        if not isinstance(p, dict):
+            continue
+        d = str(p.get("dexId") or p.get("dex_id") or "").strip().lower()
+        d_norm = d.replace("_", "").replace("-", "")
+        if d_norm:
+            pair_dexes.append(d_norm)
         # only pairs for this mint if we can check base
         base = ((p.get("baseToken") or {}).get("address") or "").lower()
         if mint and base and base != mint.lower():
@@ -104,22 +113,66 @@ def classify_graduation(
     if dex_primary and dex_primary not in pair_dexes:
         pair_dexes.append(dex_primary)
 
-    on_bonding = "pumpfun" in pair_dexes or dex_primary == "pumpfun"
-    graduated_dexes = {"pumpswap", "raydium", "meteora", "orca", "pumpswap-v2"}
-    on_grad_dex = any(d in graduated_dexes for d in pair_dexes)
+    # Normalize common labels
+    def _is_bonding_dex(d: str) -> bool:
+        return d in {"pumpfun", "pump"} or d.startswith("pumpfun")
+
+    def _is_grad_dex(d: str) -> bool:
+        if not d or _is_bonding_dex(d):
+            return False
+        # PumpSwap + major Solana AMMs after migrate
+        if d in {
+            "pumpswap",
+            "pumpswapv2",
+            "raydium",
+            "raydiumclmm",
+            "raydiumcp",
+            "meteora",
+            "meteoradamm",
+            "orca",
+            "whirlpool",
+            "fluxbeam",
+            "lifinity",
+            "phoenix",
+        }:
+            return True
+        if d.startswith("pumpswap") or d.startswith("raydium") or d.startswith("meteora"):
+            return True
+        return False
+
+    has_bonding_pair = any(_is_bonding_dex(d) for d in pair_dexes)
+    has_grad_pair = any(_is_grad_dex(d) for d in pair_dexes)
+    primary_is_bonding = _is_bonding_dex(dex_primary)
+    primary_is_grad = _is_grad_dex(dex_primary)
 
     graduated: bool | None
-    if on_bonding:
+    on_bonding_curve: bool
+
+    # 1) Native pump.fun complete flag (authoritative when present)
+    if native_complete is True:
+        graduated = True
+        on_bonding_curve = False
+    elif native_complete is False and not has_grad_pair and not primary_is_grad:
         graduated = False
-    elif is_mint and on_grad_dex:
+        on_bonding_curve = True
+    # 2) Any graduated venue → bonded/graduated yes (wins over leftover pumpfun pair)
+    elif has_grad_pair or primary_is_grad:
         graduated = True
-    elif is_mint and not on_bonding and pair_dexes:
-        # Pump mint trading somewhere other than bonding curve
+        on_bonding_curve = False
+    # 3) Only bonding-curve venue(s)
+    elif has_bonding_pair or primary_is_bonding:
+        graduated = False
+        on_bonding_curve = True
+    elif is_mint and pair_dexes:
+        # Other dex labels we don't recognize — treat as off-curve if not pumpfun
         graduated = True
+        on_bonding_curve = False
     elif is_mint:
-        graduated = None  # unknown / no pair signal
+        graduated = None
+        on_bonding_curve = False
     else:
         graduated = None
+        on_bonding_curve = False
 
     status = "bonding"
     if graduated is True:
@@ -131,16 +184,27 @@ def classify_graduation(
     else:
         status = "not_pump"
 
+    # Prefer a graduated dex_id for display when available
+    display_dex = dex_primary or (pair_dexes[0] if pair_dexes else None)
+    if graduated is True:
+        for d in pair_dexes:
+            if _is_grad_dex(d):
+                display_dex = d
+                break
+
     return {
         "is_pump_mint": is_mint,
-        "on_bonding_curve": bool(on_bonding),
+        "on_bonding_curve": bool(on_bonding_curve),
         "graduated": graduated,
         "graduated_label": (
             "yes" if graduated is True else "no" if graduated is False else "unknown"
         ),
         "status": status,
-        "dex_id": dex_primary or (pair_dexes[0] if pair_dexes else None),
+        "dex_id": display_dex,
         "dexes_seen": sorted(set(pair_dexes)),
+        "has_bonding_pair": has_bonding_pair,
+        "has_graduated_pair": has_grad_pair,
+        "native_complete": native_complete,
         "pump_url": f"https://pump.fun/{mint}" if is_mint else None,
     }
 

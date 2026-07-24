@@ -535,7 +535,7 @@ def analyze_token(
     except Exception:  # noqa: BLE001
         pass
 
-    # Pump.fun bonding vs graduated is local (no network) — cheap
+    # Pump.fun bonding vs graduated — prefer market pairs; refined after native coin
     pump_meta = pf.classify_graduation(
         token_addr,
         pairs=pairs,
@@ -543,9 +543,22 @@ def analyze_token(
     )
     # Enrich socials from Pump.fun coin JSON (X / website / telegram) so About
     # can scrape the project handle even when DexScreener omits socials.
+    # Also use native `complete` to fix Bonded yes/no (graduated tokens often
+    # still list a leftover dexId=pumpfun pair on DexScreener).
     try:
         native = pf.try_native_coin(token_addr) if token_addr else None
         if isinstance(native, dict):
+            complete = native.get("complete")
+            if complete is not None:
+                try:
+                    pump_meta = pf.classify_graduation(
+                        token_addr,
+                        pairs=pairs,
+                        primary_dex_id=pair_summary.get("dex_id"),
+                        native_complete=bool(complete),
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
             tw = (
                 native.get("twitter")
                 or native.get("twitter_url")
