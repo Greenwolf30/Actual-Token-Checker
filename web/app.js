@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v177";
+const ADTC_CLIENT_VERSION = "v178";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 // Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
 try {
@@ -4198,37 +4198,42 @@ function isUploadedSimilarOnThisMint(rec, wallet) {
 }
 
 /**
- * True if wallet was marked by the Ruggers Upload button on THIS mint only.
- * Cloud-known / other-mint / sold-while-flagged must never count.
+ * Lookup ruggers_uploaded meta for a wallet (case-insensitive).
+ */
+function ruggersUploadedHit(rec, wallet) {
+  if (!rec || !wallet) return null;
+  const w = String(wallet).trim();
+  if (!w) return null;
+  const up = rec.ruggers_uploaded;
+  if (!up || typeof up !== "object") return null;
+  if (up[w] && typeof up[w] === "object") return up[w];
+  const wl = w.toLowerCase();
+  for (const [k, meta] of Object.entries(up)) {
+    if (String(k).toLowerCase() === wl && meta && typeof meta === "object") {
+      return meta;
+    }
+  }
+  return null;
+}
+
+/**
+ * True if wallet was successfully cloud-confirmed via Upload on THIS mint.
+ * Legacy marks without cloud_confirmed do NOT count — keeps wallets available
+ * for Export + re-Upload after false "already on cloud" successes.
  */
 function isRuggersAlreadyUploaded(rec, wallet) {
   if (!rec || !wallet) return false;
   const w = String(wallet).trim();
   if (!w) return false;
-  if (isUploadedSimilarOnThisMint(rec, w)) return true;
-  const up = rec.ruggers_uploaded;
-  if (!up || typeof up !== "object") return false;
-  const mint = String(rec.address || "").trim().toLowerCase();
-  const hit = up[w]
-    ? up[w]
-    : (function () {
-        const wl = w.toLowerCase();
-        for (const k of Object.keys(up)) {
-          if (String(k).toLowerCase() === wl) return up[k];
-        }
-        return null;
-      })();
-  if (!hit || typeof hit !== "object") return false;
-  // Only explicit Upload-button marks (v106+) count
-  if (hit.via === "button") return true;
-  // Legacy keep: must prove same mint address was stored on the mark
-  if (
-    mint &&
-    hit.mint &&
-    String(hit.mint).trim().toLowerCase() === mint
-  ) {
-    return true;
+  const hit = ruggersUploadedHit(rec, w);
+  // Similar pin only counts with cloud confirmation
+  if (isUploadedSimilarOnThisMint(rec, w)) {
+    if (hit && hit.cloud_confirmed === true && hit.via === "button") return true;
+    return false;
   }
+  if (!hit) return false;
+  // Must be Upload button path AND confirmed on GitHub cloud
+  if (hit.via === "button" && hit.cloud_confirmed === true) return true;
   return false;
 }
 
@@ -4259,7 +4264,8 @@ function ruggersWalletNeedsUpload(rec, wallet) {
 
 /**
  * Drop false "already uploaded" marks (cloud bleed / other mints / old builds).
- * Only keeps Upload-button marks for THIS mint + Similar-Upload pins.
+ * Only keeps cloud-confirmed Upload-button marks for THIS mint.
+ * Unconfirmed marks are removed so Export/Upload lists stay full.
  */
 function purgeFalseRuggersUploadMarks(rec) {
   if (!rec || typeof rec !== "object") return;
@@ -4269,26 +4275,33 @@ function purgeFalseRuggersUploadMarks(rec) {
   if (up && typeof up === "object") {
     for (const [w, meta] of Object.entries(up)) {
       if (!w || !meta || typeof meta !== "object") continue;
-      if (isUploadedSimilarOnThisMint(rec, w)) {
-        cleaned[w] = { ...meta, via: meta.via || "button", mint: meta.mint || rec.address };
-        continue;
+      // Only keep confirmed cloud uploads (via button)
+      if (meta.via === "button" && meta.cloud_confirmed === true) {
+        if (
+          !mint ||
+          !meta.mint ||
+          String(meta.mint).trim().toLowerCase() === mint
+        ) {
+          cleaned[w] = meta;
+          continue;
+        }
       }
-      if (meta.via === "button") {
-        cleaned[w] = meta;
-        continue;
-      }
-      if (
-        mint &&
-        meta.mint &&
-        String(meta.mint).trim().toLowerCase() === mint
-      ) {
-        cleaned[w] = { ...meta, via: "button" };
-        continue;
-      }
-      // Drop — no proof this mint's Upload button wrote it
+      // Drop unconfirmed / foreign / legacy marks — restore Upload + Export pool
     }
   }
   rec.ruggers_uploaded = cleaned;
+  // Drop Similar pins that never got cloud confirmation
+  if (rec.uploaded_similar && typeof rec.uploaded_similar === "object") {
+    const keepSim = {};
+    for (const [w, meta] of Object.entries(rec.uploaded_similar)) {
+      if (!w || !meta) continue;
+      const hit = cleaned[w];
+      if (hit && hit.cloud_confirmed === true) {
+        keepSim[w] = meta;
+      }
+    }
+    rec.uploaded_similar = keepSim;
+  }
   // Clear sticky status flags that are not in cleaned
   if (rec.status && typeof rec.status === "object") {
     for (const [sw, st] of Object.entries(rec.status)) {
@@ -4340,7 +4353,7 @@ function purgeFalseRuggersUploadMarks(rec) {
   }
 }
 
-function markRuggersWalletUploaded(rec, wallet, section) {
+function markRuggersWalletUploaded(rec, wallet, section, opts) {
   if (!rec || !wallet) return;
   const w = String(wallet).trim();
   if (!w) return;
@@ -4348,6 +4361,7 @@ function markRuggersWalletUploaded(rec, wallet, section) {
     rec.ruggers_uploaded = {};
   }
   const now = new Date().toISOString();
+  const cloudOk = !!(opts && opts.cloud_confirmed);
   rec.ruggers_uploaded[w] = {
     ...(rec.ruggers_uploaded[w] || {}),
     uploaded_at: (rec.ruggers_uploaded[w] && rec.ruggers_uploaded[w].uploaded_at) || now,
@@ -4356,6 +4370,13 @@ function markRuggersWalletUploaded(rec, wallet, section) {
     // Proof: only Upload button / Similar pin paths call this
     via: "button",
     mint: rec.address || (rec.ruggers_uploaded[w] && rec.ruggers_uploaded[w].mint) || null,
+    // Only true after GitHub cloud push OK or every wallet skipped_cloud
+    cloud_confirmed: cloudOk
+      ? true
+      : !!(rec.ruggers_uploaded[w] && rec.ruggers_uploaded[w].cloud_confirmed),
+    cloud_confirmed_at: cloudOk
+      ? now
+      : (rec.ruggers_uploaded[w] && rec.ruggers_uploaded[w].cloud_confirmed_at) || null,
   };
 }
 
@@ -4445,12 +4466,16 @@ function markRuggersUploadedAsFlagged(exportKey, rows) {
   for (const row of rows) {
     const w = (row && row.wallet) || "";
     if (!w) continue;
-    markRuggersWalletUploaded(rec, w, exportKey || "unknown");
+    // cloud_confirmed required — only call this after real cloud success
+    markRuggersWalletUploaded(rec, w, exportKey || "unknown", {
+      cloud_confirmed: true,
+    });
     rec.rugwatch_known[w] = {
       ...(rec.rugwatch_known[w] || {}),
       origin: "uploaded",
       last_seen: now,
       uploaded_section: exportKey || "unknown",
+      cloud_confirmed: true,
       // Initial mint + ticker identity for this flag upload
       flagged_from_mint: rec.address || null,
       flagged_from_mints: rec.address ? [rec.address] : [],
@@ -5771,7 +5796,7 @@ function renderRuggersSection(title, hint, rows, exportKey, opts) {
       '<div class="rug-section-actions">' +
       '<button type="button" class="ghost history-btn rug-export-btn" data-rug-export="' +
       escHtml(exportKey) +
-      '" title="Download all wallets in this section (JSON/txt for RugWatch)">' +
+      '" title="Download ALL wallets in this section (never reduced by Upload status)">' +
       "Export" +
       (n ? " (" + n + ")" : "") +
       "</button>";
@@ -5779,7 +5804,7 @@ function renderRuggersSection(title, hint, rows, exportKey, opts) {
       actions +=
         '<button type="button" class="rug-upload-btn" data-rug-upload="' +
         escHtml(exportKey) +
-        '" title="Upload wallets not yet uploaded from THIS mint to RugWatch (via ATC proxy)">' +
+        '" title="Upload wallets not yet confirmed on the GitHub cloud list. Export always has the full list.">' +
         "Upload" +
         (nUpload ? " (" + nUpload + ")" : n ? " (0)" : "") +
         "</button>";
@@ -6007,6 +6032,7 @@ let _ruggersExportBusy = false;
 
 function downloadRuggersSection(exportKey) {
   if (_ruggersExportBusy) return;
+  // Always the FULL section — never filter by Upload / cloud marks
   const rows = ruggersRowsForExportKey(exportKey);
   if (!rows.length) {
     alert(
@@ -6023,15 +6049,21 @@ function downloadRuggersSection(exportKey) {
   }
   const section = ruggersExportLabel(exportKey);
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  const nUp = ruggersRowsNotYetUploaded(exportKey).length;
   const asJson = window.confirm(
     "Export " +
       n +
       " wallet(s) from “" +
       section +
       "” for RugWatch.\n\n" +
-      "This downloads ONE file with all " +
+      "This downloads the FULL section (" +
       n +
-      " addresses.\n\n" +
+      " addresses) — Upload status does not remove any.\n" +
+      (nUp < n
+        ? "(" +
+          (n - nUp) +
+          " already cloud-confirmed for Upload; still included in this file.)\n\n"
+        : "\n") +
       "OK = JSON (RugWatch Upload — recommended)\n" +
       "Cancel = plain text (one address per line)"
   );
@@ -6453,22 +6485,20 @@ async function uploadRuggersSectionToCloud(exportKey) {
       try {
         if (pi > 0) await rugwatchSleep(2000 + pi * 2000);
         const pushResult = await postRuggersToRugwatch("push", {}, headers);
-        if (pushResult.ok && pushResult.data) {
+        if (pushResult.ok && pushResult.data && pushResult.data.ok === true) {
           cloud = pushResult.data;
-          pushOk = cloud.ok !== false;
-          if (pushOk) break;
-          pushWarning = String(
-            (cloud && cloud.error) || pushResult.error || "Push returned not ok"
-          );
-        } else {
-          pushWarning = String(
-            pushResult.error || "Push cloud failed"
-          );
-          cloud =
-            pushResult.data && typeof pushResult.data === "object"
-              ? pushResult.data
-              : { ok: false, error: pushWarning };
+          pushOk = true;
+          break;
         }
+        pushWarning = String(
+          (pushResult.data && pushResult.data.error) ||
+            pushResult.error ||
+            "Push returned not ok"
+        );
+        cloud =
+          pushResult.data && typeof pushResult.data === "object"
+            ? pushResult.data
+            : { ok: false, error: pushWarning };
       } catch (pushErr) {
         pushWarning = String(
           (pushErr && pushErr.message) || pushErr || "Push cloud network error"
@@ -6490,22 +6520,29 @@ async function uploadRuggersSectionToCloud(exportKey) {
     const cloudBefore =
       cloud && cloud.cloud_before != null ? cloud.cloud_before : null;
 
-    // Real success on cloud:
-    //  A) merge-push OK (new or re-sync), OR
-    //  B) every sent wallet was already on the GitHub list (skipped_cloud)
+    // Real success — only then reduce Upload (N).
+    // Export ALWAYS keeps the full section count (never filtered by marks).
+    // A) Every sent wallet was skipped_cloud (already on GitHub), OR
+    // B) Push ok AND (new cloud adds OR new local imports that were pushed)
     const allAlreadyOnCloud =
-      cloudChecked && skipCloudN >= nSent && nSent > 0 && imported === 0;
-    const cloudReallyUpdated =
-      pushOk &&
-      (addedCloudN == null ||
-        addedCloudN > 0 ||
-        imported > 0 ||
-        skipLocalN > 0 ||
-        allAlreadyOnCloud);
-    const trulyOnCloud = !!(pushOk || allAlreadyOnCloud);
+      cloudChecked === true &&
+      skipCloudN >= nSent &&
+      nSent > 0;
+    const pushLanded =
+      pushOk === true &&
+      ((Number.isFinite(addedCloudN) && addedCloudN > 0) ||
+        (imported > 0 && pushOk === true) ||
+        (skipCloudN > 0 && skipCloudN + skipLocalN >= nSent && pushOk === true));
+    // Do NOT treat "push ok + 0 added + only local skips" as success — that
+    // was removing wallets from the Upload pool with nothing on GitHub.
+    const trulyOnCloud = !!(
+      allAlreadyOnCloud ||
+      (pushOk && Number.isFinite(addedCloudN) && addedCloudN > 0) ||
+      (pushOk && imported > 0) ||
+      (pushOk && skipCloudN >= nSent)
+    );
 
-    // NEVER mark wallets uploaded unless they are truly on the cloud list
-    // (or push merge succeeded). Import-only / skip-local is NOT enough.
+    // Mark ONLY on real cloud success — never strip Upload/Export pool otherwise
     if (trulyOnCloud) {
       try {
         markRuggersUploadedAsFlagged(exportKey, rows);
@@ -6514,6 +6551,9 @@ async function uploadRuggersSectionToCloud(exportKey) {
       } catch (_) {
         /* ignore */
       }
+    } else {
+      // Ensure no accidental marks from a partial run
+      markedOk = false;
     }
 
     const viaLine = upResult.via ? "Path: " + upResult.via + "\n" : "";
