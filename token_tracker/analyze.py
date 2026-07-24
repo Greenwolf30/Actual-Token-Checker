@@ -440,6 +440,20 @@ def analyze_token(
     except Exception:  # noqa: BLE001
         pass
     socials = dx.extract_socials(primary)
+    # Snapshot DexScreener-only socials BEFORE Pump.fun enrichment.
+    # Alerts "DexScreener socials missing" must not count pump.fun-filled links.
+    socials_dexscreener = {
+        "websites": list(socials.get("websites") or []),
+        "socials": list(socials.get("socials") or []),
+        "twitter_handle": socials.get("twitter_handle"),
+        "extra_twitter_handles": list(socials.get("extra_twitter_handles") or []),
+        "image_url": socials.get("image_url"),
+        "header_url": socials.get("header_url"),
+        "source": "dexscreener",
+        "checked": True,
+    }
+    socials["dexscreener"] = socials_dexscreener
+    socials["checked"] = True
 
     network = gt.network_id(pair_summary.get("chain_id"))
     token_addr = (pair_summary.get("base_token") or {}).get("address")
@@ -1016,6 +1030,8 @@ def analyze_token(
                     "pair_address": pair_summary.get("pair_address"),
                 },
             },
+            # Pure DexScreener profile (pre-enrichment) for socials-missing alert
+            socials_dexscreener=socials_dexscreener,
         )
     except Exception as exc:  # noqa: BLE001
         alerts_data = {

@@ -149,15 +149,21 @@ def build_alerts(
     dex_id: str | None = None,
     dexes: list[str] | tuple[str, ...] | None = None,
     market: dict[str, Any] | None = None,
+    socials_dexscreener: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return structured alerts from holder/bundle/Rugcheck + DexScreener socials.
 
     Pass dex_id / dexes / market so Pump.fun + PumpSwap pools skip LP-unlock
     even when the mint does not end with 'pump'.
+
+    socials_dexscreener: pure DexScreener profile snapshot (before Pump.fun
+    enrichment). Prefer this for "socials missing" so pre-bond tokens still
+    alert when DexScreener has no links even if pump.fun JSON has them.
     """
     holders_data = holders_data or {}
     bundles_data = bundles_data or {}
     socials = socials or {}
+    pumpfun = pumpfun or {}
     alerts: list[dict[str, Any]] = []
     is_pump = skip_lp_unlock_for_pump_pool(
         holders_data,
@@ -168,14 +174,26 @@ def build_alerts(
         market=market,
     )
 
-    # Socials can still be checked even if holders failed
-    social_alert = _dexscreener_socials_alert(socials)
+    # DexScreener-only socials (do not use pump-enriched merged socials)
+    dex_socials = socials_dexscreener
+    if not isinstance(dex_socials, dict) or not dex_socials:
+        if isinstance(socials.get("dexscreener"), dict):
+            dex_socials = socials.get("dexscreener")
+        else:
+            dex_socials = socials
+
+    # Socials + bonded status can still run when holders failed
+    social_alert = _dexscreener_socials_alert(dex_socials, pumpfun=pumpfun)
     if social_alert:
         alerts.append(social_alert)
 
+    bonded_alert = _bonded_status_alert(pumpfun, token_address=token_address)
+    if bonded_alert:
+        alerts.append(bonded_alert)
+
     if not holders_data.get("ok"):
         if alerts:
-            # Return social-only alerts when holders unavailable
+            # Return social/bonded alerts when holders unavailable
             return {
                 "ok": True,
                 "priority_count": sum(1 for a in alerts if a.get("priority") == "top"),
@@ -183,7 +201,10 @@ def build_alerts(
                 "summary": (
                     f"{len(alerts)} alert(s); holders scan unavailable for full checks."
                 ),
-                "checks": ["dexscreener_socials_missing"],
+                "checks": [
+                    "dexscreener_socials_missing",
+                    "bonded_status",
+                ],
                 "notes": holders_data.get("error") or holders_data.get("notes") or "",
             }
         return {
@@ -396,6 +417,7 @@ def build_alerts(
         "similar_wallets_large",
         "bundle_pct_threshold",
         "dexscreener_socials_missing",
+        "bonded_status",
         "serial_rugger_link",
         "rugwatch_flagged",
     ]
@@ -423,10 +445,30 @@ def build_alerts(
 def dexscreener_socials_updated(socials: dict[str, Any] | None) -> bool | None:
     """
     True if DexScreener profile has any social/website links.
-    False if profile payload is present but empty.
-    None if socials were not provided (unknown).
+    False if profile payload was checked but empty.
+    None if socials were not provided (unknown / not checked).
+
+    Empty dict {} is treated as missing (False) when checked=True, otherwise
+    None (unknown). Prefer the pre-enrichment dexscreener snapshot.
     """
-    if not socials:
+    if socials is None:
+        return None
+    if not isinstance(socials, dict):
+        return None
+
+    # Nested pure DexScreener snapshot (when merged socials were passed)
+    nested = socials.get("dexscreener")
+    if isinstance(nested, dict) and (
+        nested.get("checked")
+        or nested.get("source") == "dexscreener"
+        or "socials" in nested
+        or "websites" in nested
+    ):
+        socials = nested
+
+    checked = bool(socials.get("checked") or socials.get("source") == "dexscreener")
+    # No keys at all and not marked checked → unknown
+    if not socials and not checked:
         return None
 
     social_list = socials.get("socials") or []
@@ -446,31 +488,106 @@ def dexscreener_socials_updated(socials: dict[str, Any] | None) -> bool | None:
         elif isinstance(w, str) and w.strip():
             web_urls += 1
 
-    return bool(social_urls > 0 or web_urls > 0 or twitter)
+    has_any = bool(social_urls > 0 or web_urls > 0 or twitter)
+    if has_any:
+        return True
+    # Empty profile: missing when we have a real snapshot/checked flag,
+    # or when dict has socials/websites keys (extract_socials shape).
+    if checked or "socials" in socials or "websites" in socials:
+        return False
+    return None
 
 
-def _dexscreener_socials_alert(socials: dict[str, Any] | None) -> dict[str, Any] | None:
+def _bonded_status_alert(
+    pumpfun: dict[str, Any] | None,
+    *,
+    token_address: str | None = None,
+) -> dict[str, Any] | None:
     """
-    Alert when DexScreener pair profile has no socials / websites updated.
+    Bonded yes/no for Pump.fun-style mints.
 
-    DexScreener does not expose a reliable 'last updated' timestamp for social
-    links, so 'not updated' = missing or empty profile links on the pair.
+    Bonded: no  = still on bonding curve (not graduated)
+    Bonded: yes = graduated off bonding curve
+    Bonded: unknown = pump mint without clear pair signal
+    Non-pump tokens: no alert.
+    """
+    pf = pumpfun or {}
+    is_mint = pf.get("is_pump_mint")
+    if is_mint is None and token_address:
+        try:
+            from .pumpfun import is_pump_mint
+
+            is_mint = is_pump_mint(token_address)
+        except Exception:  # noqa: BLE001
+            is_mint = str(token_address or "").lower().endswith("pump")
+    if not is_mint:
+        return None
+
+    graduated = pf.get("graduated")
+    on_bonding = pf.get("on_bonding_curve")
+    if graduated is True:
+        label = "yes"
+    elif graduated is False or on_bonding is True:
+        label = "no"
+    elif on_bonding is False:
+        label = "yes"
+    else:
+        gl = str(pf.get("graduated_label") or "unknown").strip().lower()
+        label = gl if gl in {"yes", "no", "unknown"} else "unknown"
+
+    severity = "medium" if label == "no" else "info"
+
+    return {
+        "id": "bonded_status",
+        "priority": "top" if label == "no" else "info",
+        "severity": severity,
+        "title": f"Bonded: {label}",
+        "detail": "",
+        "bonded": label,
+        "on_bonding_curve": bool(on_bonding) if on_bonding is not None else None,
+        "graduated": graduated,
+        "hide_wallets": True,
+    }
+
+
+def _dexscreener_socials_alert(
+    socials: dict[str, Any] | None,
+    *,
+    pumpfun: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """
+    Alert when DexScreener pair profile has no socials / websites.
+
+    Uses DexScreener-only data (not Pump.fun-enriched links). Still fires for
+    pre-bond (bonding curve) tokens when DexScreener has no profile links.
     """
     updated = dexscreener_socials_updated(socials)
     if updated is not False:
         return None
 
+    pf = pumpfun or {}
+    bonded = None
+    if pf.get("graduated") is True:
+        bonded = "yes"
+    elif pf.get("graduated") is False or pf.get("on_bonding_curve") is True:
+        bonded = "no"
+    elif pf.get("is_pump_mint"):
+        bonded = str(pf.get("graduated_label") or "unknown").lower()
+        if bonded not in {"yes", "no", "unknown"}:
+            bonded = "unknown"
+
+    title = "DexScreener socials missing"
+    if bonded in {"yes", "no", "unknown"}:
+        title = f"DexScreener socials missing · Bonded: {bonded}"
+
     return {
         "id": "dexscreener_socials_missing",
         "priority": "top",
         "severity": "medium",
-        "title": "Socials not updated on DexScreener",
-        "detail": (
-            "No website, X/Twitter, Telegram, or other social links found on the "
-            "DexScreener pair profile. Socials appear missing or not updated — "
-            "common on fresh or low-effort tokens. Verify community links elsewhere. "
-            "Heuristics only; not financial advice."
-        ),
+        "title": title,
+        "detail": "",  # compact Alerts UI — no notes
+        "bonded": bonded,
+        "hide_wallets": True,
     }
 
 
@@ -947,6 +1064,11 @@ def format_alerts_text(data: dict[str, Any]) -> str:
             ["dexscreener_socials_missing"],
         ),
         (
+            "bonded_status",
+            "Bonded yes/no will show here if value returns True",
+            ["bonded_status"],
+        ),
+        (
             "serial_rugger_link",
             "Serial-rugger / rug signals will show here if value returns True",
             ["serial_rugger_link"],
@@ -964,8 +1086,9 @@ def format_alerts_text(data: dict[str, Any]) -> str:
 
     # Slot keys that stay on one placeholder line when active (no full alert block).
     # Placeholder already ends with "if value returns True" — do not append " · true".
+    # NOTE: dexscreener_socials_missing is NOT here — it must render as a real alert
+    # (was stuck on the placeholder line even when True).
     _append_true_keys = {
-        "dexscreener_socials_missing",
         "serial_rugger_link",
         "rugwatch_flagged",
     }
@@ -975,8 +1098,16 @@ def format_alerts_text(data: dict[str, Any]) -> str:
         title = str(a.get("title") or "")
         lines.append(f"  {index}. [{sev}] {title}")
         aid = str(a.get("id") or "")
-        # Compact totals: title only (no notes, no duplicate total %)
-        if aid == "single_holder_over_5" or aid.startswith("bundle_pct"):
+        # Compact totals / status: title only (no notes, no duplicate total %)
+        if (
+            aid
+            in {
+                "single_holder_over_5",
+                "dexscreener_socials_missing",
+                "bonded_status",
+            }
+            or aid.startswith("bundle_pct")
+        ):
             lines.append("")
             return
         # Similar-sized: total title + each group % (no notes / no total re-print)

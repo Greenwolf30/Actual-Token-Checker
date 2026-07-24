@@ -2314,15 +2314,22 @@ def run_gui() -> None:
                 mkt = report.get("market") or {}
                 pair = mkt.get("pair") if isinstance(mkt.get("pair"), dict) else {}
                 pf = report.get("pumpfun") or {}
+                soc = report.get("socials") or {}
+                dex_soc = (
+                    soc.get("dexscreener")
+                    if isinstance(soc.get("dexscreener"), dict)
+                    else None
+                )
                 report["alerts"] = build_alerts(
                     report.get("holders") or {},
                     report.get("bundles") or {},
-                    socials=report.get("socials") or {},
+                    socials=soc,
                     pumpfun=pf,
                     token_address=tok.get("address"),
                     dex_id=pair.get("dex_id") or mkt.get("dex_id") or pf.get("dex_id"),
                     dexes=list(pf.get("dexes_seen") or []),
                     market=mkt,
+                    socials_dexscreener=dex_soc,
                 )
             except Exception:  # noqa: BLE001
                 pass
