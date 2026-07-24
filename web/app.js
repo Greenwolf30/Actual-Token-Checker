@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v169";
+const ADTC_CLIENT_VERSION = "v170";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 // Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
 try {
@@ -1666,6 +1666,21 @@ function sameMintAddr(a, b) {
 }
 
 /**
+ * True when a Flagged-row meta's origin mint is the current mint.
+ * Flagged section is cross-mint only — same-mint origins stay in category lanes.
+ */
+function flaggedOriginIsThisMint(meta, mint) {
+  if (!meta || !mint) return false;
+  const from =
+    bareMintAddr(meta.flagged_from_mint) ||
+    (Array.isArray(meta.flagged_from_mints) && meta.flagged_from_mints[0]
+      ? bareMintAddr(meta.flagged_from_mints[0])
+      : "") ||
+    "";
+  return !!(from && sameMintAddr(from, mint));
+}
+
+/**
  * Canonical Ruggers store key — always chain-prefixed so mints never collide
  * and bare vs solana: keys cannot mix two different tracks.
  */
@@ -2456,12 +2471,13 @@ function isRuggersStickyOriginLane(lane) {
  * Used on first Analyze for everyone, and on later Analyzes for NEW holders
  * (and RugWatch-flagged wallets that appear as holders later).
  */
-function enrollRuggersBaselineWallet(rec, w, info, now) {
+function enrollRuggersBaselineWallet(rec, w, info, now, opts) {
   if (!rec || !w || !info) return false;
   if (!rec.first_wallets || typeof rec.first_wallets !== "object") {
     rec.first_wallets = {};
   }
   if (rec.first_wallets[w]) return false; // already baseline
+  const force = !!(opts && opts.force);
   const pct =
     info.pct_supply != null && Number.isFinite(Number(info.pct_supply))
       ? Number(info.pct_supply)
@@ -2470,11 +2486,16 @@ function enrollRuggersBaselineWallet(rec, w, info, now) {
     info.balance != null && Number.isFinite(Number(info.balance))
       ? Number(info.balance)
       : null;
-  // Skip empty / dust rows with no measurable bag (except explicit creator)
+  // Skip empty / dust rows with no measurable bag (except creator / force RugWatch)
   const isCreatorLabel =
     info.label === "creator" ||
     !!(rec.creator && String(rec.creator).toLowerCase() === String(w).toLowerCase());
-  if (!isCreatorLabel && (pct == null || pct <= 0) && (bal == null || bal <= 0)) {
+  if (
+    !force &&
+    !isCreatorLabel &&
+    (pct == null || pct <= 0) &&
+    (bal == null || bal <= 0)
+  ) {
     return false;
   }
   rec.first_wallets[w] = {
@@ -2490,7 +2511,8 @@ function enrollRuggersBaselineWallet(rec, w, info, now) {
     in_funding: !!info.in_funding,
     in_launch: !!info.in_launch,
     in_fresh: !!info.in_fresh,
-    exclude_from_single: !!info.exclude_from_single,
+    exclude_from_single: !!info.exclude_from_single || force,
+    from_rugwatch: force || !!info.from_rugwatch,
     first_seen_at: now,
     enrolled_after_baseline: true,
   };
@@ -2691,6 +2713,7 @@ function processRuggersFromAnalyze(data) {
       ...Object.keys(snap.flagged_known || {}),
     ]);
     for (const [w, info] of Object.entries(freezeMap)) {
+      const isRw = !!(snap.flagged_known && snap.flagged_known[w]);
       rec.first_wallets[w] = {
         pct_supply: info.pct_supply,
         balance: info.balance,
@@ -2704,7 +2727,8 @@ function processRuggersFromAnalyze(data) {
         in_funding: !!info.in_funding,
         in_launch: !!info.in_launch,
         in_fresh: !!info.in_fresh,
-        exclude_from_single: !!info.exclude_from_single,
+        exclude_from_single: !!info.exclude_from_single || isRw,
+        from_rugwatch: isRw || !!info.from_rugwatch,
         first_seen_at: now,
       };
     }
@@ -2885,11 +2909,9 @@ function processRuggersFromAnalyze(data) {
       if (enrolledNew >= room && room >= 0) continue;
       if (enrollRuggersBaselineWallet(rec, w, info, now)) enrolledNew++;
     }
-    // RugWatch-known addresses currently holding but missing from snap.wallets
-    // (edge: server tagged them but holder row thin) — still enroll if current
+    // Track EVERY RugWatch-flagged wallet from the server (even if not holding now)
     for (const [fw, meta] of Object.entries(snap.flagged_known || {})) {
       if (!fw || rec.first_wallets[fw]) continue;
-      if (!current[fw] && !(snap.wallets && snap.wallets[fw])) continue;
       const info = (snap.wallets && snap.wallets[fw]) || current[fw] || {};
       enrollRuggersBaselineWallet(
         rec,
@@ -2907,36 +2929,62 @@ function processRuggersFromAnalyze(data) {
           in_funding: !!info.in_funding,
           in_launch: !!info.in_launch,
           in_fresh: !!info.in_fresh,
-          exclude_from_single: !!info.exclude_from_single,
+          exclude_from_single: true,
+          from_rugwatch: true,
         },
-        now
+        now,
+        { force: true }
       );
       if (rec.first_wallets[fw]) {
         rec.first_wallets[fw].from_rugwatch_holder = true;
       }
     }
+  } else {
+    // First lookup path: also force-track all flagged_known (may have null bag)
+    for (const [fw, meta] of Object.entries(snap.flagged_known || {})) {
+      if (!fw || (rec.first_wallets && rec.first_wallets[fw])) continue;
+      const info = (snap.wallets && snap.wallets[fw]) || {};
+      enrollRuggersBaselineWallet(
+        rec,
+        fw,
+        {
+          pct_supply: info.pct_supply,
+          balance: info.balance,
+          rank: info.rank,
+          label: info.label || null,
+          in_similar: !!info.in_similar,
+          in_multi: !!info.in_multi,
+          in_multi_send: !!info.in_multi_send,
+          in_insider: !!info.in_insider,
+          in_suspect: !!info.in_suspect,
+          in_funding: !!info.in_funding,
+          in_launch: !!info.in_launch,
+          in_fresh: !!info.in_fresh,
+          exclude_from_single: true,
+          from_rugwatch: true,
+        },
+        now,
+        { force: true }
+      );
+    }
   }
 
-  // Merge RugWatch knowledge for wallets that touch this mint only
-  // (server already filters; never treat as Flagged section until ≥99% sell)
+  // Merge ALL RugWatch flagged knowledge for this Analyze (always track)
+  // Never treat as Flagged section until ≥99% sell on a *different* origin mint path
   const rwKnown =
     rec.rugwatch_known && typeof rec.rugwatch_known === "object"
       ? rec.rugwatch_known
       : {};
-  const thisMintLc = String(rec.address || "").trim().toLowerCase();
+  const thisMintLc = String(rec.address || mintBare || "")
+    .trim()
+    .toLowerCase();
   for (const [fw, meta] of Object.entries(snap.flagged_known || {})) {
     if (!fw) continue;
-    // Remember if on this mint track (baseline / currently listed / flagged seller)
-    // New holders enrolled above are already in first_wallets
-    const onTrack =
-      !!(rec.first_wallets && rec.first_wallets[fw]) ||
-      !!current[fw] ||
-      !!(rec.flagged_sellers && rec.flagged_sellers[fw]);
-    if (!onTrack) continue;
     const merged = {
       ...(rwKnown[fw] || {}),
       ...(meta || {}),
       last_seen: now,
+      tracked: true,
     };
     // Cloud "uploaded" is not a this-mint Upload unless flagged_from_mint matches
     if (String(merged.origin || "") === "uploaded") {
@@ -3339,36 +3387,45 @@ function processRuggersFromAnalyze(data) {
         const sym = normalizeFlaggedTicker(rec.symbol);
         if (sym) sealed.flagged_from_symbol = sym;
       }
-      flaggedSellers[w] = {
-        ...sealed,
-        // Never inherit cloud "uploaded" — that is NOT Ruggers Upload on this mint
-        origin:
-          sealed.origin && String(sealed.origin) !== "uploaded"
-            ? sealed.origin
-            : "sold_while_flagged",
-        entered_at: prior.entered_at || now,
-        last_update: now,
-        phase: "sold",
-        ever_flagged: true,
-        sold_pct:
-          soldState.sold_pct != null
-            ? soldState.sold_pct
-            : prior.sold_pct != null
-              ? prior.sold_pct
-              : 100,
-        first_pct: first.pct_supply,
-        reason: soldState.reason || prior.reason || "sold_99",
-        entered_via: prior.entered_via || "sold_while_flagged",
-        origin_lane: originLane,
-        rules_v: RUGGERS_RULES_VERSION,
-        source_mint: mintBare,
-      };
+      // Flagged section is cross-mint only. Same-mint first flag stays in
+      // Similar / Single / … (still tracked in rugwatch_known).
+      const sameMintOrigin =
+        flaggedOriginIsThisMint(sealed, mintBare) ||
+        String(sealed.origin || "") === "uploaded";
+      if (sameMintOrigin) {
+        if (flaggedSellers[w]) delete flaggedSellers[w];
+      } else {
+        flaggedSellers[w] = {
+          ...sealed,
+          // Never inherit cloud "uploaded" — that is NOT Ruggers Upload on this mint
+          origin:
+            sealed.origin && String(sealed.origin) !== "uploaded"
+              ? sealed.origin
+              : "sold_while_flagged",
+          entered_at: prior.entered_at || now,
+          last_update: now,
+          phase: "sold",
+          ever_flagged: true,
+          sold_pct:
+            soldState.sold_pct != null
+              ? soldState.sold_pct
+              : prior.sold_pct != null
+                ? prior.sold_pct
+                : 100,
+          first_pct: first.pct_supply,
+          reason: soldState.reason || prior.reason || "sold_99",
+          entered_via: prior.entered_via || "sold_while_flagged",
+          origin_lane: originLane,
+          rules_v: RUGGERS_RULES_VERSION,
+          source_mint: mintBare,
+        };
+      }
     }
 
     // Buy-back: stay Flagged identity forever — only move section to Swing.
     // phase=swing → Swing list with purple "flagged · swing"; never remove label.
     // Sell ≥99% again → phase=sold → Flagged section again (still purple).
-    // Similar lineage / this-mint Upload never use Flagged identity here.
+    // Similar lineage / this-mint Upload / same-mint origin never use Flagged here.
     if (
       tag === "swing" &&
       everFlaggedOnMint &&
@@ -3398,35 +3455,45 @@ function processRuggersFromAnalyze(data) {
         const sym = normalizeFlaggedTicker(rec.symbol);
         if (sym) sealed.flagged_from_symbol = sym;
       }
-      flaggedSellers[w] = {
-        ...sealed,
-        origin:
-          sealed.origin && String(sealed.origin) !== "uploaded"
-            ? sealed.origin
-            : "sold_while_flagged",
-        entered_at: prior.entered_at || now,
-        last_update: now,
-        phase: "swing",
-        ever_flagged: true,
-        source_mint: mintBare,
-        sold_pct: prior.sold_pct != null ? prior.sold_pct : soldState.sold_pct,
-        first_pct: first.pct_supply,
-        reason: "buy_back_flagged_swing",
-        origin_lane: originLane,
-        rules_v: RUGGERS_RULES_VERSION,
-      };
-      // Never cloud-unflag: keep flagged label/identity for this mint loop
+      const sameMintOriginSwing =
+        flaggedOriginIsThisMint(sealed, mintBare) ||
+        String(sealed.origin || "") === "uploaded";
+      if (sameMintOriginSwing) {
+        if (flaggedSellers[w]) delete flaggedSellers[w];
+      } else {
+        flaggedSellers[w] = {
+          ...sealed,
+          origin:
+            sealed.origin && String(sealed.origin) !== "uploaded"
+              ? sealed.origin
+              : "sold_while_flagged",
+          entered_at: prior.entered_at || now,
+          last_update: now,
+          phase: "swing",
+          ever_flagged: true,
+          source_mint: mintBare,
+          sold_pct: prior.sold_pct != null ? prior.sold_pct : soldState.sold_pct,
+          first_pct: first.pct_supply,
+          reason: "buy_back_flagged_swing",
+          origin_lane: originLane,
+          rules_v: RUGGERS_RULES_VERSION,
+        };
+      }
     }
 
-    // Permanent Similar-Upload: never Flagged on this mint
-    if (uploadedSimilar && flaggedSellers[w]) {
+    // Permanent Similar-Upload / this-mint Upload: never Flagged on this mint
+    if ((uploadedSimilar || uploadedOnThisMint) && flaggedSellers[w]) {
       delete flaggedSellers[w];
     }
 
-    // Flagged lineage = permanent once set (except similar-upload pin on this mint)
+    // Flagged lineage only when we have a cross-mint flagged_sellers row.
+    // Same-mint RugWatch sells stay in category sticky lanes (not Flagged section).
     const isFlaggedLineage = !!(
       !uploadedSimilar &&
-      (everFlaggedOnMint || flaggedSellers[w] || wasFlaggedSeller)
+      !uploadedOnThisMint &&
+      flaggedSellers[w] &&
+      !flaggedOriginIsThisMint(flaggedSellers[w], mintBare) &&
+      String(flaggedSellers[w].origin || "") !== "uploaded"
     );
     const flaggedPhase =
       flaggedSellers[w] && flaggedSellers[w].phase
@@ -3644,16 +3711,13 @@ function processRuggersFromAnalyze(data) {
       // Creator label only for the real mint creator address
       is_creator: !!isCreator,
       sticky_lane_seller: !!stickyLane[w],
-      // Purple forever once flagged on this mint (seller or swing)
+      // Purple Flagged identity only for cross-mint flagged_sellers rows
       is_flagged: !!(isFlaggedLineage && !uploadedSimilar),
-      ever_flagged_on_mint: !!(
-        !uploadedSimilar &&
-        (isFlaggedLineage || everFlaggedOnMint)
-      ),
+      ever_flagged_on_mint: !!(isFlaggedLineage && !uploadedSimilar),
       flagged_phase: flaggedPhase,
       flagged_meta: flaggedSellers[w]
         ? { ...flaggedSellers[w] }
-        : prev.flagged_meta || null,
+        : null,
       last_update: now,
     };
   }
@@ -3801,10 +3865,39 @@ function processRuggersFromAnalyze(data) {
     }
   }
 
-  // Sticky flagged sellers not in first_wallets — keep by phase
+  // Flagged section = cross-mint RugWatch sellers only.
+  // Drop: this-mint Upload, same-mint flag origin, cloud "uploaded" origin.
+  // Those wallets stay in Similar / Single / Creator / … category lanes.
+  for (const w of Object.keys(flaggedSellers)) {
+    const meta = flaggedSellers[w] || {};
+    const drop =
+      isRuggersAlreadyUploaded(rec, w) ||
+      isUploadedSimilarOnThisMint(rec, w) ||
+      flaggedOriginIsThisMint(meta, mintBare) ||
+      String(meta.origin || "") === "uploaded";
+    if (!drop) continue;
+    delete flaggedSellers[w];
+    if (status[w]) {
+      status[w].is_flagged = false;
+      status[w].ever_flagged_on_mint = false;
+      delete status[w].flagged_meta;
+      delete status[w].flagged_phase;
+    }
+  }
+
+  // Sticky flagged sellers not in first_wallets — keep by phase (cross-mint only)
   for (const fw of Object.keys(flaggedSellers)) {
     if (status[fw]) continue;
     const meta = flaggedSellers[fw] || {};
+    if (
+      isRuggersAlreadyUploaded(rec, fw) ||
+      isUploadedSimilarOnThisMint(rec, fw) ||
+      flaggedOriginIsThisMint(meta, mintBare) ||
+      String(meta.origin || "") === "uploaded"
+    ) {
+      delete flaggedSellers[fw];
+      continue;
+    }
     const phase = String(meta.phase || "sold");
     const lane = meta.origin_lane || "single";
     status[fw] = {
@@ -4491,11 +4584,24 @@ function ruggersBuckets(rec) {
     // Permanent Similar-Upload / this-mint Upload stay out of Flagged UI
     if (isUploadedSimilarOnThisMint(rec, w)) return false;
     if (isRuggersAlreadyUploaded(rec, w)) return false;
-    const meta = flaggedSellers[w];
-    if (meta && String(meta.phase || "sold") === "sold" && st.tag === "seller") {
+    const meta = flaggedSellers[w] || st.flagged_meta || {};
+    // Same-mint origin → category lanes only (Flagged = cross-mint)
+    if (
+      flaggedOriginIsThisMint(meta, rec.address) ||
+      String(meta.origin || "") === "uploaded"
+    ) {
+      return false;
+    }
+    if (
+      flaggedSellers[w] &&
+      String(flaggedSellers[w].phase || "sold") === "sold" &&
+      st.tag === "seller"
+    ) {
       return true;
     }
     if (st.is_flagged && st.tag === "seller" && st.ever_flagged_on_mint) {
+      // Only if we still have a cross-mint flagged_sellers row
+      if (!flaggedSellers[w]) return false;
       return true;
     }
     return false;
@@ -4750,11 +4856,13 @@ function ruggersBuckets(rec) {
     }
   }
 
-  // Flagged meta without status row (sold phase only)
+  // Flagged meta without status row (sold phase only, cross-mint origin only)
   for (const [fw, meta] of Object.entries(flaggedSellers)) {
     if (!fw || flaggedSeen.has(fw) || swingSeen.has(fw)) continue;
     if (isUploadedSimilarOnThisMint(rec, fw)) continue;
     if (isRuggersAlreadyUploaded(rec, fw)) continue;
+    if (flaggedOriginIsThisMint(meta, rec.address)) continue;
+    if (String((meta && meta.origin) || "") === "uploaded") continue;
     if (meta && meta.origin_lane === "similar") continue;
     const fw0 = rec.first_wallets && rec.first_wallets[fw];
     if (fw0 && (fw0.in_similar || fw0.origin_lane === "similar")) continue;
@@ -5988,7 +6096,13 @@ async function uploadRuggersSectionToCloud(exportKey) {
         : upData.skipped != null
           ? upData.skipped
           : 0;
-    const skipCloud = upData.skipped_cloud != null ? upData.skipped_cloud : "?";
+    const skipCloudRaw =
+      upData.skipped_cloud != null ? upData.skipped_cloud : null;
+    const skipCloudN = Number(skipCloudRaw);
+    const alreadyOnCloud =
+      Number.isFinite(skipCloudN) && skipCloudN >= 1;
+    const skipCloud =
+      skipCloudRaw != null ? skipCloudRaw : "?";
     const skipLocal = upData.skipped_local != null ? upData.skipped_local : "?";
     const cloudChecked = upData.cloud_checked === true ? "yes" : "no / failed";
     const cloudN =
@@ -6009,7 +6123,7 @@ async function uploadRuggersSectionToCloud(exportKey) {
           : cloud && cloud.error
             ? "failed: " + cloud.error
             : "n/a";
-    // Move uploaded sellers into Flagged for this mint (already on cloud)
+    // Mark as this-mint Upload (stay in category lanes — never Flagged here)
     try {
       markRuggersUploadedAsFlagged(exportKey, rows);
       if (_lastRuggersKey) refreshRuggersPanel(_lastRuggersKey);
@@ -6017,8 +6131,18 @@ async function uploadRuggersSectionToCloud(exportKey) {
       /* ignore */
     }
 
+    // Lead with a clear cloud-duplicate notice when 1+ wallets already on cloud
+    const alreadyCloudLine = alreadyOnCloud
+      ? skipCloudN === 1
+        ? "1 or more wallets are already on the cloud (1 wallet skipped).\n\n"
+        : "1 or more wallets are already on the cloud (" +
+          skipCloudN +
+          " wallets skipped).\n\n"
+      : "";
+
     alert(
       "RugWatch upload result\n\n" +
+        alreadyCloudLine +
         "Section: " +
         section +
         "\nNew into local DB: " +
@@ -11835,7 +11959,7 @@ function renderBundlesUi(data) {
     pushStat(
       "Shared SOL total",
       fmtSupplyPct(fdp) || "0%",
-      pctPriorityClass(fdp) || (fdp <= 0 ? "bun-pct-zero" : ""),
+      pctPriorityClass(fdp),
       "funding_total_pct",
       fdp,
       fundSubPlain
@@ -11849,7 +11973,7 @@ function renderBundlesUi(data) {
     pushStat(
       "Single holders",
       fmtSupplyPct(singlePct) || "0%",
-      pctPriorityClass(singlePct) || "",
+      pctPriorityClass(singlePct),
       "single_holders_total_pct",
       singlePct
     );
@@ -11862,7 +11986,7 @@ function renderBundlesUi(data) {
     pushStat(
       "Top10 ex-LP",
       fmtSupplyPct(s.top10_pct_excluding_known_programs) || "0%",
-      pctPriorityClass(t10) || "",
+      pctPriorityClass(t10),
       "top10_ex_lp",
       t10
     );
