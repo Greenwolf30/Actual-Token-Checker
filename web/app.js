@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v168";
+const ADTC_CLIENT_VERSION = "v169";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 // Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
 try {
@@ -7465,12 +7465,13 @@ function linkify(text, colorHold) {
 
 /** Wallet-holder % bands: low green · medium yellow · high orange · critical red */
 function pctPriorityClass(n) {
-  if (!Number.isFinite(n)) return "";
-  if (n <= 0) return "bun-pct-zero";
-  if (n >= 15) return "pct-critical";
-  if (n >= 10) return "pct-high";
-  if (n > 5) return "pct-medium";
-  // Any positive bag % gets a band (was blank below 2% — looked “uncolored”)
+  const x = Number(n);
+  if (!Number.isFinite(x)) return "bun-pct-zero";
+  if (x <= 0) return "bun-pct-zero";
+  if (x >= 15) return "pct-critical";
+  if (x >= 10) return "pct-high";
+  if (x > 5) return "pct-medium";
+  // Any positive bag % gets a band (blank classes render as plain white)
   return "pct-low";
 }
 
@@ -11696,7 +11697,14 @@ function renderBundlesUi(data) {
       (riskScore != null ? " (" + Math.round(riskScore) + "/100)" : "");
     pushStat("Risk", riskText, riskCls, "risk");
 
-    const tbp = recomputeTotalBundleFromView(view, s);
+    let tbp = recomputeTotalBundleFromView(view, s);
+    tbp = Number(tbp);
+    if (!Number.isFinite(tbp)) {
+      tbp =
+        s.total_bundle_pct != null && Number.isFinite(Number(s.total_bundle_pct))
+          ? Number(s.total_bundle_pct)
+          : 0;
+    }
     const showSimSus =
       s.total_bundle_mode === "multi_plus_suspect" ||
       s.total_bundle_mode === "suspect_fallback" ||
@@ -11706,7 +11714,7 @@ function renderBundlesUi(data) {
     pushStat(
       showSimSus ? "Total (multi + similar-sized)" : "Total bundle",
       fmtSupplyPct(tbp) || "0%",
-      pctPriorityClass(tbp) || "",
+      pctPriorityClass(tbp),
       "total_bundle_pct",
       tbp
     );
@@ -11718,9 +11726,8 @@ function renderBundlesUi(data) {
         : 0;
     pushStat(
       "Multi-account",
-      fmtSupplyPct(s.multi_account_total_pct != null ? s.multi_account_total_pct : maN) ||
-        "0%",
-      pctPriorityClass(maN) || (maN <= 0 ? "bun-pct-zero" : ""),
+      fmtSupplyPct(maN) || "0%",
+      pctPriorityClass(maN),
       "multi_account_total_pct",
       maN
     );

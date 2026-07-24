@@ -1509,6 +1509,7 @@ a.copy-mint:hover,
 .bun-stat-value {
   font-size: 1.05rem;
   font-weight: 600;
+  /* Default only when no pct-* class — otherwise Total/Multi look plain white */
   color: var(--text);
   font-variant-numeric: tabular-nums;
   min-width: 0;
@@ -1522,8 +1523,9 @@ a.copy-mint:hover,
 .bun-stat-value .pct-critical {
   font-weight: 700;
 }
-.bun-stat-value .bun-pct-zero {
-  color: var(--text-muted, #8a8f98);
+.bun-stat-value .bun-pct-zero,
+.bun-stat-value.bun-pct-zero {
+  color: var(--text-muted, #8a8f98) !important;
   font-weight: 600;
 }
 /* Last updated under Fresh / Multi-send / Shared SOL — fit inside box, no bleed */
@@ -1599,36 +1601,40 @@ a.copy-mint:hover,
   font-size: 0.72rem;
   font-weight: 600;
 }
-/* Supply % bands inside stats / section totals (class may be on child span) */
+/* Supply % bands — !important so default .bun-stat-value white never wins */
 .bun-stat-value .pct-low,
 .bun-stat-value.pct-low,
 .bun-section-total .pct-low,
-.bun-cluster-head .pct-low { color: #6a9e78; }
+.bun-cluster-head .pct-low,
+.bun-table .pct-low { color: #6a9e78 !important; }
 .bun-stat-value .pct-medium,
 .bun-stat-value.pct-medium,
 .bun-section-total .pct-medium,
-.bun-cluster-head .pct-medium { color: #b8a85c; }
+.bun-cluster-head .pct-medium,
+.bun-table .pct-medium { color: #b8a85c !important; }
 .bun-stat-value .pct-high,
 .bun-stat-value.pct-high,
 .bun-section-total .pct-high,
-.bun-cluster-head .pct-high { color: #c47a4a; }
+.bun-cluster-head .pct-high,
+.bun-table .pct-high { color: #c47a4a !important; }
 .bun-stat-value .pct-critical,
 .bun-stat-value.pct-critical,
 .bun-section-total .pct-critical,
-.bun-cluster-head .pct-critical { color: #c45c5c; }
+.bun-cluster-head .pct-critical,
+.bun-table .pct-critical { color: #c45c5c !important; }
 /* Bundle risk score: 1–25 green · 25–50 yellow · 50–75 orange · 75–100 red */
 .bun-stat-value .risk-score-green,
 .bun-stat-value.risk-score-green,
-.risk-score-green { color: #6a9e78; font-weight: 600; }
+.risk-score-green { color: #6a9e78 !important; font-weight: 600; }
 .bun-stat-value .risk-score-yellow,
 .bun-stat-value.risk-score-yellow,
-.risk-score-yellow { color: #b8a85c; font-weight: 600; }
+.risk-score-yellow { color: #b8a85c !important; font-weight: 600; }
 .bun-stat-value .risk-score-orange,
 .bun-stat-value.risk-score-orange,
-.risk-score-orange { color: #c47a4a; font-weight: 600; }
+.risk-score-orange { color: #c47a4a !important; font-weight: 600; }
 .bun-stat-value .risk-score-red,
 .bun-stat-value.risk-score-red,
-.risk-score-red { color: #c45c5c; font-weight: 600; }
+.risk-score-red { color: #c45c5c !important; font-weight: 600; }
 .bun-meta {
   font-size: 0.78rem;
   color: var(--text-muted);
