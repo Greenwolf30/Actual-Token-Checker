@@ -714,28 +714,30 @@ def _similar_wallets_alert(
 
     sim_pct, sim_n = _similar_total_from_bundles(bundles_data)
     groups = list(bundles_data.get("similar_size_groups") or [])
-    large_groups: list[dict[str, Any]] = []
+    # All similar-sized groups with a usable % (for Alerts group breakdown)
+    group_rows: list[dict[str, Any]] = []
     for g in groups:
+        if not isinstance(g, dict):
+            continue
         try:
-            n = int(g.get("count") or len(g.get("wallets") or []))
+            n = int(g.get("count") or len(g.get("wallets") or []) or 0)
             avg = float(g.get("avg_pct")) if g.get("avg_pct") is not None else None
         except (TypeError, ValueError):
             continue
         if avg is None or n < 2:
             continue
         combined = avg * n
-        if combined >= 5.0 or avg >= 2.0 or n >= 3:
-            large_groups.append({**g, "combined_pct_est": combined})
-    large_groups.sort(key=lambda x: -float(x.get("combined_pct_est") or 0))
+        group_rows.append({**g, "combined_pct_est": combined})
+    group_rows.sort(key=lambda x: -float(x.get("combined_pct_est") or 0))
 
     has_total = sim_pct is not None and float(sim_pct) > 0
-    if not has_total and not large_groups:
+    if not has_total and not group_rows:
         return None
 
     # Severity from Bundles similar total when available, else largest group
     score = float(sim_pct) if has_total and sim_pct is not None else 0.0
-    if not score and large_groups:
-        score = float(large_groups[0].get("combined_pct_est") or 0)
+    if not score and group_rows:
+        score = float(group_rows[0].get("combined_pct_est") or 0)
     if score >= 15:
         severity = "high"
     elif score >= 5:
@@ -744,10 +746,9 @@ def _similar_wallets_alert(
         severity = "info"
 
     if has_total and sim_pct is not None:
-        # One clean line — no notes, no wallet count, no group breakdown
         title = f"Similar-sized total {float(sim_pct):.2f}%"
     else:
-        g0 = large_groups[0]
+        g0 = group_rows[0]
         title = (
             f"Similar-sized total "
             f"{float(g0.get('combined_pct_est') or 0):.2f}%"
@@ -760,8 +761,8 @@ def _similar_wallets_alert(
         "priority": "top",
         "severity": severity,
         "title": title,
-        "detail": "",  # no notes / no duplicate % on UI
-        "groups": [],
+        "detail": "",  # no notes; groups rendered as % lines only
+        "groups": group_rows[:12],
         "similar_size_total_pct": sim_pct,
         "similar_size_wallet_count": sim_n,
         "suspect_total_pct": sim_pct,
@@ -974,11 +975,22 @@ def format_alerts_text(data: dict[str, Any]) -> str:
         title = str(a.get("title") or "")
         lines.append(f"  {index}. [{sev}] {title}")
         aid = str(a.get("id") or "")
-        # Compact totals: title only (no notes, no duplicate % lines)
-        if aid in {
-            "single_holder_over_5",
-            "similar_wallets_large",
-        } or aid.startswith("bundle_pct"):
+        # Compact totals: title only (no notes, no duplicate total %)
+        if aid == "single_holder_over_5" or aid.startswith("bundle_pct"):
+            lines.append("")
+            return
+        # Similar-sized: total title + each group % (no notes / no total re-print)
+        if aid == "similar_wallets_large":
+            for g in (a.get("groups") or [])[:12]:
+                try:
+                    n = int(g.get("count") or len(g.get("wallets") or []) or 0)
+                    avg = float(g.get("avg_pct") or 0)
+                    comb = float(g.get("combined_pct_est") or (avg * n))
+                    lines.append(
+                        f"     · {n} wallets ~{avg:.2f}% each (≈ {comb:.2f}%)"
+                    )
+                except (TypeError, ValueError):
+                    continue
             lines.append("")
             return
         detail = a.get("detail") or ""
