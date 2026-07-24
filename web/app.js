@@ -25,8 +25,12 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v156";
+const ADTC_CLIENT_VERSION = "v157";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
+// Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
+try {
+  if (window.__adtcBootReady) window.__adtcBootReady();
+} catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
 const BUNDLE_DELTA_BASELINE_VER_KEY = "adtc_bundle_delta_baseline_ver";
@@ -8679,25 +8683,62 @@ function summaryOnlyBundlesView(bv) {
 const ADTC_IDB_NAME = "adtc_persist_v1";
 const ADTC_IDB_STORE = "kv";
 
-function openAdtcIdb() {
-  return new Promise((resolve, reject) => {
-    try {
-      if (!window.indexedDB) {
-        reject(new Error("no idb"));
-        return;
+/** Race a promise so hung IndexedDB / network cannot freeze boot forever. */
+function withTimeout(promise, ms, fallback) {
+  return new Promise((resolve) => {
+    let done = false;
+    const t = setTimeout(() => {
+      if (!done) {
+        done = true;
+        resolve(fallback);
       }
-      const req = indexedDB.open(ADTC_IDB_NAME, 1);
-      req.onupgradeneeded = () => {
-        const db = req.result;
-        if (!db.objectStoreNames.contains(ADTC_IDB_STORE)) {
-          db.createObjectStore(ADTC_IDB_STORE);
+    }, ms);
+    Promise.resolve(promise).then(
+      (v) => {
+        if (!done) {
+          done = true;
+          clearTimeout(t);
+          resolve(v);
         }
-      };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error || new Error("idb open failed"));
-    } catch (err) {
-      reject(err);
-    }
+      },
+      () => {
+        if (!done) {
+          done = true;
+          clearTimeout(t);
+          resolve(fallback);
+        }
+      }
+    );
+  });
+}
+
+function openAdtcIdb() {
+  return withTimeout(
+    new Promise((resolve, reject) => {
+      try {
+        if (!window.indexedDB) {
+          reject(new Error("no idb"));
+          return;
+        }
+        const req = indexedDB.open(ADTC_IDB_NAME, 1);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains(ADTC_IDB_STORE)) {
+            db.createObjectStore(ADTC_IDB_STORE);
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error || new Error("idb open failed"));
+        req.onblocked = () => reject(new Error("idb blocked"));
+      } catch (err) {
+        reject(err);
+      }
+    }),
+    2500,
+    null
+  ).then((db) => {
+    if (!db) throw new Error("idb timeout");
+    return db;
   });
 }
 
@@ -11933,8 +11974,13 @@ async function recordAndLoadStats() {
 async function checkHealth() {
   const el = $("serverStatus");
   if (!el) return;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
   try {
-    const r = await fetch(apiUrl("/api/health"), { headers: headers(false) });
+    const r = await fetch(apiUrl("/api/health"), {
+      headers: headers(false),
+      signal: ctrl.signal,
+    });
     const j = await r.json();
     if (j.ok) {
       const p = j.providers_configured || {};
@@ -11965,6 +12011,8 @@ async function checkHealth() {
     el.title = apiBase()
       ? "Cannot reach " + apiBase() + " — check backend + CORS"
       : String(e.message || e);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -12262,10 +12310,13 @@ async function analyze(ev) {
   btn.textContent = quick ? "Quick…" : "Analyzing…";
   setPanelText("overview", "Loading… this can take up to ~90s for holders/about.");
 
+  const ctrl = new AbortController();
+  const analyzeTimer = setTimeout(() => ctrl.abort(), quick ? 45000 : 120000);
   try {
     const r = await fetch(apiUrl("/api/analyze"), {
       method: "POST",
       headers: headers(true),
+      signal: ctrl.signal,
       body: JSON.stringify({
         query,
         chain,
@@ -12341,8 +12392,14 @@ async function analyze(ev) {
       console.error("[saveLastAnalyze]", err);
     }
   } catch (e) {
-    showError(String(e.message || e));
+    const msg = String(e && e.message ? e.message : e);
+    showError(
+      e && e.name === "AbortError"
+        ? "Analyze timed out — try Quick mode or retry."
+        : msg
+    );
   } finally {
+    clearTimeout(analyzeTimer);
     btn.disabled = false;
     btn.textContent = "Analyze";
   }
@@ -12402,6 +12459,25 @@ function initSettings() {
   }
 }
 
+/** Restore last Analyze off the critical path so clicks never wait on IDB/JSON. */
+async function restoreBootCache() {
+  try {
+    const cached = await withTimeout(loadLastAnalyzeAsync(), 2500, null);
+    if (cached) {
+      restoreLastAnalyze(cached);
+    } else {
+      restoreLastAnalyze();
+    }
+  } catch (err) {
+    console.warn("[init restore]", err);
+    try {
+      restoreLastAnalyze();
+    } catch (_e) {
+      /* ignore */
+    }
+  }
+}
+
 async function init() {
   // Isolate each subsystem so one Opera/localStorage failure cannot blank the site
   function safe(name, fn) {
@@ -12416,6 +12492,30 @@ async function init() {
       }
     }
   }
+
+  // Unstick controls from a prior hung Analyze / modal (Opera GX common)
+  try {
+    const btn = $("analyzeBtn");
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Analyze";
+    }
+  } catch (_e) {
+    /* ignore */
+  }
+  try {
+    const dlg = $("settingsDialog");
+    if (dlg && dlg.open && typeof dlg.close === "function") dlg.close();
+  } catch (_e) {
+    /* ignore */
+  }
+  try {
+    if (window.__adtcBootReady) window.__adtcBootReady();
+  } catch (_e) {
+    /* ignore */
+  }
+
+  // Wire UI first — page must be clickable before any storage/network restore
   safe("tabs", initTabs);
   safe("settings", initSettings);
   safe("history", initHistory);
@@ -12439,6 +12539,7 @@ async function init() {
   }
 
   // Deep link: ?q=mint or #mint — still restore last Analyze unless auto-run
+  let autoRun = false;
   try {
     const params = new URLSearchParams(location.search);
     const q = params.get("q") || params.get("query");
@@ -12446,33 +12547,28 @@ async function init() {
       $("query").value = q;
       if (params.get("chain") && $("chain")) $("chain").value = params.get("chain");
     }
-    if (params.get("auto") === "1" && q) {
-      analyze();
-      return;
-    }
+    if (params.get("auto") === "1" && q) autoRun = true;
   } catch (err) {
     console.warn("[init] deep link", err);
   }
-  // Restore from localStorage / sessionStorage / IndexedDB
-  // (Opera private mode / full quota can throw — never block the shell)
-  try {
-    const cached = await loadLastAnalyzeAsync();
-    if (cached) {
-      restoreLastAnalyze(cached);
-    } else {
-      restoreLastAnalyze();
-    }
-  } catch (err) {
-    console.warn("[init restore]", err);
+
+  if (autoRun) {
+    // Don't block on cache restore when auto-analyzing
     try {
-      restoreLastAnalyze();
-    } catch (_e) {
-      /* ignore */
+      analyze();
+    } catch (err) {
+      console.warn("[init] auto analyze", err);
     }
+    return;
   }
+
+  // Defer cache restore so first paint + clicks never wait on huge JSON/IDB
+  setTimeout(() => {
+    restoreBootCache().catch((err) => console.warn("[restoreBootCache]", err));
+  }, 0);
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+function startApp() {
   try {
     if (window.__adtcBootReady) window.__adtcBootReady();
   } catch (_e) {
@@ -12488,4 +12584,11 @@ document.addEventListener("DOMContentLoaded", () => {
       /* ignore */
     }
   });
-});
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", startApp);
+} else {
+  // defer scripts can finish after DOMContentLoaded already fired
+  startApp();
+}

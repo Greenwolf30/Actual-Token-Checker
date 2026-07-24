@@ -10,10 +10,9 @@
   <!--
     Opera GX notes:
     - No fonts.googleapis.com (shield hang → blank).
-    - No external scripts in <head> (parser hang → black shell).
-    - styles.css is same-origin and must load as a normal stylesheet so layout/fonts
-      are correct (media=print + onload broke placement in Opera GX).
-    Critical CSS only paints dark bg + boot banners; full layout comes from styles.css.
+    - External scripts use defer (not parser-blocking) so the shell paints and stays clickable.
+    - styles.css is same-origin normal stylesheet (layout/fonts).
+    Critical CSS only paints dark bg + boot banners.
   -->
   <style>
     html, body {
@@ -48,10 +47,21 @@
     }
   </style>
   <!-- Normal stylesheet (required for correct fonts/layout). Same-origin; not Google Fonts. -->
-  <link rel="stylesheet" href="/styles.css?v=opera-boot-v156" />
-  <!-- app cache: opera-boot-v156 — full CSS restored; scripts stay at end of body -->
+  <link rel="stylesheet" href="/styles.css?v=opera-boot-v157" />
+  <!-- defer = download in parallel, run after HTML parse — keeps UI clickable while JS loads -->
+  <script
+    defer
+    src="/config.js?v=opera-boot-v157"
+    onerror="window.__adtcBootError && window.__adtcBootError('failed to load config.js — hard-refresh or disable Opera blocker')"
+  ></script>
+  <script
+    defer
+    src="/app.js?v=opera-boot-v157"
+    onerror="window.__adtcBootError && window.__adtcBootError('failed to load app.js — hard-refresh or disable Opera blocker')"
+  ></script>
+  <!-- app cache: opera-boot-v157 — deferred scripts + non-blocking restore -->
   <script>
-    // Boot helpers only — no external deps in <head>
+    // Boot helpers only — no blocking external deps
     window.__adtcBootError = function (msg) {
       try {
         var status = document.getElementById("bootStatus");
@@ -88,6 +98,10 @@
         window.__adtcBootError((ev.message || "script error") + " (line " + (ev.lineno || "?") + ")");
       }
     });
+    // Hide sticky "Loading…" once client is up (even if a later restore hangs)
+    setTimeout(function () {
+      if (window.__ADTC_CLIENT__ && window.__adtcBootReady) window.__adtcBootReady();
+    }, 1500);
     setTimeout(function () {
       if (!window.__ADTC_CLIENT__ && window.__adtcBootError) {
         window.__adtcBootError(
@@ -465,17 +479,9 @@
     </form>
   </dialog>
 
-  <!-- Scripts at end of body only — never in <head> (Opera GX hang → black screen) -->
-  <script
-    src="/config.js?v=opera-boot-v156"
-    onerror="window.__adtcBootError && window.__adtcBootError('failed to load config.js — hard-refresh or disable Opera blocker')"
-  ></script>
-  <script
-    src="/app.js?v=opera-boot-v156"
-    onerror="window.__adtcBootError && window.__adtcBootError('failed to load app.js — hard-refresh or disable Opera blocker')"
-  ></script>
   <script>
-    // Visible boot check — if this is not v156+, hard-refresh / redeploy
+    // Visible boot check — if this is not v157+, hard-refresh / redeploy
+    // (config.js + app.js load via defer in <head>)
     document.addEventListener("DOMContentLoaded", function () {
       var v = window.__ADTC_CLIENT__ || "(app.js not loaded)";
       console.info("[ADTC boot]", v);
