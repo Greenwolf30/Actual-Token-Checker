@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v166";
+const ADTC_CLIENT_VERSION = "v167";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 // Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
 try {
@@ -53,21 +53,27 @@ function isOperaBrowser() {
   return false;
 }
 
-/** Force full heavy UI (opt-in via ?full=1 or window.__ADTC_FULL_UI__). */
+/**
+ * Full UI (fonts, full Bundles cards, full Ruggers) is DEFAULT on Edge/Chrome/Firefox.
+ * Opera GX stays on lite unless ?full=1. Force lite anywhere with ?lite=1.
+ */
 function wantFullHeavyUi() {
   try {
-    if (window.__ADTC_FULL_UI__) return true;
+    if (window.__ADTC_FULL_UI__ === true) return true;
+    if (window.__ADTC_FULL_UI__ === false) return false;
     const p = new URLSearchParams(location.search || "");
-    return p.get("full") === "1";
-  } catch (_) {
+    if (p.get("lite") === "1") return false;
+    if (p.get("full") === "1") return true;
+    // Edge / Chrome / Firefox / Safari → full experience
+    if (!isOperaBrowser()) return true;
+    // Opera GX → lite by default (freeze-safe)
     return false;
+  } catch (_) {
+    return !isOperaBrowser();
   }
 }
 
-/**
- * Lite mode is the DEFAULT for everyone (especially Opera GX).
- * Full wallet tables / ruggers / huge JSON require ?full=1.
- */
+/** Lite UI only when full is off (Opera default, or ?lite=1). */
 function useLiteUi() {
   return !wantFullHeavyUi();
 }

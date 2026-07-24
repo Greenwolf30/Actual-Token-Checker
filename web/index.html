@@ -8,19 +8,23 @@
   <link rel="icon" href="/logo.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/logo.svg" />
   <!--
-    Opera GX notes:
-    - No fonts.googleapis.com (shield hang → blank).
-    - External scripts use defer (not parser-blocking) so the shell paints and stays clickable.
-    - styles.css is same-origin normal stylesheet (layout/fonts).
-    Critical CSS only paints dark bg + boot banners.
+    Fonts restored for Edge/Chrome (Inter + JetBrains Mono).
+    Opera GX still uses lite UI mode in app.js (no freeze path).
+    Scripts stay deferred so first paint is quick.
   -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet"
+  />
   <style>
     html, body {
       margin: 0;
       min-height: 100%;
       background: #0a0c10;
       color: #f0f2f5;
-      font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      font-family: Inter, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
     }
     #bootStatus {
       margin: 0 0 12px;
@@ -29,7 +33,7 @@
       background: #141820;
       color: #e8eef8;
       border-radius: 8px;
-      font: 14px/1.45 system-ui, sans-serif;
+      font: 14px/1.45 Inter, system-ui, sans-serif;
     }
     #bootStatus[hidden],
     #bootError[hidden] {
@@ -42,24 +46,22 @@
       background: #2a1818;
       color: #ffe8e6;
       border-radius: 8px;
-      font: 14px/1.45 system-ui, sans-serif;
+      font: 14px/1.45 Inter, system-ui, sans-serif;
       white-space: pre-wrap;
     }
   </style>
-  <!-- Normal stylesheet (required for correct fonts/layout). Same-origin; not Google Fonts. -->
-  <link rel="stylesheet" href="/styles.css?v=opera-boot-v166" />
-  <!-- defer = download in parallel, run after HTML parse — keeps UI clickable while JS loads -->
+  <link rel="stylesheet" href="/styles.css?v=edge-full-v167" />
   <script
     defer
-    src="/config.js?v=opera-boot-v166"
-    onerror="window.__adtcBootError && window.__adtcBootError('failed to load config.js — hard-refresh or disable Opera blocker')"
+    src="/config.js?v=edge-full-v167"
+    onerror="window.__adtcBootError && window.__adtcBootError('failed to load config.js — hard-refresh')"
   ></script>
   <script
     defer
-    src="/app.js?v=opera-boot-v166"
-    onerror="window.__adtcBootError && window.__adtcBootError('failed to load app.js — hard-refresh or disable Opera blocker')"
+    src="/app.js?v=edge-full-v167"
+    onerror="window.__adtcBootError && window.__adtcBootError('failed to load app.js — hard-refresh')"
   ></script>
-  <!-- app cache: opera-boot-v166 — no heavy boot restore on Opera; clicks first -->
+  <!-- app cache: edge-full-v167 — full fonts + full Ruggers on Edge/Chrome -->
   <script>
     // Boot helpers only — no blocking external deps
     window.__adtcBootError = function (msg) {
@@ -482,7 +484,7 @@
   </dialog>
 
   <script>
-    // Visible boot check — if this is not v166+, hard-refresh / redeploy
+    // Visible boot check — if this is not v167+, hard-refresh / redeploy
     // (config.js + app.js load via defer in <head>)
     document.addEventListener("DOMContentLoaded", function () {
       var v = window.__ADTC_CLIENT__ || "(app.js not loaded)";
