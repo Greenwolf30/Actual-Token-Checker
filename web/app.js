@@ -11742,7 +11742,7 @@ function renderBundlesUi(data) {
     pushStat(
       "Similar-sized total",
       fmtSupplyPct(susN) || "0%",
-      pctPriorityClass(susN) || (susN <= 0 ? "bun-pct-zero" : ""),
+      pctPriorityClass(susN),
       "suspect_total_pct",
       susN
     );
@@ -11772,7 +11772,7 @@ function renderBundlesUi(data) {
     pushStat(
       "Fresh total",
       fmtSupplyPct(fp) || "0%",
-      pctPriorityClass(fp) || (fp <= 0 ? "bun-pct-zero" : ""),
+      pctPriorityClass(fp),
       "fresh_total_pct",
       fp,
       freshSubPlain
@@ -11804,7 +11804,7 @@ function renderBundlesUi(data) {
     pushStat(
       "Multi-send total",
       fmtSupplyPct(mp) || "0%",
-      pctPriorityClass(mp) || (mp <= 0 ? "bun-pct-zero" : ""),
+      pctPriorityClass(mp),
       "multi_send_total_pct",
       mp,
       msSubPlain
