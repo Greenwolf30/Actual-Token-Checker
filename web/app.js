@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v167";
+const ADTC_CLIENT_VERSION = "v168";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 // Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
 try {
@@ -5887,55 +5887,97 @@ async function uploadRuggersSectionToCloud(exportKey) {
   }
 
   try {
-    const headers = { "Content-Type": "application/json", Accept: "application/json" };
+    const headers = {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    };
     // Optional: same passcode as RugWatch site token if configured
     try {
-      const tok = localStorage.getItem("rugwatch_site_token") || "";
+      const tok =
+        localStorage.getItem("rugwatch_site_token") ||
+        sessionStorage.getItem("rugwatch_site_token") ||
+        "";
       if (tok) headers["X-API-Token"] = tok;
     } catch (_) {
       /* ignore */
     }
 
+    // Send wallets[] + plain text lines so RugWatch always has something to parse
+    const addrLines = (payload.wallets || [])
+      .map((w) => (w && (w.address || w.wallet)) || "")
+      .filter(Boolean)
+      .join("\n");
+    if (!addrLines) {
+      throw new Error("No wallet addresses in payload after filter.");
+    }
+
     const up = await fetch(base + "/api/upload", {
       method: "POST",
+      mode: "cors",
       headers,
       body: JSON.stringify({
-        format: payload.format,
+        format: payload.format || "rugwatch_wallets_v1",
         wallets: payload.wallets,
+        text: addrLines,
         source: "adtc_ruggers_" + section,
         push_cloud: true,
       }),
     });
     let upData = {};
+    const upText = await up.text();
     try {
-      upData = await up.json();
+      upData = upText ? JSON.parse(upText) : {};
     } catch (_) {
-      throw new Error("RugWatch upload returned non-JSON (is " + base + " running?)");
+      throw new Error(
+        "RugWatch upload returned non-JSON (HTTP " +
+          up.status +
+          "). Is " +
+          base +
+          " awake? Body: " +
+          String(upText || "").slice(0, 120)
+      );
     }
     if (!up.ok || !upData.ok) {
       throw new Error(
-        upData.error || "Upload failed (HTTP " + up.status + "). Start RugWatch website."
+        (upData && upData.error) ||
+          "Upload failed (HTTP " +
+            up.status +
+            "). Open RugWatch (" +
+            base +
+            ") and retry."
       );
     }
 
-    // Explicit push if server did not auto-push
+    // Explicit push if server did not auto-push — do NOT fail the whole upload
+    // when wallets already imported but GitHub push is misconfigured.
     let cloud = upData.cloud || null;
+    let pushWarning = "";
     if (!cloud || !cloud.ok) {
-      const push = await fetch(base + "/api/push-cloud", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({}),
-      });
       try {
-        cloud = await push.json();
-      } catch (_) {
-        cloud = { ok: false, error: "Push cloud bad response" };
-      }
-      if (!push.ok || !cloud.ok) {
-        throw new Error(
-          (cloud && cloud.error) ||
-            "Imported locally but Push cloud failed. Open RugWatch and click Push cloud."
+        const push = await fetch(base + "/api/push-cloud", {
+          method: "POST",
+          mode: "cors",
+          headers,
+          body: JSON.stringify({}),
+        });
+        const pushText = await push.text();
+        try {
+          cloud = pushText ? JSON.parse(pushText) : { ok: false };
+        } catch (_) {
+          cloud = { ok: false, error: "Push cloud bad response" };
+        }
+        if (!push.ok || !cloud.ok) {
+          pushWarning =
+            (cloud && cloud.error) ||
+            "Push cloud failed — wallets may still be in RugWatch local DB. Open RugWatch and click Push cloud.";
+          console.warn("[ruggers upload] push-cloud", pushWarning, cloud);
+        }
+      } catch (pushErr) {
+        pushWarning = String(
+          (pushErr && pushErr.message) || pushErr || "Push cloud network error"
         );
+        console.warn("[ruggers upload] push-cloud", pushWarning);
+        cloud = cloud || { ok: false, error: pushWarning };
       }
     }
 
@@ -5995,6 +6037,8 @@ async function uploadRuggersSectionToCloud(exportKey) {
         addedCloud +
         "\nCloud push: " +
         pushed +
+        (pushWarning ? "\n\n⚠ " + pushWarning : "") +
+        (upData && upData.note ? "\n\n" + upData.note : "") +
         (cloud && cloud.note ? "\n\n" + cloud.note : "") +
         (exportKey === "similar"
           ? "\n\nSimilar sellers stay under Similar wallets on this mint (also on cloud). " +
@@ -7422,11 +7466,12 @@ function linkify(text, colorHold) {
 /** Wallet-holder % bands: low green · medium yellow · high orange · critical red */
 function pctPriorityClass(n) {
   if (!Number.isFinite(n)) return "";
+  if (n <= 0) return "bun-pct-zero";
   if (n >= 15) return "pct-critical";
   if (n >= 10) return "pct-high";
   if (n > 5) return "pct-medium";
-  if (n >= 2) return "pct-low";
-  return "";
+  // Any positive bag % gets a band (was blank below 2% — looked “uncolored”)
+  return "pct-low";
 }
 
 function colorPctTokens(html) {
@@ -8792,10 +8837,12 @@ function mountBundleStatsBar(mountEl, items, version) {
     lab.textContent = String(it.label || "");
 
     const val = document.createElement("span");
-    val.className = "bun-stat-value";
+    // Put color class on both value shell and main text so % bands always win CSS
+    const vCls = it.valueClass ? String(it.valueClass).trim() : "";
+    val.className = "bun-stat-value" + (vCls ? " " + vCls : "");
 
     const main = document.createElement("span");
-    if (it.valueClass) main.className = String(it.valueClass);
+    if (vCls) main.className = vCls;
     main.textContent = String(it.valueText != null ? it.valueText : "—");
 
     // Classic: 12% ▲ +3%  (value then space then arrow delta — no parens)
@@ -11718,7 +11765,7 @@ function renderBundlesUi(data) {
     pushStat(
       "Fresh total",
       fmtSupplyPct(fp) || "0%",
-      fp > 0 ? "pct-low" : "bun-pct-zero",
+      pctPriorityClass(fp) || (fp <= 0 ? "bun-pct-zero" : ""),
       "fresh_total_pct",
       fp,
       freshSubPlain
@@ -11781,7 +11828,7 @@ function renderBundlesUi(data) {
     pushStat(
       "Shared SOL total",
       fmtSupplyPct(fdp) || "0%",
-      fdp > 0 ? "pct-low" : "bun-pct-zero",
+      pctPriorityClass(fdp) || (fdp <= 0 ? "bun-pct-zero" : ""),
       "funding_total_pct",
       fdp,
       fundSubPlain
