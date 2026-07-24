@@ -441,7 +441,6 @@ def analyze_token(
         pass
     socials = dx.extract_socials(primary)
     # Snapshot DexScreener-only socials BEFORE Pump.fun enrichment.
-    # Alerts "DexScreener socials missing" must not count pump.fun-filled links.
     socials_dexscreener = {
         "websites": list(socials.get("websites") or []),
         "socials": list(socials.get("socials") or []),
@@ -458,6 +457,30 @@ def analyze_token(
     network = gt.network_id(pair_summary.get("chain_id"))
     token_addr = (pair_summary.get("base_token") or {}).get("address")
     base = pair_summary.get("base_token") or {}
+
+    # DexScreener paid profile (orders API) — used by Alerts "DexScreener paid"
+    dexscreener_paid: dict[str, Any] = {
+        "ok": False,
+        "paid": None,
+        "paid_label": "unknown",
+    }
+    try:
+        dexscreener_paid = dx.fetch_token_orders(
+            pair_summary.get("chain_id") or "solana",
+            token_addr,
+        )
+        socials["dexscreener_paid"] = dexscreener_paid
+        socials_dexscreener["dexscreener_paid"] = dexscreener_paid
+        pair_summary["dexscreener_paid"] = dexscreener_paid.get("paid")
+        pair_summary["dexscreener_paid_label"] = dexscreener_paid.get("paid_label")
+    except Exception:  # noqa: BLE001
+        dexscreener_paid = {
+            "ok": False,
+            "paid": None,
+            "paid_label": "unknown",
+            "error": "orders fetch failed",
+        }
+        socials["dexscreener_paid"] = dexscreener_paid
 
     # Last-resort: GeckoTerminal token endpoint (reserve + 24h volume + price % )
     try:
@@ -1030,8 +1053,8 @@ def analyze_token(
                     "pair_address": pair_summary.get("pair_address"),
                 },
             },
-            # Pure DexScreener profile (pre-enrichment) for socials-missing alert
             socials_dexscreener=socials_dexscreener,
+            dexscreener_paid=dexscreener_paid,
         )
     except Exception as exc:  # noqa: BLE001
         alerts_data = {

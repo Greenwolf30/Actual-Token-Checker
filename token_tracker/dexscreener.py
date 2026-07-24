@@ -335,6 +335,111 @@ def pick_primary_pair(
     return max(pairs, key=score)
 
 
+def fetch_token_orders(
+    chain_id: str | None,
+    token_address: str | None,
+) -> dict[str, Any]:
+    """
+    DexScreener paid-order status for a token.
+
+    GET /orders/v1/{chainId}/{tokenAddress}
+    Returns raw orders + a simple paid yes/no:
+      paid = True  if any tokenProfile (or tokenAd) order is approved
+      paid = False if request OK and no approved paid order
+      paid = None  if fetch failed / unknown
+    """
+    chain = (chain_id or "").strip().lower() or "solana"
+    # DexScreener uses "solana" not "sol"
+    if chain in {"sol", "solana-mainnet", "mainnet-beta"}:
+        chain = "solana"
+    addr = (token_address or "").strip()
+    if not addr:
+        return {"ok": False, "paid": None, "orders": [], "error": "no token address"}
+
+    key = f"dx:orders:{chain}:{addr}"
+    hit = cache_get(key)
+    if hit is not None and isinstance(hit, dict):
+        return dict(hit)
+
+    url = f"{BASE}/orders/v1/{chain}/{addr}"
+    try:
+        raw = get_json(url, timeout=12)
+    except Exception as exc:  # noqa: BLE001
+        out = {
+            "ok": False,
+            "paid": None,
+            "orders": [],
+            "boosts": [],
+            "error": str(exc)[:200],
+            "chain_id": chain,
+            "token_address": addr,
+        }
+        cache_set(key, out, TTL_NEGATIVE)
+        return out
+
+    orders: list[dict[str, Any]] = []
+    boosts: list[Any] = []
+    if isinstance(raw, dict):
+        orders = list(raw.get("orders") or [])
+        boosts = list(raw.get("boosts") or [])
+    elif isinstance(raw, list):
+        orders = list(raw)
+
+    paid_types = {
+        "tokenprofile",
+        "token_profile",
+        "tokenad",
+        "token_ad",
+        "communitytakeover",
+        "community_takeover",
+    }
+    paid = False
+    paid_order: dict[str, Any] | None = None
+    for o in orders:
+        if not isinstance(o, dict):
+            continue
+        otype = str(o.get("type") or "").strip().lower().replace("-", "").replace("_", "")
+        # normalize tokenProfile → tokenprofile already; also accept spaced
+        otype_cmp = otype.replace(" ", "")
+        status = str(o.get("status") or "").strip().lower()
+        # approved / processing count as paid (not cancelled / on-hold / rejected)
+        if status in {"cancelled", "canceled", "rejected", "failed", "on-hold", "onhold"}:
+            continue
+        if otype_cmp in {
+            "tokenprofile",
+            "tokenad",
+            "communitytakeover",
+        } or "profile" in otype_cmp:
+            if status in {"approved", "processing", "pending", "active", "complete", "completed", ""}:
+                # empty status with paymentTimestamp still counts
+                if status or o.get("paymentTimestamp"):
+                    paid = True
+                    paid_order = o
+                    break
+        # Explicit payment timestamp on profile-ish types
+        if o.get("paymentTimestamp") and (
+            "profile" in otype_cmp or "ad" in otype_cmp or "boost" in otype_cmp
+        ):
+            if status not in {"cancelled", "canceled", "rejected", "failed"}:
+                paid = True
+                paid_order = o
+                break
+
+    out = {
+        "ok": True,
+        "paid": bool(paid),
+        "paid_label": "yes" if paid else "no",
+        "orders": orders,
+        "boosts": boosts,
+        "paid_order": paid_order,
+        "chain_id": chain,
+        "token_address": addr,
+        "error": None,
+    }
+    cache_set(key, out, TTL_PAIRS)
+    return out
+
+
 def extract_socials(pair: dict[str, Any]) -> dict[str, Any]:
     info = pair.get("info") or {}
     websites = []

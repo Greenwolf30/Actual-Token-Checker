@@ -3267,12 +3267,23 @@ function processRuggersFromAnalyze(data) {
         { ...(rwKnown[w] || {}), ...prior },
         prior,
         rwKnown[w],
-        prev
+        prev,
+        { symbol: rec.symbol, flagged_from_symbol: rec.symbol }
       );
-      // First time ever flagged: attribute to THIS mint for display only
+      // First time ever flagged: attribute to THIS mint + ticker for display
       if (!sealed.flagged_from_mint && rec.address) {
         sealed.flagged_from_mint = rec.address;
         sealed.flagged_from_mints = [rec.address];
+        const sym = normalizeFlaggedTicker(rec.symbol);
+        if (sym) sealed.flagged_from_symbol = sym;
+      } else if (
+        sealed.flagged_from_mint &&
+        !sealed.flagged_from_symbol &&
+        rec.address &&
+        String(sealed.flagged_from_mint) === String(rec.address)
+      ) {
+        const sym = normalizeFlaggedTicker(rec.symbol);
+        if (sym) sealed.flagged_from_symbol = sym;
       }
       flaggedSellers[w] = {
         ...sealed,
@@ -3316,11 +3327,22 @@ function processRuggersFromAnalyze(data) {
         { ...prior, ...(rwKnown[w] || {}) },
         prior,
         rwKnown[w],
-        prev
+        prev,
+        { symbol: rec.symbol, flagged_from_symbol: rec.symbol }
       );
       if (!sealed.flagged_from_mint && rec.address) {
         sealed.flagged_from_mint = rec.address;
         sealed.flagged_from_mints = [rec.address];
+        const sym = normalizeFlaggedTicker(rec.symbol);
+        if (sym) sealed.flagged_from_symbol = sym;
+      } else if (
+        sealed.flagged_from_mint &&
+        !sealed.flagged_from_symbol &&
+        rec.address &&
+        String(sealed.flagged_from_mint) === String(rec.address)
+      ) {
+        const sym = normalizeFlaggedTicker(rec.symbol);
+        if (sym) sealed.flagged_from_symbol = sym;
       }
       flaggedSellers[w] = {
         ...sealed,
@@ -4168,9 +4190,10 @@ function markRuggersUploadedAsFlagged(exportKey, rows) {
       origin: "uploaded",
       last_seen: now,
       uploaded_section: exportKey || "unknown",
-      // Initial mint identity for this flag upload (ticker resolved in UI from store)
+      // Initial mint + ticker identity for this flag upload
       flagged_from_mint: rec.address || null,
       flagged_from_mints: rec.address ? [rec.address] : [],
+      flagged_from_symbol: normalizeFlaggedTicker(rec.symbol) || null,
     };
     const st = (rec.status && rec.status[w]) || row;
     const tag = st.tag || row.tag;
@@ -4476,7 +4499,8 @@ function ruggersBuckets(rec) {
           flaggedSellers[w] || st.flagged_meta || {},
           st,
           rwKnown[w],
-          rec.address
+          rec.address,
+          { symbol: rec.symbol, flagged_from_symbol: rec.symbol }
         );
         swings.push({
           ...row,
@@ -4490,6 +4514,7 @@ function ruggersBuckets(rec) {
             !!(row.ever_flagged_on_mint || flaggedSwing || row.is_flagged),
           flagged_from_mint: metaF.flagged_from_mint || null,
           flagged_from_mints: metaF.flagged_from_mints || [],
+          flagged_from_symbol: metaF.flagged_from_symbol || null,
           times_flagged:
             metaF.times_flagged != null
               ? metaF.times_flagged
@@ -4527,7 +4552,8 @@ function ruggersBuckets(rec) {
           flaggedSellers[w] || st.flagged_meta || {},
           st,
           rwKnown[w],
-          rec.address
+          rec.address,
+          { symbol: rec.symbol, flagged_from_symbol: rec.symbol }
         );
         flaggedWallets.push({
           ...row,
@@ -4537,6 +4563,7 @@ function ruggersBuckets(rec) {
           label: metaF.label || st.label,
           flagged_from_mint: metaF.flagged_from_mint || null,
           flagged_from_mints: metaF.flagged_from_mints || [],
+          flagged_from_symbol: metaF.flagged_from_symbol || null,
           times_flagged:
             metaF.times_flagged != null
               ? metaF.times_flagged
@@ -4685,7 +4712,8 @@ function ruggersBuckets(rec) {
       meta,
       rec.rugwatch_known && rec.rugwatch_known[fw],
       st,
-      rec.address
+      rec.address,
+      { symbol: rec.symbol, flagged_from_symbol: rec.symbol }
     );
     flaggedWallets.push({
       wallet: fw,
@@ -4709,6 +4737,7 @@ function ruggersBuckets(rec) {
       label: meta.label,
       flagged_from_mint: sealed.flagged_from_mint || null,
       flagged_from_mints: sealed.flagged_from_mints || [],
+      flagged_from_symbol: sealed.flagged_from_symbol || null,
       times_flagged:
         sealed.times_flagged != null
           ? sealed.times_flagged
@@ -4939,23 +4968,29 @@ function pickInitialFlaggedFromMint(...sources) {
   return "";
 }
 
-/** Force a flagged meta object to carry only the initial mint. */
-function withSingleFlaggedFromMint(meta, ...fallbacks) {
-  const base = meta && typeof meta === "object" ? { ...meta } : {};
-  const initial = pickInitialFlaggedFromMint(base, ...fallbacks);
-  base.flagged_from_mint = initial || null;
-  base.flagged_from_mints = initial ? [initial] : [];
-  return base;
+/** Strip $ and whitespace from a ticker symbol. */
+function normalizeFlaggedTicker(sym) {
+  const s = String(sym || "")
+    .trim()
+    .replace(/^\$+/, "");
+  return s || "";
 }
 
 /**
- * Resolve a mint CA to display "$TICKER mintAddress" using Ruggers store when known.
+ * Resolve ticker for a source mint from meta / store / history.
  */
-function formatFlaggedFromMint(mintAddr) {
+function resolveFlaggedFromSymbol(mintAddr, ...sources) {
   const raw = String(mintAddr || "").trim();
+  for (const src of sources) {
+    if (!src || typeof src !== "object") continue;
+    const s =
+      normalizeFlaggedTicker(src.flagged_from_symbol) ||
+      normalizeFlaggedTicker(src.flagged_from_ticker) ||
+      normalizeFlaggedTicker(src.symbol) ||
+      normalizeFlaggedTicker(src.ticker);
+    if (s) return s;
+  }
   if (!raw) return "";
-  let symbol = "";
-  let full = raw;
   try {
     const store = loadRuggersStore();
     for (const [k, rec] of Object.entries(store || {})) {
@@ -4970,7 +5005,79 @@ function formatFlaggedFromMint(mintAddr) {
         (addr && raw.endsWith(addr)) ||
         (addr && addr.endsWith(raw))
       ) {
-        if (rec.symbol) symbol = String(rec.symbol).replace(/^\$/, "");
+        const s = normalizeFlaggedTicker(rec.symbol);
+        if (s) return s;
+      }
+    }
+  } catch (_) {
+    /* ignore */
+  }
+  // History log (last Analyze rows often have symbol + address)
+  try {
+    const hist =
+      typeof loadHistoryLog === "function" ? loadHistoryLog() : null;
+    for (const e of hist || []) {
+      const addr = String(e.address || e.token_address || "").trim();
+      if (addr && (addr === raw || raw.endsWith(addr) || addr.endsWith(raw))) {
+        const s = normalizeFlaggedTicker(e.symbol);
+        if (s) return s;
+      }
+    }
+  } catch (_) {
+    /* ignore */
+  }
+  try {
+    const last = JSON.parse(localStorage.getItem(LAST_ANALYZE_KEY) || "null");
+    const t = (last && last.token) || {};
+    const addr = String(t.address || "").trim();
+    if (addr && (addr === raw || raw.endsWith(addr) || addr.endsWith(raw))) {
+      return normalizeFlaggedTicker(t.symbol);
+    }
+  } catch (_) {
+    /* ignore */
+  }
+  return "";
+}
+
+/**
+ * Force a flagged meta object to carry only the initial mint + its ticker.
+ * Always stores flagged_from_symbol when known so UI shows $TICKER mint.
+ */
+function withSingleFlaggedFromMint(meta, ...fallbacks) {
+  const base = meta && typeof meta === "object" ? { ...meta } : {};
+  const initial = pickInitialFlaggedFromMint(base, ...fallbacks);
+  base.flagged_from_mint = initial || null;
+  base.flagged_from_mints = initial ? [initial] : [];
+  const sym = resolveFlaggedFromSymbol(initial, base, ...fallbacks);
+  if (sym) base.flagged_from_symbol = sym;
+  else if (!base.flagged_from_symbol) base.flagged_from_symbol = null;
+  return base;
+}
+
+/**
+ * Display "$TICKER mintAddress" for the mint a wallet was flagged from.
+ * Always prefers ticker + mint when ticker is known (store / meta / history).
+ */
+function formatFlaggedFromMint(mintAddr, symbolHint) {
+  const raw = String(mintAddr || "").trim();
+  if (!raw) return "";
+  let full = raw;
+  let symbol = normalizeFlaggedTicker(symbolHint);
+  try {
+    const store = loadRuggersStore();
+    for (const [k, rec] of Object.entries(store || {})) {
+      if (k === "__meta" || !rec || typeof rec !== "object") continue;
+      const addr = String(rec.address || "").trim();
+      const keyEnd = k.includes(":") ? k.split(":").pop() : k;
+      if (
+        addr === raw ||
+        keyEnd === raw ||
+        k === raw ||
+        k.endsWith(":" + raw) ||
+        (addr && raw.endsWith(addr)) ||
+        (addr && addr.endsWith(raw))
+      ) {
+        if (!symbol && rec.symbol) symbol = normalizeFlaggedTicker(rec.symbol);
         if (addr) full = addr;
         break;
       }
@@ -4978,6 +5085,7 @@ function formatFlaggedFromMint(mintAddr) {
   } catch (_) {
     /* ignore */
   }
+  if (!symbol) symbol = resolveFlaggedFromSymbol(full || raw);
   if (symbol) return "$" + symbol + " " + full;
   return full;
 }
@@ -5153,7 +5261,11 @@ function renderRuggersWalletRow(row) {
       pickInitialFlaggedFromMint(row, row.flagged_meta) ||
       String(row.flagged_from_mint || "").trim();
     if (initial) {
-      const label = formatFlaggedFromMint(initial);
+      const symHint =
+        (row.flagged_from_symbol ||
+          (row.flagged_meta && row.flagged_meta.flagged_from_symbol) ||
+          "") + "";
+      const label = formatFlaggedFromMint(initial, symHint);
       if (label) flaggedFromLine = " · flagged from " + label;
     }
     let times = 0;
@@ -5572,9 +5684,10 @@ function buildRuggersExportPayload(exportKey, rows) {
       source: "adtc_ruggers_export",
       mint: mint || null,
       symbol: symbol || null,
-      // Initial mint identity for this upload (source mint of the flag)
+      // Initial mint + ticker identity for this upload (source of the flag)
       flagged_from_mint: mint || null,
       flagged_from_mints: mint ? [mint] : [],
+      flagged_from_symbol: symbol || null,
     });
   }
   return {

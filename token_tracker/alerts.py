@@ -150,15 +150,14 @@ def build_alerts(
     dexes: list[str] | tuple[str, ...] | None = None,
     market: dict[str, Any] | None = None,
     socials_dexscreener: dict[str, Any] | None = None,
+    dexscreener_paid: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return structured alerts from holder/bundle/Rugcheck + DexScreener socials.
+    """Return structured alerts from holder/bundle/Rugcheck + DexScreener.
 
     Pass dex_id / dexes / market so Pump.fun + PumpSwap pools skip LP-unlock
     even when the mint does not end with 'pump'.
 
-    socials_dexscreener: pure DexScreener profile snapshot (before Pump.fun
-    enrichment). Prefer this for "socials missing" so pre-bond tokens still
-    alert when DexScreener has no links even if pump.fun JSON has them.
+    dexscreener_paid: result of dexscreener.fetch_token_orders (paid yes/no).
     """
     holders_data = holders_data or {}
     bundles_data = bundles_data or {}
@@ -174,18 +173,27 @@ def build_alerts(
         market=market,
     )
 
-    # DexScreener-only socials (do not use pump-enriched merged socials)
-    dex_socials = socials_dexscreener
-    if not isinstance(dex_socials, dict) or not dex_socials:
-        if isinstance(socials.get("dexscreener"), dict):
-            dex_socials = socials.get("dexscreener")
-        else:
-            dex_socials = socials
+    # DexScreener paid profile (replaces old "socials missing" slot)
+    paid_info = dexscreener_paid
+    if not isinstance(paid_info, dict) or paid_info.get("paid") is None:
+        # Fallbacks from socials / pair snapshot
+        if isinstance(socials.get("dexscreener_paid"), dict):
+            paid_info = socials.get("dexscreener_paid")
+        elif isinstance(socials_dexscreener, dict) and isinstance(
+            socials_dexscreener.get("dexscreener_paid"), dict
+        ):
+            paid_info = socials_dexscreener.get("dexscreener_paid")
+        elif isinstance(market, dict) and market.get("dexscreener_paid") is not None:
+            paid_info = {
+                "paid": market.get("dexscreener_paid"),
+                "paid_label": market.get("dexscreener_paid_label")
+                or ("yes" if market.get("dexscreener_paid") else "no"),
+                "ok": True,
+            }
 
-    # Socials + bonded status can still run when holders failed
-    social_alert = _dexscreener_socials_alert(dex_socials, pumpfun=pumpfun)
-    if social_alert:
-        alerts.append(social_alert)
+    paid_alert = _dexscreener_paid_alert(paid_info)
+    if paid_alert:
+        alerts.append(paid_alert)
 
     bonded_alert = _bonded_status_alert(pumpfun, token_address=token_address)
     if bonded_alert:
@@ -193,7 +201,7 @@ def build_alerts(
 
     if not holders_data.get("ok"):
         if alerts:
-            # Return social/bonded alerts when holders unavailable
+            # Return paid/bonded alerts when holders unavailable
             return {
                 "ok": True,
                 "priority_count": sum(1 for a in alerts if a.get("priority") == "top"),
@@ -202,7 +210,7 @@ def build_alerts(
                     f"{len(alerts)} alert(s); holders scan unavailable for full checks."
                 ),
                 "checks": [
-                    "dexscreener_socials_missing",
+                    "dexscreener_paid",
                     "bonded_status",
                 ],
                 "notes": holders_data.get("error") or holders_data.get("notes") or "",
@@ -406,7 +414,7 @@ def build_alerts(
         summary = (
             "No top-priority warnings from current checks. "
             f"Top priority will show here if {lp_clause}a single holder "
-            "is over 5%, bundle share exceeds 20%, DexScreener socials are missing, "
+            "is over 5%, bundle share exceeds 20%, DexScreener is unpaid, "
             "similar wallets hold a large %, a wallet is linked to known rug signals, "
             "or RugWatch-flagged wallets hold a measurable bag."
         )
@@ -416,7 +424,7 @@ def build_alerts(
         "single_holder_over_5",
         "similar_wallets_large",
         "bundle_pct_threshold",
-        "dexscreener_socials_missing",
+        "dexscreener_paid",
         "bonded_status",
         "serial_rugger_link",
         "rugwatch_flagged",
@@ -432,7 +440,7 @@ def build_alerts(
         "checks": checks,
         "notes": (
             "Alerts are heuristics from Rugcheck + top-holder snapshot + bundle % + "
-            "DexScreener profile socials. Not financial advice."
+            "DexScreener paid profile. Not financial advice."
             + (
                 " Liquidity-unlocked check skipped for Pump.fun / PumpSwap pools."
                 if is_pump
@@ -550,45 +558,48 @@ def _bonded_status_alert(
     }
 
 
+def _dexscreener_paid_alert(
+    paid_info: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """
+    DexScreener paid profile yes/no (orders API: tokenProfile / tokenAd).
+
+    Always shows when we know paid True/False. Unknown (fetch failed) shows
+    as DexScreener paid: unknown so the slot is not empty after Analyze.
+    """
+    info = paid_info if isinstance(paid_info, dict) else {}
+    paid = info.get("paid")
+    label = str(info.get("paid_label") or "").strip().lower()
+    if paid is True:
+        label = "yes"
+    elif paid is False:
+        label = "no"
+    elif label not in {"yes", "no", "unknown"}:
+        # No data at all — still show unknown after a scan attempt shape
+        if not info:
+            return None
+        label = "unknown"
+
+    severity = "medium" if label == "no" else ("info" if label == "yes" else "info")
+    return {
+        "id": "dexscreener_paid",
+        "priority": "top" if label == "no" else "info",
+        "severity": severity,
+        "title": f"DexScreener paid: {label}",
+        "detail": "",
+        "dexscreener_paid": label,
+        "paid": paid,
+        "hide_wallets": True,
+    }
+
+
 def _dexscreener_socials_alert(
     socials: dict[str, Any] | None,
     *,
     pumpfun: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """
-    Alert when DexScreener pair profile has no socials / websites.
-
-    Uses DexScreener-only data (not Pump.fun-enriched links). Still fires for
-    pre-bond (bonding curve) tokens when DexScreener has no profile links.
-    """
-    updated = dexscreener_socials_updated(socials)
-    if updated is not False:
-        return None
-
-    pf = pumpfun or {}
-    bonded = None
-    if pf.get("graduated") is True:
-        bonded = "yes"
-    elif pf.get("graduated") is False or pf.get("on_bonding_curve") is True:
-        bonded = "no"
-    elif pf.get("is_pump_mint"):
-        bonded = str(pf.get("graduated_label") or "unknown").lower()
-        if bonded not in {"yes", "no", "unknown"}:
-            bonded = "unknown"
-
-    title = "DexScreener socials missing"
-    if bonded in {"yes", "no", "unknown"}:
-        title = f"DexScreener socials missing · Bonded: {bonded}"
-
-    return {
-        "id": "dexscreener_socials_missing",
-        "priority": "top",
-        "severity": "medium",
-        "title": title,
-        "detail": "",  # compact Alerts UI — no notes
-        "bonded": bonded,
-        "hide_wallets": True,
-    }
+    """Legacy helper — socials missing was replaced by DexScreener paid yes/no."""
+    return None
 
 
 def _single_holders_from_bundles(
@@ -1059,9 +1070,9 @@ def format_alerts_text(data: dict[str, Any]) -> str:
             ],
         ),
         (
-            "dexscreener_socials_missing",
-            "DexScreener socials missing will show here if value returns True",
-            ["dexscreener_socials_missing"],
+            "dexscreener_paid",
+            "DexScreener paid yes/no will show here if value returns True",
+            ["dexscreener_paid", "dexscreener_socials_missing"],
         ),
         (
             "bonded_status",
@@ -1086,8 +1097,6 @@ def format_alerts_text(data: dict[str, Any]) -> str:
 
     # Slot keys that stay on one placeholder line when active (no full alert block).
     # Placeholder already ends with "if value returns True" — do not append " · true".
-    # NOTE: dexscreener_socials_missing is NOT here — it must render as a real alert
-    # (was stuck on the placeholder line even when True).
     _append_true_keys = {
         "serial_rugger_link",
         "rugwatch_flagged",
@@ -1103,6 +1112,7 @@ def format_alerts_text(data: dict[str, Any]) -> str:
             aid
             in {
                 "single_holder_over_5",
+                "dexscreener_paid",
                 "dexscreener_socials_missing",
                 "bonded_status",
             }
