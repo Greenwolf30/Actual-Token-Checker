@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v160";
+const ADTC_CLIENT_VERSION = "v161";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 // Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
 try {
@@ -7651,7 +7651,32 @@ function formatBundlesRichHtml(text) {
 function setPanelText(tab, text) {
   const el = $("text-" + tab);
   if (!el) return;
-  const raw = text || "(empty)";
+  let raw = text == null || text === "" ? "(empty)" : String(text);
+
+  // Opera GX freezes after Analyze when we regex-color + innerHTML huge
+  // Holders/Alerts reports (often 100k–1M+ chars). Plain text stays clickable.
+  const usePlain =
+    (isOperaBrowser() && !wantFullHeavyUi()) ||
+    raw.length > 60000 ||
+    (tab === "holders" && raw.length > 25000);
+
+  if (usePlain) {
+    const cap =
+      tab === "holders" ? 100000 : tab === "alerts" ? 80000 : 120000;
+    if (raw.length > cap) {
+      raw =
+        raw.slice(0, cap) +
+        "\n\n… truncated for browser performance (Opera) — open ?full=1 for rich formatting …";
+    }
+    try {
+      el.textContent = raw;
+    } catch (_) {
+      el.innerHTML = "";
+      el.appendChild(document.createTextNode(raw));
+    }
+    return;
+  }
+
   let html;
   if (tab === "holders") {
     // Wallet address: >5% yellow · >10% red · skip known LP
@@ -12653,12 +12678,27 @@ async function analyze(ev) {
     }
     await yieldToUi(0);
 
-    // Text tabs first (fast), then Bundles (Opera uses lite tables)
+    // Text tabs one-at-a-time with yields (Holders rich HTML was freezing Opera)
     try {
       const sections = (data && data.sections) || {};
-      for (const tab of TABS) {
-        if (tab === "history" || tab === "ruggers" || tab === "bundles") continue;
-        if (sections[tab]) setPanelText(tab, sections[tab]);
+      const paintOrder = [
+        "overview",
+        "alerts",
+        "maps",
+        "about",
+        "holders",
+        "bundles",
+      ];
+      for (const tab of paintOrder) {
+        if (tab === "bundles") continue; // cards UI below
+        if (sections[tab]) {
+          try {
+            setPanelText(tab, sections[tab]);
+          } catch (e) {
+            console.warn("[setPanelText]", tab, e);
+          }
+          await yieldToUi(0);
+        }
       }
       const n = (data.alerts_meta && data.alerts_meta.priority_count) || 0;
       if (n > 0) switchTab("alerts");
@@ -12679,12 +12719,11 @@ async function analyze(ev) {
     } catch (_) {}
 
     // Heavy work after paint — never block the Analyze button again
-    // Extra delay on Opera so first clicks after results land
     setTimeout(() => {
       finishAnalyzeHeavyWork(data, query).catch((err) =>
         console.error("[finishAnalyzeHeavyWork]", err)
       );
-    }, isOperaBrowser() ? 200 : 0);
+    }, isOperaBrowser() ? 400 : 0);
   } catch (e) {
     const msg = String(e && e.message ? e.message : e);
     showError(
