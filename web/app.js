@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v170";
+const ADTC_CLIENT_VERSION = "v171";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 // Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
 try {
@@ -4143,6 +4143,42 @@ function isRuggersAlreadyUploaded(rec, wallet) {
   return false;
 }
 
+/** Case-insensitive key hit in a wallet→meta map. */
+function ruggersMapHasWallet(map, wallet) {
+  if (!map || typeof map !== "object" || !wallet) return false;
+  const w = String(wallet).trim();
+  if (!w) return false;
+  if (map[w]) return true;
+  const wl = w.toLowerCase();
+  for (const k of Object.keys(map)) {
+    if (String(k).toLowerCase() === wl) return true;
+  }
+  return false;
+}
+
+/**
+ * True if wallet is already on RugWatch / the cloud list (no need to Upload).
+ * Uses local rugwatch_known (from Analyze flagged hits + prior Uploads).
+ */
+function isRuggersAlreadyOnCloud(rec, wallet) {
+  if (!rec || !wallet) return false;
+  if (ruggersMapHasWallet(rec.rugwatch_known, wallet)) return true;
+  // Cross-mint Flagged sellers are already cloud/rugwatch knowledge
+  if (ruggersMapHasWallet(rec.flagged_sellers, wallet)) return true;
+  return false;
+}
+
+/**
+ * True if this wallet still needs a Ruggers → RugWatch Upload.
+ * Excludes: already uploaded from this mint, already on cloud/rugwatch.
+ */
+function ruggersWalletNeedsUpload(rec, wallet) {
+  if (!wallet) return false;
+  if (isRuggersAlreadyUploaded(rec, wallet)) return false;
+  if (isRuggersAlreadyOnCloud(rec, wallet)) return false;
+  return true;
+}
+
 /**
  * Drop false "already uploaded" marks (cloud bleed / other mints / old builds).
  * Only keeps Upload-button marks for THIS mint + Similar-Upload pins.
@@ -5624,10 +5660,10 @@ function renderRuggersSection(title, hint, rows, exportKey, opts) {
     supplyMode === "bought"
       ? "Sum of mint-supply % currently held (bought back) across Swing wallets (capped at 100%)"
       : "Sum of mint-supply % sold across wallets in this section (capped at 100%)";
-  // Upload count = not yet uploaded on this mint (ignores already-uploaded)
+  // Upload count = wallets that still need upload (not this-mint uploaded, not on cloud)
   const rec = _lastRuggersRec;
   const nUpload = (rows || []).filter(
-    (r) => r && r.wallet && !isRuggersAlreadyUploaded(rec, r.wallet)
+    (r) => r && r.wallet && ruggersWalletNeedsUpload(rec, r.wallet)
   ).length;
   const exportOnly = !!(opts && opts.exportOnly);
   let actions = "";
@@ -5644,7 +5680,7 @@ function renderRuggersSection(title, hint, rows, exportKey, opts) {
       actions +=
         '<button type="button" class="rug-upload-btn" data-rug-upload="' +
         escHtml(exportKey) +
-        '" title="Upload wallets not yet uploaded from THIS mint (cloud may still skip wallets already in RugWatch)">' +
+        '" title="Upload only wallets not yet on cloud and not already uploaded from this mint">' +
         "Upload" +
         (nUpload ? " (" + nUpload + ")" : n ? " (0)" : "") +
         "</button>";
@@ -5783,12 +5819,15 @@ function ruggersRowsForExportKey(key) {
   return filterOutRuggersLpRows(rows);
 }
 
-/** Section rows that have not been Uploaded yet on this mint. */
+/**
+ * Section rows that still need Upload (not this-mint uploaded, not already on cloud).
+ * Upload (N) and the upload payload use this only — never count already-done wallets.
+ */
 function ruggersRowsNotYetUploaded(key) {
   const rows = ruggersRowsForExportKey(key);
   const rec = _lastRuggersRec;
   return (rows || []).filter(
-    (r) => r && r.wallet && !isRuggersAlreadyUploaded(rec, r.wallet)
+    (r) => r && r.wallet && ruggersWalletNeedsUpload(rec, r.wallet)
   );
 }
 
@@ -5945,6 +5984,17 @@ function rugwatchApiBase() {
 async function uploadRuggersSectionToCloud(exportKey) {
   const allRows = ruggersRowsForExportKey(exportKey);
   const rows = ruggersRowsNotYetUploaded(exportKey);
+  const recForCount = _lastRuggersRec;
+  const nAlreadyUploaded = (allRows || []).filter(
+    (r) => r && r.wallet && isRuggersAlreadyUploaded(recForCount, r.wallet)
+  ).length;
+  const nAlreadyCloud = (allRows || []).filter(
+    (r) =>
+      r &&
+      r.wallet &&
+      !isRuggersAlreadyUploaded(recForCount, r.wallet) &&
+      isRuggersAlreadyOnCloud(recForCount, r.wallet)
+  ).length;
   if (!allRows.length) {
     alert(
       "No wallets in this section to upload.\n\n" +
@@ -5953,12 +6003,20 @@ async function uploadRuggersSectionToCloud(exportKey) {
     return;
   }
   if (!rows.length) {
+    const parts = [];
+    if (nAlreadyUploaded) {
+      parts.push(nAlreadyUploaded + " already uploaded from this mint");
+    }
+    if (nAlreadyCloud) {
+      parts.push(nAlreadyCloud + " already on the cloud / RugWatch");
+    }
     alert(
-      "All " +
+      "Nothing to upload — Upload only counts wallets that still need it.\n\n" +
+        "Section has " +
         allRows.length +
-        " wallet(s) in this section were already uploaded from THIS mint.\n\n" +
-        "Upload (N) only skips wallets you already Uploaded here — " +
-        "wallets on RugWatch from other mints still count as new for this mint.\n\n" +
+        " wallet(s); 0 need upload" +
+        (parts.length ? " (" + parts.join("; ") + ")" : "") +
+        ".\n\n" +
         "If this is wrong, clear Ruggers track for this mint and re-Analyze."
     );
     return;
@@ -5966,18 +6024,25 @@ async function uploadRuggersSectionToCloud(exportKey) {
   const section = ruggersExportLabel(exportKey);
   const payload = buildRuggersExportPayload(exportKey, rows);
   const base = rugwatchApiBase();
+  const skipParts = [];
+  if (nAlreadyUploaded) {
+    skipParts.push(nAlreadyUploaded + " already uploaded from this mint");
+  }
+  if (nAlreadyCloud) {
+    skipParts.push(nAlreadyCloud + " already on the cloud");
+  }
   const ok = window.confirm(
     "Upload " +
       rows.length +
-      " new wallet(s) from “" +
+      " wallet(s) that need uploading from “" +
       section +
       "” to RugWatch?\n\n" +
       "(Section has " +
       allRows.length +
-      " total; " +
-      (allRows.length - rows.length) +
-      " already uploaded from this mint are skipped.)\n\n" +
-      "1) Import NEW wallets only (already in cloud/local are skipped)\n" +
+      " total" +
+      (skipParts.length ? "; skipping " + skipParts.join(" + ") : "") +
+      ".)\n\n" +
+      "1) Import only these wallets (already on cloud/local still skipped by server)\n" +
       "2) Push cloud → GitHub if anything new was added\n\n" +
       "RugWatch:\n" +
       base +
