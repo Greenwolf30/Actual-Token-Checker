@@ -25,12 +25,33 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v158";
+const ADTC_CLIENT_VERSION = "v159";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 // Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
 try {
   if (window.__adtcBootReady) window.__adtcBootReady();
 } catch (_) {}
+
+/** Yield so the browser can paint / handle clicks (Opera freezes on long sync work). */
+function yieldToUi(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms != null ? ms : 0));
+}
+
+function isOperaBrowser() {
+  try {
+    const ua = String(navigator.userAgent || "");
+    if (/OPR\/|Opera|OPX\//i.test(ua)) return true;
+    if (
+      typeof navigator.userAgentData !== "undefined" &&
+      Array.isArray(navigator.userAgentData.brands)
+    ) {
+      return navigator.userAgentData.brands.some((b) =>
+        /Opera|OPR/i.test(String((b && b.brand) || ""))
+      );
+    }
+  } catch (_) {}
+  return false;
+}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
 const BUNDLE_DELTA_BASELINE_VER_KEY = "adtc_bundle_delta_baseline_ver";
@@ -656,15 +677,19 @@ function recordAnalyzeInLogs(data, query) {
     entry.symbol || entry.query || "?",
     String(entry.address || "").slice(0, 12)
   );
-  try {
-    refreshHistoryPanel(entry.address || entry.query || "");
-  } catch (_) {
+  // Defer panel paint — full Logs render freezes Opera after Analyze
+  const highlight = entry.address || entry.query || "";
+  setTimeout(() => {
     try {
-      refreshHistoryPanel();
-    } catch (__) {
-      /* ignore */
+      refreshHistoryPanel(highlight);
+    } catch (_) {
+      try {
+        refreshHistoryPanel();
+      } catch (__) {
+        /* ignore */
+      }
     }
-  }
+  }, 0);
   return true;
 }
 
@@ -10001,26 +10026,30 @@ function renderBundlesUi(data) {
       if (data && data._bundleDeltaPair && data._bundleDeltaPair.htmlByKey) {
         sources.push(data._bundleDeltaPair.htmlByKey);
       }
-      const cached = loadLastAnalyze();
-      if (cached && cached.bundleDelta && cached.bundleDelta.htmlByKey) {
-        sources.push(cached.bundleDelta.htmlByKey);
-      }
-      if (
-        cached &&
-        cached.data &&
-        cached.data.bundleDelta &&
-        cached.data.bundleDelta.htmlByKey
-      ) {
-        sources.push(cached.data.bundleDelta.htmlByKey);
-      }
-      if (
-        cached &&
-        cached.data &&
-        cached.data.bundles_view &&
-        cached.data.bundles_view.summary &&
-        cached.data.bundles_view.summary._ui_delta_html
-      ) {
-        sources.push(cached.data.bundles_view.summary._ui_delta_html);
+      // loadLastAnalyze() is expensive (multi‑MB JSON.parse) — only on restore,
+      // never on live Analyze (that freeze is what locks Opera GX after Analyze).
+      if (isRestore) {
+        const cached = loadLastAnalyze();
+        if (cached && cached.bundleDelta && cached.bundleDelta.htmlByKey) {
+          sources.push(cached.bundleDelta.htmlByKey);
+        }
+        if (
+          cached &&
+          cached.data &&
+          cached.data.bundleDelta &&
+          cached.data.bundleDelta.htmlByKey
+        ) {
+          sources.push(cached.data.bundleDelta.htmlByKey);
+        }
+        if (
+          cached &&
+          cached.data &&
+          cached.data.bundles_view &&
+          cached.data.bundles_view.summary &&
+          cached.data.bundles_view.summary._ui_delta_html
+        ) {
+          sources.push(cached.data.bundles_view.summary._ui_delta_html);
+        }
       }
     } catch (_) {
       /* ignore */
@@ -11761,13 +11790,13 @@ function renderBundlesUi(data) {
   }
 }
 
-function renderSections(data, query) {
+/** Fast paint only: summary tabs + bundles. No Ruggers/history (those freeze Opera). */
+function renderSectionsLight(data, query) {
   const sections = (data && data.sections) || {};
   for (const tab of TABS) {
     if (tab === "history" || tab === "ruggers" || tab === "bundles") continue;
     if (sections[tab]) setPanelText(tab, sections[tab]);
   }
-  // Bundles: card UI (structured), not monospaced text dump
   try {
     renderBundlesUi(data);
   } catch (err) {
@@ -11781,10 +11810,13 @@ function renderSections(data, query) {
     }
     if (sections.bundles) setPanelText("bundles", sections.bundles);
   }
-  // Logs are recorded from analyze() after renderSections so a UI error
-  // cannot skip writing the current mint to Logs.
+  const n = (data.alerts_meta && data.alerts_meta.priority_count) || 0;
+  if (n > 0) switchTab("alerts");
+  else switchTab("overview");
+}
 
-  // Ruggers: first-lookup baseline + sell/swing tracking
+/** Heavy Ruggers baseline + panel — must run after UI is unlocked. */
+function runRuggersAfterAnalyze(data, query) {
   let rugKey = null;
   try {
     const isQuick = !!(data.quick || data._phase === "quick");
@@ -11792,23 +11824,26 @@ function renderSections(data, query) {
     const mintAddr =
       bareMintAddr((data.token && data.token.address) || data.query || "") ||
       "";
-    const holdersText = String(
-      (sections && sections.holders) || ""
-    );
+    const holdersText = String(((data && data.sections) || {}).holders || "");
     const holdersOk = !!(
-      (track && (track.ok || (Array.isArray(track.wallets) && track.wallets.length))) ||
+      (track &&
+        (track.ok || (Array.isArray(track.wallets) && track.wallets.length))) ||
       (data.holders && data.holders.ok) ||
       (holdersText &&
         holdersText.length > 40 &&
         !/unavailable|skipped|quick mode/i.test(holdersText))
     );
     if (isQuick) {
-      console.info("[ruggers] skipped — Quick mode (need full Analyze for sellers)");
+      console.info(
+        "[ruggers] skipped — Quick mode (need full Analyze for sellers)"
+      );
       if (mintAddr) {
-        rugKey = mintKeyFromToken(mintAddr, (data.token && data.token.chain_id) || "solana");
+        rugKey = mintKeyFromToken(
+          mintAddr,
+          (data.token && data.token.chain_id) || "solana"
+        );
       }
     } else {
-      // Always try to seed/update track when we have a mint CA (even if holders thin)
       let result = null;
       try {
         result = processRuggersFromAnalyze(data);
@@ -11816,7 +11851,6 @@ function renderSections(data, query) {
         console.error("[ruggers] process threw", procErr);
         result = null;
       }
-      // Resolve mint from multiple sources (token, query arg, search box)
       let seedAddr = mintAddr;
       if (!seedAddr || seedAddr.length < 32) {
         try {
@@ -11832,7 +11866,6 @@ function renderSections(data, query) {
           seedAddr = mintAddr;
         }
       }
-      // Always ensure a track exists for this CA after Analyze
       try {
         const seeded = ensureRuggersMintTrack(seedAddr || mintAddr, {
           chain: (data.token && data.token.chain_id) || "solana",
@@ -11840,7 +11873,6 @@ function renderSections(data, query) {
           name: (data.token && data.token.name) || null,
         });
         if (seeded && seeded.key) {
-          // Prefer process result (has wallets) but keep seed key as fallback
           if (!result) result = seeded;
           else rugKey = result.key || seeded.key;
         }
@@ -11876,11 +11908,18 @@ function renderSections(data, query) {
   } catch (refErr) {
     console.error("[ruggers] refresh failed", refErr);
   }
+}
 
-  // Prefer Alerts tab when there are top-priority warnings
-  const n = (data.alerts_meta && data.alerts_meta.priority_count) || 0;
-  if (n > 0) switchTab("alerts");
-  else switchTab("overview");
+function renderSections(data, query) {
+  // Backward-compatible: light paint + deferred ruggers
+  renderSectionsLight(data, query);
+  setTimeout(() => {
+    try {
+      runRuggersAfterAnalyze(data, query);
+    } catch (err) {
+      console.error("[ruggers] deferred failed", err);
+    }
+  }, 0);
 }
 
 function formatViews(n) {
@@ -12280,6 +12319,64 @@ function initRugwatchCounts() {
   loadRugwatchCounts();
 }
 
+/**
+ * After light UI is shown: logs → ruggers → disk persist, each yielding so
+ * Opera GX can process clicks between steps.
+ */
+async function finishAnalyzeHeavyWork(data, query) {
+  await yieldToUi(0);
+  try {
+    recordAnalyzeInLogs(data, query);
+  } catch (logErr) {
+    console.error("[logs] recordAnalyzeInLogs failed", logErr);
+  }
+
+  await yieldToUi(16);
+  try {
+    runRuggersAfterAnalyze(data, query);
+  } catch (err) {
+    console.error("[ruggers] after analyze", err);
+  }
+
+  await yieldToUi(16);
+  try {
+    const ok = saveLastAnalyze(data, query);
+    try {
+      saveSectionsSeparately((data && data.sections) || {});
+    } catch (_) {}
+    if (!ok) {
+      console.warn(
+        "[analyze] last Analyze may not fully persist; Bundles backup attempted"
+      );
+    }
+  } catch (err) {
+    console.error("[saveLastAnalyze]", err);
+  }
+
+  // IDB last — never block UI; skip re-loadLastAnalyze stringify storm on Opera
+  await yieldToUi(0);
+  if (isOperaBrowser()) {
+    // Opera: fire-and-forget slim persist only; skip dual full re-read
+    try {
+      const raw = sessionStorage.getItem(LAST_ANALYZE_KEY);
+      if (raw && raw.length < 500000) {
+        idbSet(LAST_ANALYZE_KEY, raw).catch(() => {});
+      }
+    } catch (_) {}
+    return;
+  }
+  try {
+    const snap = loadLastAnalyze();
+    if (snap) {
+      const raw = JSON.stringify(snap);
+      await withTimeout(idbSet(LAST_ANALYZE_KEY, raw), 3000, false);
+      await withTimeout(idbSet(LAST_BUNDLES_ONLY_KEY, raw), 3000, false);
+    }
+  } catch (idbErr) {
+    console.warn("[analyze] idb persist", idbErr);
+  }
+}
+
 async function analyze(ev) {
   if (ev) ev.preventDefault();
   showError("");
@@ -12297,10 +12394,26 @@ async function analyze(ev) {
   const btn = $("analyzeBtn");
   btn.disabled = true;
   btn.textContent = quick ? "Quick…" : "Analyzing…";
-  setPanelText("overview", "Loading… this can take up to ~90s for holders/about.");
+  setPanelText(
+    "overview",
+    "Loading… this can take up to ~90s for holders/about."
+  );
 
   const ctrl = new AbortController();
   const analyzeTimer = setTimeout(() => ctrl.abort(), quick ? 45000 : 120000);
+  let unlocked = false;
+  function unlockBtn() {
+    if (unlocked) return;
+    unlocked = true;
+    try {
+      clearTimeout(analyzeTimer);
+    } catch (_) {}
+    try {
+      btn.disabled = false;
+      btn.textContent = "Analyze";
+    } catch (_) {}
+  }
+
   try {
     const r = await fetch(apiUrl("/api/analyze"), {
       method: "POST",
@@ -12339,47 +12452,32 @@ async function analyze(ev) {
       $("summaryBar").hidden = true;
       return;
     }
-    // Analyze time for Fresh / Multi-send / Shared SOL “Updated · …” under % + delta
+
+    // Unlock clicks BEFORE heavy paint/persist (Opera GX freezes on sync work)
+    unlockBtn();
+    unstickPointerLayer();
+
     if (!data.generated_at) data.generated_at = new Date().toISOString();
     data._marketUpdatedAt = data.generated_at;
-    renderSummary(data);
-    try {
-      renderSections(data, query);
-    } catch (err) {
-      console.error("[renderSections]", err);
-    }
-    // ALWAYS record current mint in Logs (even if renderSections threw)
-    try {
-      recordAnalyzeInLogs(data, query);
-    } catch (logErr) {
-      console.error("[logs] recordAnalyzeInLogs failed", logErr);
-    }
-    // Persist AFTER UI so delta freeze is included — must not be skipped
-    try {
-      const ok = saveLastAnalyze(data, query);
-      try {
-        saveSectionsSeparately((data && data.sections) || {});
-      } catch (_) {}
 
-      if (!ok) {
-        console.warn(
-          "[analyze] last Analyze may not fully persist; Bundles backup attempted"
-        );
-      }
-      // Explicit IDB write of current payload snapshot (await so refresh is safe)
-      try {
-        const snap = loadLastAnalyze();
-        if (snap) {
-          const raw = JSON.stringify(snap);
-          await idbSet(LAST_ANALYZE_KEY, raw);
-          await idbSet(LAST_BUNDLES_ONLY_KEY, raw);
-        }
-      } catch (idbErr) {
-        console.warn("[analyze] idb persist", idbErr);
-      }
+    try {
+      renderSummary(data);
     } catch (err) {
-      console.error("[saveLastAnalyze]", err);
+      console.error("[renderSummary]", err);
     }
+    await yieldToUi(0);
+
+    try {
+      renderSectionsLight(data, query);
+    } catch (err) {
+      console.error("[renderSectionsLight]", err);
+    }
+    await yieldToUi(0);
+
+    // Heavy work after paint — never block the Analyze button again
+    finishAnalyzeHeavyWork(data, query).catch((err) =>
+      console.error("[finishAnalyzeHeavyWork]", err)
+    );
   } catch (e) {
     const msg = String(e && e.message ? e.message : e);
     showError(
@@ -12388,9 +12486,7 @@ async function analyze(ev) {
         : msg
     );
   } finally {
-    clearTimeout(analyzeTimer);
-    btn.disabled = false;
-    btn.textContent = "Analyze";
+    unlockBtn();
   }
 }
 
