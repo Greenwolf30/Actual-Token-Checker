@@ -918,12 +918,13 @@ def apply_lite_response(payload: dict[str, Any]) -> dict[str, Any]:
     secs = out.get("sections") if isinstance(out.get("sections"), dict) else {}
     slim_secs: dict[str, str] = {}
     for key, max_len in (
-        ("overview", 5000),
-        ("alerts", 6000),
-        ("maps", 3000),
-        ("about", 4000),
-        ("holders", 12000),
-        ("bundles", 8000),
+        ("overview", 6000),
+        ("alerts", 8000),
+        ("maps", 4000),
+        ("about", 5000),
+        ("holders", 14000),
+        # Keep enough Bundles report for green titles / blue wallets / % colors
+        ("bundles", 16000),
     ):
         val = secs.get(key)
         if val is None:
@@ -933,7 +934,7 @@ def apply_lite_response(payload: dict[str, Any]) -> dict[str, Any]:
             s = s[:max_len] + "\n\n… truncated (lite mode) …"
         slim_secs[key] = s
     out["sections"] = slim_secs
-    # Bundles cards: summary numbers only
+    # Bundles cards: summary numbers only (wallet tables stay client-side off)
     bv = out.get("bundles_view")
     if isinstance(bv, dict):
         out["bundles_view"] = {
@@ -942,8 +943,26 @@ def apply_lite_response(payload: dict[str, Any]) -> dict[str, Any]:
             "summary": bv.get("summary") if isinstance(bv.get("summary"), dict) else {},
             "token_address": bv.get("token_address"),
         }
-    # history_meta: counts only — no ruggers_track / huge snapshots
+    # history_meta: keep a CAP on ruggers_track so Ruggers can detect without freezing
     hm = out.get("history_meta") if isinstance(out.get("history_meta"), dict) else {}
+    rt = hm.get("ruggers_track")
+    slim_rt = None
+    if isinstance(rt, dict):
+        slim_rt = {
+            "ok": rt.get("ok"),
+            "address": rt.get("address"),
+            "chain": rt.get("chain"),
+            "symbol": rt.get("symbol"),
+            "name": rt.get("name"),
+            "creator": rt.get("creator"),
+            "similar_groups": (rt.get("similar_groups") or [])[:12],
+            "flagged_addresses": list(rt.get("flagged_addresses") or [])[:40],
+        }
+        wallets = rt.get("wallets") if isinstance(rt.get("wallets"), list) else []
+        # Cap wallet rows — enough for baseline, small enough for Opera
+        slim_rt["wallets"] = wallets[:60]
+        slim_rt["wallets_capped"] = len(wallets) > 60
+        slim_rt["wallet_count"] = len(wallets)
     out["history_meta"] = {
         "holders_ok": hm.get("holders_ok"),
         "flagged_still_holding": hm.get("flagged_still_holding"),
@@ -956,6 +975,13 @@ def apply_lite_response(payload: dict[str, Any]) -> dict[str, Any]:
         "bundle_pct": hm.get("bundle_pct"),
         "dex_id": hm.get("dex_id"),
         "pumpfun": hm.get("pumpfun"),
+        "holders_snapshot": _clip_log_snapshot(
+            hm.get("holders_snapshot") or slim_secs.get("holders"), max_chars=4000
+        ),
+        "bundles_snapshot": _clip_log_snapshot(
+            hm.get("bundles_snapshot") or slim_secs.get("bundles"), max_chars=3000
+        ),
+        "ruggers_track": slim_rt,
         "lite": True,
     }
     return out

@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v165";
+const ADTC_CLIENT_VERSION = "v166";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 // Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
 try {
@@ -6043,62 +6043,110 @@ function wireRuggersExportButtons() {
   }
 }
 
-/** Lite Ruggers tab — never rebuild huge seller tables (freezes Opera GX). */
-function showRuggersLitePanel() {
+/** Lite Ruggers tab — show detection status without huge seller tables. */
+function showRuggersLitePanel(focusKey) {
   const body = $("ruggersBody");
   const dump = $("text-ruggers");
-  let mintList = "";
+  let lines = [];
+  let activeLine = "";
   try {
-    // Only list mint keys — do not walk wallet maps
+    const ca =
+      bareMintAddr(focusKey || getSummaryBarMintAddr() || "") ||
+      bareMintAddr(($("query") && $("query").value) || "") ||
+      "";
     const raw = localStorage.getItem(RUGGERS_KEY);
-    if (raw && raw.length < 500000) {
-      const store = JSON.parse(raw);
-      if (store && typeof store === "object") {
-        const keys = Object.keys(store)
-          .filter((k) => k && k !== "__meta")
-          .slice(0, 25);
-        if (keys.length) {
-          mintList =
-            "<br/><br/><strong>Tracked mints (names only):</strong><br/>" +
-            keys
-              .map((k) => {
-                const rec = store[k];
-                const sym =
-                  rec && rec.symbol ? "$" + String(rec.symbol) + " · " : "";
-                const addr = rec && rec.address ? String(rec.address) : k;
-                return (
-                  "· " +
-                  escHtml(sym) +
-                  escHtml(String(addr).slice(0, 12)) +
-                  "…"
-                );
-              })
-              .join("<br/>");
-        }
+    let store = {};
+    if (raw && raw.length < 800000) {
+      try {
+        store = JSON.parse(raw) || {};
+      } catch (_) {
+        store = {};
       }
     }
-  } catch (_) {
-    mintList = "";
+    // Prefer in-memory recs from last Analyze
+    try {
+      for (const [k, recM] of Object.entries(__ruggersMem || {})) {
+        if (k && recM && typeof recM === "object") store[k] = recM;
+      }
+    } catch (_) {}
+
+    if (ca) {
+      const found = findRuggersRecForMint
+        ? findRuggersRecForMint(store, ca, "solana")
+        : { rec: null, key: "" };
+      let rec = found && found.rec;
+      if (!rec && __ruggersMem) {
+        const k = mintKeyFromToken(ca, "solana");
+        rec = __ruggersMem[k] || __ruggersMem[ca] || null;
+      }
+      if (rec && rec.first_wallets) {
+        const n = Object.keys(rec.first_wallets).length;
+        const looks = rec.lookup_count || 1;
+        const sym = rec.symbol ? "$" + rec.symbol : "token";
+        activeLine =
+          "<strong>Detected</strong> " +
+          escHtml(sym) +
+          " · " +
+          escHtml(ca.slice(0, 8)) +
+          "…" +
+          " · baseline <strong>" +
+          escHtml(String(n)) +
+          "</strong> wallet(s) · lookups " +
+          escHtml(String(looks)) +
+          "<br/><span class=\"muted\">Seller/swing tables stay collapsed in lite mode (Opera-safe).</span>";
+      } else if (ca) {
+        activeLine =
+          "Mint <code>" +
+          escHtml(ca.slice(0, 12)) +
+          "…</code> not in Ruggers yet. Run <strong>Analyze</strong> with Quick off so holders can seed a baseline.";
+      }
+    }
+
+    const keys = Object.keys(store)
+      .filter((k) => k && k !== "__meta")
+      .slice(0, 20);
+    if (keys.length) {
+      lines.push("<br/><br/><strong>Tracked mints:</strong><br/>");
+      for (const k of keys) {
+        const rec = store[k];
+        if (!rec || typeof rec !== "object") continue;
+        const sym = rec.symbol ? "$" + String(rec.symbol) + " · " : "";
+        const addr = rec.address ? String(rec.address) : k;
+        const n =
+          rec.first_wallets && typeof rec.first_wallets === "object"
+            ? Object.keys(rec.first_wallets).length
+            : 0;
+        lines.push(
+          "· " +
+            escHtml(sym) +
+            escHtml(String(addr).slice(0, 10)) +
+            "… · " +
+            escHtml(String(n)) +
+            " baseline<br/>"
+        );
+      }
+    }
+  } catch (err) {
+    console.warn("[ruggers lite build]", err);
   }
   if (body) {
     body.innerHTML =
-      '<p class="logs-empty"><strong>Ruggers · lite mode</strong><br/>' +
-      "Full seller / swing tables freeze Opera GX, so they stay off here.<br/>" +
-      "Use <strong>Logs</strong> for recent analyzes, or open " +
-      "<code>?full=1</code> in Edge/Chrome for full Ruggers." +
-      mintList +
-      "</p>";
+      '<div class="logs-empty" style="text-align:left;padding:12px">' +
+      "<strong>Ruggers · lite</strong><br/><br/>" +
+      (activeLine || "Run Analyze to detect a mint baseline.") +
+      lines.join("") +
+      "<br/><br/>Full seller / Flagged / Upload UI: open <code>?full=1</code> in Edge or Chrome." +
+      "</div>";
   }
   if (dump) {
-    dump.textContent =
-      "Ruggers lite mode — full panel disabled to keep the page clickable.";
+    dump.textContent = "Ruggers lite — detection on; full tables off for Opera safety.";
   }
 }
 
 function refreshRuggersPanel(focusKey) {
   if (useLiteUi()) {
     try {
-      showRuggersLitePanel();
+      showRuggersLitePanel(focusKey);
     } catch (err) {
       console.warn("[ruggers lite]", err);
     }
@@ -10064,8 +10112,13 @@ function renderBundlesUiOperaLite(data) {
   const view = (data && data.bundles_view) || null;
   const textFallback =
     (data && data.sections && data.sections.bundles) || "";
-  const textEl = $("text-bundles");
-  if (textEl && textFallback) textEl.textContent = String(textFallback);
+  // Keep hidden text panel in sync with rich formatting for Logs
+  try {
+    if (textFallback) setPanelText("bundles", textFallback);
+  } catch (_) {
+    const textEl = $("text-bundles");
+    if (textEl && textFallback) textEl.textContent = String(textFallback);
+  }
 
   const s = (view && view.summary) || {};
   const hasSummary =
@@ -10099,7 +10152,6 @@ function renderBundlesUiOperaLite(data) {
       s.bundle_risk_score != null && Number.isFinite(Number(s.bundle_risk_score))
         ? Number(s.bundle_risk_score)
         : null;
-    // Colored % (same bands as full Bundles) via bunPctHtml
     html += '<div class="bun-stats">';
     html += row(
       "Risk",
@@ -10125,20 +10177,30 @@ function renderBundlesUiOperaLite(data) {
       "</div>";
   } else {
     html +=
-      '<p class="bun-hint">No structured bundle stats in this response. See text below / uncheck Quick for fuller holders-based bundles.</p>';
+      '<p class="bun-hint">No structured bundle stats yet — text report below. Uncheck Quick for fuller holders-based bundles.</p>';
   }
 
-  // Always show text report when present (holders/alerts path also has plain text)
+  // Rich report: green titles, colored %, blue wallet links (same as full text path)
   if (textFallback && String(textFallback).trim()) {
+    let rich = "";
+    try {
+      rich = formatBundlesRichHtml(String(textFallback).slice(0, 14000));
+    } catch (err) {
+      console.warn("[bundles lite rich]", err);
+      rich =
+        "<pre style=\"white-space:pre-wrap\">" +
+        escHtml(String(textFallback).slice(0, 8000)) +
+        "</pre>";
+    }
     html +=
-      '<pre style="white-space:pre-wrap;word-break:break-word;margin-top:12px;padding:10px;border:1px solid #323a48;border-radius:8px;background:#11141a;color:#e8eef8;font:12px/1.45 Consolas,monospace;max-height:50vh;overflow:auto">' +
-      escHtml(String(textFallback).slice(0, 12000)) +
-      "</pre>";
+      '<div class="bun-section" style="margin-top:12px"><div class="bun-section-body" style="max-height:55vh;overflow:auto;padding:10px 12px;border:1px solid var(--border,#323a48);border-radius:8px;background:var(--bg-panel,#141820);font:12.5px/1.5 var(--mono,Consolas,monospace);white-space:pre-wrap;word-break:break-word">' +
+      rich +
+      "</div></div>";
   }
 
   html +=
-    '<p class="bun-hint" style="margin-top:12px">Wallet-by-wallet tables stay off in lite mode so Opera stays clickable. ' +
-    "Use <code>?full=1</code> in Edge/Chrome for full tables.</p>";
+    '<p class="bun-hint" style="margin-top:12px">Interactive wallet cards stay off in lite mode. ' +
+    "Use <code>?full=1</code> in Edge/Chrome for full expandable tables.</p>";
   root.innerHTML = html;
 }
 
@@ -12852,15 +12914,30 @@ async function analyze(ev) {
       } catch (_) {}
       await yieldToUi(0);
       unstickPointerLayer();
-      // Light log entry only — no ruggers process / full save
+      // Logs + capped Ruggers seed (needs history_meta.ruggers_track from lite API)
       setTimeout(() => {
         try {
           recordAnalyzeInLogs(data, query);
         } catch (e) {
           console.warn("[logs lite]", e);
         }
-      }, 300);
-      console.info("[analyze] lite path done — tabs painted, heavy finish skipped");
+      }, 200);
+      setTimeout(() => {
+        try {
+          // Seed baseline without painting huge seller tables
+          runRuggersAfterAnalyze(data, query);
+        } catch (e) {
+          console.warn("[ruggers lite process]", e);
+          try {
+            showRuggersLitePanel(
+              bareMintAddr(
+                (data.token && data.token.address) || query || ""
+              ) || ""
+            );
+          } catch (_) {}
+        }
+      }, 450);
+      console.info("[analyze] lite path done — rich tabs + ruggers seed");
       return;
     }
 
