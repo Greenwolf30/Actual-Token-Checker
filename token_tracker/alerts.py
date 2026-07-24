@@ -302,6 +302,14 @@ def build_alerts(
     over_2.sort(key=lambda x: -float(x["pct"]))
     whales.sort(key=lambda x: -float(x["pct"]))
 
+    # Bundles tab totals (same numbers as Bundles stats bar)
+    single_total_pct, single_total_n, bundle_single_whales = (
+        _single_holders_from_bundles(bundles_data)
+    )
+    # Prefer single-holder wallets from Bundles (non-category ≥0.01%) when present
+    if bundle_single_whales:
+        whales = bundle_single_whales
+
     # Comprehensive list: every non-LP wallet above 2% with holding %
     if over_2:
         lines_detail = [
@@ -325,18 +333,40 @@ def build_alerts(
     if whales:
         top = whales[0]
         more = f" (+{len(whales) - 1} more over 5%)" if len(whales) > 1 else ""
+        total_clause = ""
+        if single_total_pct is not None and single_total_pct > 0:
+            n_bit = (
+                f" · {single_total_n} single-holder wallet(s)"
+                if single_total_n
+                else ""
+            )
+            total_clause = (
+                f" Single holders total {single_total_pct:.2f}% of supply"
+                f"{n_bit} (from Bundles)."
+            )
         alerts.append(
             {
                 "id": "single_holder_over_5",
                 "priority": "top",
                 "severity": "high" if top["pct"] >= 15 else "medium",
-                "title": "Single holder over 5%",
+                "title": (
+                    f"Single holder over 5%"
+                    + (
+                        f" · single holders total {single_total_pct:.2f}%"
+                        if single_total_pct is not None and single_total_pct > 0
+                        else ""
+                    )
+                ),
                 "detail": (
                     f"Wallet holds {top['pct']:.2f}% of supply "
                     f"(rank #{top.get('rank')}){more}."
+                    + total_clause
                 ),
                 # Full list so UI can color-code each address by bag %
                 "wallets": whales[:12],
+                # Same totals as Bundles → Single holders
+                "single_holders_total_pct": single_total_pct,
+                "single_holders_wallet_count": single_total_n,
             }
         )
 
@@ -502,9 +532,99 @@ def _dexscreener_socials_alert(socials: dict[str, Any] | None) -> dict[str, Any]
     }
 
 
+def _single_holders_from_bundles(
+    bundles_data: dict[str, Any] | None,
+) -> tuple[float | None, int | None, list[dict[str, Any]]]:
+    """
+    Single-holders totals + wallets over 5% from Bundles tab data.
+
+    Returns (single_holders_total_pct, wallet_count, whales_over_5).
+    Uses the same summary fields as Bundles → Single holders.
+    """
+    bundles_data = bundles_data or {}
+    if not bundles_data.get("ok"):
+        return None, None, []
+    summary = bundles_data.get("summary") or {}
+    raw_pct = summary.get("single_holders_total_pct")
+    raw_n = summary.get("single_holders_wallet_count")
+    total_pct: float | None
+    total_n: int | None
+    try:
+        total_pct = float(raw_pct) if raw_pct is not None else None
+    except (TypeError, ValueError):
+        total_pct = None
+    try:
+        total_n = int(raw_n) if raw_n is not None else None
+    except (TypeError, ValueError):
+        total_n = None
+
+    try:
+        from .holders import holding_priority_label
+    except Exception:  # noqa: BLE001
+
+        def holding_priority_label(pct: float | None) -> str:  # type: ignore[misc]
+            if pct is None:
+                return "unknown"
+            if pct < 2:
+                return "none"
+            if pct <= 5:
+                return "low"
+            if pct < 10:
+                return "medium"
+            if pct < 15:
+                return "high"
+            return "critical"
+
+    whales: list[dict[str, Any]] = []
+    for h in bundles_data.get("single_holders") or []:
+        if not isinstance(h, dict):
+            continue
+        try:
+            pct = (
+                float(h["pct_supply"])
+                if h.get("pct_supply") is not None
+                else (
+                    float(h["pct"])
+                    if h.get("pct") is not None
+                    else None
+                )
+            )
+        except (TypeError, ValueError):
+            pct = None
+        if pct is None or pct <= 5.0:
+            continue
+        whales.append(
+            {
+                "wallet": h.get("wallet") or h.get("owner"),
+                "pct": pct,
+                "rank": h.get("rank"),
+                "label": h.get("label"),
+                "insider": bool(h.get("insider")),
+                "hold_priority": holding_priority_label(pct),
+            }
+        )
+    whales.sort(key=lambda x: -float(x["pct"]))
+
+    # If summary total missing but we have rows, sum unique bags
+    if total_pct is None:
+        try:
+            from .bundles import _single_holders_total  # type: ignore[attr-defined]
+
+            total_pct, total_n = _single_holders_total(bundles_data)
+        except Exception:  # noqa: BLE001
+            if whales:
+                try:
+                    total_pct = sum(float(w["pct"]) for w in whales)
+                    total_n = len(whales)
+                except (TypeError, ValueError):
+                    pass
+
+    return total_pct, total_n, whales
+
+
 def _bundle_pct_alert(bundles_data: dict[str, Any] | None) -> dict[str, Any] | None:
     """
-    Alert from total estimated bundle % of supply.
+    Alert from Bundles tab total_bundle_pct (same number as Total % bundles).
 
     Thresholds (highest matching tier only):
       5–20%            → low to moderate (informational warn)
@@ -516,7 +636,10 @@ def _bundle_pct_alert(bundles_data: dict[str, Any] | None) -> dict[str, Any] | N
     if not bundles_data.get("ok"):
         return None
     summary = bundles_data.get("summary") or {}
+    # Prefer Bundles tab Total % bundles (deduped unique wallets)
     raw = summary.get("total_bundle_pct")
+    if raw is None:
+        raw = summary.get("estimated_bundle_pct") or summary.get("bundle_pct")
     if raw is None:
         # fallback: sum similar-size groups combined estimate
         try:
@@ -540,74 +663,80 @@ def _bundle_pct_alert(bundles_data: dict[str, Any] | None) -> dict[str, Any] | N
         return None
 
     flagged_n = summary.get("flagged_wallets")
+    if flagged_n is None:
+        flagged_n = summary.get("total_bundle_unique_wallets")
     extra = ""
     if flagged_n is not None:
         extra = (
-            f" · {flagged_n} unique wallet(s) in bundle estimate "
+            f" · {flagged_n} unique wallet(s) in Total bundle "
             f"(deduped across vectors — no double-count)"
         )
 
+    # Shared payload fields — same total as Bundles stats bar
+    def _payload(
+        *,
+        aid: str,
+        severity: str,
+        title: str,
+        detail_core: str,
+        threshold: int,
+    ) -> dict[str, Any]:
+        return {
+            "id": aid,
+            "priority": "top",
+            "severity": severity,
+            "title": f"{title} · total bundle {pct:.2f}%",
+            "detail": (
+                f"Total bundle {pct:.2f}% of supply. "
+                + detail_core
+                + " Heuristics only; not financial advice."
+                + extra
+            ),
+            "bundle_pct": pct,
+            "total_bundle_pct": pct,
+            "threshold": threshold,
+        }
+
     if pct >= 50.0:
-        return {
-            "id": "bundle_pct_50",
-            "priority": "top",
-            "severity": "critical",
-            "title": "RUG IMMINENT — bundle ≥ 50%",
-            "detail": (
-                f"Estimated bundle share ≈ {pct:.1f}% of supply (≥ 50%). "
-                "Extremely concentrated coordinated supply — rug imminent risk. "
-                "Heuristics only; not financial advice."
-                + extra
+        return _payload(
+            aid="bundle_pct_50",
+            severity="critical",
+            title="RUG IMMINENT — bundle ≥ 50%",
+            detail_core=(
+                "Extremely concentrated coordinated supply — rug imminent risk."
             ),
-            "bundle_pct": pct,
-            "threshold": 50,
-        }
+            threshold=50,
+        )
     if pct > 27.0:
-        return {
-            "id": "bundle_pct_27",
-            "priority": "top",
-            "severity": "critical",
-            "title": "DANGER — bundle 27% or higher",
-            "detail": (
-                f"Estimated bundle share ≈ {pct:.1f}% of supply (> 27%). "
-                "Most likely rug risk — coordinated wallets control a large slice of supply. "
-                "Heuristics only; not financial advice."
-                + extra
+        return _payload(
+            aid="bundle_pct_27",
+            severity="critical",
+            title="DANGER — bundle 27% or higher",
+            detail_core=(
+                "Most likely rug risk — coordinated wallets control a large "
+                "slice of supply."
             ),
-            "bundle_pct": pct,
-            "threshold": 27,
-        }
+            threshold=27,
+        )
     if pct > 20.0:
-        # > 20% and ≤ 27%
-        return {
-            "id": "bundle_pct_20",
-            "priority": "top",
-            "severity": "high",
-            "title": "Bundle higher than 20%",
-            "detail": (
-                f"Estimated bundle share ≈ {pct:.1f}% of supply (> 20%). "
-                "High possibility of rug — watch for coordinated dumps. "
-                "Heuristics only; not financial advice."
-                + extra
-            ),
-            "bundle_pct": pct,
-            "threshold": 20,
-        }
+        return _payload(
+            aid="bundle_pct_20",
+            severity="high",
+            title="Bundle higher than 20%",
+            detail_core="High possibility of rug — watch for coordinated dumps.",
+            threshold=20,
+        )
     # 5% ≤ pct ≤ 20%
-    return {
-        "id": "bundle_pct_5_20",
-        "priority": "top",
-        "severity": "medium",
-        "title": "Bundle amount low to moderate",
-        "detail": (
-            f"Estimated bundle share ≈ {pct:.1f}% of supply (in the 5%–20% range). "
-            "Bundle amount is low to moderate — worth watching, not an extreme signal by itself. "
-            "Heuristics only; not financial advice."
-            + extra
+    return _payload(
+        aid="bundle_pct_5_20",
+        severity="medium",
+        title="Bundle amount low to moderate",
+        detail_core=(
+            "Bundle amount is low to moderate — worth watching, not an extreme "
+            "signal by itself."
         ),
-        "bundle_pct": pct,
-        "threshold": 5,
-    }
+        threshold=5,
+    )
 
 
 def format_alerts_text(data: dict[str, Any]) -> str:
@@ -724,7 +853,30 @@ def format_alerts_text(data: dict[str, Any]) -> str:
             lines.append(f"     {detail}")
         for it in (a.get("items") or [])[:6]:
             lines.append(f"     • {it}")
-        if a.get("hide_wallets") or a.get("id") == "rugwatch_flagged":
+        aid = str(a.get("id") or "")
+        # Single holders total — same number as Bundles → Single holders
+        if aid == "single_holder_over_5":
+            sp = a.get("single_holders_total_pct")
+            sn = a.get("single_holders_wallet_count")
+            try:
+                if sp is not None and float(sp) > 0:
+                    n_s = f" ({int(sn)} wallet(s))" if sn is not None else ""
+                    lines.append(
+                        f"     Single holders total: {float(sp):.2f}%{n_s}"
+                    )
+            except (TypeError, ValueError):
+                pass
+        # Total bundle % — same number as Bundles → Total % bundles
+        if aid.startswith("bundle_pct"):
+            bp = a.get("total_bundle_pct")
+            if bp is None:
+                bp = a.get("bundle_pct")
+            try:
+                if bp is not None and float(bp) > 0:
+                    lines.append(f"     Total bundle: {float(bp):.2f}%")
+            except (TypeError, ValueError):
+                pass
+        if a.get("hide_wallets") or aid == "rugwatch_flagged":
             ftp = a.get("flagged_total_pct")
             if ftp is not None:
                 try:
@@ -744,7 +896,7 @@ def format_alerts_text(data: dict[str, Any]) -> str:
             lines.append("")
             return
         wallets = a.get("wallets") or []
-        if not wallets and a.get("id") in {
+        if not wallets and aid in {
             "holders_over_2_pct",
             "single_holder_over_5",
         }:
@@ -753,7 +905,7 @@ def format_alerts_text(data: dict[str, Any]) -> str:
             )
             lines.append("")
             return
-        max_w = 40 if a.get("list_all") or a.get("id") == "holders_over_2_pct" else 8
+        max_w = 40 if a.get("list_all") or aid == "holders_over_2_pct" else 8
         _pri_order = {
             "critical": 0,
             "high": 1,
