@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v163";
+const ADTC_CLIENT_VERSION = "v164";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 // Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
 try {
@@ -6043,7 +6043,67 @@ function wireRuggersExportButtons() {
   }
 }
 
+/** Lite Ruggers tab — never rebuild huge seller tables (freezes Opera GX). */
+function showRuggersLitePanel() {
+  const body = $("ruggersBody");
+  const dump = $("text-ruggers");
+  let mintList = "";
+  try {
+    // Only list mint keys — do not walk wallet maps
+    const raw = localStorage.getItem(RUGGERS_KEY);
+    if (raw && raw.length < 500000) {
+      const store = JSON.parse(raw);
+      if (store && typeof store === "object") {
+        const keys = Object.keys(store)
+          .filter((k) => k && k !== "__meta")
+          .slice(0, 25);
+        if (keys.length) {
+          mintList =
+            "<br/><br/><strong>Tracked mints (names only):</strong><br/>" +
+            keys
+              .map((k) => {
+                const rec = store[k];
+                const sym =
+                  rec && rec.symbol ? "$" + String(rec.symbol) + " · " : "";
+                const addr = rec && rec.address ? String(rec.address) : k;
+                return (
+                  "· " +
+                  escHtml(sym) +
+                  escHtml(String(addr).slice(0, 12)) +
+                  "…"
+                );
+              })
+              .join("<br/>");
+        }
+      }
+    }
+  } catch (_) {
+    mintList = "";
+  }
+  if (body) {
+    body.innerHTML =
+      '<p class="logs-empty"><strong>Ruggers · lite mode</strong><br/>' +
+      "Full seller / swing tables freeze Opera GX, so they stay off here.<br/>" +
+      "Use <strong>Logs</strong> for recent analyzes, or open " +
+      "<code>?full=1</code> in Edge/Chrome for full Ruggers." +
+      mintList +
+      "</p>";
+  }
+  if (dump) {
+    dump.textContent =
+      "Ruggers lite mode — full panel disabled to keep the page clickable.";
+  }
+}
+
 function refreshRuggersPanel(focusKey) {
+  if (useLiteUi()) {
+    try {
+      showRuggersLitePanel();
+    } catch (err) {
+      console.warn("[ruggers lite]", err);
+    }
+    return;
+  }
   try {
     _refreshRuggersPanelImpl(focusKey);
   } catch (err) {
@@ -10000,23 +10060,16 @@ function renderBundlesUiOperaLite(data) {
   const textEl = $("text-bundles");
   if (textEl && textFallback) textEl.textContent = String(textFallback);
 
-  if (!view) {
-    root.innerHTML =
-      '<p class="logs-empty">Run a <strong>full Analyze</strong> (not Quick) on a Solana mint to load Bundles cards.</p>';
-    return;
-  }
-  if (!view.ok) {
-    root.innerHTML =
-      '<div class="bun-hint"><strong>Bundles unavailable</strong><br />' +
-      escHtml(view.error || "No data") +
-      "</div>";
-    return;
-  }
-  const s = view.summary || {};
-  const risk =
-    s.bundle_risk_score != null && Number.isFinite(Number(s.bundle_risk_score))
-      ? Number(s.bundle_risk_score)
-      : null;
+  const s = (view && view.summary) || {};
+  const hasSummary =
+    view &&
+    view.ok !== false &&
+    s &&
+    typeof s === "object" &&
+    (s.total_bundle_pct != null ||
+      s.bundle_risk_score != null ||
+      s.similar_size_total_pct != null);
+
   function row(label, val) {
     return (
       '<div class="bun-stat"><span class="bun-stat-label">' +
@@ -10030,47 +10083,50 @@ function renderBundlesUiOperaLite(data) {
     if (n == null || !Number.isFinite(Number(n))) return "—";
     return Number(n).toFixed(2) + "%";
   }
+
   let html =
-    '<p class="bun-delta-note" data-adtc-ver="1">Bundles · Opera lite mode · ' +
+    '<p class="bun-delta-note" data-adtc-ver="1">Bundles · lite · ' +
     escHtml(
       typeof ADTC_CLIENT_VERSION !== "undefined" ? ADTC_CLIENT_VERSION : "?"
     ) +
-    " — full wallet tables deferred so the page stays clickable</p>";
-  html += '<div class="bun-stats">';
-  html += row("Risk", risk != null ? String(Math.round(risk)) : "—");
-  html += row("Total bundle", pct(s.total_bundle_pct));
-  html += row("Similar-sized", pct(s.similar_size_total_pct));
-  html += row("Fresh", pct(s.fresh_total_pct));
-  html += row("Multi-send", pct(s.multi_send_total_pct));
-  html += row("Shared SOL", pct(s.funding_total_pct));
-  html += row("Single holders", pct(s.single_holders_total_pct));
-  html += "</div>";
-  html +=
-    '<p class="bun-hint" style="margin-top:12px">Overview / Holders / Alerts tabs have full text. ' +
-    "Building every Bundles wallet table freezes Opera GX, so they stay collapsed here.</p>";
-  html +=
-    '<p style="margin-top:10px"><button type="button" class="primary" id="bunExpandFullOpera">' +
-    "Load full Bundles tables (may freeze briefly)</button></p>";
-  root.innerHTML = html;
-  const btn = $("bunExpandFullOpera");
-  if (btn) {
-    btn.addEventListener("click", () => {
-      try {
-        window.__ADTC_FULL_UI__ = true;
-      } catch (_) {}
-      btn.disabled = true;
-      btn.textContent = "Building…";
-      setTimeout(() => {
-        try {
-          renderBundlesUi(data);
-        } catch (err) {
-          console.error("[bundles full expand]", err);
-          btn.disabled = false;
-          btn.textContent = "Retry full tables";
-        }
-      }, 30);
-    });
+    "</p>";
+
+  if (hasSummary) {
+    const risk =
+      s.bundle_risk_score != null && Number.isFinite(Number(s.bundle_risk_score))
+        ? Number(s.bundle_risk_score)
+        : null;
+    html += '<div class="bun-stats">';
+    html += row("Risk", risk != null ? String(Math.round(risk)) : "—");
+    html += row("Total bundle", pct(s.total_bundle_pct));
+    html += row("Similar-sized", pct(s.similar_size_total_pct));
+    html += row("Fresh", pct(s.fresh_total_pct));
+    html += row("Multi-send", pct(s.multi_send_total_pct));
+    html += row("Shared SOL", pct(s.funding_total_pct));
+    html += row("Single holders", pct(s.single_holders_total_pct));
+    html += "</div>";
+  } else if (view && view.ok === false) {
+    html +=
+      '<div class="bun-hint"><strong>Bundles unavailable</strong><br />' +
+      escHtml(view.error || "No structured bundles data") +
+      "</div>";
+  } else {
+    html +=
+      '<p class="bun-hint">No structured bundle stats in this response. See text below / uncheck Quick for fuller holders-based bundles.</p>';
   }
+
+  // Always show text report when present (holders/alerts path also has plain text)
+  if (textFallback && String(textFallback).trim()) {
+    html +=
+      '<pre style="white-space:pre-wrap;word-break:break-word;margin-top:12px;padding:10px;border:1px solid #323a48;border-radius:8px;background:#11141a;color:#e8eef8;font:12px/1.45 Consolas,monospace;max-height:50vh;overflow:auto">' +
+      escHtml(String(textFallback).slice(0, 12000)) +
+      "</pre>";
+  }
+
+  html +=
+    '<p class="bun-hint" style="margin-top:12px">Wallet-by-wallet tables stay off in lite mode so Opera stays clickable. ' +
+    "Use <code>?full=1</code> in Edge/Chrome for full tables.</p>";
+  root.innerHTML = html;
 }
 
 function renderBundlesUi(data) {
@@ -12610,12 +12666,10 @@ async function analyze(ev) {
   }
   const chain = $("chain") ? $("chain").value || null : null;
   const lite = useLiteUi();
-  // Lite (default): always Quick + no heavy Helius options
-  let quick = $("quick") ? $("quick").checked : false;
+  // Lite: allow full or quick (user checkbox). Only force off heavy Helius options.
+  const quick = $("quick") ? $("quick").checked : false;
   if (lite) {
-    quick = true;
     try {
-      if ($("quick")) $("quick").checked = true;
       if ($("useFresh")) $("useFresh").checked = false;
       if ($("useMultiSend")) $("useMultiSend").checked = false;
       if ($("useSharedSol")) $("useSharedSol").checked = false;
@@ -12628,12 +12682,18 @@ async function analyze(ev) {
   const btn = $("analyzeBtn");
   if (btn) {
     btn.disabled = true;
-    btn.textContent = lite || quick ? "Quick…" : "Analyzing…";
+    btn.textContent = quick ? "Quick…" : "Analyzing…";
   }
   try {
     const st = $("serverStatus");
     if (st) {
-      st.textContent = lite ? "lite analyze…" : quick ? "quick analyze…" : "analyzing…";
+      st.textContent = lite
+        ? quick
+          ? "lite quick…"
+          : "lite analyze…"
+        : quick
+          ? "quick analyze…"
+          : "analyzing…";
       st.className = "pill muted";
     }
   } catch (_) {}
@@ -12731,23 +12791,70 @@ async function analyze(ev) {
       switchTab("overview");
     } catch (_) {}
 
-    // 2) Lite: overview text only; skip holders/alerts/maps/about/bundles tables
+    // 2) Lite: paint ALL text tabs (plain) + bundles summary — no heavy tables/ruggers
     if (lite) {
+      const sections = (data && data.sections) || {};
+      const order = ["overview", "alerts", "holders", "maps", "about"];
+      for (const tab of order) {
+        try {
+          const body = sections[tab];
+          if (body && String(body).trim()) {
+            setPanelText(tab, body);
+          } else if (tab === "holders" && quick) {
+            setPanelText(
+              tab,
+              "Holders skipped in Quick mode.\nUncheck Quick and run Analyze again for holder lists (still lite-safe)."
+            );
+          } else if (tab === "alerts") {
+            const am = data.alerts_meta || {};
+            setPanelText(
+              tab,
+              (am.summary && String(am.summary)) ||
+                "No alerts text in this response."
+            );
+          } else if (!body) {
+            setPanelText(tab, "(no data for this tab in lite response)");
+          }
+        } catch (e) {
+          console.warn("[lite setPanelText]", tab, e);
+        }
+        await yieldToUi(0);
+      }
+      // Bundles: stats cards + text fallback
       try {
-        const ov =
-          (data.sections && data.sections.overview) ||
-          "Lite Analyze complete. Summary bar shows market data. Open ?full=1 for full tabs (may freeze on Opera GX).";
-        setPanelText("overview", ov);
+        if (sections.bundles) setPanelText("bundles", sections.bundles);
       } catch (_) {}
+      await yieldToUi(0);
       try {
         renderBundlesUiOperaLite(data);
       } catch (err) {
         console.warn("[bundles lite]", err);
+        try {
+          const root = $("bundlesUi");
+          if (root && sections.bundles) {
+            root.innerHTML =
+              '<pre class="panel-text" style="white-space:pre-wrap;padding:12px">' +
+              escHtml(String(sections.bundles).slice(0, 8000)) +
+              "</pre>";
+          }
+        } catch (_) {}
       }
+      try {
+        const n = (data.alerts_meta && data.alerts_meta.priority_count) || 0;
+        if (n > 0) switchTab("alerts");
+        else switchTab("overview");
+      } catch (_) {}
       await yieldToUi(0);
       unstickPointerLayer();
-      // No finishAnalyzeHeavyWork on lite — that was freezing Opera
-      console.info("[analyze] lite path done — skipped heavy finish");
+      // Light log entry only — no ruggers process / full save
+      setTimeout(() => {
+        try {
+          recordAnalyzeInLogs(data, query);
+        } catch (e) {
+          console.warn("[logs lite]", e);
+        }
+      }, 300);
+      console.info("[analyze] lite path done — tabs painted, heavy finish skipped");
       return;
     }
 
@@ -13000,15 +13107,14 @@ async function init() {
     });
   }
 
-  // Default lite: Quick on, heavy Helius options off (use ?full=1 for heavy)
+  // Lite defaults: leave Quick for user; force heavy Helius options off
   try {
     if (useLiteUi()) {
-      if ($("quick")) $("quick").checked = true;
       if ($("useFresh")) $("useFresh").checked = false;
       if ($("useMultiSend")) $("useMultiSend").checked = false;
       if ($("useSharedSol")) $("useSharedSol").checked = false;
       console.info(
-        "[boot] lite UI defaults (Quick on). Add ?full=1 for full Analyze tables."
+        "[boot] lite UI: Fresh/Multi/Shared SOL off. Uncheck Quick for holders. ?full=1 for full UI."
       );
     }
   } catch (_) {}

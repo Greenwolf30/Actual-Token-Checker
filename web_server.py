@@ -918,12 +918,12 @@ def apply_lite_response(payload: dict[str, Any]) -> dict[str, Any]:
     secs = out.get("sections") if isinstance(out.get("sections"), dict) else {}
     slim_secs: dict[str, str] = {}
     for key, max_len in (
-        ("overview", 3500),
-        ("alerts", 2500),
-        ("maps", 1500),
-        ("about", 2500),
-        ("holders", 2000),
-        ("bundles", 1500),
+        ("overview", 5000),
+        ("alerts", 6000),
+        ("maps", 3000),
+        ("about", 4000),
+        ("holders", 12000),
+        ("bundles", 8000),
     ):
         val = secs.get(key)
         if val is None:
@@ -1497,9 +1497,9 @@ class WebHandler(BaseHTTPRequestHandler):
                     if not bool(body.get("fresh_multi")):
                         include_fresh = False
                         include_multi_send = False
-            # Lite clients (Opera GX): force quick + skip heavy Helius scans
+            # Lite clients (Opera GX): keep full/quick as requested, but skip
+            # the heaviest optional Helius scans and strip huge response fields.
             if lite:
-                quick = True
                 include_fresh = False
                 include_multi_send = False
                 include_shared_sol = False
