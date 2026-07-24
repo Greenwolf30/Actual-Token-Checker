@@ -1420,6 +1420,20 @@ def run_gui() -> None:
             pos = end
         return ranges
 
+    def _alerts_skip_pct_color_line(line: str) -> bool:
+        """Alerts: Single holders total % stays uncolored (Total bundle is colored)."""
+        if re.search(r"\bsingle\s*holders?\s*total\b", line, re.I):
+            return True
+        if re.search(r"\bsingle\s*holders?\s*≥", line, re.I):
+            return True
+        if re.search(r"\bsingle\s*holder\s*over\s*5", line, re.I):
+            return True
+        if re.search(r"\bsingle-holder wallet", line, re.I):
+            return True
+        if re.search(r"Bundles\s*→\s*Single holders", line, re.I):
+            return True
+        return False
+
     def _in_any_range(idx: int, ranges: list[tuple[int, int]]) -> bool:
         for a, b in ranges:
             if a <= idx < b:
@@ -1676,6 +1690,9 @@ def run_gui() -> None:
                 # Leave Top1 / Top5 / Top10 summary line percentages uncolored
                 line = _line_containing(content, m.start())
                 if _is_top_summary_line(line):
+                    continue
+                # Alerts: skip Single holders total %; color Total bundle etc.
+                if color_mode == "alerts" and _alerts_skip_pct_color_line(line):
                     continue
                 try:
                     n = float(m.group(1))
@@ -2200,14 +2217,14 @@ def run_gui() -> None:
             if key == "holders":
                 _render_holders_text(content, error=error)
                 return
-            # Alerts / Bundles: same address hold colors as Holders
+            # Alerts: Total bundle % colored; Single holders total uncolored
             if key == "alerts":
                 _insert_text_with_wallet_links(
                     box,
                     content,
                     error=error,
                     color_holder_pct=True,
-                    color_mode="all",
+                    color_mode="alerts",
                     wallet_hold_color=True,
                 )
                 return

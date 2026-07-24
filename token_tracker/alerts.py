@@ -643,27 +643,28 @@ def _single_holders_alert(
     single_total_n: int | None,
 ) -> dict[str, Any] | None:
     """
-    Single holders alert using Bundles single_holders_total_pct.
+    Single holders alert using Bundles single_holders_total_pct only.
 
-    Lists every Bundles single-holder wallet with bag ≥ 5%.
-    Fires when total > 0 (matches Bundles) and/or any single holder ≥ 5%.
+    Shows the total % (same as Bundles → Single holders). Does NOT list
+    individual wallets. UI should not apply hold-% color bands to this total.
     """
-    # Only wallets at/above 5% appear in the list
-    ge5 = []
+    # Count ≥5% single holders for severity only (never listed in Alerts)
+    ge5_n = 0
+    top_pct = 0.0
     for w in whales or []:
         try:
             p = float(w.get("pct"))
         except (TypeError, ValueError):
             continue
         if p >= 5.0:
-            ge5.append(w)
-    ge5.sort(key=lambda x: -float(x["pct"]))
+            ge5_n += 1
+            if p > top_pct:
+                top_pct = p
 
     has_total = single_total_pct is not None and float(single_total_pct) > 0
-    if not ge5 and not has_total:
+    if not has_total and ge5_n <= 0:
         return None
 
-    top_pct = float(ge5[0]["pct"]) if ge5 else 0.0
     if top_pct >= 15 or (
         has_total and single_total_pct is not None and float(single_total_pct) >= 15
     ):
@@ -677,45 +678,39 @@ def _single_holders_alert(
 
     if has_total and single_total_pct is not None:
         title = f"Single holders total {float(single_total_pct):.2f}%"
-        if ge5:
-            title = (
-                f"Single holders ≥5% ({len(ge5)}) · "
-                f"total {float(single_total_pct):.2f}%"
-            )
-    elif ge5:
-        title = f"Single holders ≥5% ({len(ge5)})"
     else:
-        return None
+        # Total missing but had ≥5% singles — still surface a total-style line
+        title = "Single holders total"
+        single_total_pct = top_pct if top_pct > 0 else None
+        if single_total_pct is not None:
+            title = f"Single holders total {float(single_total_pct):.2f}%"
 
-    detail_bits: list[str] = []
-    if has_total and single_total_pct is not None:
-        n_bit = (
-            f" · {int(single_total_n)} single-holder wallet(s) overall"
-            if single_total_n is not None
-            else ""
-        )
-        detail_bits.append(
-            f"Single holders total {float(single_total_pct):.2f}% of supply"
-            f"{n_bit} (same as Bundles → Single holders)."
-        )
-    if ge5:
-        detail_bits.append(
-            f"{len(ge5)} single-holder wallet(s) hold 5% or more of supply "
-            "(listed below; Bundles single holders only)."
-        )
+    n_bit = (
+        f" · {int(single_total_n)} single-holder wallet(s)"
+        if single_total_n is not None
+        else ""
+    )
+    detail = (
+        f"Single holders total {float(single_total_pct):.2f}% of supply{n_bit} "
+        "(same as Bundles → Single holders). Wallet list not shown in Alerts."
+        if single_total_pct is not None
+        else "Single holders total unavailable."
+    )
 
     return {
         "id": "single_holder_over_5",
         "priority": "top",
         "severity": severity,
         "title": title,
-        "detail": " ".join(detail_bits),
-        # Full list of single holders with ≥5% (not capped at 12)
-        "wallets": ge5,
-        "list_all": True,
+        "detail": detail,
+        # No wallet list in Alerts — total only
+        "wallets": [],
+        "list_all": False,
         "single_holders_total_pct": single_total_pct,
         "single_holders_wallet_count": single_total_n,
-        "hide_wallets": False,
+        "hide_wallets": True,
+        # Hint for UI: do not apply hold-% color bands to this slot
+        "no_pct_color": True,
     }
 
 
@@ -906,6 +901,9 @@ def _bundle_pct_alert(bundles_data: dict[str, Any] | None) -> dict[str, Any] | N
             "total_bundle_unique_wallets": flagged_n,
             "threshold": threshold,
             "hide_wallets": True,
+            # Apply hold-% color bands to Total bundle (not single holders)
+            "no_pct_color": False,
+            "color_pct": True,
         }
 
     if pct >= 50.0:
@@ -1074,7 +1072,7 @@ def format_alerts_text(data: dict[str, Any]) -> str:
         for it in (a.get("items") or [])[:6]:
             lines.append(f"     • {it}")
         aid = str(a.get("id") or "")
-        # Single holders total — same number as Bundles → Single holders
+        # Single holders total only — no wallet list, no hold-% color in UI
         if aid == "single_holder_over_5":
             sp = a.get("single_holders_total_pct")
             sn = a.get("single_holders_wallet_count")
@@ -1086,6 +1084,8 @@ def format_alerts_text(data: dict[str, Any]) -> str:
                     )
             except (TypeError, ValueError):
                 pass
+            lines.append("")
+            return
         # Similar-sized total — same number as Bundles → Similar-sized total
         if aid == "similar_wallets_large":
             sp = a.get("similar_size_total_pct")
@@ -1114,7 +1114,7 @@ def format_alerts_text(data: dict[str, Any]) -> str:
                     )
                 except (TypeError, ValueError):
                     continue
-        # Total bundle % — same number as Bundles → Total % bundles
+        # Total bundle % — same number as Bundles → Total % bundles (colored in UI)
         if aid.startswith("bundle_pct"):
             bp = a.get("total_bundle_pct")
             if bp is None:
@@ -1144,21 +1144,13 @@ def format_alerts_text(data: dict[str, Any]) -> str:
             lines.append("")
             return
         wallets = a.get("wallets") or []
-        if not wallets and aid in {
-            "holders_over_2_pct",
-            "single_holder_over_5",
-        }:
+        if not wallets and aid == "holders_over_2_pct":
             lines.append(
                 "     Wallet list will show here if value returns True"
             )
             lines.append("")
             return
-        max_w = (
-            40
-            if a.get("list_all")
-            or aid in {"holders_over_2_pct", "single_holder_over_5"}
-            else 8
-        )
+        max_w = 40 if a.get("list_all") or aid == "holders_over_2_pct" else 8
         _pri_order = {
             "critical": 0,
             "high": 1,

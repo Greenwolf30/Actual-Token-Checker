@@ -7225,6 +7225,47 @@ function colorWalletHolderPcts(html) {
 }
 
 /**
+ * Alerts tab % colors:
+ *  - Total bundle lines get hold-% priority bands (same as Bundles Total %)
+ *  - Single holders total lines stay uncolored (no wallet list either)
+ *  - Other alert rows keep normal wallet hold-% coloring
+ */
+function isAlertsSingleHoldersPctLine(plain) {
+  const t = String(plain || "");
+  if (/\bsingle\s*holders?\s*total\b/i.test(t)) return true;
+  if (/\bsingle\s*holders?\s*≥/i.test(t)) return true;
+  if (/\bsingle\s*holder\s*over\s*5/i.test(t)) return true;
+  if (/\bBundles\s*→\s*Single holders\b/i.test(t)) return true;
+  if (/\bsingle-holder wallet/i.test(t)) return true;
+  return false;
+}
+
+function isAlertsTotalBundlePctLine(plain) {
+  const t = String(plain || "");
+  if (/\btotal\s*bundle\b/i.test(t)) return true;
+  if (/\bbundle\s*≥\s*50|bundle\s*27|higher than 20%|RUG IMMINENT/i.test(t)) {
+    return true;
+  }
+  if (/\bBundle amount low to moderate\b/i.test(t)) return true;
+  return false;
+}
+
+function colorAlertsSelectivePcts(html) {
+  if (!html) return html;
+  return html
+    .split("\n")
+    .map((line) => {
+      const plain = plainTextFromHtmlLine(line);
+      // Never color single holders total %
+      if (isAlertsSingleHoldersPctLine(plain)) return line;
+      if (isUncoloredPctLine(line)) return line;
+      // Always color Total bundle % (and other remaining alert rows)
+      return colorPctTokens(line);
+    })
+    .join("\n");
+}
+
+/**
  * Holders + Logs rich formatting:
  *  - drop Solscan URL lines (keep addresses)
  *  - clickable wallet addresses
@@ -7476,9 +7517,9 @@ function setPanelText(tab, text) {
     // Wallet address: >5% yellow · >10% red · skip known LP
     html = formatHoldersRichHtml(raw);
   } else if (tab === "alerts") {
-    // Same hold-color scheme as Holders / Bundles + green section titles
+    // Total bundle % colored; Single holders total uncolored; no single-wallet list
     html = linkify(raw, true);
-    html = colorWalletHolderPcts(html);
+    html = colorAlertsSelectivePcts(html);
     html = colorHoldingAmounts(html);
     html = colorAllSectionTitles(html);
   } else if (tab === "about") {
