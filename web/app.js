@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v172";
+const ADTC_CLIENT_VERSION = "v173";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 // Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
 try {
@@ -4157,25 +4157,14 @@ function ruggersMapHasWallet(map, wallet) {
 }
 
 /**
- * True if wallet is already on RugWatch / the cloud list (no need to Upload).
- * Uses local rugwatch_known (from Analyze flagged hits + prior Uploads).
- */
-function isRuggersAlreadyOnCloud(rec, wallet) {
-  if (!rec || !wallet) return false;
-  if (ruggersMapHasWallet(rec.rugwatch_known, wallet)) return true;
-  // Cross-mint Flagged sellers are already cloud/rugwatch knowledge
-  if (ruggersMapHasWallet(rec.flagged_sellers, wallet)) return true;
-  return false;
-}
-
-/**
  * True if this wallet still needs a Ruggers → RugWatch Upload.
- * Excludes: already uploaded from this mint, already on cloud/rugwatch.
+ * ONLY excludes wallets already marked by the Upload button on THIS mint.
+ * Do NOT use rugwatch_known / Analyze flags here — that zeroed Upload (N)
+ * without the user ever successfully uploading.
  */
 function ruggersWalletNeedsUpload(rec, wallet) {
   if (!wallet) return false;
   if (isRuggersAlreadyUploaded(rec, wallet)) return false;
-  if (isRuggersAlreadyOnCloud(rec, wallet)) return false;
   return true;
 }
 
@@ -5660,7 +5649,7 @@ function renderRuggersSection(title, hint, rows, exportKey, opts) {
     supplyMode === "bought"
       ? "Sum of mint-supply % currently held (bought back) across Swing wallets (capped at 100%)"
       : "Sum of mint-supply % sold across wallets in this section (capped at 100%)";
-  // Upload count = wallets that still need upload (not this-mint uploaded, not on cloud)
+  // Upload count = not yet marked by Upload button on this mint (never use Analyze flags)
   const rec = _lastRuggersRec;
   const nUpload = (rows || []).filter(
     (r) => r && r.wallet && ruggersWalletNeedsUpload(rec, r.wallet)
@@ -5680,7 +5669,7 @@ function renderRuggersSection(title, hint, rows, exportKey, opts) {
       actions +=
         '<button type="button" class="rug-upload-btn" data-rug-upload="' +
         escHtml(exportKey) +
-        '" title="Upload only wallets not yet on cloud and not already uploaded from this mint">' +
+        '" title="Upload wallets not yet uploaded from THIS mint to RugWatch (via ATC proxy)">' +
         "Upload" +
         (nUpload ? " (" + nUpload + ")" : n ? " (0)" : "") +
         "</button>";
@@ -5820,8 +5809,8 @@ function ruggersRowsForExportKey(key) {
 }
 
 /**
- * Section rows that still need Upload (not this-mint uploaded, not already on cloud).
- * Upload (N) and the upload payload use this only — never count already-done wallets.
+ * Section rows still needing Upload (not yet marked by Upload button on this mint).
+ * Upload (N) + payload. Server still skips true cloud duplicates.
  */
 function ruggersRowsNotYetUploaded(key) {
   const rows = ruggersRowsForExportKey(key);
@@ -6119,19 +6108,123 @@ async function rugwatchFetchJson(url, options, opts) {
  * Import and push are separate requests so a GitHub push crash/502 cannot wipe
  * a successful import (and so the browser gets CORS JSON instead of HTML 502).
  */
+/**
+ * POST to RugWatch via ATC same-origin proxy first (reliable), then direct URL.
+ * Never marks wallets uploaded — caller decides only after ok:true.
+ * Returns { ok, data, via, error, status }.
+ */
+async function postRuggersToRugwatch(kind, bodyObj, headers) {
+  const base = rugwatchApiBase();
+  const directPath = kind === "push" ? "/api/push-cloud" : "/api/upload";
+  const proxyPath =
+    kind === "push" ? "/api/rugwatch/push-cloud" : "/api/rugwatch/upload";
+  const body = JSON.stringify(bodyObj || {});
+  const opts = {
+    method: "POST",
+    mode: "cors",
+    headers: headers || { "Content-Type": "application/json", Accept: "application/json" },
+    body: body,
+  };
+
+  // 1) Same-origin ATC proxy (server talks to RugWatch — no browser CORS)
+  try {
+    const proxyUrl = apiUrl(proxyPath);
+    const proxyHeaders = Object.assign({}, opts.headers);
+    // Prefer ATC site token for same-origin gate; keep any X-API-Token already set
+    try {
+      const siteTok = siteToken();
+      if (siteTok && !proxyHeaders["X-API-Token"]) {
+        proxyHeaders["X-API-Token"] = siteTok;
+      }
+    } catch (_) {
+      /* ignore */
+    }
+    const r = await fetch(proxyUrl, {
+      method: "POST",
+      headers: proxyHeaders,
+      body: body,
+    });
+    const text = await r.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch (_) {
+      data = null;
+    }
+    // Proxy exists and returned JSON
+    if (data && typeof data === "object") {
+      // 404 from old ATC without proxy → fall through to direct
+      if (r.status === 404 && !data.proxy) {
+        /* fall through */
+      } else {
+        return {
+          ok: !!(r.ok && data.ok),
+          data: data,
+          via: "proxy",
+          error: data.ok
+            ? null
+            : (data.error || "Proxy upload failed (HTTP " + r.status + ")"),
+          status: r.status,
+        };
+      }
+    }
+  } catch (proxyErr) {
+    console.warn("[ruggers upload] proxy failed, trying direct", proxyErr);
+  }
+
+  // 2) Direct browser → RugWatch (with wake + retries)
+  const upResult = await rugwatchFetchJson(
+    base + directPath,
+    opts,
+    {
+      attempts: kind === "push" ? 2 : 3,
+      wake: kind !== "push",
+      label: kind,
+    }
+  );
+  if (upResult.error) {
+    return {
+      ok: false,
+      data: null,
+      via: "direct",
+      error: formatRugwatchFetchError(upResult.error, base, kind === "push" ? "Push cloud" : "Upload"),
+      status: 0,
+    };
+  }
+  const data = upResult.data;
+  if (!data || typeof data !== "object") {
+    return {
+      ok: false,
+      data: null,
+      via: "direct",
+      error:
+        "RugWatch returned non-JSON (HTTP " +
+        (upResult.response && upResult.response.status) +
+        "). Body: " +
+        String(upResult.text || "").slice(0, 160),
+      status: upResult.response && upResult.response.status,
+    };
+  }
+  return {
+    ok: !!(upResult.ok && data.ok),
+    data: data,
+    via: "direct",
+    error: data.ok
+      ? null
+      : (data.error ||
+        "Upload failed (HTTP " +
+          (upResult.response && upResult.response.status) +
+          ")"),
+    status: upResult.response && upResult.response.status,
+  };
+}
+
 async function uploadRuggersSectionToCloud(exportKey) {
   const allRows = ruggersRowsForExportKey(exportKey);
   const rows = ruggersRowsNotYetUploaded(exportKey);
   const recForCount = _lastRuggersRec;
   const nAlreadyUploaded = (allRows || []).filter(
     (r) => r && r.wallet && isRuggersAlreadyUploaded(recForCount, r.wallet)
-  ).length;
-  const nAlreadyCloud = (allRows || []).filter(
-    (r) =>
-      r &&
-      r.wallet &&
-      !isRuggersAlreadyUploaded(recForCount, r.wallet) &&
-      isRuggersAlreadyOnCloud(recForCount, r.wallet)
   ).length;
   if (!allRows.length) {
     alert(
@@ -6141,20 +6234,11 @@ async function uploadRuggersSectionToCloud(exportKey) {
     return;
   }
   if (!rows.length) {
-    const parts = [];
-    if (nAlreadyUploaded) {
-      parts.push(nAlreadyUploaded + " already uploaded from this mint");
-    }
-    if (nAlreadyCloud) {
-      parts.push(nAlreadyCloud + " already on the cloud / RugWatch");
-    }
     alert(
-      "Nothing to upload — Upload only counts wallets that still need it.\n\n" +
-        "Section has " +
+      "Nothing to upload — all " +
         allRows.length +
-        " wallet(s); 0 need upload" +
-        (parts.length ? " (" + parts.join("; ") + ")" : "") +
-        ".\n\n" +
+        " wallet(s) were already uploaded from THIS mint via the Upload button.\n\n" +
+        "Export still downloads the full section.\n" +
         "If this is wrong, clear Ruggers track for this mint and re-Analyze."
     );
     return;
@@ -6162,29 +6246,26 @@ async function uploadRuggersSectionToCloud(exportKey) {
   const section = ruggersExportLabel(exportKey);
   const payload = buildRuggersExportPayload(exportKey, rows);
   const base = rugwatchApiBase();
-  const skipParts = [];
-  if (nAlreadyUploaded) {
-    skipParts.push(nAlreadyUploaded + " already uploaded from this mint");
-  }
-  if (nAlreadyCloud) {
-    skipParts.push(nAlreadyCloud + " already on the cloud");
-  }
   const ok = window.confirm(
     "Upload " +
       rows.length +
-      " wallet(s) that need uploading from “" +
+      " wallet(s) from “" +
       section +
       "” to RugWatch?\n\n" +
       "(Section has " +
       allRows.length +
       " total" +
-      (skipParts.length ? "; skipping " + skipParts.join(" + ") : "") +
+      (nAlreadyUploaded
+        ? "; " + nAlreadyUploaded + " already uploaded from this mint are skipped"
+        : "") +
       ".)\n\n" +
-      "1) Import only these wallets (already on cloud/local still skipped by server)\n" +
-      "2) Push cloud → GitHub if anything new was added\n\n" +
-      "RugWatch:\n" +
+      "Target: " +
       base +
-      "\n\nContinue?"
+      "\n(via ATC server proxy when available)\n\n" +
+      "1) Import wallets (server skips true cloud duplicates)\n" +
+      "2) Push cloud → GitHub\n\n" +
+      "Upload (N) only drops after a successful API response.\n\n" +
+      "Continue?"
   );
   if (!ok) return;
 
@@ -6197,13 +6278,18 @@ async function uploadRuggersSectionToCloud(exportKey) {
     btn.textContent = "Uploading…";
   }
 
+  // Snapshot count before — on failure we must NOT reduce Upload (N)
+  let markedOk = false;
+
   try {
     const headers = {
       "Content-Type": "application/json",
       Accept: "application/json",
     };
-    // Optional: same passcode as RugWatch site token if configured
+    // ATC site token (for proxy gate) + optional RugWatch token
     try {
+      const siteTok = siteToken();
+      if (siteTok) headers["X-API-Token"] = siteTok;
       const tok =
         localStorage.getItem("rugwatch_site_token") ||
         sessionStorage.getItem("rugwatch_site_token") ||
@@ -6213,7 +6299,6 @@ async function uploadRuggersSectionToCloud(exportKey) {
       /* ignore */
     }
 
-    // Send wallets[] + plain text lines so RugWatch always has something to parse
     const addrLines = (payload.wallets || [])
       .map((w) => (w && (w.address || w.wallet)) || "")
       .filter(Boolean)
@@ -6222,89 +6307,43 @@ async function uploadRuggersSectionToCloud(exportKey) {
       throw new Error("No wallet addresses in payload after filter.");
     }
 
-    // Import ONLY (push_cloud false). Inline push was crashing RugWatch on Render
-    // (502 HTML without CORS → browser “Failed to fetch”).
     if (btn) btn.textContent = "Uploading…";
-    const upResult = await rugwatchFetchJson(
-      base + "/api/upload",
+    const upResult = await postRuggersToRugwatch(
+      "upload",
       {
-        method: "POST",
-        mode: "cors",
-        headers,
-        body: JSON.stringify({
-          format: payload.format || "rugwatch_wallets_v1",
-          wallets: payload.wallets,
-          text: addrLines,
-          source: "adtc_ruggers_" + section,
-          push_cloud: false,
-        }),
+        format: payload.format || "rugwatch_wallets_v1",
+        wallets: payload.wallets,
+        text: addrLines,
+        source: "adtc_ruggers_" + section,
+        push_cloud: false,
       },
-      { attempts: 3, wake: true, label: "upload" }
+      headers
     );
-    if (upResult.error) {
+    if (!upResult.ok || !upResult.data) {
       throw new Error(
-        formatRugwatchFetchError(upResult.error, base, "Upload")
+        upResult.error ||
+          "Upload failed — RugWatch did not accept the wallets. Count was NOT reduced."
       );
     }
-    const up = upResult.response;
-    let upData = upResult.data;
-    if (!upData || typeof upData !== "object") {
-      throw new Error(
-        "RugWatch upload returned non-JSON (HTTP " +
-          (up && up.status) +
-          "). Is " +
-          base +
-          " awake?\nBody: " +
-          String(upResult.text || "").slice(0, 160)
-      );
-    }
-    if (!up.ok || !upData.ok) {
-      throw new Error(
-        (upData && upData.error) ||
-          "Upload failed (HTTP " +
-            up.status +
-            "). Open RugWatch (" +
-            base +
-            ") and retry."
-      );
-    }
+    const upData = upResult.data;
 
     // Separate Push cloud — never fail the whole upload if push dies
     let cloud = upData.cloud || null;
     let pushWarning = "";
     if (btn) btn.textContent = "Pushing cloud…";
     try {
-      const pushResult = await rugwatchFetchJson(
-        base + "/api/push-cloud",
-        {
-          method: "POST",
-          mode: "cors",
-          headers,
-          body: JSON.stringify({}),
-        },
-        { attempts: 2, wake: false, label: "push-cloud" }
-      );
-      if (pushResult.error) {
+      const pushResult = await postRuggersToRugwatch("push", {}, headers);
+      if (!pushResult.ok) {
         pushWarning =
-          "Push cloud network error: " +
-          String(
-            (pushResult.error && pushResult.error.message) || pushResult.error
-          ) +
-          " — wallets may still be in RugWatch local DB. Open RugWatch and click Push cloud.";
-        console.warn("[ruggers upload] push-cloud", pushWarning);
-        cloud = cloud || { ok: false, error: pushWarning };
+          "Push cloud failed: " +
+          String(pushResult.error || "unknown") +
+          " — wallets may be in RugWatch local DB only. Open RugWatch → Push cloud.";
+        console.warn("[ruggers upload] push-cloud", pushWarning, pushResult);
+        cloud = (pushResult.data && typeof pushResult.data === "object")
+          ? pushResult.data
+          : { ok: false, error: pushWarning };
       } else {
-        const pushData =
-          pushResult.data && typeof pushResult.data === "object"
-            ? pushResult.data
-            : { ok: false, error: "Push cloud bad response" };
-        cloud = pushData;
-        if (!pushResult.ok || !cloud.ok) {
-          pushWarning =
-            (cloud && cloud.error) ||
-            "Push cloud failed — wallets may still be in RugWatch local DB. Open RugWatch and click Push cloud.";
-          console.warn("[ruggers upload] push-cloud", pushWarning, cloud);
-        }
+        cloud = pushResult.data || { ok: true };
       }
     } catch (pushErr) {
       pushWarning = String(
@@ -6315,12 +6354,6 @@ async function uploadRuggersSectionToCloud(exportKey) {
     }
 
     const imported = upData.imported != null ? upData.imported : 0;
-    const skipEx =
-      upData.skipped_existing != null
-        ? upData.skipped_existing
-        : upData.skipped != null
-          ? upData.skipped
-          : 0;
     const skipCloudRaw =
       upData.skipped_cloud != null ? upData.skipped_cloud : null;
     const skipCloudN = Number(skipCloudRaw);
@@ -6348,15 +6381,17 @@ async function uploadRuggersSectionToCloud(exportKey) {
           : cloud && cloud.error
             ? "failed: " + cloud.error
             : "n/a";
-    // Mark as this-mint Upload (stay in category lanes — never Flagged here)
+
+    // ONLY mark after RugWatch accepted the request (ok:true).
+    // Failed / network errors never reach here — Upload (N) stays the same.
     try {
       markRuggersUploadedAsFlagged(exportKey, rows);
+      markedOk = true;
       if (_lastRuggersKey) refreshRuggersPanel(_lastRuggersKey);
     } catch (_) {
       /* ignore */
     }
 
-    // Lead with a clear cloud-duplicate notice when 1+ wallets already on cloud
     const alreadyCloudLine = alreadyOnCloud
       ? skipCloudN === 1
         ? "1 or more wallets are already on the cloud (1 wallet skipped).\n\n"
@@ -6364,12 +6399,16 @@ async function uploadRuggersSectionToCloud(exportKey) {
           skipCloudN +
           " wallets skipped).\n\n"
       : "";
+    const viaLine = upResult.via ? "Path: " + upResult.via + "\n" : "";
 
     alert(
       "RugWatch upload result\n\n" +
         alreadyCloudLine +
+        viaLine +
         "Section: " +
         section +
+        "\nWallets sent: " +
+        rows.length +
         "\nNew into local DB: " +
         imported +
         "\nSkipped (already on cloud list): " +
@@ -6404,25 +6443,35 @@ async function uploadRuggersSectionToCloud(exportKey) {
   } catch (e) {
     const baseHint = rugwatchApiBase();
     const msg = String(e.message || e);
-    // formatRugwatchFetchError already embeds tips for network failures
     const hasTips = /Failed to fetch|Target:|Common causes/i.test(msg);
     alert(
       "RugWatch Upload failed:\n\n" +
         msg +
+        "\n\nUpload count was NOT reduced (no successful mark)." +
         (hasTips
           ? ""
           : "\n\nTips:\n• Open " +
             baseHint +
             " and wait until it loads\n" +
             "• Live RugWatch: https://rugwatch.onrender.com\n" +
-            "• Check web/config.js rugwatchUrl\n" +
-            "• Free tier: cold start / 502 can take 30–60s — retry\n" +
-            "• Workaround: Export → import in RugWatch → Push cloud")
+            "• Free tier: cold start / 502 — wait 30–60s and retry\n" +
+            "• Or use Export → import in RugWatch → Push cloud")
     );
+    // Explicit: never mark on failure
+    if (markedOk) {
+      /* should not happen */
+    }
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.textContent = prev || "Upload";
+      // Restore label from fresh count if panel still has old HTML
+      if (!markedOk && prev) btn.textContent = prev;
+      else if (btn) {
+        const still = ruggersRowsNotYetUploaded(exportKey).length;
+        const total = (ruggersRowsForExportKey(exportKey) || []).length;
+        btn.textContent =
+          "Upload" + (still ? " (" + still + ")" : total ? " (0)" : "");
+      }
     }
   }
 }

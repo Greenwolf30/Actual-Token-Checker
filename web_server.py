@@ -8,6 +8,8 @@ load only from server-side .env and are never sent to the browser.
   GET  /health
   GET  /api/health
   GET  /api/rugwatch-counts  local DB + cloud wallet counts (no addresses)
+  POST /api/rugwatch/upload      proxy → RugWatch /api/upload (same-origin, no browser CORS)
+  POST /api/rugwatch/push-cloud  proxy → RugWatch /api/push-cloud
   POST /api/analyze   JSON: {"query": "...", "chain": "solana"?, "quick": false?}
   GET  /api/analyze?q=...&chain=solana&quick=0
 
@@ -26,6 +28,8 @@ import sys
 import threading
 import time
 import traceback
+import urllib.error
+import urllib.request
 from collections import defaultdict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -1471,6 +1475,15 @@ class WebHandler(BaseHTTPRequestHandler):
             stats = record_profile_view(self._client_ip())
             return self._json(200, stats)
 
+        # Same-origin proxy → live RugWatch (avoids browser CORS / HTML 502 = Failed to fetch)
+        if path in {
+            "/api/rugwatch/upload",
+            "/api/rugwatch-upload",
+            "/api/rugwatch/push-cloud",
+            "/api/rugwatch-push-cloud",
+        }:
+            return self._proxy_rugwatch_post(path)
+
         if path == "/api/analyze":
             body = self._read_json()
             q = str(body.get("query") or body.get("q") or "").strip()
@@ -1537,6 +1550,137 @@ class WebHandler(BaseHTTPRequestHandler):
             )
 
         return self._json(404, {"ok": False, "error": "not found"})
+
+    def _proxy_rugwatch_post(self, path: str) -> None:
+        """
+        Forward Ruggers Upload / Push cloud to the live RugWatch host from this
+        server (server-to-server). Browser only talks same-origin to ATC → no
+        CORS / HTML-502-as-Failed-to-fetch.
+        """
+        try:
+            from token_tracker.rugwatch_bridge import rugwatch_site_url
+        except Exception as exc:  # noqa: BLE001
+            return self._json(
+                500,
+                {
+                    "ok": False,
+                    "error": f"RugWatch bridge unavailable: {exc}",
+                    "proxy": True,
+                },
+            )
+        base = rugwatch_site_url()
+        if not base:
+            return self._json(
+                503,
+                {
+                    "ok": False,
+                    "error": "RUGWATCH_URL is disabled or unset on this ATC host.",
+                    "proxy": True,
+                },
+            )
+        if "push" in path:
+            remote_path = "/api/push-cloud"
+        else:
+            remote_path = "/api/upload"
+        remote_url = base.rstrip("/") + remote_path
+
+        # Read raw body (already consumed if _read_json was used — read here only)
+        n = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(n) if n else b"{}"
+        if not raw:
+            raw = b"{}"
+
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "Actual-Token-Checker-rugwatch-proxy/1.0",
+        }
+        # Forward optional RugWatch site token from browser
+        tok = (self.headers.get("X-API-Token") or "").strip()
+        if tok:
+            headers["X-API-Token"] = tok
+
+        # Wake + retry (Render free tier cold start / brief 502)
+        last_err = "unknown"
+        for attempt in range(4):
+            try:
+                req = urllib.request.Request(
+                    remote_url,
+                    data=raw,
+                    headers=headers,
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    body = resp.read()
+                    code = int(getattr(resp, "status", 200) or 200)
+                    # Prefer pass-through JSON
+                    try:
+                        payload = json.loads(body.decode("utf-8", errors="replace") or "{}")
+                    except json.JSONDecodeError:
+                        payload = {
+                            "ok": False,
+                            "error": "RugWatch returned non-JSON",
+                            "proxy": True,
+                            "status": code,
+                            "body_preview": body[:200].decode("utf-8", errors="replace"),
+                        }
+                        return self._json(502 if code >= 500 else code, payload)
+                    if isinstance(payload, dict):
+                        payload.setdefault("proxy", True)
+                        payload.setdefault("proxy_target", remote_url)
+                    return self._json(code, payload)
+            except urllib.error.HTTPError as exc:
+                err_body = b""
+                try:
+                    err_body = exc.read() or b""
+                except Exception:  # noqa: BLE001
+                    err_body = b""
+                # Retry gateway / cold-start
+                if exc.code in (502, 503, 504) and attempt < 3:
+                    last_err = f"HTTP {exc.code}"
+                    time.sleep(2.5 + attempt * 2.0)
+                    continue
+                try:
+                    payload = json.loads(err_body.decode("utf-8", errors="replace") or "{}")
+                    if isinstance(payload, dict):
+                        payload.setdefault("proxy", True)
+                        payload.setdefault("proxy_target", remote_url)
+                        return self._json(int(exc.code), payload)
+                except Exception:  # noqa: BLE001
+                    pass
+                return self._json(
+                    int(exc.code) if exc.code else 502,
+                    {
+                        "ok": False,
+                        "error": f"RugWatch HTTP {exc.code}",
+                        "proxy": True,
+                        "proxy_target": remote_url,
+                        "body_preview": err_body[:200].decode("utf-8", errors="replace"),
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                last_err = str(exc)
+                if attempt < 3:
+                    time.sleep(2.5 + attempt * 2.0)
+                    continue
+                return self._json(
+                    502,
+                    {
+                        "ok": False,
+                        "error": f"Could not reach RugWatch at {remote_url}: {last_err}",
+                        "proxy": True,
+                        "proxy_target": remote_url,
+                    },
+                )
+        return self._json(
+            502,
+            {
+                "ok": False,
+                "error": f"RugWatch unreachable after retries: {last_err}",
+                "proxy": True,
+                "proxy_target": remote_url,
+            },
+        )
 
     def _handle_analyze(
         self,
