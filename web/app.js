@@ -7226,9 +7226,10 @@ function colorWalletHolderPcts(html) {
 
 /**
  * Alerts tab % colors:
- *  - Total bundle lines get hold-% priority bands (same as Bundles Total %)
- *  - Single holders total lines stay uncolored (no wallet list either)
- *  - Other alert rows keep normal wallet hold-% coloring
+ *  - Total bundle % → hold-% priority bands (same as Bundles Total %)
+ *  - Similar-sized total % → same bands
+ *  - Single holders total → uncolored
+ *  - Other alert rows (wallets over 2%, etc.) keep normal coloring
  */
 function isAlertsSingleHoldersPctLine(plain) {
   const t = String(plain || "");
@@ -7240,13 +7241,10 @@ function isAlertsSingleHoldersPctLine(plain) {
   return false;
 }
 
-function isAlertsTotalBundlePctLine(plain) {
+function isAlertsBundleOrSimilarPctLine(plain) {
   const t = String(plain || "");
   if (/\btotal\s*bundle\b/i.test(t)) return true;
-  if (/\bbundle\s*≥\s*50|bundle\s*27|higher than 20%|RUG IMMINENT/i.test(t)) {
-    return true;
-  }
-  if (/\bBundle amount low to moderate\b/i.test(t)) return true;
+  if (/\bsimilar[-\s]*sized\s*total\b/i.test(t)) return true;
   return false;
 }
 
@@ -7259,7 +7257,7 @@ function colorAlertsSelectivePcts(html) {
       // Never color single holders total %
       if (isAlertsSingleHoldersPctLine(plain)) return line;
       if (isUncoloredPctLine(line)) return line;
-      // Always color Total bundle % (and other remaining alert rows)
+      // Color Total bundle + Similar-sized total + other alert wallet rows
       return colorPctTokens(line);
     })
     .join("\n");

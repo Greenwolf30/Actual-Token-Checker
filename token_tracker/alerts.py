@@ -679,37 +679,22 @@ def _single_holders_alert(
     if has_total and single_total_pct is not None:
         title = f"Single holders total {float(single_total_pct):.2f}%"
     else:
-        # Total missing but had ≥5% singles — still surface a total-style line
-        title = "Single holders total"
         single_total_pct = top_pct if top_pct > 0 else None
-        if single_total_pct is not None:
-            title = f"Single holders total {float(single_total_pct):.2f}%"
-
-    n_bit = (
-        f" · {int(single_total_n)} single-holder wallet(s)"
-        if single_total_n is not None
-        else ""
-    )
-    detail = (
-        f"Single holders total {float(single_total_pct):.2f}% of supply{n_bit} "
-        "(same as Bundles → Single holders). Wallet list not shown in Alerts."
-        if single_total_pct is not None
-        else "Single holders total unavailable."
-    )
+        if single_total_pct is None:
+            return None
+        title = f"Single holders total {float(single_total_pct):.2f}%"
 
     return {
         "id": "single_holder_over_5",
         "priority": "top",
         "severity": severity,
         "title": title,
-        "detail": detail,
-        # No wallet list in Alerts — total only
+        "detail": "",  # no notes / no duplicate % on UI
         "wallets": [],
         "list_all": False,
         "single_holders_total_pct": single_total_pct,
         "single_holders_wallet_count": single_total_n,
         "hide_wallets": True,
-        # Hint for UI: do not apply hold-% color bands to this slot
         "no_pct_color": True,
     }
 
@@ -759,44 +744,30 @@ def _similar_wallets_alert(
         severity = "info"
 
     if has_total and sim_pct is not None:
-        n_bit = f" ({int(sim_n)} wallet(s))" if sim_n is not None else ""
-        title = f"Similar-sized total {float(sim_pct):.2f}%{n_bit}"
-        detail = (
-            f"Similar-sized total {float(sim_pct):.2f}% of supply{n_bit} "
-            "(same as Bundles → Similar-sized total — near-exact bags + "
-            "Rugcheck insiders, unique wallets)."
-        )
+        # One clean line — no notes, no wallet count, no group breakdown
+        title = f"Similar-sized total {float(sim_pct):.2f}%"
     else:
         g0 = large_groups[0]
-        title = "Similar wallets with large combined share"
-        detail = (
-            f"{g0.get('count')} wallets hold nearly the same size "
-            f"(~{float(g0.get('avg_pct') or 0):.2f}% each, "
-            f"combined ≈ {float(g0.get('combined_pct_est') or 0):.1f}%). "
-            "Can look like a coordinated bundle."
+        title = (
+            f"Similar-sized total "
+            f"{float(g0.get('combined_pct_est') or 0):.2f}%"
         )
-
-    if large_groups and has_total:
-        g0 = large_groups[0]
-        detail += (
-            f" Largest group: {g0.get('count')} wallets "
-            f"~{float(g0.get('avg_pct') or 0):.2f}% each "
-            f"(group ≈ {float(g0.get('combined_pct_est') or 0):.1f}%)."
-        )
+        if sim_pct is None:
+            sim_pct = float(g0.get("combined_pct_est") or 0)
 
     return {
         "id": "similar_wallets_large",
         "priority": "top",
         "severity": severity,
         "title": title,
-        "detail": detail,
-        "groups": large_groups[:4],
-        # Same totals as Bundles → Similar-sized total
+        "detail": "",  # no notes / no duplicate % on UI
+        "groups": [],
         "similar_size_total_pct": sim_pct,
         "similar_size_wallet_count": sim_n,
         "suspect_total_pct": sim_pct,
         "suspect_wallet_count": sim_n,
         "hide_wallets": True,
+        "color_pct": True,
     }
 
 
@@ -862,98 +833,37 @@ def _bundle_pct_alert(bundles_data: dict[str, Any] | None) -> dict[str, Any] | N
     if pct is None:
         return None
 
-    extra = ""
-    if flagged_n is not None:
-        extra = (
-            f" · {flagged_n} unique wallet(s) in Total bundle "
-            f"(deduped across vectors — no double-count)"
-        )
-
-    n_bit = f" ({int(flagged_n)} wallet(s))" if flagged_n is not None else ""
-
-    # Shared payload — title always leads with Total bundle % (like Similar-sized)
+    # One clean title line — Total bundle % only (hold-% color bands in UI)
     def _payload(
         *,
         aid: str,
         severity: str,
-        title_suffix: str,
-        detail_core: str,
         threshold: int,
     ) -> dict[str, Any]:
-        if title_suffix:
-            title = f"Total bundle {pct:.2f}%{n_bit} · {title_suffix}"
-        else:
-            title = f"Total bundle {pct:.2f}%{n_bit}"
         return {
             "id": aid,
             "priority": "top",
             "severity": severity,
-            "title": title,
-            "detail": (
-                f"Total bundle {pct:.2f}% of supply{n_bit} "
-                "(same as Bundles → Total % bundles). "
-                + detail_core
-                + " Heuristics only; not financial advice."
-                + extra
-            ),
+            "title": f"Total bundle {pct:.2f}%",
+            "detail": "",  # no notes / no duplicate % on UI
             "bundle_pct": pct,
             "total_bundle_pct": pct,
             "total_bundle_unique_wallets": flagged_n,
             "threshold": threshold,
             "hide_wallets": True,
-            # Apply hold-% color bands to Total bundle (not single holders)
             "no_pct_color": False,
             "color_pct": True,
         }
 
     if pct >= 50.0:
-        return _payload(
-            aid="bundle_pct_50",
-            severity="critical",
-            title_suffix="RUG IMMINENT (≥ 50%)",
-            detail_core=(
-                "Extremely concentrated coordinated supply — rug imminent risk."
-            ),
-            threshold=50,
-        )
+        return _payload(aid="bundle_pct_50", severity="critical", threshold=50)
     if pct > 27.0:
-        return _payload(
-            aid="bundle_pct_27",
-            severity="critical",
-            title_suffix="DANGER (27% or higher)",
-            detail_core=(
-                "Most likely rug risk — coordinated wallets control a large "
-                "slice of supply."
-            ),
-            threshold=27,
-        )
+        return _payload(aid="bundle_pct_27", severity="critical", threshold=27)
     if pct > 20.0:
-        return _payload(
-            aid="bundle_pct_20",
-            severity="high",
-            title_suffix="higher than 20%",
-            detail_core="High possibility of rug — watch for coordinated dumps.",
-            threshold=20,
-        )
+        return _payload(aid="bundle_pct_20", severity="high", threshold=20)
     if pct >= 5.0:
-        return _payload(
-            aid="bundle_pct_5_20",
-            severity="medium",
-            title_suffix="low to moderate",
-            detail_core=(
-                "Bundle amount is low to moderate — worth watching, not an extreme "
-                "signal by itself."
-            ),
-            threshold=5,
-        )
-    # 0 < pct < 5 — still show so Alerts matches Bundles Total %
-    return _payload(
-        aid="bundle_pct_under_5",
-        severity="info",
-        title_suffix="",
-        detail_core="Below 5% — low coordinated footprint by current vectors.",
-        threshold=0,
-    )
+        return _payload(aid="bundle_pct_5_20", severity="medium", threshold=5)
+    return _payload(aid="bundle_pct_under_5", severity="info", threshold=0)
 
 
 def format_alerts_text(data: dict[str, Any]) -> str:
@@ -1063,6 +973,14 @@ def format_alerts_text(data: dict[str, Any]) -> str:
         sev = (a.get("severity") or "info").upper()
         title = str(a.get("title") or "")
         lines.append(f"  {index}. [{sev}] {title}")
+        aid = str(a.get("id") or "")
+        # Compact totals: title only (no notes, no duplicate % lines)
+        if aid in {
+            "single_holder_over_5",
+            "similar_wallets_large",
+        } or aid.startswith("bundle_pct"):
+            lines.append("")
+            return
         detail = a.get("detail") or ""
         while len(detail) > 90:
             lines.append(f"     {detail[:90]}")
@@ -1071,59 +989,6 @@ def format_alerts_text(data: dict[str, Any]) -> str:
             lines.append(f"     {detail}")
         for it in (a.get("items") or [])[:6]:
             lines.append(f"     • {it}")
-        aid = str(a.get("id") or "")
-        # Single holders total only — no wallet list, no hold-% color in UI
-        if aid == "single_holder_over_5":
-            sp = a.get("single_holders_total_pct")
-            sn = a.get("single_holders_wallet_count")
-            try:
-                if sp is not None and float(sp) > 0:
-                    n_s = f" ({int(sn)} wallet(s))" if sn is not None else ""
-                    lines.append(
-                        f"     Single holders total: {float(sp):.2f}%{n_s}"
-                    )
-            except (TypeError, ValueError):
-                pass
-            lines.append("")
-            return
-        # Similar-sized total — same number as Bundles → Similar-sized total
-        if aid == "similar_wallets_large":
-            sp = a.get("similar_size_total_pct")
-            if sp is None:
-                sp = a.get("suspect_total_pct")
-            sn = a.get("similar_size_wallet_count")
-            if sn is None:
-                sn = a.get("suspect_wallet_count")
-            try:
-                if sp is not None and float(sp) > 0:
-                    n_s = f" ({int(sn)} wallet(s))" if sn is not None else ""
-                    lines.append(
-                        f"     Similar-sized total: {float(sp):.2f}%{n_s}"
-                    )
-            except (TypeError, ValueError):
-                pass
-            # Optional group breakdown under the total
-            for g in (a.get("groups") or [])[:3]:
-                try:
-                    n = int(g.get("count") or len(g.get("wallets") or []) or 0)
-                    avg = float(g.get("avg_pct") or 0)
-                    comb = float(g.get("combined_pct_est") or (avg * n))
-                    lines.append(
-                        f"     · group {n} wallets ~{avg:.2f}% each "
-                        f"(≈ {comb:.1f}% combined)"
-                    )
-                except (TypeError, ValueError):
-                    continue
-        # Total bundle % — same number as Bundles → Total % bundles (colored in UI)
-        if aid.startswith("bundle_pct"):
-            bp = a.get("total_bundle_pct")
-            if bp is None:
-                bp = a.get("bundle_pct")
-            try:
-                if bp is not None and float(bp) > 0:
-                    lines.append(f"     Total bundle: {float(bp):.2f}%")
-            except (TypeError, ValueError):
-                pass
         if a.get("hide_wallets") or aid == "rugwatch_flagged":
             ftp = a.get("flagged_total_pct")
             if ftp is not None:
@@ -1249,8 +1114,7 @@ def format_alerts_text(data: dict[str, Any]) -> str:
             idx += 1
 
     lines.append("")
-    if data.get("notes"):
-        lines.append(f"  Note: {data['notes']}")
+    # No footer notes on Alerts UI
     return "\n".join(lines) + "\n"
 
 

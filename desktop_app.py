@@ -1421,7 +1421,7 @@ def run_gui() -> None:
         return ranges
 
     def _alerts_skip_pct_color_line(line: str) -> bool:
-        """Alerts: Single holders total % stays uncolored (Total bundle is colored)."""
+        """Alerts: Single holders total uncolored; Total bundle / Similar-sized colored."""
         if re.search(r"\bsingle\s*holders?\s*total\b", line, re.I):
             return True
         if re.search(r"\bsingle\s*holders?\s*≥", line, re.I):
