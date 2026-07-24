@@ -7,24 +7,65 @@
   <title>Actual Data Token Checker</title>
   <link rel="icon" href="/logo.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/logo.svg" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=opera-boot-v152" />
-  <!-- app cache: opera-boot-v152 -->
+  <!--
+    Do NOT load fonts.googleapis.com as a render-blocking stylesheet.
+    Opera GX shield / tracker block often hangs that request → pure white
+    blank screen with zero console errors. System fonts already fall back
+    in styles.css (Segoe UI / system-ui / monospace).
+  -->
+  <!-- Critical first paint: never depend on external CSS/fonts to leave white void -->
+  <style>
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background: #0a0c10;
+      color: #f0f2f5;
+      font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    .app {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 20px 16px 40px;
+      min-height: 100%;
+    }
+    #bootStatus {
+      margin: 0 0 12px;
+      padding: 8px 12px;
+      border: 1px solid #323a48;
+      background: #141820;
+      color: #a8b0bd;
+      border-radius: 8px;
+      font: 13px/1.4 system-ui, sans-serif;
+    }
+    #bootStatus[hidden],
+    #bootError[hidden] {
+      display: none !important;
+    }
+    #bootError {
+      margin: 0 0 12px;
+      padding: 10px 12px;
+      border: 1px solid #b86b66;
+      background: #2a1818;
+      color: #f0d0d0;
+      border-radius: 8px;
+      font: 13px/1.4 system-ui, sans-serif;
+    }
+  </style>
+  <link rel="stylesheet" href="/styles.css?v=opera-boot-v154" />
+  <!-- app cache: opera-boot-v154 — no Google Fonts (Opera GX white-screen fix) -->
   <!-- Public API base only — never put provider keys in config.js -->
-  <script src="/config.js?v=opera-boot-v152"></script>
+  <script src="/config.js?v=opera-boot-v154" onerror="window.__adtcBootError && window.__adtcBootError('failed to load config.js')"></script>
   <script>
     // Surface script/load failures (Opera adblock / cache / syntax) before app.js runs
     window.__adtcBootError = function (msg) {
       try {
+        var status = document.getElementById("bootStatus");
+        if (status) status.hidden = true;
         var el = document.getElementById("bootError");
         if (!el) {
           el = document.createElement("div");
           el.id = "bootError";
           el.setAttribute("role", "alert");
-          el.style.cssText =
-            "margin:8px 12px;padding:10px 12px;border:1px solid #b86b66;background:#2a1818;color:#f0d0d0;border-radius:8px;font:13px/1.4 system-ui,sans-serif;z-index:9999";
           var root = document.querySelector(".app") || document.body;
           root.insertBefore(el, root.firstChild);
         }
@@ -37,11 +78,27 @@
         console.error("[boot]", msg, e);
       }
     };
+    window.__adtcBootReady = function () {
+      try {
+        var status = document.getElementById("bootStatus");
+        if (status) status.hidden = true;
+      } catch (e) {
+        /* ignore */
+      }
+    };
     window.addEventListener("error", function (ev) {
       if (ev && (ev.filename || "").indexOf("app.js") !== -1) {
         window.__adtcBootError((ev.message || "app.js error") + " (line " + (ev.lineno || "?") + ")");
       }
     });
+    // If app.js never runs (blocked / hung), surface it instead of a silent white shell
+    setTimeout(function () {
+      if (!window.__ADTC_CLIENT__ && window.__adtcBootError) {
+        window.__adtcBootError(
+          "app.js did not run within 12s (blocked, hung network, or syntax error). Hard-refresh Ctrl+Shift+R."
+        );
+      }
+    }, 12000);
   </script>
 </head>
 <body>
@@ -51,6 +108,8 @@
     </div>
   </noscript>
   <div class="app">
+    <div id="bootStatus" role="status">Loading Actual Data Token Checker…</div>
+    <div id="bootError" role="alert" hidden></div>
     <nav class="site-nav site-nav-compact" aria-label="Main">
       <div class="site-nav-inner">
         <div class="nav-left">
@@ -410,18 +469,18 @@
     </form>
   </dialog>
 
-  <script src="/app.js?v=opera-boot-v152" onerror="window.__adtcBootError && window.__adtcBootError('failed to load app.js — hard-refresh or disable Opera blocker')"></script>
+  <script src="/app.js?v=opera-boot-v154" onerror="window.__adtcBootError && window.__adtcBootError('failed to load app.js — hard-refresh or disable Opera blocker')"></script>
   <script>
-    // Visible boot check — if this is not v152+, hard-refresh / redeploy
+    // Visible boot check — if this is not v154+, hard-refresh / redeploy
     document.addEventListener("DOMContentLoaded", function () {
       var v = window.__ADTC_CLIENT__ || "(app.js not loaded)";
       console.info("[ADTC boot]", v);
-      if (!window.__ADTC_CLIENT__) {
-        if (window.__adtcBootError) {
-          window.__adtcBootError(
-            "app.js did not run (blocked, cached old file, or syntax error). Hard-refresh Ctrl+Shift+R."
-          );
-        }
+      if (window.__ADTC_CLIENT__) {
+        if (window.__adtcBootReady) window.__adtcBootReady();
+      } else if (window.__adtcBootError) {
+        window.__adtcBootError(
+          "app.js did not run (blocked, cached old file, or syntax error). Hard-refresh Ctrl+Shift+R."
+        );
       }
       var bar = document.querySelector(".history-bar-label");
       if (bar && !bar.dataset.adtcVer) {
