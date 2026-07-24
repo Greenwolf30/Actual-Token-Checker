@@ -44,16 +44,23 @@ body::before {
   content: "";
   position: fixed;
   inset: 0;
-  pointer-events: none;
+  /* Must never steal clicks (Opera GX “looks fine, nothing works”) */
+  pointer-events: none !important;
   background:
     radial-gradient(ellipse 80% 50% at 50% -20%, rgba(79, 140, 255, 0.07), transparent 55%),
     linear-gradient(180deg, #0c0e13 0%, var(--bg) 40%);
   z-index: 0;
 }
 
+html,
+body {
+  pointer-events: auto;
+}
+
 .app {
   position: relative;
   z-index: 1;
+  pointer-events: auto;
   max-width: 1080px;
   margin: 0 auto;
   padding: 28px 20px 48px;

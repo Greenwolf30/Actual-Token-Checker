@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v157";
+const ADTC_CLIENT_VERSION = "v158";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 // Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
 try {
@@ -1090,7 +1090,7 @@ function wireLogsCaSearch() {
 }
 
 function initHistory() {
-  refreshHistoryPanel();
+  // Wire only — do not render the full log on boot (can freeze Opera GX)
   wireLogsCaSearch();
   const r = $("historyRefresh");
   const c = $("historyClear");
@@ -6892,19 +6892,8 @@ function formatRuggersPlain(rec, buckets, key) {
 }
 
 function initRuggers() {
-  // Always load through migration (wipes illegal Flagged sticky rows)
-  try {
-    loadRuggersStore();
-  } catch (_) {
-    /* ignore */
-  }
-  // Prefer mint in summary/query — do not open a random other mint's track
-  try {
-    const ca = getSummaryBarMintAddr();
-    refreshRuggersPanel(ca ? mintKeyFromToken(ca, "solana") : "");
-  } catch (_) {
-    refreshRuggersPanel();
-  }
+  // Wire search only on boot. Full panel render is heavy (can freeze Opera GX
+  // when many tracked mints exist) — run on first Ruggers tab open instead.
   wireRuggersCaSearch();
 }
 
@@ -12459,23 +12448,93 @@ function initSettings() {
   }
 }
 
-/** Restore last Analyze off the critical path so clicks never wait on IDB/JSON. */
+/**
+ * Optional last-Analyze restore — never on the critical path.
+ * Skip huge payloads (they freeze Opera GX while re-rendering).
+ * Use ?restore=1 to force, ?safe=1 to never restore and clear heavy keys.
+ */
 async function restoreBootCache() {
   try {
-    const cached = await withTimeout(loadLastAnalyzeAsync(), 2500, null);
-    if (cached) {
-      restoreLastAnalyze(cached);
-    } else {
-      restoreLastAnalyze();
+    const params = new URLSearchParams(location.search || "");
+    if (params.get("safe") === "1" || params.get("norestore") === "1") {
+      console.info("[boot] skip restore (safe/norestore)");
+      return;
     }
+    // Default: skip auto-restore on Opera-family browsers (main-thread freezes)
+    const ua = String(navigator.userAgent || "");
+    const isOpera =
+      /OPR\/|Opera|OPX\//i.test(ua) ||
+      (typeof navigator.userAgentData !== "undefined" &&
+        Array.isArray(navigator.userAgentData.brands) &&
+        navigator.userAgentData.brands.some((b) =>
+          /Opera|OPR/i.test(String((b && b.brand) || ""))
+        ));
+    if (isOpera && params.get("restore") !== "1") {
+      console.info("[boot] Opera: skip auto-restore (add ?restore=1 to enable)");
+      return;
+    }
+
+    const cached = await withTimeout(loadLastAnalyzeAsync(), 1500, null);
+    if (!cached) return;
+
+    // Huge cached Analyze re-renders freeze the tab (looks fine, no clicks)
+    let approx = 0;
+    try {
+      approx = JSON.stringify(cached).length;
+    } catch (_) {
+      approx = 0;
+    }
+    if (approx > 400000) {
+      console.warn(
+        "[boot] skip restore — payload too large (" + approx + " chars)"
+      );
+      return;
+    }
+
+    restoreLastAnalyze(cached);
   } catch (err) {
     console.warn("[init restore]", err);
-    try {
-      restoreLastAnalyze();
-    } catch (_e) {
-      /* ignore */
-    }
   }
+}
+
+/** Clear poisoned local caches that can freeze Opera on boot. */
+function clearHeavyBootCaches() {
+  const keys = [
+    LAST_ANALYZE_KEY,
+    LAST_BUNDLES_ANALYZE_KEY,
+    LAST_BUNDLES_ONLY_KEY,
+    BUNDLE_STATS_PREV_KEY,
+    BUNDLE_DELTA_HTML_KEY,
+    BUNDLE_STATS_BAR_SNAP_KEY,
+  ];
+  for (const k of keys) {
+    try {
+      localStorage.removeItem(k);
+    } catch (_) {}
+    try {
+      sessionStorage.removeItem(k);
+    } catch (_) {}
+  }
+}
+
+/** Ensure nothing is eating clicks (stuck dialog / pointer-events). */
+function unstickPointerLayer() {
+  try {
+    document.documentElement.style.pointerEvents = "auto";
+    document.body.style.pointerEvents = "auto";
+  } catch (_) {}
+  try {
+    const dlg = $("settingsDialog");
+    if (dlg && dlg.open && typeof dlg.close === "function") dlg.close();
+  } catch (_) {}
+  try {
+    document.querySelectorAll("dialog[open]").forEach((d) => {
+      try {
+        if (typeof d.close === "function") d.close();
+        else d.removeAttribute("open");
+      } catch (_) {}
+    });
+  } catch (_) {}
 }
 
 async function init() {
@@ -12486,12 +12545,24 @@ async function init() {
     } catch (err) {
       console.warn("[init] " + name + " failed", err);
       try {
-        if (window.__adtcBootError) window.__adtcBootError(name + ": " + (err && err.message));
+        if (window.__adtcBootError)
+          window.__adtcBootError(name + ": " + (err && err.message));
       } catch (_e) {
         /* ignore */
       }
     }
   }
+
+  // Safe mode: wipe heavy caches that freeze boot
+  try {
+    const params = new URLSearchParams(location.search || "");
+    if (params.get("safe") === "1") {
+      clearHeavyBootCaches();
+      console.info("[boot] safe=1 cleared heavy caches");
+    }
+  } catch (_) {}
+
+  unstickPointerLayer();
 
   // Unstick controls from a prior hung Analyze / modal (Opera GX common)
   try {
@@ -12504,41 +12575,46 @@ async function init() {
     /* ignore */
   }
   try {
-    const dlg = $("settingsDialog");
-    if (dlg && dlg.open && typeof dlg.close === "function") dlg.close();
-  } catch (_e) {
-    /* ignore */
-  }
-  try {
     if (window.__adtcBootReady) window.__adtcBootReady();
   } catch (_e) {
     /* ignore */
   }
 
-  // Wire UI first — page must be clickable before any storage/network restore
+  // 1) Wire interactive controls FIRST — nothing else before this
   safe("tabs", initTabs);
   safe("settings", initSettings);
+  const searchForm = $("searchForm");
+  if (searchForm) searchForm.addEventListener("submit", analyze);
+  else console.warn("[init] searchForm missing");
+
+  // 2) Light wiring only (no heavy panel paints)
   safe("history", initHistory);
   safe("ruggers", initRuggers);
   safe("rugwatchPref", initRugwatchPref);
   safe("freshMultiPref", initFreshMultiPref);
   safe("rugwatchNav", initRugwatchNav);
-  safe("rugwatchCounts", initRugwatchCounts);
-  const searchForm = $("searchForm");
-  if (searchForm) searchForm.addEventListener("submit", analyze);
-  else console.warn("[init] searchForm missing");
-  try {
-    checkHealth();
-  } catch (err) {
-    console.warn("[init] health", err);
-  }
-  try {
-    recordAndLoadStats();
-  } catch (err) {
-    console.warn("[init] stats", err);
-  }
 
-  // Deep link: ?q=mint or #mint — still restore last Analyze unless auto-run
+  try {
+    window.__ADTC_UI_READY__ = true;
+  } catch (_) {}
+  unstickPointerLayer();
+
+  // 3) Network / counts after clicks work (never block)
+  setTimeout(() => {
+    safe("rugwatchCounts", initRugwatchCounts);
+    try {
+      checkHealth();
+    } catch (err) {
+      console.warn("[init] health", err);
+    }
+    try {
+      recordAndLoadStats();
+    } catch (err) {
+      console.warn("[init] stats", err);
+    }
+  }, 0);
+
+  // Deep link: ?q=mint or #mint
   let autoRun = false;
   try {
     const params = new URLSearchParams(location.search);
@@ -12553,7 +12629,6 @@ async function init() {
   }
 
   if (autoRun) {
-    // Don't block on cache restore when auto-analyzing
     try {
       analyze();
     } catch (err) {
@@ -12562,10 +12637,18 @@ async function init() {
     return;
   }
 
-  // Defer cache restore so first paint + clicks never wait on huge JSON/IDB
+  // 4) Optional cache restore much later (Opera skips entirely)
   setTimeout(() => {
     restoreBootCache().catch((err) => console.warn("[restoreBootCache]", err));
-  }, 0);
+  }, 750);
+
+  // Keep re-asserting clickability for a few seconds (stuck dialogs / extensions)
+  let n = 0;
+  const poke = setInterval(() => {
+    unstickPointerLayer();
+    n += 1;
+    if (n >= 8) clearInterval(poke);
+  }, 500);
 }
 
 function startApp() {

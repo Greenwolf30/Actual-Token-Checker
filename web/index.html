@@ -47,19 +47,19 @@
     }
   </style>
   <!-- Normal stylesheet (required for correct fonts/layout). Same-origin; not Google Fonts. -->
-  <link rel="stylesheet" href="/styles.css?v=opera-boot-v157" />
+  <link rel="stylesheet" href="/styles.css?v=opera-boot-v158" />
   <!-- defer = download in parallel, run after HTML parse — keeps UI clickable while JS loads -->
   <script
     defer
-    src="/config.js?v=opera-boot-v157"
+    src="/config.js?v=opera-boot-v158"
     onerror="window.__adtcBootError && window.__adtcBootError('failed to load config.js — hard-refresh or disable Opera blocker')"
   ></script>
   <script
     defer
-    src="/app.js?v=opera-boot-v157"
+    src="/app.js?v=opera-boot-v158"
     onerror="window.__adtcBootError && window.__adtcBootError('failed to load app.js — hard-refresh or disable Opera blocker')"
   ></script>
-  <!-- app cache: opera-boot-v157 — deferred scripts + non-blocking restore -->
+  <!-- app cache: opera-boot-v158 — no heavy boot restore on Opera; clicks first -->
   <script>
     // Boot helpers only — no blocking external deps
     window.__adtcBootError = function (msg) {
@@ -109,6 +109,7 @@
         );
       }
     }, 12000);
+    // If clicks still dead, open with ?safe=1 once (clears heavy cache)
   </script>
 </head>
 <body>
@@ -480,7 +481,7 @@
   </dialog>
 
   <script>
-    // Visible boot check — if this is not v157+, hard-refresh / redeploy
+    // Visible boot check — if this is not v158+, hard-refresh / redeploy
     // (config.js + app.js load via defer in <head>)
     document.addEventListener("DOMContentLoaded", function () {
       var v = window.__ADTC_CLIENT__ || "(app.js not loaded)";
