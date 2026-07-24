@@ -1497,12 +1497,8 @@ class WebHandler(BaseHTTPRequestHandler):
                     if not bool(body.get("fresh_multi")):
                         include_fresh = False
                         include_multi_send = False
-            # Lite clients (Opera GX): keep full/quick as requested, but skip
-            # the heaviest optional Helius scans and strip huge response fields.
-            if lite:
-                include_fresh = False
-                include_multi_send = False
-                include_shared_sol = False
+            # Lite only strips huge response fields (ruggers lists, etc.).
+            # Fresh / Multi-send / Shared SOL follow the client's checkboxes.
             return self._handle_analyze(
                 q,
                 chain=chain_s,

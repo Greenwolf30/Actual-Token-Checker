@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v164";
+const ADTC_CLIENT_VERSION = "v165";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 // Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
 try {
@@ -7721,11 +7721,10 @@ function setPanelText(tab, text) {
   if (!el) return;
   let raw = text == null || text === "" ? "(empty)" : String(text);
 
-  // Plain text by default in lite mode / large panels (rich HTML freezes GX)
+  // Only skip rich colors when the report is huge (that freezes Opera).
+  // Lite mode still gets green titles + % color bands for normal-sized text.
   const usePlain =
-    useLiteUi() ||
-    raw.length > 60000 ||
-    (tab === "holders" && raw.length > 25000);
+    raw.length > 80000 || (tab === "holders" && raw.length > 50000);
 
   if (usePlain) {
     const cap =
@@ -7733,7 +7732,7 @@ function setPanelText(tab, text) {
     if (raw.length > cap) {
       raw =
         raw.slice(0, cap) +
-        "\n\n… truncated for browser performance (Opera) — open ?full=1 for rich formatting …";
+        "\n\n… truncated for browser performance — open ?full=1 for full rich formatting …";
     }
     try {
       el.textContent = raw;
@@ -7745,27 +7744,35 @@ function setPanelText(tab, text) {
   }
 
   let html;
-  if (tab === "holders") {
-    // Wallet address: >5% yellow · >10% red · skip known LP
-    html = formatHoldersRichHtml(raw);
-  } else if (tab === "alerts") {
-    // Total bundle % colored; Single holders total uncolored; no single-wallet list
-    html = linkify(raw, true);
-    html = colorAlertsSelectivePcts(html);
-    html = colorHoldingAmounts(html);
-    html = colorAllSectionTitles(html);
-  } else if (tab === "about") {
-    // About: green section titles (NARRATIVE / X / NEWS / LINKS / placeholders)
-    html = linkify(raw, true);
-    html = colorAllSectionTitles(html);
-  } else if (tab === "bundles") {
-    // Summary + each wallet group % colored; Top10 ex-LP uncolored; bal yellow
-    // + wallet address hold colors
-    html = formatBundlesRichHtml(raw);
-  } else {
-    // Overview, Maps, History text, etc.
-    html = linkify(raw);
-    html = colorAllSectionTitles(html);
+  try {
+    if (tab === "holders") {
+      // Wallet address: >5% yellow · >10% red · skip known LP
+      html = formatHoldersRichHtml(raw);
+    } else if (tab === "alerts") {
+      // Total bundle % colored; Single holders total uncolored; no single-wallet list
+      html = linkify(raw, true);
+      html = colorAlertsSelectivePcts(html);
+      html = colorHoldingAmounts(html);
+      html = colorAllSectionTitles(html);
+    } else if (tab === "about") {
+      // About: green section titles (NARRATIVE / X / NEWS / LINKS / placeholders)
+      html = linkify(raw, true);
+      html = colorAllSectionTitles(html);
+    } else if (tab === "bundles") {
+      // Summary + each wallet group % colored; Top10 ex-LP uncolored; bal yellow
+      // + wallet address hold colors
+      html = formatBundlesRichHtml(raw);
+    } else {
+      // Overview, Maps, History text, etc.
+      html = linkify(raw);
+      html = colorAllSectionTitles(html);
+    }
+  } catch (err) {
+    console.warn("[setPanelText rich]", tab, err);
+    try {
+      el.textContent = raw;
+    } catch (_) {}
+    return;
   }
   el.innerHTML = html;
 }
@@ -10070,18 +10077,14 @@ function renderBundlesUiOperaLite(data) {
       s.bundle_risk_score != null ||
       s.similar_size_total_pct != null);
 
-  function row(label, val) {
+  function row(label, valHtml) {
     return (
       '<div class="bun-stat"><span class="bun-stat-label">' +
       escHtml(label) +
       '</span><span class="bun-stat-value">' +
-      (val == null || val === "" ? "—" : val) +
+      (valHtml == null || valHtml === "" ? "—" : valHtml) +
       "</span></div>"
     );
-  }
-  function pct(n) {
-    if (n == null || !Number.isFinite(Number(n))) return "—";
-    return Number(n).toFixed(2) + "%";
   }
 
   let html =
@@ -10096,14 +10099,24 @@ function renderBundlesUiOperaLite(data) {
       s.bundle_risk_score != null && Number.isFinite(Number(s.bundle_risk_score))
         ? Number(s.bundle_risk_score)
         : null;
+    // Colored % (same bands as full Bundles) via bunPctHtml
     html += '<div class="bun-stats">';
-    html += row("Risk", risk != null ? String(Math.round(risk)) : "—");
-    html += row("Total bundle", pct(s.total_bundle_pct));
-    html += row("Similar-sized", pct(s.similar_size_total_pct));
-    html += row("Fresh", pct(s.fresh_total_pct));
-    html += row("Multi-send", pct(s.multi_send_total_pct));
-    html += row("Shared SOL", pct(s.funding_total_pct));
-    html += row("Single holders", pct(s.single_holders_total_pct));
+    html += row(
+      "Risk",
+      risk != null
+        ? '<span class="' +
+            bundleRiskScoreClass(risk) +
+            '">' +
+            escHtml(String(Math.round(risk))) +
+            "</span>"
+        : "—"
+    );
+    html += row("Total bundle", bunPctHtml(s.total_bundle_pct));
+    html += row("Similar-sized", bunPctHtml(s.similar_size_total_pct));
+    html += row("Fresh", bunPctHtml(s.fresh_total_pct));
+    html += row("Multi-send", bunPctHtml(s.multi_send_total_pct));
+    html += row("Shared SOL", bunPctHtml(s.funding_total_pct));
+    html += row("Single holders", bunPctHtml(s.single_holders_total_pct));
     html += "</div>";
   } else if (view && view.ok === false) {
     html +=
@@ -12666,19 +12679,12 @@ async function analyze(ev) {
   }
   const chain = $("chain") ? $("chain").value || null : null;
   const lite = useLiteUi();
-  // Lite: allow full or quick (user checkbox). Only force off heavy Helius options.
+  // Respect user checkboxes (including Fresh / Multi-send / Shared SOL)
   const quick = $("quick") ? $("quick").checked : false;
-  if (lite) {
-    try {
-      if ($("useFresh")) $("useFresh").checked = false;
-      if ($("useMultiSend")) $("useMultiSend").checked = false;
-      if ($("useSharedSol")) $("useSharedSol").checked = false;
-    } catch (_) {}
-  }
   const include_rugwatch = useRugwatchEnabled();
-  const include_fresh = lite ? false : useFreshEnabled();
-  const include_multi_send = lite ? false : useMultiSendEnabled();
-  const include_shared_sol = lite ? false : useSharedSolEnabled();
+  const include_fresh = useFreshEnabled();
+  const include_multi_send = useMultiSendEnabled();
+  const include_shared_sol = useSharedSolEnabled();
   const btn = $("analyzeBtn");
   if (btn) {
     btn.disabled = true;
@@ -13107,14 +13113,10 @@ async function init() {
     });
   }
 
-  // Lite defaults: leave Quick for user; force heavy Helius options off
   try {
     if (useLiteUi()) {
-      if ($("useFresh")) $("useFresh").checked = false;
-      if ($("useMultiSend")) $("useMultiSend").checked = false;
-      if ($("useSharedSol")) $("useSharedSol").checked = false;
       console.info(
-        "[boot] lite UI: Fresh/Multi/Shared SOL off. Uncheck Quick for holders. ?full=1 for full UI."
+        "[boot] lite UI on (safe paint). Check Fresh/Multi/Shared SOL if you need those scans. ?full=1 for full wallet tables."
       );
     }
   } catch (_) {}
