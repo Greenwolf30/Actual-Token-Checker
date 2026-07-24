@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v151";
+const ADTC_CLIENT_VERSION = "v152";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Wipe poisoned forNext baselines once (old builds wrote forNext=cur before paint). */
@@ -188,7 +188,7 @@ function loadHistoryLog() {
       data.filter((x) => x && typeof x === "object"),
       HISTORY_MAX
     );
-  } catch {
+  } catch (_e) {
     return [];
   }
 }
@@ -1117,7 +1117,7 @@ function loadRuggersStore() {
         data = parsed;
       }
     }
-  } catch {
+  } catch (_e) {
     data = {};
   }
   // Overlay in-memory tracks (newer / recovered after quota fail)
@@ -1469,7 +1469,7 @@ function migrateRuggersStore(store) {
       } else {
         localStorage.setItem(RUGGERS_KEY, raw);
       }
-    } catch {
+    } catch (_e) {
       /* ignore */
     }
   }
@@ -6919,7 +6919,7 @@ function apiUrl(path) {
 function siteToken() {
   try {
     return sessionStorage.getItem(TOKEN_KEY) || "";
-  } catch {
+  } catch (_e) {
     return "";
   }
 }
@@ -6928,7 +6928,7 @@ function setSiteToken(v) {
   try {
     if (v) sessionStorage.setItem(TOKEN_KEY, v);
     else sessionStorage.removeItem(TOKEN_KEY);
-  } catch {
+  } catch (_e) {
     /* ignore */
   }
 }
@@ -11863,8 +11863,8 @@ function formatViews(n) {
 
 function renderPublicStats(j) {
   if (!j || !j.ok) return;
-  const views = j.profile_views ?? 0;
-  const analyzes = j.analyzes ?? 0;
+  const views = j.profile_views != null ? j.profile_views : 0;
+  const analyzes = j.analyzes != null ? j.analyzes : 0;
   const uniques = j.unique_visitors_today;
   const pill = $("viewStats");
   if (pill) {
@@ -11906,7 +11906,7 @@ async function recordAndLoadStats() {
     const j = await r.json();
     renderPublicStats(j);
     return;
-  } catch {
+  } catch (_e) {
     /* fall through */
   } finally {
     clearTimeout(timer);
@@ -11921,7 +11921,7 @@ async function recordAndLoadStats() {
     clearTimeout(t2);
     const j = await r.json();
     renderPublicStats(j);
-  } catch {
+  } catch (_e) {
     const pill = $("viewStats");
     if (pill) {
       pill.textContent = "views n/a";
@@ -12281,7 +12281,7 @@ async function analyze(ev) {
     let data;
     try {
       data = await r.json();
-    } catch {
+    } catch (_e) {
       throw new Error("Bad response from server");
     }
     if (r.status === 401) {
@@ -12403,32 +12403,58 @@ function initSettings() {
 }
 
 async function init() {
-  initTabs();
-  initSettings();
-  initHistory();
-  initRuggers();
-  initRugwatchPref();
-  initFreshMultiPref();
-  initRugwatchNav();
-  initRugwatchCounts();
+  // Isolate each subsystem so one Opera/localStorage failure cannot blank the site
+  function safe(name, fn) {
+    try {
+      fn();
+    } catch (err) {
+      console.warn("[init] " + name + " failed", err);
+      try {
+        if (window.__adtcBootError) window.__adtcBootError(name + ": " + (err && err.message));
+      } catch (_e) {
+        /* ignore */
+      }
+    }
+  }
+  safe("tabs", initTabs);
+  safe("settings", initSettings);
+  safe("history", initHistory);
+  safe("ruggers", initRuggers);
+  safe("rugwatchPref", initRugwatchPref);
+  safe("freshMultiPref", initFreshMultiPref);
+  safe("rugwatchNav", initRugwatchNav);
+  safe("rugwatchCounts", initRugwatchCounts);
   const searchForm = $("searchForm");
   if (searchForm) searchForm.addEventListener("submit", analyze);
   else console.warn("[init] searchForm missing");
-  checkHealth();
-  recordAndLoadStats();
+  try {
+    checkHealth();
+  } catch (err) {
+    console.warn("[init] health", err);
+  }
+  try {
+    recordAndLoadStats();
+  } catch (err) {
+    console.warn("[init] stats", err);
+  }
 
   // Deep link: ?q=mint or #mint — still restore last Analyze unless auto-run
-  const params = new URLSearchParams(location.search);
-  const q = params.get("q") || params.get("query");
-  if (q) {
-    $("query").value = q;
-    if (params.get("chain")) $("chain").value = params.get("chain");
-  }
-  if (params.get("auto") === "1" && q) {
-    analyze();
-    return;
+  try {
+    const params = new URLSearchParams(location.search);
+    const q = params.get("q") || params.get("query");
+    if (q && $("query")) {
+      $("query").value = q;
+      if (params.get("chain") && $("chain")) $("chain").value = params.get("chain");
+    }
+    if (params.get("auto") === "1" && q) {
+      analyze();
+      return;
+    }
+  } catch (err) {
+    console.warn("[init] deep link", err);
   }
   // Restore from localStorage / sessionStorage / IndexedDB
+  // (Opera private mode / full quota can throw — never block the shell)
   try {
     const cached = await loadLastAnalyzeAsync();
     if (cached) {
@@ -12440,12 +12466,21 @@ async function init() {
     console.warn("[init restore]", err);
     try {
       restoreLastAnalyze();
-    } catch (_) {
+    } catch (_e) {
       /* ignore */
     }
   }
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  init().catch((err) => console.error("[init]", err));
+  init().catch((err) => {
+    console.error("[init]", err);
+    try {
+      if (window.__adtcBootError) {
+        window.__adtcBootError(String((err && err.message) || err));
+      }
+    } catch (_e) {
+      /* ignore */
+    }
+  });
 });

@@ -10,12 +10,46 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/styles.css?v=ms-decouple-v117" />
-  <!-- app cache: same-slot-title-green-v59 -->
+  <link rel="stylesheet" href="/styles.css?v=opera-boot-v152" />
+  <!-- app cache: opera-boot-v152 -->
   <!-- Public API base only — never put provider keys in config.js -->
-  <script src="/config.js"></script>
+  <script src="/config.js?v=opera-boot-v152"></script>
+  <script>
+    // Surface script/load failures (Opera adblock / cache / syntax) before app.js runs
+    window.__adtcBootError = function (msg) {
+      try {
+        var el = document.getElementById("bootError");
+        if (!el) {
+          el = document.createElement("div");
+          el.id = "bootError";
+          el.setAttribute("role", "alert");
+          el.style.cssText =
+            "margin:8px 12px;padding:10px 12px;border:1px solid #b86b66;background:#2a1818;color:#f0d0d0;border-radius:8px;font:13px/1.4 system-ui,sans-serif;z-index:9999";
+          var root = document.querySelector(".app") || document.body;
+          root.insertBefore(el, root.firstChild);
+        }
+        el.hidden = false;
+        el.textContent =
+          "Site script issue: " +
+          String(msg || "unknown") +
+          " — try hard-refresh (Ctrl+Shift+R), disable Opera adblock/VPN for this site, or open in a private window.";
+      } catch (e) {
+        console.error("[boot]", msg, e);
+      }
+    };
+    window.addEventListener("error", function (ev) {
+      if (ev && (ev.filename || "").indexOf("app.js") !== -1) {
+        window.__adtcBootError((ev.message || "app.js error") + " (line " + (ev.lineno || "?") + ")");
+      }
+    });
+  </script>
 </head>
 <body>
+  <noscript>
+    <div style="margin:12px;padding:12px;background:#2a1818;color:#f0d0d0;border-radius:8px">
+      JavaScript is required for Actual Data Token Checker. Enable scripts for this site in Opera.
+    </div>
+  </noscript>
   <div class="app">
     <nav class="site-nav site-nav-compact" aria-label="Main">
       <div class="site-nav-inner">
@@ -376,12 +410,19 @@
     </form>
   </dialog>
 
-  <script src="/app.js?v=ms-decouple-v117"></script>
+  <script src="/app.js?v=opera-boot-v152" onerror="window.__adtcBootError && window.__adtcBootError('failed to load app.js — hard-refresh or disable Opera blocker')"></script>
   <script>
-    // Visible boot check — if this is not v87, hard-refresh / redeploy
+    // Visible boot check — if this is not v152+, hard-refresh / redeploy
     document.addEventListener("DOMContentLoaded", function () {
       var v = window.__ADTC_CLIENT__ || "(app.js not loaded)";
       console.info("[ADTC boot]", v);
+      if (!window.__ADTC_CLIENT__) {
+        if (window.__adtcBootError) {
+          window.__adtcBootError(
+            "app.js did not run (blocked, cached old file, or syntax error). Hard-refresh Ctrl+Shift+R."
+          );
+        }
+      }
       var bar = document.querySelector(".history-bar-label");
       if (bar && !bar.dataset.adtcVer) {
         bar.dataset.adtcVer = "1";
