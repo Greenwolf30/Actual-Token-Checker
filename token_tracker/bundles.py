@@ -132,6 +132,8 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
     if similar_groups:
         biggest = max(similar_groups, key=lambda g: len(g.get("wallets") or []))
         n = len(biggest.get("wallets") or [])
+        # Risk score only factors in 50% of similar-sized wallets (UI still shows full n)
+        n_for_score = float(n) * 0.5
         signals.append(
             {
                 "id": "similar_size",
@@ -139,11 +141,12 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
                 "title": "Similar-sized top wallets",
                 "detail": (
                     f"{n} non-LP top wallets hold nearly the same balance "
-                    f"(~{_pct(biggest.get('avg_pct'))} each) — can look like a coordinated bundle."
+                    f"(~{_pct(biggest.get('avg_pct'))} each) — can look like a coordinated bundle "
+                    f"(risk score uses 50% of similar-sized count → {n_for_score:g})."
                 ),
             }
         )
-        score += min(25, 8 + n * 4)
+        score += min(25, 8 + n_for_score * 4)
 
     if insiders:
         signals.append(
