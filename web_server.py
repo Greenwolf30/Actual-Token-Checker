@@ -1062,6 +1062,12 @@ def build_public_payload(report: dict[str, Any], *, lite: bool = False) -> dict[
             "top1_pct": hsum.get("top1_pct"),
             "top5_pct": hsum.get("top5_pct"),
             "top10_pct": hsum.get("top10_pct"),
+            "holders_on_mint": hsum.get("holders_on_mint")
+            if hsum.get("holders_on_mint") is not None
+            else hsum.get("total_wallets"),
+            "total_wallets": hsum.get("total_wallets")
+            if hsum.get("total_wallets") is not None
+            else hsum.get("holders_on_mint"),
             "bundle_risk": bsum.get("bundle_risk"),
             "bundle_pct": bsum.get("total_bundle_pct")
             or bsum.get("estimated_bundle_pct")

@@ -1030,6 +1030,23 @@ def _fuse_holder_sources(
         by_src["solscan"] = solscan.get("total_holders")
     solscan_total = by_src.get("solscan")
 
+    # Helius DAS unique owners (from fusion rpc path meta, if present)
+    helius_unique = None
+    try:
+        if rpc and isinstance(rpc.get("meta"), dict):
+            hu = rpc["meta"].get("das_unique_owners")
+            if hu is not None:
+                helius_unique = int(hu)
+    except (TypeError, ValueError):
+        helius_unique = None
+    if helius_unique is None:
+        try:
+            # Owner-aggregated map size when DAS rows were fused
+            if owner_totals:
+                helius_unique = len(owner_totals)
+        except Exception:  # noqa: BLE001
+            pass
+
     candidates = [
         n
         for n in (
@@ -1039,6 +1056,7 @@ def _fuse_holder_sources(
             by_src.get("solscan"),
             solscan_total,
             totals.get("total_wallets"),
+            helius_unique,
         )
         if isinstance(n, int) and n >= 0
     ]
@@ -1048,13 +1066,16 @@ def _fuse_holder_sources(
     base_extra["holder_provider_errors"] = errors
     base_extra["holder_totals"] = {
         "total_wallets": best_total,
+        "holders_on_mint": best_total,  # alias — full count, no %
         "by_source": {
             "pumpfun": by_src.get("pumpfun"),
             "birdeye": by_src.get("birdeye"),
             "dexscreener": by_src.get("dexscreener"),
             "solscan": by_src.get("solscan"),
+            "helius": helius_unique,
         },
         "solscan": solscan_total,
+        "helius_unique_owners": helius_unique,
         "sources_detail": totals.get("sources_detail") or {},
         "ok": best_total is not None,
     }
@@ -1090,15 +1111,18 @@ def _fuse_holder_sources(
     )
     summary = dict(result.get("summary") or {})
     summary["total_wallets"] = best_total
+    summary["holders_on_mint"] = best_total  # full holder count (no list / no %)
     summary["total_wallets_by_source"] = {
         "pumpfun": by_src.get("pumpfun"),
         "birdeye": by_src.get("birdeye"),
         "dexscreener": by_src.get("dexscreener"),
         "solscan": by_src.get("solscan"),
+        "helius": helius_unique,
     }
     summary["top_list_size"] = min(14, len(result.get("holders") or []))
     result["summary"] = summary
     result["holder_totals"] = base_extra["holder_totals"]
+    result["holders_on_mint"] = best_total
 
     # RugWatch flagged wallets (optional — user checkbox on website)
     if include_rugwatch:
@@ -1734,8 +1758,24 @@ def _solana_via_helius_das(
     s = dict(result.get("summary") or {})
     s["accounts_returned"] = len(holders)
     s["unique_wallets_in_top"] = len(holders)
+    # Full unique holder count from DAS (or cap floor if pagination hit max)
+    s["total_wallets"] = len(owner_bal)
+    s["holders_on_mint"] = len(owner_bal)
     s["holder_source"] = "helius_das"
+    s["total_wallets_by_source"] = {"helius": len(owner_bal)}
     result["summary"] = s
+    result["holders_on_mint"] = len(owner_bal)
+    result["holder_totals"] = {
+        "total_wallets": len(owner_bal),
+        "holders_on_mint": len(owner_bal),
+        "by_source": {"helius": len(owner_bal)},
+        "ok": True,
+        "partial": len(token_rows) >= max_acc,
+    }
+    meta = dict(result.get("meta") or {})
+    meta["das_unique_owners"] = len(owner_bal)
+    meta["holder_totals"] = result["holder_totals"]
+    result["meta"] = meta
     return result
 
 
@@ -2053,12 +2093,28 @@ def format_holders_text(data: dict[str, Any]) -> str:
     summary = data.get("summary") or {}
     totals = data.get("holder_totals") or (data.get("meta") or {}).get("holder_totals") or {}
     by = summary.get("total_wallets_by_source") or totals.get("by_source") or {}
-    total_w = summary.get("total_wallets")
+    total_w = (
+        summary.get("holders_on_mint")
+        if summary.get("holders_on_mint") is not None
+        else summary.get("total_wallets")
+    )
+    if total_w is None:
+        total_w = totals.get("holders_on_mint")
     if total_w is None:
         total_w = totals.get("total_wallets")
+    if total_w is None and data.get("holders_on_mint") is not None:
+        total_w = data.get("holders_on_mint")
+
+    # Full holder count only — no wallet list, no %
+    lines.append("")
+    lines.append("── HOLDERS ON MINT ──")
+    lines.append(f"  Holders on mint: {_fmt_count(total_w)}")
+    lines.append(
+        "  (Total unique wallets holding this token · no list · no %)"
+    )
 
     lines.append("")
-    lines.append("── TOTAL WALLETS ──")
+    lines.append("── TOTAL WALLETS (by source) ──")
     lines.append(f"  Total wallets (holders): {_fmt_count(total_w)}")
     lines.append(f"    Pump.fun:     {_fmt_count(by.get('pumpfun'))}")
     lines.append(f"    Birdeye:      {_fmt_count(by.get('birdeye'))}")
@@ -2078,8 +2134,10 @@ def format_holders_text(data: dict[str, Any]) -> str:
             else ""
         )
     )
+    if by.get("helius") is not None:
+        lines.append(f"    Helius DAS:   {_fmt_count(by.get('helius'))}")
     lines.append(
-        "  (Best total = highest reported source · list below is top 14 only)"
+        "  (Best total = highest reported source · top list below is not the full mint)"
     )
 
     lines.append("")
