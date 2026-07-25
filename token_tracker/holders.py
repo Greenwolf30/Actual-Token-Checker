@@ -1000,6 +1000,14 @@ def _fuse_holder_sources(
         base_extra.update(rug.get("meta") or {})
     if rpc and rpc.get("ok"):
         base_extra.update({k: v for k, v in (rpc.get("meta") or {}).items() if k not in base_extra})
+        # Prefer DAS unique owner count from Helius path when present
+        rsum = (rpc.get("summary") or {}) if isinstance(rpc, dict) else {}
+        if rsum.get("holders_on_mint") is not None:
+            base_extra["das_unique_owners"] = rsum.get("holders_on_mint")
+        if rsum.get("total_wallets") is not None and "das_unique_owners" not in base_extra:
+            base_extra["das_unique_owners"] = rsum.get("total_wallets")
+        if rpc.get("holders_on_mint") is not None:
+            base_extra["das_unique_owners"] = rpc.get("holders_on_mint")
     if birdeye and birdeye.get("security"):
         base_extra["birdeye_security"] = birdeye.get("security")
     if solscan and solscan.get("total_holders") is not None:
@@ -1007,7 +1015,7 @@ def _fuse_holder_sources(
     if birdeye and birdeye.get("total_holders") is not None:
         base_extra["birdeye_total_holders"] = birdeye.get("total_holders")
 
-    # Total wallets (Pump.fun / Birdeye / DexScreener / Solscan)
+    # Total wallets (Pump.fun / Birdeye / DexScreener / Solscan / Helius)
     totals = holder_totals or {}
     by_src = dict(totals.get("by_source") or {})
     # Fill Birdeye from holder list total if dedicated totals call missed it
@@ -1033,7 +1041,9 @@ def _fuse_holder_sources(
     # Helius DAS unique owners (from fusion rpc path meta, if present)
     helius_unique = None
     try:
-        if rpc and isinstance(rpc.get("meta"), dict):
+        if base_extra.get("das_unique_owners") is not None:
+            helius_unique = int(base_extra["das_unique_owners"])
+        elif rpc and isinstance(rpc.get("meta"), dict):
             hu = rpc["meta"].get("das_unique_owners")
             if hu is not None:
                 helius_unique = int(hu)
