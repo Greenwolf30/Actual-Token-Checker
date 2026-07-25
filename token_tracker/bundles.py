@@ -6,6 +6,22 @@ This is NOT a professional sniper-graph indexer. Signals are derived from:
   - similar-sized non-LP top wallets (possible coordinated buys)
   - Rugcheck insider flags when present
   - concentration of top wallets excluding known programs / LP
+
+Bundle risk score (0–100) — see DOCUMENTATION.txt §6.3i and web/documentation.txt.
+
+  Sources (via holders analyze output, Solana full Analyze):
+    Helius DAS/RPC (bags + multi-ATA clusters), Rugcheck (insiders),
+    optional Solscan/Birdeye holder rows; known LP/program labels excluded
+    from multi + similar groups. Fresh / Multi-send / Shared SOL do not score.
+
+  Components (sum, then clamp 0–100):
+    multi-ATA clusters:     min(35, 12 + clusters*8 + extra_ATAs*4)
+    similar-sized (largest group only): min(25, 8 + (n*0.5)*4)
+      — only 50% of similar-sized wallet count factors into the score
+    Rugcheck insiders:      min(25, 10 + insiders*6)
+    Top10 ex-LP:            +20 if ≥85%, +12 if ≥70%, +6 if ≥55%
+
+  Labels: ≥70 high · ≥45 elevated · ≥25 moderate · else lower
 """
 
 from __future__ import annotations

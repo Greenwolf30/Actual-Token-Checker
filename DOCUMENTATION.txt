@@ -322,7 +322,7 @@ What people often ask
   - Fresh / Multi-send / Shared SOL totals (live or last-known when box off)
   - Single holders total % (standalone bags — NOT in Total)
   - Top10 ex-LP (see §6.3a)
-  - Bundle risk score
+  - Bundle risk score (0–100 heuristic — full formula in §6.3i)
 
   List sections (website cards)
   - Multi-account clusters — one owner, several large ATAs (§6.3b, §6.3e)
@@ -399,6 +399,86 @@ What people often ask
   Total interaction
     Similar-sized enters Total only when Fresh, Multi-send, and Shared SOL
     are all unchecked (§6.1). Single never enters Total.
+
+
+6.3i Bundle risk score (0–100) — how it works
+
+  What it is
+    A single 0–100 “bundle-like risk” number shown in the Bundles summary bar
+    (label: lower / moderate / elevated / high). Higher = more signals that
+    look like coordinated / concentrated non-LP ownership.
+
+    It is a heuristic from the top-holder snapshot — NOT legal proof of
+    collusion, NOT a sniper-graph product, and NOT the same as Total %.
+
+  Where the score draws its data from
+    Input = Holders tab result for this Analyze (holders must succeed first).
+
+    Primary sources fused into that holder list (Solana full Analyze):
+      • Helius DAS / RPC — token accounts, multi-ATA owner clusters, bag sizes
+      • Rugcheck — insider flags, risks, rugged-style tags when present
+      • Solscan / Birdeye (optional keys) — extra holder rows / totals
+      • Known LP / program labels — excluded from multi + similar risk groups
+
+    Optional Bundles categories (Fresh, Multi-send, Shared SOL) do NOT add
+    points to this score. They affect Total % rules and UI lists only.
+
+  Score components (added, then clamped to 0–100)
+    Code: token_tracker/bundles.py → analyze_bundles()
+
+    1) Multi-account clusters (cap +35)
+       Source: owner_clusters / multi-ATA (one wallet, several large ATAs).
+       Known LP / pool owners are dropped before scoring.
+       Formula:  min(35, 12 + clusters×8 + extra_ATAs×4)
+         extra_ATAs = total ATAs in clusters − number of cluster owners
+
+    2) Similar-sized top wallets (cap +25)
+       Source: near-exact bag groups among non-LP top holders (§6.3h gates).
+       Uses the LARGEST similar group only (by wallet count).
+       Weighting (current): only 50% of that group’s wallet count is used
+         for the score (UI still lists 100% of the group).
+       Formula:  min(25, 8 + (n × 0.5) × 4)
+         where n = wallets in the largest similar-size group
+
+    3) Rugcheck insider-flagged accounts (cap +25)
+       Source: holder rows with insider=true (non-LP).
+       Formula:  min(25, 10 + insiders×6)
+
+    4) Concentration — Top10 ex-LP (cap +20 / +12 / +6)
+       Source: summary.top10_pct_excluding_known_programs (§6.3a).
+         ≥ 85% → +20
+         ≥ 70% → +12
+         ≥ 55% → +6
+         else   → +0
+
+    Final score = min(100, round(sum of components above))
+    Risk label:
+      ≥ 70  high
+      ≥ 45  elevated
+      ≥ 25  moderate
+      else  lower
+
+  Example
+    Multi: 2 clusters, 5 ATAs total
+      → min(35, 12 + 2×8 + (5−2)×4) = min(35, 40) = 35
+    Similar: largest group has 8 wallets
+      → n_for_score = 4; min(25, 8 + 4×4) = min(25, 24) = 24
+    Insiders: 1
+      → min(25, 10 + 6) = 16
+    Top10 ex-LP: 62%
+      → +6
+    Total risk score = min(100, 35+24+16+6) = 81 → high
+
+  What the score does NOT use
+    - Fresh / Multi-send / Shared SOL / Launch-window scans
+    - Single holders list
+    - RugWatch cloud / Ruggers Flagged
+    - Social / news / sentiment
+    - Full mint holder count (Holders on mint) — display only, not in score
+
+  UI note
+    Website colors Bundle risk by score bands (green ≤25 · yellow ≤50 ·
+    orange ≤70 · red above). Re-Analyze after deploy to refresh the number.
 
 
 6.3a What “Top10 ex-LP” means
