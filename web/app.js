@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v181";
+const ADTC_CLIENT_VERSION = "v182";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 // Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
 try {
@@ -11036,9 +11036,11 @@ function renderAboutUi(data) {
 
   const li = view.linkedin || [];
   const liSn = view.linkedin_snippets || [];
-  if (li.length || liSn.length) {
-    html +=
-      '<section class="about-card"><h3 class="about-card-title section-title-green section-title-major">── LINKEDIN ──</h3>';
+  html +=
+    '<section class="about-card"><h3 class="about-card-title section-title-green section-title-major">── LINKEDIN ──</h3>';
+  html +=
+    '<p class="about-meta">(company / profile links + public search snippets)</p>';
+  if (li.length) {
     for (let i = 0; i < li.length; i++) {
       html +=
         "<p>" +
@@ -11049,6 +11051,12 @@ function renderAboutUi(data) {
         escHtml(li[i].url) +
         "</a></p>";
     }
+  } else {
+    html +=
+      '<p class="about-meta">No LinkedIn company/profile page found in public sources.</p>';
+  }
+  if (liSn.length) {
+    html += '<p class="about-label">Public snippets</p>';
     for (let i = 0; i < liSn.length; i++) {
       html += '<p class="about-para">' + withLinks(liSn[i].text || "");
       if (liSn[i].url) {
@@ -11061,8 +11069,8 @@ function renderAboutUi(data) {
       }
       html += "</p>";
     }
-    html += "</section>";
   }
+  html += "</section>";
 
   html += "</div>";
   if (view.disclaimer) {

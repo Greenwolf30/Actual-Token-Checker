@@ -718,22 +718,21 @@ def build_about_ui_payload(report: dict[str, Any]) -> dict[str, Any]:
         li_unique.append(item)
 
     li_snips: list[dict[str, str]] = []
-    if not li_unique:
-        social_pack = report.get("social_narrative_sources") or {}
-        for s in social_pack.get("snippets") or []:
-            if not isinstance(s, dict):
-                continue
-            if (s.get("platform") or "").lower() != "linkedin":
-                continue
-            text = re.sub(r"\s+", " ", str(s.get("text") or "")).strip()
-            if not text:
-                continue
-            u = (s.get("url") or "").strip()
-            if u and not u.startswith("http"):
-                u = "https://" + u.lstrip("/")
-            li_snips.append({"text": text[:200], "url": u})
-            if len(li_snips) >= 6:
-                break
+    social_pack = report.get("social_narrative_sources") or {}
+    for s in social_pack.get("snippets") or []:
+        if not isinstance(s, dict):
+            continue
+        if (s.get("platform") or "").lower() != "linkedin":
+            continue
+        text = re.sub(r"\s+", " ", str(s.get("text") or "")).strip()
+        if not text:
+            continue
+        u = (s.get("url") or "").strip()
+        if u and not u.startswith("http"):
+            u = "https://" + u.lstrip("/")
+        li_snips.append({"text": text[:200], "url": u})
+        if len(li_snips) >= 6:
+            break
 
     listing_tags = story.get("listing_tags") or (
         (cf or {}).get("tags") if isinstance(cf, dict) else None
@@ -793,13 +792,13 @@ def build_about_ui_payload(report: dict[str, Any]) -> dict[str, Any]:
 
 
 def format_about_section(report: dict[str, Any]) -> str:
-    """About tab: Narrative storyline + X posts + Public News + Links (no placeholders)."""
+    """About tab: Narrative + X posts + Public News + Links + LinkedIn (no placeholders)."""
     if not report.get("ok") and not report.get("narrative") and not report.get(
         "community_sentiment_x"
     ):
         return (
             "── ABOUT ──\n"
-            "  Run Analyze to load narrative, X posts, and public news.\n"
+            "  Run Analyze to load narrative, X posts, public news, and LinkedIn.\n"
         )
 
     token = report.get("token") or {}
@@ -811,7 +810,7 @@ def format_about_section(report: dict[str, Any]) -> str:
 
     lines: list[str] = []
     lines.append("=" * 72)
-    lines.append("  ABOUT — narrative · X posts · public news")
+    lines.append("  ABOUT — narrative · X posts · public news · LinkedIn")
     if token.get("symbol") or token.get("name"):
         lines.append(
             f"  {token.get('name') or ''} (${token.get('symbol') or '?'})  ·  "
@@ -1031,41 +1030,43 @@ def format_about_section(report: dict[str, Any]) -> str:
             lines.append(f"  {lab}:")
             lines.append(f"    {url}")
 
+    # Always show LinkedIn as its own About section (even when empty).
     li_snips_pairs: list[tuple[str, str]] = []
-    if not li_unique:
-        social_pack = report.get("social_narrative_sources") or {}
-        for s in social_pack.get("snippets") or []:
-            if not isinstance(s, dict):
-                continue
-            if (s.get("platform") or "").lower() != "linkedin":
-                continue
-            text = re.sub(r"\s+", " ", str(s.get("text") or "")).strip()
-            if not text:
-                continue
-            u = (s.get("url") or "").strip()
-            if u and not u.startswith("http"):
-                u = "https://" + u.lstrip("/")
-            li_snips_pairs.append((text, u))
-            if len(li_snips_pairs) >= 6:
-                break
+    social_pack = report.get("social_narrative_sources") or {}
+    for s in social_pack.get("snippets") or []:
+        if not isinstance(s, dict):
+            continue
+        if (s.get("platform") or "").lower() != "linkedin":
+            continue
+        text = re.sub(r"\s+", " ", str(s.get("text") or "")).strip()
+        if not text:
+            continue
+        u = (s.get("url") or "").strip()
+        if u and not u.startswith("http"):
+            u = "https://" + u.lstrip("/")
+        li_snips_pairs.append((text, u))
+        if len(li_snips_pairs) >= 6:
+            break
 
-    if li_unique or li_snips_pairs:
-        lines.append("")
-        lines.append("-" * 72)
-        lines.append("")
-        lines.append("── LINKEDIN ──")
-        lines.append("  (company / profile links + public search snippets)")
+    lines.append("")
+    lines.append("-" * 72)
+    lines.append("")
+    lines.append("── LINKEDIN ──")
+    lines.append("  (company / profile links + public search snippets)")
+    if li_unique:
         for lab, url in li_unique:
             lines.append(f"  {lab}:")
             lines.append(f"    {url}")
-        if li_snips_pairs:
-            lines.append("  Public snippets:")
-            for text, u in li_snips_pairs:
-                if len(text) > 160:
-                    text = text[:157] + "…"
-                lines.append(f"    • {text}")
-                if u:
-                    lines.append(f"      {u}")
+    else:
+        lines.append("  No LinkedIn company/profile page found in public sources.")
+    if li_snips_pairs:
+        lines.append("  Public snippets:")
+        for text, u in li_snips_pairs:
+            if len(text) > 160:
+                text = text[:157] + "…"
+            lines.append(f"    • {text}")
+            if u:
+                lines.append(f"      {u}")
 
     lines.append("")
     lines.append("-" * 72)
