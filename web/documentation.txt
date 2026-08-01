@@ -325,7 +325,8 @@ What people often ask
   - Bundle risk score (0–100 heuristic — formula §6.3i, UI rendering §6.3j)
 
   List sections (website cards)
-  - Multi-account clusters — one owner, several large ATAs (§6.3b, §6.3e)
+  - Multi-account clusters — one owner, several ATAs for this mint (§6.3b).
+    NOT “many wallets → one hidden owner” — see §6.3b “What it is NOT”.
   - Shared SOL funder — 1-hop common SOL funder (Helius; checkbox)
   - Fresh wallets — almost only this mint (§6.3f)
   - Multi-send (one → many) — token multi-send only here (§6.3e);
@@ -346,8 +347,10 @@ What people often ask
   Bundles categories compared (not interchangeable)
     | Section              | What it tracks                              |
     |----------------------|---------------------------------------------|
-    | Multi-account        | Same owner, multiple large Associated Token |
-    |                      | Accounts under that one owner — §6.3b       |
+    | Multi-account        | ONE owner with several token accounts (ATAs)  |
+    |                      | for this mint — §6.3b. Shows ATA count +      |
+    |                      | combined % for that owner. NOT multi-wallet   |
+    |                      | identity linking.                             |
     | Multi-send           | One wallet sent this mint to many others    |
     |                      | — §6.3e  (NOT multi-account)                |
     | Fresh / sole-token   | Holder whose bag is almost only this mint   |
@@ -566,33 +569,84 @@ What people often ask
     - That % is NOT colored with the wallet holding priority bands
       (same idea as Top1 / Top5 / Top10 summary lines).
 
-6.3b What an Associated Token Account is (multi-account clusters)
-  On Solana, your wallet (owner address) does not hold SPL tokens directly.
-  Each token mint uses a separate token account. The standard one for
-  “this owner + this mint” is the Associated Token Account.
+6.3b Multi-account clusters — what it does (and does not)
 
-    Wallet / owner  — the key people usually share (what Actual Data Token Checker colors as
-                      the holder when possible)
-    Associated Token Account — the on-chain account that actually holds
-                      that mint’s balance for that owner
-    Mint            — the token itself (contract / mint address)
+  Plain answer
+    Multi-account means: one wallet OWNER holds this mint through more than
+    one Associated Token Account (ATA). It counts how many token accounts
+    that single owner uses — not how many different wallet addresses belong
+    to the same person.
 
-  Multi-account / multi Associated Token Account cluster
-    - Same owner controls more than one large token account for this mint
-    - Holder lists sometimes show the token-account address, not the owner
-    - Actual Data Token Checker rolls those up by owner when it can, so one person is not counted
-      as several unrelated holders
-    - Shown under ── MULTI-ACCOUNT CLUSTERS ── and Ruggers “Multi-account
-      clusters (1 Owner)”
+  What it IS (one owner → many accounts)
+    On Solana, SPL tokens live in token accounts, not in the owner pubkey
+    itself. Usually there is one standard ATA per owner per mint. Sometimes
+    the same owner controls several token accounts for the same mint (extra
+    ATAs, legacy accounts, or split bags).
 
-  This is a heuristic (“looks like one operator with several bags”), not
-  proof of identity.
+    Actual Data Token Checker:
+      1) Pages token accounts for the mint (Helius DAS getTokenAccounts).
+      2) Rolls balances up by OWNER address.
+      3) Flags any owner with more than one token account (accounts > 1).
+      4) Lists them under ── MULTI-ACCOUNT CLUSTERS ── and Ruggers
+         “Multi-account clusters (1 Owner)”.
 
-  Multi-account is NOT multi-send
-    - Multi-account = one owner, several of their own token accounts (structure
-      of how they hold).
-    - Multi-send = one wallet transferred tokens/SOL out to many other wallets
-      (distribution / fan-out). See §6.3e for the full contrast.
+  What each cluster row shows
+    • Owner wallet — the one address that controls the accounts
+    • accounts — how many token accounts that owner has for this mint
+      (e.g. “3 Associated Token Accounts”)
+    • total / combined % — supply % summed across all of that owner’s
+      accounts for this mint (one operator’s full bag)
+    • token_accounts — individual ATA addresses (first few listed; rest
+      summarized as “+N more”)
+
+  Summary stats (top Bundles bar)
+    • Multi-account total % — combined supply % of unique owners in this
+      category (deduped by owner, capped at 100%)
+    • Header text like “total X% across N wallet(s)” — N is how many
+      OWNERS have multi-ATA setups, not “N wallets controlled by one person”
+
+  Detection rule (code)
+    token_tracker/holders.py: after DAS aggregate, owner_clusters includes
+    every owner where owner_ata_n[owner] > 1. Known LP / pool owners are
+    dropped before Bundles scoring and display when labeled.
+
+  Common misconception — what multi-account is NOT
+    Multi-account does NOT answer:
+      “How many different wallet addresses are secretly the same person?”
+
+    That is a different problem. Use these Bundles sections instead:
+
+    | If you want to know…                          | Use this section      |
+    |-----------------------------------------------|-----------------------|
+    | Several wallets funded from one SOL source    | Shared SOL funder     |
+    | One wallet sent this mint to many receivers   | Multi-send            |
+    | Many wallets hold near-identical bag sizes    | Similar-sized         |
+    | Wallets that barely hold any other tokens     | Fresh                 |
+    | Rugcheck marked insider on a top holder        | Similar-sized (insider)|
+
+  Solana terms (quick)
+    Wallet / owner     — pubkey people usually treat as “the holder”
+    Associated Token Account (ATA) — on-chain account that holds this
+                       mint’s balance for that owner
+    Mint               — the token contract / mint address
+
+  Why it matters
+    Raw holder lists sometimes show token-account addresses. Without rolling
+    up by owner, one person could look like several unrelated top holders.
+    Multi-account also surfaces operators who deliberately split one bag
+    across multiple accounts for the same mint.
+
+  Limits
+    • Heuristic from a capped token-account scan — not every dust account on
+      huge mints (see HOLDERS_MAX_ACCOUNTS).
+    • Not proof of identity, sybil linking, or legal “same person.”
+    • One owner with one ATA never appears here (accounts must be > 1).
+
+  Multi-account is NOT multi-send (§6.3e)
+    • Multi-account = one owner, several of their own token accounts
+      (structure of how they hold).
+    • Multi-send = one wallet transferred tokens/SOL out to many other
+      wallets (distribution / fan-out).
 
 6.3c Launch-window slots and same-slot multi-buys (reference)
 
@@ -956,11 +1010,15 @@ What people often ask
     Accounts (ATAs). Structure of how they hold — still one owner.
 
   Question it answers
-    “Is this one operator’s bag split across multiple token accounts?”
+    “Does this one owner hold this mint through more than one token account?”
+    (NOT: “Are these many wallets the same owner?”)
 
   What you see
-    Owner address · how many Associated Token Accounts · total % for that
-    owner (combined bag).
+    • One row per OWNER (not per token account)
+    • Owner address · N Associated Token Accounts · combined total % for
+      that owner
+    • Individual ATA pubkeys listed under the owner (up to a few shown)
+    • Summary: multi-account total % and count of owners flagged
 
   Source
     Holder snapshot / owner-cluster heuristics (roll token accounts up by
@@ -968,7 +1026,8 @@ What people often ask
 
   What it is NOT
     Not “this wallet sent tokens to other people.”
-    Not proof of multiple people.
+    Not “these five different wallets belong to one hidden owner.”
+    Not proof of multiple people sharing one wallet either.
 
   ---------------------------------------------------------------------------
   MULTI-SEND (ONE → MANY)  (── MULTI-SEND (ONE → MANY) ──)
