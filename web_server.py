@@ -43,6 +43,7 @@ if str(ROOT) not in sys.path:
 from token_tracker.env_config import load_dotenv  # noqa: E402
 from token_tracker.bundles import build_bundles_ui_payload  # noqa: E402
 from token_tracker.report import (  # noqa: E402
+    build_about_ui_payload,
     format_about_section,
     format_alerts_section,
     format_bundles_section,
@@ -1034,6 +1035,11 @@ def build_public_payload(report: dict[str, Any], *, lite: bool = False) -> dict[
             "error": "Bundles UI payload failed — use full Analyze on Solana.",
         }
 
+    try:
+        about_view = sanitize_public(build_about_ui_payload(report))
+    except Exception:  # noqa: BLE001
+        about_view = {"ok": False, "error": "About UI payload failed."}
+
     payload = {
         "ok": True,
         "query": report.get("query"),
@@ -1045,6 +1051,7 @@ def build_public_payload(report: dict[str, Any], *, lite: bool = False) -> dict[
         "links": _safe_links(report),
         "sections": sections,
         "bundles_view": bundles_view,
+        "about_view": about_view,
         "alerts_meta": {
             "priority_count": alerts.get("priority_count") or 0,
             "summary": redact_text(str(alerts.get("summary") or "")),

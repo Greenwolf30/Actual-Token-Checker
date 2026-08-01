@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v179";
+const ADTC_CLIENT_VERSION = "v180";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 // Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
 try {
@@ -10179,6 +10179,21 @@ function restoreLastAnalyze(cachedOpt) {
         /* ignore */
       }
     }
+    // About UI (cards)
+    try {
+      if (data.about_view || sections.about) {
+        renderAboutUi(data);
+      }
+    } catch (err) {
+      console.error("[about ui restore]", err);
+      try {
+        if (sections.about) {
+          setPanelText("about", lastKnownLine + String(sections.about));
+        }
+      } catch (_) {
+        /* ignore */
+      }
+    }
     // Ruggers (separate localStorage track — always try to show)
     try {
       const mint =
@@ -10805,6 +10820,226 @@ function resolveBundleStatsPrev(mint) {
   } catch (_) {
     return null;
   }
+}
+
+function aboutSentimentClass(label) {
+  const l = String(label || "").toLowerCase();
+  if (/bull|positive|optim/i.test(l)) return "about-chip-pos";
+  if (/bear|negative|pessim/i.test(l)) return "about-chip-neg";
+  return "about-chip-neutral";
+}
+
+/**
+ * Card UI for About tab from structured about_view.
+ */
+function renderAboutUi(data) {
+  const root = $("aboutUi");
+  if (!root) return;
+  const view = (data && data.about_view) || null;
+  const textFallback = (data && data.sections && data.sections.about) || "";
+  try {
+    if (textFallback) setPanelText("about", textFallback);
+  } catch (_) {
+    const textEl = $("text-about");
+    if (textEl && textFallback) textEl.textContent = String(textFallback);
+  }
+
+  if (!view || view.ok === false) {
+    if (view && view.error) {
+      root.innerHTML =
+        '<div class="about-hint"><strong>About unavailable</strong><br />' +
+        escHtml(view.error) +
+        "</div>";
+    } else if (textFallback) {
+      root.innerHTML =
+        '<pre class="about-fallback">' +
+        escHtml(String(textFallback).slice(0, 12000)) +
+        "</pre>";
+    }
+    return;
+  }
+
+  let html = '<div class="about-cards">';
+
+  const paras = view.storyline_paragraphs || [];
+  const hasNarr =
+    paras.length ||
+    view.theme ||
+    (view.fragments && view.fragments.length) ||
+    (view.hype && view.hype.length) ||
+    view.official_description;
+  if (hasNarr) {
+    html += '<section class="about-card"><h3 class="about-card-title">Narrative</h3>';
+    if (view.headline) {
+      html += '<p class="about-headline">' + escHtml(view.headline) + "</p>";
+    }
+    if (view.theme) {
+      html +=
+        '<p class="about-theme"><span class="about-label">Theme</span> ' +
+        escHtml(view.theme) +
+        "</p>";
+    }
+    const metaBits = [];
+    if (view.confidence) metaBits.push("confidence " + view.confidence);
+    if (view.sources_used && view.sources_used.length) {
+      metaBits.push("sources: " + view.sources_used.join(", "));
+    }
+    if (metaBits.length) {
+      html += '<p class="about-meta">' + escHtml(metaBits.join(" · ")) + "</p>";
+    }
+    for (let i = 0; i < paras.length; i++) {
+      html += '<p class="about-para">' + escHtml(paras[i]) + "</p>";
+    }
+    if (view.fragments && view.fragments.length) {
+      html += '<p class="about-label">Description sources</p><ul class="about-list">';
+      for (let i = 0; i < view.fragments.length; i++) {
+        html += "<li>" + escHtml(view.fragments[i]) + "</li>";
+      }
+      html += "</ul>";
+    }
+    if (view.listing_tags && view.listing_tags.length) {
+      html +=
+        '<p class="about-meta">Tags: ' +
+        escHtml(view.listing_tags.join(", ")) +
+        "</p>";
+    }
+    if (view.risk_notes && view.risk_notes.length) {
+      html += '<p class="about-label">Rugcheck notes</p><ul class="about-list">';
+      for (let i = 0; i < view.risk_notes.length; i++) {
+        html += "<li>" + escHtml(view.risk_notes[i]) + "</li>";
+      }
+      html += "</ul>";
+    }
+    if (view.hype && view.hype.length) {
+      html += '<p class="about-label">Hype</p><ul class="about-list">';
+      for (let i = 0; i < view.hype.length; i++) {
+        html += "<li>" + escHtml(view.hype[i]) + "</li>";
+      }
+      html += "</ul>";
+    }
+    if (view.official_description) {
+      html +=
+        '<p class="about-label">Official description</p><p class="about-para">' +
+        escHtml(view.official_description) +
+        "</p>";
+    }
+    html += "</section>";
+  }
+
+  const x = view.x || {};
+  if (
+    (x.posts && x.posts.length) ||
+    x.handle ||
+    x.summary ||
+    x.notes
+  ) {
+    html +=
+      '<section class="about-card"><h3 class="about-card-title">X / Community</h3>';
+    if (x.label != null || x.score != null || x.posts_analyzed) {
+      html += '<p class="about-x-meta"><span class="about-chip ' + aboutSentimentClass(x.label) + '">';
+      html += escHtml(x.label || "n/a") + "</span>";
+      if (x.score != null && x.score !== "") {
+        html += " · score " + escHtml(String(x.score));
+      }
+      if (x.posts_analyzed != null && x.posts_analyzed !== "") {
+        html += " · " + escHtml(String(x.posts_analyzed)) + " posts";
+      }
+      html += "</p>";
+    }
+    if (x.handle) {
+      const prof = x.profile_url || "https://x.com/" + x.handle;
+      html +=
+        '<p class="about-handle"><a href="' +
+        escHtml(prof) +
+        '" target="_blank" rel="noopener noreferrer">@' +
+        escHtml(x.handle) +
+        "</a></p>";
+    }
+    if (x.summary) {
+      html += '<p class="about-para">' + escHtml(x.summary) + "</p>";
+    }
+    if (x.notes) {
+      html += '<p class="about-meta">' + escHtml(x.notes) + "</p>";
+    }
+    if (x.posts && x.posts.length) {
+      html += '<ul class="about-posts">';
+      for (let i = 0; i < x.posts.length; i++) {
+        const p = x.posts[i];
+        html += '<li class="about-post"><span class="about-post-text">';
+        html += escHtml(p.text || "");
+        html += "</span>";
+        if (p.url) {
+          html +=
+            ' <a class="about-post-link" href="' +
+            escHtml(p.url) +
+            '" target="_blank" rel="noopener noreferrer">link</a>';
+        }
+        html += "</li>";
+      }
+      html += "</ul>";
+    }
+    html += "</section>";
+  }
+
+  if (view.news && view.news.length) {
+    html +=
+      '<section class="about-card"><h3 class="about-card-title">Public news</h3><ul class="about-list about-news">';
+    for (let i = 0; i < view.news.length; i++) {
+      const n = view.news[i];
+      html += "<li><span class=\"about-news-plat\">[" + escHtml(n.platform || "news") + "]</span> ";
+      if (n.url) {
+        html +=
+          '<a href="' +
+          escHtml(n.url) +
+          '" target="_blank" rel="noopener noreferrer">' +
+          escHtml(n.title) +
+          "</a>";
+      } else {
+        html += escHtml(n.title);
+      }
+      html += "</li>";
+    }
+    html += "</ul></section>";
+  }
+
+  if (view.links && view.links.length) {
+    html +=
+      '<section class="about-card about-links-card"><h3 class="about-card-title">Links</h3><div class="about-link-row">';
+    for (let i = 0; i < view.links.length; i++) {
+      const l = view.links[i];
+      html +=
+        '<a class="about-link-chip" href="' +
+        escHtml(l.url) +
+        '" target="_blank" rel="noopener noreferrer">' +
+        escHtml(l.label) +
+        "</a>";
+    }
+    html += "</div></section>";
+  }
+
+  const li = view.linkedin || [];
+  const liSn = view.linkedin_snippets || [];
+  if (li.length || liSn.length) {
+    html += '<section class="about-card"><h3 class="about-card-title">LinkedIn</h3>';
+    for (let i = 0; i < li.length; i++) {
+      html +=
+        '<p><a href="' +
+        escHtml(li[i].url) +
+        '" target="_blank" rel="noopener noreferrer">' +
+        escHtml(li[i].label) +
+        "</a></p>";
+    }
+    for (let i = 0; i < liSn.length; i++) {
+      html += '<p class="about-para">' + escHtml(liSn[i].text || "") + "</p>";
+    }
+    html += "</section>";
+  }
+
+  html += "</div>";
+  if (view.disclaimer) {
+    html += '<p class="about-footer">' + escHtml(view.disclaimer) + "</p>";
+  }
+  root.innerHTML = html;
 }
 
 /**
@@ -12804,7 +13039,7 @@ function renderBundlesUi(data) {
 function renderSectionsLight(data, query) {
   const sections = (data && data.sections) || {};
   for (const tab of TABS) {
-    if (tab === "history" || tab === "ruggers" || tab === "bundles") continue;
+    if (tab === "history" || tab === "ruggers" || tab === "bundles" || tab === "about") continue;
     if (sections[tab]) setPanelText(tab, sections[tab]);
   }
   try {
@@ -12819,6 +13054,12 @@ function renderSectionsLight(data, query) {
         "</div>";
     }
     if (sections.bundles) setPanelText("bundles", sections.bundles);
+  }
+  try {
+    renderAboutUi(data);
+  } catch (err) {
+    console.error("[about ui]", err);
+    if (sections.about) setPanelText("about", sections.about);
   }
   const n = (data.alerts_meta && data.alerts_meta.priority_count) || 0;
   if (n > 0) switchTab("alerts");
@@ -13684,7 +13925,7 @@ async function analyze(ev) {
     // Full path (only with ?full=1)
     try {
       const sections = (data && data.sections) || {};
-      for (const tab of ["overview", "alerts", "maps", "about", "holders"]) {
+      for (const tab of ["overview", "alerts", "maps", "holders"]) {
         if (sections[tab]) {
           try {
             setPanelText(tab, sections[tab]);
@@ -13693,6 +13934,15 @@ async function analyze(ev) {
           }
           await yieldToUi(0);
         }
+      }
+      if (sections.about) {
+        try {
+          renderAboutUi(data);
+        } catch (e) {
+          console.warn("[renderAboutUi]", e);
+          setPanelText("about", sections.about);
+        }
+        await yieldToUi(0);
       }
       const n = (data.alerts_meta && data.alerts_meta.priority_count) || 0;
       if (n > 0) switchTab("alerts");

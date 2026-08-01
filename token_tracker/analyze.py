@@ -971,18 +971,45 @@ def analyze_token(
         except Exception:  # noqa: BLE001
             helius_holders = {"ok": False, "holders": [], "summary": {}}
 
-    # Merge official description into social pack
-    if coin_pack.get("official_description"):
+    # Merge coin facts prose + fragments into social pack for richer narrative
+    if coin_pack.get("official_description") or coin_pack.get("description_fragments"):
         social_pack = dict(social_pack)
         blocks = list(social_pack.get("description_blocks") or [])
-        blocks.insert(
-            0,
-            {
-                "source": coin_pack.get("official_source") or "coin_api",
-                "text": coin_pack["official_description"],
-                "url": (coin_pack.get("links") or {}).get("website") or "",
-            },
-        )
+        seen_heads: set[str] = {
+            re.sub(r"\s+", " ", (b.get("text") or "")).strip()[:80].lower()
+            for b in blocks
+            if (b.get("text") or "").strip()
+        }
+        if (coin_pack.get("official_description") or "").strip():
+            od = coin_pack["official_description"].strip()
+            head = od[:80].lower()
+            if head not in seen_heads:
+                blocks.insert(
+                    0,
+                    {
+                        "source": coin_pack.get("official_source") or "coin_api",
+                        "text": od,
+                        "url": (coin_pack.get("links") or {}).get("website") or "",
+                    },
+                )
+                seen_heads.add(head)
+        for fr in coin_pack.get("description_fragments") or []:
+            if not isinstance(fr, dict):
+                continue
+            text = re.sub(r"\s+", " ", str(fr.get("text") or "")).strip()
+            if not text or len(text) < 8:
+                continue
+            head = text[:80].lower()
+            if head in seen_heads:
+                continue
+            seen_heads.add(head)
+            blocks.append(
+                {
+                    "source": fr.get("source") or "coin_api",
+                    "text": text,
+                    "url": "",
+                }
+            )
         social_pack["description_blocks"] = blocks
         srcs = list(social_pack.get("sources_used") or [])
         for s in coin_pack.get("sources_used") or []:
@@ -990,6 +1017,33 @@ def analyze_token(
                 srcs.insert(0, s)
         social_pack["sources_used"] = srcs
         social_pack["ok"] = True
+
+    # Backfill coin_pack when social fetch got Pump.fun About but coin_facts missed it
+    if not (coin_pack.get("official_description") or "").strip():
+        for block in social_pack.get("description_blocks") or []:
+            if not isinstance(block, dict):
+                continue
+            src = str(block.get("source") or "").lower()
+            text = re.sub(r"\s+", " ", str(block.get("text") or "")).strip()
+            if len(text) < 12:
+                continue
+            if "pumpfun" in src or src in {
+                "dexscreener",
+                "birdeye",
+                "metadata_uri",
+                "coinmarketcap",
+                "website_og",
+            }:
+                coin_pack = dict(coin_pack)
+                coin_pack["official_description"] = text
+                coin_pack["official_source"] = block.get("source") or src
+                coin_pack["ok"] = True
+                srcs = list(coin_pack.get("sources_used") or [])
+                lab = block.get("source") or src
+                if lab not in srcs:
+                    srcs.insert(0, str(lab))
+                coin_pack["sources_used"] = srcs
+                break
 
     # Fold social snippets into X sample posts
     if social_pack.get("snippets"):

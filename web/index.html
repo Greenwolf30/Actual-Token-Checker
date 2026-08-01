@@ -50,7 +50,7 @@
       white-space: pre-wrap;
     }
   </style>
-  <link rel="stylesheet" href="/styles.css?v=edge-full-v169" />
+  <link rel="stylesheet" href="/styles.css?v=edge-full-v170" />
   <script
     defer
     src="/config.js?v=edge-full-v169"
@@ -58,7 +58,7 @@
   ></script>
   <script
     defer
-    src="/app.js?v=edge-full-v169"
+    src="/app.js?v=edge-full-v170"
     onerror="window.__adtcBootError && window.__adtcBootError('failed to load app.js — hard-refresh')"
   ></script>
   <!-- app cache: edge-full-v169 — full fonts + full Ruggers on Edge/Chrome -->
@@ -351,8 +351,16 @@
         <section class="panel" id="panel-maps" data-panel="maps" role="tabpanel">
           <pre class="report" id="text-maps">Maps / Bubblemaps links load after Analyze.</pre>
         </section>
-        <section class="panel" id="panel-about" data-panel="about" role="tabpanel">
-          <pre class="report" id="text-about">About narrative loads after Analyze (coin facts + X + news).</pre>
+        <section class="panel panel-about" id="panel-about" data-panel="about" role="tabpanel">
+          <div class="history-bar">
+            <span class="history-bar-label">About · narrative · X · news · links</span>
+          </div>
+          <div id="aboutUi" class="about-ui" aria-live="polite">
+            <p class="logs-empty">
+              Run <strong>Analyze</strong> to load coin narrative, X posts, public news, and links.
+            </p>
+          </div>
+          <pre class="report" id="text-about" hidden></pre>
         </section>
         <section class="panel panel-ruggers" id="panel-ruggers" data-panel="ruggers" role="tabpanel">
           <div class="history-bar">

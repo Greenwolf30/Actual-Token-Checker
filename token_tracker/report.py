@@ -529,94 +529,28 @@ def _will_show_placeholder(label: str) -> str:
     return f"  {name} will show here if value returns True"
 
 
-def format_about_section(report: dict[str, Any]) -> str:
-    """About tab: Narrative storyline + X posts + Public News + Links."""
-    if not report.get("ok") and not report.get("narrative") and not report.get("community_sentiment_x"):
-        return (
-            "── ABOUT ──\n"
-            "  Run Analyze to load narrative, X posts, and public news.\n"
-            + _will_show_placeholder("Narrative, X posts, and public news")
-            + "\n"
-        )
-
-    token = report.get("token") or {}
-    x = report.get("community_sentiment_x") or {}
-    sent = x.get("sentiment") or {}
-    story = report.get("narrative") or {}
-    socials = report.get("socials") or {}
-
-    lines: list[str] = []
-    lines.append("=" * 72)
-    lines.append("  ABOUT — narrative · X posts · public news")
-    if token.get("symbol") or token.get("name"):
-        lines.append(
-            f"  {token.get('name') or ''} (${token.get('symbol') or '?'})  ·  "
-            f"{token.get('chain_id') or ''}"
-        )
-    lines.append("=" * 72)
-
-    # ── NARRATIVE (storyline) ─────────────────────────────────────────
-    # Section markers (── TITLE ──) are colored dim-green in the UI.
-    lines.append("")
-    lines.append("── NARRATIVE ──")
-    lines.append("  What this token is about")
-    has_story = bool(story.get("headline") or story.get("theme") or story.get("storyline"))
-    if has_story or story:
-        headline = story.get("headline") or (
-            f"{token.get('name') or 'Token'} (${token.get('symbol') or '?'})"
-        )
-        lines.append(f"  {headline}")
-        if story.get("theme"):
-            lines.append(f"  Theme:  {story.get('theme')}")
-        else:
-            lines.append(_will_show_placeholder("Theme / category"))
-    else:
-        lines.append(_will_show_placeholder("Token story / theme"))
-
-    cf = story.get("coin_facts") if isinstance(story.get("coin_facts"), dict) else {}
-    conf = (cf or {}).get("confidence") or ""
-    srcs = story.get("sources_used") or []
-    if conf or srcs:
-        bits = []
-        if conf:
-            bits.append(f"confidence {conf}")
-        if srcs:
-            bits.append("sources: " + ", ".join(str(s) for s in srcs[:14]))
-        lines.append("  (" + " · ".join(bits) + ")")
-    else:
-        lines.append(_will_show_placeholder("Confidence / sources"))
-
-    lines.append("")
-    storyline = (story.get("storyline") or story.get("paragraph") or "").strip()
-    if storyline:
-        for para in storyline.split("\n\n"):
-            p = para.strip()
-            if not p:
-                continue
-            lines.append(_wrap(p, indent="  ", width=72))
-            lines.append("")
-    else:
-        lines.append(_will_show_placeholder("Narrative storyline"))
-        lines.append("")
-
-    official_desc = (story.get("official_description") or "").strip()
-    if not official_desc and isinstance(cf, dict):
-        official_desc = str(cf.get("official_description") or "").strip()
-
-    def _already_shown_prose(text: str, *pools: str) -> bool:
-        t = re.sub(r"\s+", " ", (text or "")).strip().lower()
-        if len(t) < 20:
-            return False
-        head = t[:48]
-        for pool in pools:
-            p = re.sub(r"\s+", " ", (pool or "")).strip().lower()
-            if not p:
-                continue
-            if head in p or t in p or (len(p) >= 24 and p[:48] in t):
-                return True
+def _about_prose_redundant(text: str, *pools: str) -> bool:
+    t = re.sub(r"\s+", " ", (text or "")).strip().lower()
+    if len(t) < 20:
         return False
+    head = t[:48]
+    for pool in pools:
+        p = re.sub(r"\s+", " ", (pool or "")).strip().lower()
+        if not p:
+            continue
+        if head in p or t in p or (len(p) >= 24 and p[:48] in t):
+            return True
+    return False
 
-    # Multi-source string elements — only *new* prose not already in the storyline
+
+def _about_collect_frag_lines(
+    story: dict[str, Any],
+    cf: dict[str, Any],
+    *,
+    storyline: str,
+    official_desc: str,
+    limit: int = 6,
+) -> list[str]:
     fragments = list(story.get("description_fragments") or [])
     if not fragments and isinstance(cf, dict):
         fragments = list(cf.get("description_fragments") or [])
@@ -627,7 +561,7 @@ def format_about_section(report: dict[str, Any]) -> str:
         text = re.sub(r"\s+", " ", str(fr.get("text") or "")).strip()
         if not text:
             continue
-        if _already_shown_prose(text, storyline, official_desc):
+        if _about_prose_redundant(text, storyline, official_desc):
             continue
         key = text.lower()
         if any(
@@ -639,42 +573,21 @@ def format_about_section(report: dict[str, Any]) -> str:
         seen_fr.append(key)
         if len(text) > 180:
             text = text[:177] + "…"
-        frag_lines.append(f"    • [{src}] {text}")
-        if len(frag_lines) >= 6:
+        frag_lines.append(f"[{src}] {text}")
+        if len(frag_lines) >= limit:
             break
-    if frag_lines:
-        lines.append("  Description sources (string elements):")
-        lines.extend(frag_lines)
-        lines.append("")
-    else:
-        lines.append(_will_show_placeholder("Description sources (string elements)"))
-        lines.append("")
+    return frag_lines
 
-    listing_tags = story.get("listing_tags") or (
-        (cf or {}).get("tags") if isinstance(cf, dict) else None
-    ) or []
-    if listing_tags:
-        lines.append("  Listing tags: " + ", ".join(str(t) for t in listing_tags[:12]))
-        lines.append("")
-    else:
-        lines.append(_will_show_placeholder("Listing tags"))
-        lines.append("")
 
-    risk_notes = list(story.get("risk_notes") or [])
-    if not risk_notes and isinstance(cf, dict):
-        risk_notes = list(cf.get("risk_notes") or [])
-    if risk_notes:
-        lines.append("  Rugcheck risk text:")
-        for r in risk_notes[:5]:
-            lines.append(f"    • {r}")
-        lines.append("")
-    else:
-        lines.append(_will_show_placeholder("Rugcheck risk text"))
-        lines.append("")
-
+def _about_collect_hype_lines(
+    story: dict[str, Any],
+    *,
+    storyline: str,
+    official_desc: str,
+    limit: int = 6,
+) -> list[str]:
     why = list(story.get("why_interested") or [])
     hype_drv = list(story.get("hype_drivers") or [])
-    # Single Hype block: merge interest + drivers, drop restated / duplicate language
     hook_lines: list[str] = []
     shown_why: list[str] = []
     for w in _dedupe_str_list(why + hype_drv):
@@ -692,7 +605,7 @@ def format_about_section(report: dict[str, Any]) -> str:
             ws,
             flags=re.I,
         ).strip()
-        if _already_shown_prose(core, storyline, official_desc):
+        if _about_prose_redundant(core, storyline, official_desc):
             continue
         if any(
             core.lower() == s
@@ -703,125 +616,362 @@ def format_about_section(report: dict[str, Any]) -> str:
         ):
             continue
         shown_why.append(core.lower())
-        hook_lines.append(f"    • {ws}")
-        if len(hook_lines) >= 6:
+        hook_lines.append(ws)
+        if len(hook_lines) >= limit:
             break
-    if hook_lines:
-        lines.append("  Hype:")
-        lines.extend(hook_lines)
-        lines.append("")
-    else:
-        lines.append(_will_show_placeholder("Hype"))
-        lines.append("")
+    return hook_lines
 
-    # Official description only if storyline never included it
-    if official_desc and not _already_shown_prose(official_desc, storyline):
-        od = official_desc if len(official_desc) <= 400 else official_desc[:397] + "…"
-        lines.append("  Official description:")
-        lines.append(_wrap(od, indent="    ", width=72))
-        lines.append("")
-    elif not official_desc:
-        lines.append(_will_show_placeholder("Official description"))
-        lines.append("")
 
-    # ── X / COMMUNITY POSTS ───────────────────────────────────────────
-    # Compact meta (always with values) so nothing crowds/covers post text.
-    lines.append("-" * 72)
-    lines.append("")
-    lines.append("── X / COMMUNITY POSTS ──")
-    kind = sent.get("kind") or ("x_text" if x.get("posts_analyzed") else "unknown")
-    label = sent.get("label")
-    label_missing = (
-        label is None or str(label).strip() == "" or str(label).lower() == "none"
-    )
-    label_s = "n/a" if label_missing else str(label).strip()
-    score = sent.get("score")
-    score_missing = score is None or score == ""
-    if score_missing:
-        score_s = "n/a"
-    else:
-        try:
-            score_s = f"{float(score):g}"
-        except (TypeError, ValueError):
-            score_s = str(score)
-    posts_n = x.get("posts_analyzed")
-    if posts_n is None or posts_n == "":
-        posts_s = "0"
-    else:
-        posts_s = str(posts_n)
-    srcs = [str(s) for s in (x.get("sources_used") or []) if s]
-    srcs_missing = not srcs
-    srcs_s = ", ".join(srcs) if srcs else "n/a"
-    # One tight meta line + optional handle / summary / note
-    lines.append(
-        f"  Tone: {label_s} · score {score_s} · kind {kind} · posts analyzed {posts_s}"
-    )
-    lines.append(f"  Sources: {srcs_s}")
-    if label_missing or score_missing or srcs_missing:
-        lines.append(
-            _will_show_placeholder("X tone / score / sources (when metrics exist)")
-        )
+def build_about_ui_payload(report: dict[str, Any]) -> dict[str, Any]:
+    """Structured About tab data for card UI (mirrors format_about_section)."""
+    if not report.get("ok") and not report.get("narrative") and not report.get(
+        "community_sentiment_x"
+    ):
+        return {"ok": False, "error": "Run Analyze to load About."}
+
+    token = report.get("token") or {}
+    x = report.get("community_sentiment_x") or {}
+    sent = x.get("sentiment") or {}
+    story = report.get("narrative") or {}
+    socials = report.get("socials") or {}
+    cf = story.get("coin_facts") if isinstance(story.get("coin_facts"), dict) else {}
+
+    storyline = (story.get("storyline") or story.get("paragraph") or "").strip()
+    official_desc = (story.get("official_description") or "").strip()
+    if not official_desc and isinstance(cf, dict):
+        official_desc = str(cf.get("official_description") or "").strip()
+
     tw_handle = (
         (x.get("twitter_handle") or socials.get("twitter_handle") or "")
         .strip()
         .lstrip("@")
     )
-    if tw_handle:
-        lines.append(f"  Handle: @{tw_handle}")
-        lines.append(f"  Profile: https://x.com/{tw_handle}")
-    else:
-        lines.append(_will_show_placeholder("X handle / profile"))
-    summary = (sent.get("summary") or "").strip()
-    if summary:
-        lines.append("  Summary: " + summary)
-    else:
-        lines.append(_will_show_placeholder("X sentiment summary"))
-    notes = (x.get("notes") or "").strip()
-    if notes:
-        lines.append("  Note: " + notes)
 
-    samples = x.get("sample_posts") or []
-    lines.append("")
-    if samples:
-        lines.append("  Recent X posts:")
-        seen_posts: set[str] = set()
-        shown = 0
-        for p in samples[:10]:
-            text = (p.get("text") or "").replace("\n", " ").strip()
+    posts: list[dict[str, Any]] = []
+    seen_posts: set[str] = set()
+    for p in x.get("sample_posts") or []:
+        text = (p.get("text") or "").replace("\n", " ").strip()
+        if not text:
+            continue
+        key = text[:60].lower()
+        if key in seen_posts:
+            continue
+        seen_posts.add(key)
+        post_url = (p.get("url") or p.get("link") or "").strip()
+        if post_url and not post_url.startswith("http"):
+            post_url = "https://" + post_url.lstrip("/")
+        posts.append(
+            {
+                "text": text[:240],
+                "url": post_url,
+                "source": p.get("source") or "",
+            }
+        )
+        if len(posts) >= 10:
+            break
+
+    news_out: list[dict[str, Any]] = []
+    seen_titles: set[str] = set()
+    for ev in story.get("news_events") or []:
+        title = re.sub(r"\s+", " ", str(ev.get("title") or "")).strip()
+        if not title:
+            continue
+        key = title[:70].lower()
+        if key in seen_titles:
+            continue
+        seen_titles.add(key)
+        url = (ev.get("url") or "").strip()
+        if url and not url.startswith("http"):
+            url = "https://" + url.lstrip("/")
+        news_out.append(
+            {
+                "title": title,
+                "url": url,
+                "platform": ev.get("platform") or ev.get("source") or "news",
+            }
+        )
+        if len(news_out) >= 12:
+            break
+
+    link_lines = _collect_about_links(report, story, socials, x)
+    other_links = [
+        {"label": lab, "url": url}
+        for lab, url in link_lines
+        if "linkedin" not in str(lab).lower() and "linkedin.com" not in str(url).lower()
+    ]
+    linkedin_links = [
+        {"label": lab, "url": url}
+        for lab, url in link_lines
+        if "linkedin" in str(lab).lower() or "linkedin.com" in str(url).lower()
+    ]
+    linkedin_links.extend(
+        {"label": lab, "url": url}
+        for lab, url in _collect_about_linkedin(report, story, socials, x)
+    )
+    seen_li: set[str] = set()
+    li_unique: list[dict[str, str]] = []
+    for item in linkedin_links:
+        key = str(item.get("url") or "").rstrip("/").lower()
+        if not key or key in seen_li:
+            continue
+        seen_li.add(key)
+        li_unique.append(item)
+
+    li_snips: list[dict[str, str]] = []
+    if not li_unique:
+        social_pack = report.get("social_narrative_sources") or {}
+        for s in social_pack.get("snippets") or []:
+            if not isinstance(s, dict):
+                continue
+            if (s.get("platform") or "").lower() != "linkedin":
+                continue
+            text = re.sub(r"\s+", " ", str(s.get("text") or "")).strip()
             if not text:
                 continue
-            key = text[:60].lower()
-            if key in seen_posts:
-                continue
-            seen_posts.add(key)
-            if len(text) > 160:
-                text = text[:157] + "..."
-            lines.append(f"    • {text}")
-            post_url = (p.get("url") or p.get("link") or "").strip()
-            src = p.get("source") or ""
-            if post_url:
-                if not post_url.startswith("http"):
-                    post_url = "https://" + post_url.lstrip("/")
-                lines.append(f"      {post_url}")
-            elif src:
-                lines.append(f"      ({src})")
-            shown += 1
-        if shown == 0:
-            lines.append(_will_show_placeholder("Recent X post text"))
-    else:
-        lines.append(_will_show_placeholder("Recent X posts"))
+            u = (s.get("url") or "").strip()
+            if u and not u.startswith("http"):
+                u = "https://" + u.lstrip("/")
+            li_snips.append({"text": text[:200], "url": u})
+            if len(li_snips) >= 6:
+                break
+
+    listing_tags = story.get("listing_tags") or (
+        (cf or {}).get("tags") if isinstance(cf, dict) else None
+    ) or []
+    risk_notes = list(story.get("risk_notes") or [])
+    if not risk_notes and isinstance(cf, dict):
+        risk_notes = list(cf.get("risk_notes") or [])
+
+    show_official = bool(
+        official_desc and not _about_prose_redundant(official_desc, storyline)
+    )
+
+    return {
+        "ok": True,
+        "token": {
+            "name": token.get("name"),
+            "symbol": token.get("symbol"),
+            "chain_id": token.get("chain_id"),
+        },
+        "headline": story.get("headline")
+        or f"{token.get('name') or 'Token'} (${token.get('symbol') or '?'})",
+        "theme": story.get("theme") or "",
+        "confidence": (cf or {}).get("confidence") or "",
+        "sources_used": list(story.get("sources_used") or [])[:14],
+        "storyline_paragraphs": [
+            p.strip() for p in storyline.split("\n\n") if p.strip()
+        ],
+        "fragments": _about_collect_frag_lines(
+            story, cf, storyline=storyline, official_desc=official_desc
+        ),
+        "listing_tags": [str(t) for t in listing_tags[:12]],
+        "risk_notes": [str(r) for r in risk_notes[:5]],
+        "hype": _about_collect_hype_lines(
+            story, storyline=storyline, official_desc=official_desc
+        ),
+        "official_description": official_desc if show_official else "",
+        "x": {
+            "label": sent.get("label"),
+            "score": sent.get("score"),
+            "kind": sent.get("kind"),
+            "posts_analyzed": x.get("posts_analyzed"),
+            "sources_used": list(x.get("sources_used") or [])[:8],
+            "summary": (sent.get("summary") or "").strip(),
+            "handle": tw_handle,
+            "profile_url": f"https://x.com/{tw_handle}" if tw_handle else "",
+            "notes": (x.get("notes") or "").strip(),
+            "posts": posts,
+        },
+        "news": news_out,
+        "links": other_links,
+        "linkedin": li_unique,
+        "linkedin_snippets": li_snips,
+        "generated_at": report.get("generated_at"),
+        "disclaimer": report.get("disclaimer")
+        or "Narrative + news from public APIs · heuristics only · not financial advice.",
+    }
+
+
+def format_about_section(report: dict[str, Any]) -> str:
+    """About tab: Narrative storyline + X posts + Public News + Links (no placeholders)."""
+    if not report.get("ok") and not report.get("narrative") and not report.get(
+        "community_sentiment_x"
+    ):
+        return (
+            "── ABOUT ──\n"
+            "  Run Analyze to load narrative, X posts, and public news.\n"
+        )
+
+    token = report.get("token") or {}
+    x = report.get("community_sentiment_x") or {}
+    sent = x.get("sentiment") or {}
+    story = report.get("narrative") or {}
+    socials = report.get("socials") or {}
+    cf = story.get("coin_facts") if isinstance(story.get("coin_facts"), dict) else {}
+
+    lines: list[str] = []
+    lines.append("=" * 72)
+    lines.append("  ABOUT — narrative · X posts · public news")
+    if token.get("symbol") or token.get("name"):
+        lines.append(
+            f"  {token.get('name') or ''} (${token.get('symbol') or '?'})  ·  "
+            f"{token.get('chain_id') or ''}"
+        )
+    lines.append("=" * 72)
+
+    storyline = (story.get("storyline") or story.get("paragraph") or "").strip()
+    official_desc = (story.get("official_description") or "").strip()
+    if not official_desc and isinstance(cf, dict):
+        official_desc = str(cf.get("official_description") or "").strip()
+
+    frag_lines = _about_collect_frag_lines(
+        story, cf, storyline=storyline, official_desc=official_desc
+    )
+    hook_lines = _about_collect_hype_lines(
+        story, storyline=storyline, official_desc=official_desc
+    )
+    listing_tags = story.get("listing_tags") or (
+        (cf or {}).get("tags") if isinstance(cf, dict) else None
+    ) or []
+    risk_notes = list(story.get("risk_notes") or [])
+    if not risk_notes and isinstance(cf, dict):
+        risk_notes = list(cf.get("risk_notes") or [])
+
+    has_narrative = bool(
+        story.get("headline")
+        or story.get("theme")
+        or storyline
+        or official_desc
+        or frag_lines
+        or hook_lines
+        or listing_tags
+        or risk_notes
+    )
+    if has_narrative:
+        lines.append("")
+        lines.append("── NARRATIVE ──")
+        headline = story.get("headline") or (
+            f"{token.get('name') or 'Token'} (${token.get('symbol') or '?'})"
+        )
+        lines.append(f"  {headline}")
+        if story.get("theme"):
+            lines.append(f"  Theme:  {story.get('theme')}")
+        conf = (cf or {}).get("confidence") or ""
+        srcs = story.get("sources_used") or []
+        if conf or srcs:
+            bits = []
+            if conf:
+                bits.append(f"confidence {conf}")
+            if srcs:
+                bits.append("sources: " + ", ".join(str(s) for s in srcs[:14]))
+            lines.append("  (" + " · ".join(bits) + ")")
+        if storyline:
+            lines.append("")
+            for para in storyline.split("\n\n"):
+                p = para.strip()
+                if not p:
+                    continue
+                lines.append(_wrap(p, indent="  ", width=72))
+                lines.append("")
+        if frag_lines:
+            lines.append("  Description sources (string elements):")
+            for fl in frag_lines:
+                lines.append(f"    • {fl}")
+            lines.append("")
+        if listing_tags:
+            lines.append("  Listing tags: " + ", ".join(str(t) for t in listing_tags[:12]))
+            lines.append("")
+        if risk_notes:
+            lines.append("  Rugcheck risk text:")
+            for r in risk_notes[:5]:
+                lines.append(f"    • {r}")
+            lines.append("")
+        if hook_lines:
+            lines.append("  Hype:")
+            for h in hook_lines:
+                lines.append(f"    • {h}")
+            lines.append("")
+        if official_desc and not _about_prose_redundant(official_desc, storyline):
+            od = official_desc if len(official_desc) <= 400 else official_desc[:397] + "…"
+            lines.append("  Official description:")
+            lines.append(_wrap(od, indent="    ", width=72))
+            lines.append("")
+
+    # ── X / COMMUNITY POSTS ───────────────────────────────────────────
+    tw_handle = (
+        (x.get("twitter_handle") or socials.get("twitter_handle") or "")
+        .strip()
+        .lstrip("@")
+    )
+    samples = x.get("sample_posts") or []
+    summary = (sent.get("summary") or "").strip()
+    notes = (x.get("notes") or "").strip()
+    kind = sent.get("kind") or ("x_text" if x.get("posts_analyzed") else "")
+    label = sent.get("label")
+    label_s = (
+        "n/a"
+        if label is None or str(label).strip() == "" or str(label).lower() == "none"
+        else str(label).strip()
+    )
+    score = sent.get("score")
+    try:
+        score_s = "n/a" if score is None or score == "" else f"{float(score):g}"
+    except (TypeError, ValueError):
+        score_s = str(score) if score not in (None, "") else "n/a"
+    posts_n = x.get("posts_analyzed")
+    posts_s = "0" if posts_n is None or posts_n == "" else str(posts_n)
+    x_srcs = [str(s) for s in (x.get("sources_used") or []) if s]
+    has_x = bool(samples or tw_handle or summary or notes or kind or x_srcs)
+
+    if has_x:
+        lines.append("-" * 72)
+        lines.append("")
+        lines.append("── X / COMMUNITY POSTS ──")
+        if kind or label_s != "n/a" or score_s != "n/a" or posts_s != "0":
+            lines.append(
+                f"  Tone: {label_s} · score {score_s} · kind {kind or 'n/a'} · "
+                f"posts analyzed {posts_s}"
+            )
+        if x_srcs:
+            lines.append(f"  Sources: {', '.join(x_srcs)}")
+        if tw_handle:
+            lines.append(f"  Handle: @{tw_handle}")
+            lines.append(f"  Profile: https://x.com/{tw_handle}")
+        if summary:
+            lines.append("  Summary: " + summary)
+        if notes:
+            lines.append("  Note: " + notes)
+        if samples:
+            lines.append("")
+            lines.append("  Recent X posts:")
+            seen_posts: set[str] = set()
+            shown = 0
+            for p in samples[:10]:
+                text = (p.get("text") or "").replace("\n", " ").strip()
+                if not text:
+                    continue
+                key = text[:60].lower()
+                if key in seen_posts:
+                    continue
+                seen_posts.add(key)
+                if len(text) > 160:
+                    text = text[:157] + "..."
+                lines.append(f"    • {text}")
+                post_url = (p.get("url") or p.get("link") or "").strip()
+                src = p.get("source") or ""
+                if post_url:
+                    if not post_url.startswith("http"):
+                        post_url = "https://" + post_url.lstrip("/")
+                    lines.append(f"      {post_url}")
+                elif src:
+                    lines.append(f"      ({src})")
+                shown += 1
 
     # ── PUBLIC NEWS ───────────────────────────────────────────────────
-    lines.append("")
-    lines.append("-" * 72)
-    lines.append("")
-    lines.append("── PUBLIC NEWS ──")
-    lines.append("  Public news events")
-    lines.append("  (Click blue links to open in your browser)")
     news = list(story.get("news_events") or [])
+    news_lines: list[str] = []
     if news:
         seen_titles: set[str] = set()
-        shown = 0
         for ev in news:
             title = re.sub(r"\s+", " ", str(ev.get("title") or "")).strip()
             if not title:
@@ -830,30 +980,26 @@ def format_about_section(report: dict[str, Any]) -> str:
             if key in seen_titles:
                 continue
             seen_titles.add(key)
-            shown += 1
             plat = ev.get("platform") or ev.get("source") or "news"
-            lines.append(f"    • [{plat}] {title}")
+            news_lines.append(f"    • [{plat}] {title}")
             url = (ev.get("url") or "").strip()
             if url:
                 if not url.startswith("http://") and not url.startswith("https://"):
                     url = "https://" + url.lstrip("/")
-                lines.append(f"      {url}")
-            if shown >= 12:
+                news_lines.append(f"      {url}")
+            if len(news_lines) >= 24:
                 break
-        if shown == 0:
-            lines.append(_will_show_placeholder("Public news headlines"))
-    else:
-        lines.append(_will_show_placeholder("Public news events"))
-        lines.append("  Sources checked: Google News RSS + web search snippets.")
+
+    if news_lines:
+        lines.append("")
+        lines.append("-" * 72)
+        lines.append("")
+        lines.append("── PUBLIC NEWS ──")
+        lines.append("  (Click blue links to open in your browser)")
+        lines.extend(news_lines)
 
     # ── LINKS ─────────────────────────────────────────────────────────
-    lines.append("")
-    lines.append("-" * 72)
-    lines.append("")
-    lines.append("── LINKS ──")
-    lines.append("  (click blue URLs to open)")
     link_lines = _collect_about_links(report, story, socials, x)
-    # LinkedIn lives in its own section below — keep general LINKS clean
     other_links = [
         (lab, url)
         for lab, url in link_lines
@@ -865,9 +1011,7 @@ def format_about_section(report: dict[str, Any]) -> str:
         for lab, url in link_lines
         if "linkedin" in str(lab).lower() or "linkedin.com" in str(url).lower()
     ]
-    # Also pull LinkedIn-only finds that might not have been labeled
     linkedin_links.extend(_collect_about_linkedin(report, story, socials, x))
-    # Dedupe LinkedIn by URL
     seen_li: set[str] = set()
     li_unique: list[tuple[str, str]] = []
     for lab, url in linkedin_links:
@@ -876,47 +1020,51 @@ def format_about_section(report: dict[str, Any]) -> str:
             continue
         seen_li.add(key)
         li_unique.append((lab, url))
-    linkedin_links = li_unique
 
     if other_links:
+        lines.append("")
+        lines.append("-" * 72)
+        lines.append("")
+        lines.append("── LINKS ──")
+        lines.append("  (click blue URLs to open)")
         for lab, url in other_links:
             lines.append(f"  {lab}:")
             lines.append(f"    {url}")
-    else:
-        lines.append(_will_show_placeholder("Website / social links"))
 
-    # ── LINKEDIN (own section) ────────────────────────────────────────
-    lines.append("")
-    lines.append("-" * 72)
-    lines.append("")
-    lines.append("── LINKEDIN ──")
-    lines.append("  (company / profile links + public search snippets)")
-    if linkedin_links:
-        for lab, url in linkedin_links:
+    li_snips_pairs: list[tuple[str, str]] = []
+    if not li_unique:
+        social_pack = report.get("social_narrative_sources") or {}
+        for s in social_pack.get("snippets") or []:
+            if not isinstance(s, dict):
+                continue
+            if (s.get("platform") or "").lower() != "linkedin":
+                continue
+            text = re.sub(r"\s+", " ", str(s.get("text") or "")).strip()
+            if not text:
+                continue
+            u = (s.get("url") or "").strip()
+            if u and not u.startswith("http"):
+                u = "https://" + u.lstrip("/")
+            li_snips_pairs.append((text, u))
+            if len(li_snips_pairs) >= 6:
+                break
+
+    if li_unique or li_snips_pairs:
+        lines.append("")
+        lines.append("-" * 72)
+        lines.append("")
+        lines.append("── LINKEDIN ──")
+        lines.append("  (company / profile links + public search snippets)")
+        for lab, url in li_unique:
             lines.append(f"  {lab}:")
             lines.append(f"    {url}")
-    else:
-        lines.append(_will_show_placeholder("LinkedIn profile / company page"))
-        # Surface any LinkedIn narrative snippets (text-only) when no URL
-        social_pack = report.get("social_narrative_sources") or {}
-        li_snips = [
-            s
-            for s in (social_pack.get("snippets") or [])
-            if isinstance(s, dict)
-            and (s.get("platform") or "").lower() == "linkedin"
-            and (s.get("text") or "").strip()
-        ]
-        if li_snips:
+        if li_snips_pairs:
             lines.append("  Public snippets:")
-            for s in li_snips[:6]:
-                text = re.sub(r"\s+", " ", str(s.get("text") or "")).strip()
+            for text, u in li_snips_pairs:
                 if len(text) > 160:
                     text = text[:157] + "…"
                 lines.append(f"    • {text}")
-                u = (s.get("url") or "").strip()
                 if u:
-                    if not u.startswith("http"):
-                        u = "https://" + u.lstrip("/")
                     lines.append(f"      {u}")
 
     lines.append("")

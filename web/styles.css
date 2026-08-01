@@ -2151,3 +2151,154 @@ code {
   color: #7dba8a !important;
   font-weight: 800 !important;
 }
+
+/* About tab card UI */
+.panel-about.active {
+  display: flex;
+  flex-direction: column;
+}
+.about-ui {
+  flex: 1;
+  overflow: auto;
+  max-height: min(68vh, 880px);
+  padding: 12px 14px 24px;
+}
+.about-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.about-card {
+  border: 1px solid var(--border, #2a3140);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--bg-elevated, #141820);
+  padding: 12px 14px;
+}
+.about-card-title {
+  margin: 0 0 10px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #7dba8a;
+}
+.about-headline {
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.about-theme,
+.about-meta,
+.about-para,
+.about-handle {
+  margin: 0 0 8px;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  color: var(--text, #f0f2f5);
+}
+.about-meta {
+  color: var(--text-muted, #8a8f98);
+  font-size: 0.78rem;
+}
+.about-label {
+  display: inline-block;
+  margin: 8px 0 4px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, #8a8f98);
+}
+.about-list {
+  margin: 0 0 8px;
+  padding-left: 1.1rem;
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+.about-list li {
+  margin-bottom: 6px;
+}
+.about-posts {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+.about-post {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.25);
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+.about-post-link {
+  font-size: 0.78rem;
+  margin-left: 6px;
+}
+.about-x-meta {
+  margin: 0 0 8px;
+  font-size: 0.86rem;
+}
+.about-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+.about-chip-pos {
+  background: rgba(125, 186, 138, 0.18);
+  color: #7dba8a;
+}
+.about-chip-neg {
+  background: rgba(224, 106, 106, 0.18);
+  color: #e06a6a;
+}
+.about-chip-neutral {
+  background: rgba(138, 143, 152, 0.18);
+  color: #b8bcc4;
+}
+.about-link-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.about-link-chip {
+  display: inline-block;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(79, 140, 255, 0.35);
+  background: rgba(79, 140, 255, 0.1);
+  color: #6eb0ff;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+.about-link-chip:hover {
+  background: rgba(79, 140, 255, 0.2);
+}
+.about-news-plat {
+  color: var(--text-muted, #8a8f98);
+  font-size: 0.78rem;
+}
+.about-footer {
+  margin: 12px 0 0;
+  font-size: 0.72rem;
+  color: var(--text-muted, #8a8f98);
+  line-height: 1.4;
+}
+.about-hint {
+  padding: 12px;
+  border: 1px solid var(--border, #2a3140);
+  border-radius: 8px;
+  font-size: 0.88rem;
+}
+.about-fallback {
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 0.86rem;
+  line-height: 1.45;
+  margin: 0;
+}
