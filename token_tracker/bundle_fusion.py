@@ -138,7 +138,7 @@ def comprehensive_bundle_check(
                     "detail": f"{rug.get('insider_count')} top account(s) marked insider.",
                 }
             )
-            extra_score += min(20, 6 * int(rug.get("insider_count") or 0))
+            # Insider supply % is scored in analyze_bundles(); avoid double-counting here.
         if rug.get("rugged"):
             fusion_signals.append(
                 {
@@ -191,7 +191,7 @@ def comprehensive_bundle_check(
                             "detail": f"~{val:.2f}% supply tagged as {key} (Birdeye holder profile).",
                         }
                     )
-                    extra_score += min(18, int(val / 2) + 4)
+                    extra_score += bun._pct_risk_points(val, cap=18, full_at=15.0)  # type: ignore[attr-defined]
 
         sec = (bird.get("layers") or {}).get("security") or {}
         if isinstance(sec, dict):
@@ -366,8 +366,19 @@ def comprehensive_bundle_check(
                 }
             )
             if not shared_sol_from_cache:
-                extra_score += min(
-                    28, 12 + int(best_f.get("child_count") or 0) * 4
+                fund_rows: list[dict[str, Any]] = []
+                funder = (best_f.get("funder") or "").strip()
+                for c in list(best_f.get("children") or []):
+                    w = str(c).strip() if c else ""
+                    if w:
+                        fund_rows.append({"wallet": w, "pct_supply": pct_by_w.get(w)})
+                if funder:
+                    fund_rows.append(
+                        {"wallet": funder, "pct_supply": pct_by_w.get(funder)}
+                    )
+                fund_pct, _ = bun._sum_wallets_pct(fund_rows)  # type: ignore[attr-defined]
+                extra_score += bun._pct_risk_points(  # type: ignore[attr-defined]
+                    fund_pct, cap=28, full_at=15.0
                 )
             # Always attach Shared SOL clusters (even if multi-account base failed)
             # so Total can count them when Shared SOL is checked.
@@ -629,7 +640,10 @@ def comprehensive_bundle_check(
                 }
             )
             if not fresh_from_cache:
-                extra_score += min(18, 6 + len(fresh_rows) * 2)
+                fresh_pct, _ = bun._sum_wallets_pct(fresh_rows)  # type: ignore[attr-defined]
+                extra_score += bun._pct_risk_points(  # type: ignore[attr-defined]
+                    fresh_pct, cap=18, full_at=12.0
+                )
             if include_fresh and not fresh_from_cache:
                 osc.put_slice(
                     mint,
@@ -737,8 +751,8 @@ def comprehensive_bundle_check(
                     ),
                 }
             )
-            extra_score += min(
-                24, 10 + int(best_m.get("receiver_count") or 0) * 2
+            extra_score += bun._pct_risk_points(  # type: ignore[attr-defined]
+                best_m.get("total_pct"), cap=24, full_at=12.0
             )
     else:
         multi_send_error = multi_send_report.get("error") or multi_send_report.get(

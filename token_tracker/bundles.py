@@ -14,12 +14,11 @@ Bundle risk score (0–100) — see DOCUMENTATION.txt §6.3i and web/documentati
     optional Solscan/Birdeye holder rows; known LP/program labels excluded
     from multi + similar groups. Fresh / Multi-send / Shared SOL do not score.
 
-  Components (sum, then clamp 0–100):
-    multi-ATA clusters:     min(35, 12 + clusters*8 + extra_ATAs*4)
-    similar-sized (largest group only): min(25, 8 + (n*0.5)*4)
-      — only 50% of similar-sized wallet count factors into the score
-    Rugcheck insiders:      min(25, 10 + insiders*6)
-    Top10 ex-LP:            +20 if ≥85%, +12 if ≥70%, +6 if ≥55%
+  Components (sum, then clamp 0–100) — each uses supply % held by that group:
+    multi-ATA clusters:     min(35, linear in multi_account_total_pct, full at 15%)
+    similar-sized groups:   min(25, linear in similar_size_total_pct, full at 15%)
+    Rugcheck insiders:      min(25, linear in insider_total_pct, full at 15%)
+    Top10 ex-LP:            min(20, linear in top10_pct_excluding_known_programs, full at 85%)
 
   Labels: ≥70 high · ≥45 elevated · ≥25 moderate · else lower
 """
@@ -127,11 +126,42 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
     except (TypeError, ValueError):
         top10_ex_f = None
 
+    # Build rows / supply % totals used for scoring and summary
+    insider_rows = [
+        {
+            "wallet": h.get("wallet"),
+            "rank": h.get("rank"),
+            "pct_supply": h.get("pct_supply"),
+            "balance": h.get("balance"),
+            "label": h.get("label") or "insider-flagged (Rugcheck)",
+            "source": "rugcheck_insider",
+        }
+        for h in insiders[:20]
+        if isinstance(h, dict) and (h.get("wallet") or "").strip()
+    ]
+    multi_pct, multi_n = _sum_wallets_pct(
+        [
+            {
+                "wallet": c.get("wallet") or c.get("owner"),
+                "pct_supply": c.get("pct_supply")
+                if c.get("pct_supply") is not None
+                else c.get("combined_pct"),
+            }
+            for c in multi_clusters
+            if isinstance(c, dict)
+        ]
+    )
+    similar_total_pct, similar_wallet_n = _similar_size_total_percent(similar_groups)
+    insider_total_pct, _insider_n = _sum_wallets_pct(insider_rows)
+
     signals: list[dict[str, Any]] = []
     score = 0  # 0–100 higher = more bundle-like risk
 
     if multi_clusters:
         n_acct = sum(int(c.get("accounts") or 0) for c in multi_clusters)
+        pts = _pct_risk_points(multi_pct, cap=35)
+        if pts:
+            score += pts
         signals.append(
             {
                 "id": "multi_ata",
@@ -139,17 +169,23 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
                 "title": "Multi-account wallet clusters",
                 "detail": (
                     f"{len(multi_clusters)} wallet(s) control multiple large token accounts "
-                    f"({n_acct} Associated Token Accounts total in the top set)."
+                    f"({n_acct} Associated Token Accounts total in the top set)"
+                    + (
+                        f" — ~{_pct(multi_pct)} of supply in those clusters "
+                        f"(+{pts} risk pts)."
+                        if multi_pct is not None and pts
+                        else "."
+                    )
                 ),
             }
         )
-        score += min(35, 12 + len(multi_clusters) * 8 + max(0, n_acct - len(multi_clusters)) * 4)
 
     if similar_groups:
         biggest = max(similar_groups, key=lambda g: len(g.get("wallets") or []))
         n = len(biggest.get("wallets") or [])
-        # Risk score only factors in 50% of similar-sized wallets (UI still shows full n)
-        n_for_score = float(n) * 0.5
+        pts = _pct_risk_points(similar_total_pct, cap=25)
+        if pts:
+            score += pts
         signals.append(
             {
                 "id": "similar_size",
@@ -157,49 +193,56 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
                 "title": "Similar-sized top wallets",
                 "detail": (
                     f"{n} non-LP top wallets hold nearly the same balance "
-                    f"(~{_pct(biggest.get('avg_pct'))} each) — can look like a coordinated bundle "
-                    f"(risk score uses 50% of similar-sized count → {n_for_score:g})."
+                    f"(~{_pct(biggest.get('avg_pct'))} each)"
+                    + (
+                        f" — ~{_pct(similar_total_pct)} of supply combined "
+                        f"(+{pts} risk pts)."
+                        if similar_total_pct is not None and pts
+                        else " — can look like a coordinated bundle."
+                    )
                 ),
             }
         )
-        score += min(25, 8 + n_for_score * 4)
 
     if insiders:
+        pts = _pct_risk_points(insider_total_pct, cap=25)
+        if pts:
+            score += pts
         signals.append(
             {
                 "id": "insider",
                 "severity": "high",
                 "title": "Insider-flagged accounts",
                 "detail": (
-                    f"Rugcheck marks {len(insiders)} top account(s) as insider-related."
+                    f"Rugcheck marks {len(insiders)} top account(s) as insider-related"
+                    + (
+                        f" — ~{_pct(insider_total_pct)} of supply "
+                        f"(+{pts} risk pts)."
+                        if insider_total_pct is not None and pts
+                        else "."
+                    )
                 ),
             }
         )
-        score += min(25, 10 + len(insiders) * 6)
 
-    if top10_ex_f is not None and top10_ex_f >= 70:
+    if top10_ex_f is not None and top10_ex_f >= 55:
+        pts = _pct_risk_points(top10_ex_f, cap=20, full_at=85.0, min_pct=55.0)
+        if pts:
+            score += pts
         signals.append(
             {
                 "id": "concentration",
                 "severity": "high" if top10_ex_f >= 85 else "medium",
-                "title": "Tight non-LP concentration",
+                "title": "Tight non-LP concentration"
+                if top10_ex_f >= 70
+                else "Moderate non-LP concentration",
                 "detail": (
                     f"Top 10 non-program wallets hold ~{top10_ex_f:.1f}% of supply "
-                    "(excluding known LP/programs)."
+                    "(excluding known LP/programs)"
+                    + (f" (+{pts} risk pts)." if pts else ".")
                 ),
             }
         )
-        score += 20 if top10_ex_f >= 85 else 12
-    elif top10_ex_f is not None and top10_ex_f >= 55:
-        signals.append(
-            {
-                "id": "concentration_mild",
-                "severity": "low",
-                "title": "Moderate non-LP concentration",
-                "detail": f"Top 10 non-program wallets hold ~{top10_ex_f:.1f}% of supply.",
-            }
-        )
-        score += 6
 
     score = max(0, min(100, int(round(score))))
     risk = _risk_label(score)
@@ -219,33 +262,8 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
 
     # Multi-account stays its own category.
     # Suspect = similar-size bags + Rugcheck insider-flagged (not multi).
-    similar_total_pct, similar_wallet_n = _similar_size_total_percent(similar_groups)
-    insider_rows = [
-        {
-            "wallet": h.get("wallet"),
-            "rank": h.get("rank"),
-            "pct_supply": h.get("pct_supply"),
-            "balance": h.get("balance"),
-            "label": h.get("label") or "insider-flagged (Rugcheck)",
-            "source": "rugcheck_insider",
-        }
-        for h in insiders[:20]
-        if isinstance(h, dict) and (h.get("wallet") or "").strip()
-    ]
     suspect_total_pct, suspect_wallet_n = _suspect_union_percent(
         similar_groups, insider_rows
-    )
-    multi_pct, multi_n = _sum_wallets_pct(
-        [
-            {
-                "wallet": c.get("wallet") or c.get("owner"),
-                "pct_supply": c.get("pct_supply")
-                if c.get("pct_supply") is not None
-                else c.get("combined_pct"),
-            }
-            for c in multi_clusters
-            if isinstance(c, dict)
-        ]
     )
     # Baseline total: multi always; Suspect (similar+insider) when no optionals
     total_pct, flagged_n = _total_bundle_percent(
@@ -284,7 +302,7 @@ def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
             "suspect_total_pct": suspect_total_pct,
             "suspect_wallet_count": suspect_wallet_n,
             "insider_accounts": len(insiders),
-            "insider_total_pct": _sum_wallets_pct(insider_rows)[0],
+            "insider_total_pct": insider_total_pct,
             "non_lp_top_wallets": len(non_lp),
             "top10_pct_excluding_known_programs": top10_ex_f,
             "unique_wallets_in_top": summary.get("unique_wallets_in_top"),
@@ -2179,6 +2197,24 @@ def recompute_total_bundle_all_vectors(
     result["total_bundle_pct"] = grand if any_data else 0.0
     result["flagged_wallets"] = slot_count
     return result
+
+
+def _pct_risk_points(
+    pct: Any,
+    *,
+    cap: int,
+    full_at: float = 15.0,
+    min_pct: float = 0.25,
+) -> int:
+    """Map supply % held by a group to 0..cap risk points (linear up to full_at)."""
+    try:
+        p = float(pct) if pct is not None else None
+    except (TypeError, ValueError):
+        return 0
+    if p is None or p < min_pct:
+        return 0
+    p = min(100.0, p)
+    return min(cap, max(1, int(round(p * cap / full_at))))
 
 
 def _risk_label(score: int) -> str:
