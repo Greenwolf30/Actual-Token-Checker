@@ -111,49 +111,106 @@
     <div class="docs-top">
       <div>
         <h1>Actual Data Token Checker — User Guide</h1>
-        <p>Full website documentation (same content as documentation.txt on this site)</p>
+        <p>
+          Loads the <strong>Actual Token Checker</strong> user guide from GitHub
+          (<code>DOCUMENTATION.txt</code> on
+          <code>main</code>), with a copy on this host as backup.
+        </p>
       </div>
       <div class="docs-actions">
         <a class="primary" href="/">← Back to Analyze</a>
-        <a href="/documentation.txt" target="_blank" rel="noopener">Raw .txt</a>
+        <a href="/documentation.txt" target="_blank" rel="noopener">Site copy (.txt)</a>
         <a
           href="https://github.com/Greenwolf30/Actual-Token-Checker/blob/main/DOCUMENTATION.txt"
           target="_blank"
           rel="noopener noreferrer"
-          >GitHub copy</a
+          >Open on GitHub</a
         >
       </div>
     </div>
 
-    <p id="docsStatus" class="docs-status">Loading documentation…</p>
+    <p id="docsStatus" class="docs-status">Loading Token Checker documentation from GitHub…</p>
     <div class="docs-body">
       <pre id="docsContent"></pre>
     </div>
   </div>
 
-  <script src="/config.js"></script>
   <script>
     (async function () {
       const status = document.getElementById("docsStatus");
       const pre = document.getElementById("docsContent");
-      const cfg = window.ADTC_CONFIG || {};
-      const base = (cfg.apiBase || "").trim().replace(/\/+$/, "");
-      const docUrl = base ? base + "/documentation.txt" : "/documentation.txt";
-      try {
-        const r = await fetch(docUrl, { cache: "no-cache" });
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        const text = await r.text();
-        pre.textContent = text;
-        status.textContent =
-          "Loaded from this website · " + text.length.toLocaleString() + " characters";
-      } catch (e) {
-        status.className = "docs-status err";
-        status.textContent =
-          "Could not load /documentation.txt — " + (e && e.message ? e.message : e);
-        pre.textContent =
-          "Documentation file missing from the web/ folder on the server.\n" +
-          "Upload web/documentation.txt next to index.html, then refresh.";
+      // Prefer GitHub so Docs always matches the repo without waiting for redeploy.
+      // Fall back to this host if raw.githubusercontent.com is blocked.
+      const sources = [
+        {
+          url:
+            "https://raw.githubusercontent.com/Greenwolf30/Actual-Token-Checker/main/DOCUMENTATION.txt",
+          label: "GitHub (DOCUMENTATION.txt on main)",
+        },
+        {
+          url:
+            "https://cdn.jsdelivr.net/gh/Greenwolf30/Actual-Token-Checker@main/DOCUMENTATION.txt",
+          label: "jsDelivr CDN (GitHub mirror)",
+        },
+        { url: "/documentation.txt", label: "this website (/documentation.txt)" },
+        { url: "/DOCUMENTATION.txt", label: "this website (/DOCUMENTATION.txt)" },
+      ];
+      let lastErr = null;
+      for (const src of sources) {
+        try {
+          const ctrl = new AbortController();
+          const t = setTimeout(function () {
+            ctrl.abort();
+          }, 20000);
+          const r = await fetch(src.url, {
+            cache: "no-cache",
+            credentials: "omit",
+            mode: "cors",
+            signal: ctrl.signal,
+          });
+          clearTimeout(t);
+          if (!r.ok) throw new Error("HTTP " + r.status + " for " + src.url);
+          const text = await r.text();
+          if (!text || text.length < 200) {
+            throw new Error("file too short / empty");
+          }
+          // Reject accidental HTML error pages
+          if (/^\s*<(!doctype|html)/i.test(text)) {
+            throw new Error("got HTML instead of plain-text guide");
+          }
+          pre.textContent = text;
+          status.className = "docs-status";
+          status.textContent =
+            "Loaded Token Checker guide from " +
+            src.label +
+            " · " +
+            text.length.toLocaleString() +
+            " characters";
+          return;
+        } catch (e) {
+          lastErr = e;
+        }
       }
+      status.className = "docs-status err";
+      const msg =
+        lastErr && lastErr.name === "AbortError"
+          ? "request timed out"
+          : lastErr && lastErr.message
+            ? lastErr.message
+            : String(lastErr || "unknown error");
+      status.textContent =
+        "Could not load Token Checker documentation — " + msg;
+      pre.textContent =
+        "The Docs tab could not load DOCUMENTATION.txt.\n\n" +
+        "Tried in order:\n" +
+        "  1) GitHub raw (main/DOCUMENTATION.txt)\n" +
+        "  2) jsDelivr CDN mirror of that file\n" +
+        "  3) This site /documentation.txt\n" +
+        "  4) This site /DOCUMENTATION.txt\n\n" +
+        "Open the guide directly:\n" +
+        "https://github.com/Greenwolf30/Actual-Token-Checker/blob/main/DOCUMENTATION.txt\n\n" +
+        "Raw text:\n" +
+        "https://raw.githubusercontent.com/Greenwolf30/Actual-Token-Checker/main/DOCUMENTATION.txt\n";
     })();
   </script>
 </body>

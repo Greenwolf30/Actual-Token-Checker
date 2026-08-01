@@ -112,8 +112,8 @@ QUICK = ["BONK", "WIF", "POPCAT", "PEPE", "TRUMP", "FARTCOIN"]
 
 # Desktop search bar history (local file; not shipped in share package)
 SEARCH_HISTORY_MAX = 5
-# History Log tab: last N full analyzes (drops oldest when over limit)
-HISTORY_LOG_MAX = 20
+# History Log tab: last N full analyzes (drops oldest on consecutive lookups over limit)
+HISTORY_LOG_MAX = 200
 
 
 def _app_data_dir() -> Path:
@@ -256,7 +256,7 @@ def _fmt_pct_short(v: Any) -> str | None:
         return None
 
 
-# Cap text snapshots so 20 Logs entries stay reasonable on disk / browser storage
+# Cap text snapshots so 200 Logs entries stay reasonable on disk / browser storage
 _LOGS_HOLDERS_SNAP_MAX = 12_000
 _LOGS_BUNDLES_SNAP_MAX = 8_000
 
@@ -361,7 +361,7 @@ def build_history_log_entry(
 
 def push_history_log(entry: dict[str, Any]) -> list[dict[str, Any]]:
     """
-    Prepend entry; keep only HISTORY_LOG_MAX (drop oldest when over 20).
+    Prepend entry; keep only HISTORY_LOG_MAX (drop oldest when over 200).
     Returns the updated list (newest first).
     """
     if not entry:
@@ -1264,6 +1264,30 @@ def run_gui() -> None:
             foreground="#6cb6ff",
             underline=True,
         )
+        # Wallet address hold colors — dim (match pct_medium / pct_critical)
+        box.tag_configure(
+            "wallet_hold_yellow",
+            foreground=PCT_MEDIUM,  # dim yellow >5%
+            underline=True,
+        )
+        box.tag_configure(
+            "wallet_hold_red",
+            foreground=PCT_CRITICAL,  # dim red >10%
+            underline=True,
+        )
+        # Known LP / liquidity pair — muted off-white / gray (not bright white)
+        box.tag_configure(
+            "wallet_hold_lp",
+            foreground="#9aa3b2",
+            underline=True,
+        )
+        # Color tags must outrank default wallet_link blue
+        try:
+            box.tag_raise("wallet_hold_yellow")
+            box.tag_raise("wallet_hold_red")
+            box.tag_raise("wallet_hold_lp")
+        except Exception:  # noqa: BLE001
+            pass
         box.tag_configure(
             "url_link",
             foreground="#6cb6ff",
@@ -1375,7 +1399,7 @@ def run_gui() -> None:
 
     def _bundle_colorable_ranges(content: str) -> list[tuple[int, int]]:
         """
-        Bundles tab: only Total % bundles + Suspect wallets TOTAL line get % colors.
+        Bundles tab: only Total % bundles + Similar-sized wallets TOTAL line get % colors.
         Per-wallet suspect rows stay uncolored.
         """
         ranges: list[tuple[int, int]] = []
@@ -1385,12 +1409,30 @@ def run_gui() -> None:
             end = pos + len(line)
             if re.search(r"Total\s*%\s*bundles\s*:", line, re.I):
                 ranges.append((pos, end))
-            elif re.search(r"Suspect\s+wallets", line, re.I) and re.search(
+            elif re.search(
+                r"(Suspect\s+wallets|Similar-sized\s+wallets|Similar-size\s+total)",
+                line,
+                re.I,
+            ) and re.search(
                 r"total", line, re.I
             ):
                 ranges.append((pos, end))
             pos = end
         return ranges
+
+    def _alerts_skip_pct_color_line(line: str) -> bool:
+        """Alerts: Single holders total uncolored; Total bundle / Similar-sized colored."""
+        if re.search(r"\bsingle\s*holders?\s*total\b", line, re.I):
+            return True
+        if re.search(r"\bsingle\s*holders?\s*≥", line, re.I):
+            return True
+        if re.search(r"\bsingle\s*holder\s*over\s*5", line, re.I):
+            return True
+        if re.search(r"\bsingle-holder wallet", line, re.I):
+            return True
+        if re.search(r"Bundles\s*→\s*Single holders", line, re.I):
+            return True
+        return False
 
     def _in_any_range(idx: int, ranges: list[tuple[int, int]]) -> bool:
         for a, b in ranges:
@@ -1405,6 +1447,139 @@ def run_gui() -> None:
         if end < 0:
             end = len(content)
         return content[start:end]
+
+    def _prev_line(content: str, idx: int) -> str:
+        """Line immediately above the line that contains idx (or empty)."""
+        line_start = content.rfind("\n", 0, idx) + 1
+        if line_start <= 0:
+            return ""
+        prev_end = line_start - 1
+        prev_start = content.rfind("\n", 0, prev_end) + 1
+        return content[prev_start:prev_end]
+
+    def _line_hold_pct(line: str) -> float | None:
+        """Bag % from 'holds X%' / '(X%' / 'owns X%' on a report line."""
+        if not line:
+            return None
+        # Optional ~ (Alerts: "holds ~15.00%")
+        m = re.search(r"\bholds\s*~?\s*(\d+(?:\.\d+)?)\s*%", line, re.I)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                return None
+        m = re.search(r"\((\d+(?:\.\d+)?)\s*%", line)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                return None
+        m = re.search(r"\bowns\s*~?\s*(\d+(?:\.\d+)?)\s*%", line, re.I)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                return None
+        m = re.search(r"~(\d+(?:\.\d+)?)\s*%", line)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                return None
+        return None
+
+    # Known LP / program vaults — never address-color by bag % (holders.py)
+    _KNOWN_LP_ADDRS = {
+        "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1",
+        "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK",
+        "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",
+        "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+        "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+        "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+        "11111111111111111111111111111111",
+        "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+        "ComputeBudget111111111111111111111111111111",
+        "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+        "5quBtoiQqxF9Jv6KYKctB59NT3gtJD2Y65kdnB1Uev3h",
+        "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C",
+        "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",
+        "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB",
+        "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG",
+        "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+        "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+        "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s",
+    }
+    _LP_LABEL_RE = re.compile(
+        r"\b("
+        r"lp|liquidity|pool|vault|amm|clmm|dlmm|cpmm|"
+        r"raydium|orca|meteora|whirlpool|pumpswap|pump\.fun|pumpfun|"
+        r"openbook|serum|phoenix|lifinity|invariant|saber|mercurial|"
+        r"market\s*maker|authority|program"
+        r")\b",
+        re.I,
+    )
+
+    def _next_line(content: str, idx: int) -> str:
+        """Line immediately below the line that contains idx (or empty)."""
+        line_end = content.find("\n", idx)
+        if line_end < 0:
+            return ""
+        next_start = line_end + 1
+        next_end = content.find("\n", next_start)
+        if next_end < 0:
+            next_end = len(content)
+        return content[next_start:next_end]
+
+    def _is_lp_context(content: str, addr: str, addr_start: int) -> bool:
+        """Skip color for known LP / liquidity pair / program vaults."""
+        if (addr or "").strip() in _KNOWN_LP_ADDRS:
+            return True
+        line = _line_containing(content, addr_start)
+        prev = _prev_line(content, addr_start)
+        nxt = _next_line(content, addr_start)
+        blob = f"{prev}\n{line}\n{nxt}"
+        if re.search(
+            r"\bliquidity\s*pair\b|\bknown\s*program\b", blob, re.I
+        ):
+            return True
+        for m in re.finditer(r"\[([^\]]+)\]", blob):
+            if _LP_LABEL_RE.search(m.group(1)):
+                return True
+        if re.search(
+            r"\[[^\]]*(?:lp|liquidity|pool|vault|amm|raydium|orca|meteora|"
+            r"whirlpool|pump)[^\]]*\]",
+            blob,
+            re.I,
+        ):
+            return True
+        return False
+
+    def _wallet_hold_color_tag(
+        content: str, addr: str, addr_start: int, enabled: bool
+    ) -> str | None:
+        """
+        Shared address colors (Holders / Alerts / Bundles):
+          known LP / liquidity pair → white
+          > 10% → red
+          > 5%  → yellow
+        """
+        if not enabled:
+            return None
+        if _is_lp_context(content, addr, addr_start):
+            return "wallet_hold_lp"
+        line = _line_containing(content, addr_start)
+        pct = _line_hold_pct(line)
+        if pct is None:
+            pct = _line_hold_pct(_prev_line(content, addr_start))
+        if pct is None:
+            pct = _line_hold_pct(_next_line(content, addr_start))
+        if pct is None:
+            return None
+        if pct > 10:
+            return "wallet_hold_red"
+        if pct > 5:
+            return "wallet_hold_yellow"
+        return None
 
     def _is_top_summary_line(line: str) -> bool:
         """
@@ -1428,12 +1603,14 @@ def run_gui() -> None:
         color_holder_pct: bool = True,
         color_mode: str = "all",
         link_urls: bool = False,
+        wallet_hold_color: bool = False,
     ) -> None:
         """
         Insert report text; Solana wallets + optional holder % priority colors.
         color_mode: "all" | "none" | "bundles" (total + suspect only)
         Top1/Top5/Top10 summary % values are never colored.
         link_urls: also make http(s) Solscan/etc. lines clickable (Holders).
+        wallet_hold_color: address >5% yellow · >10% red (skip known LP).
         """
         _configure_link_tags(box)
         if link_urls:
@@ -1453,6 +1630,21 @@ def run_gui() -> None:
                 "<Leave>",
                 lambda _e, b=box: b.configure(cursor="arrow"),
             )
+        # Colored wallet tags still open Solscan (same as wallet_link)
+        for wtag in ("wallet_hold_yellow", "wallet_hold_red", "wallet_hold_lp"):
+            box.tag_bind(
+                wtag, "<Button-1>", lambda e, b=box: _open_url_for_index(b, e)
+            )
+            box.tag_bind(
+                wtag,
+                "<Enter>",
+                lambda _e, b=box: b.configure(cursor="hand2"),
+            )
+            box.tag_bind(
+                wtag,
+                "<Leave>",
+                lambda _e, b=box: b.configure(cursor="arrow"),
+            )
         box.configure(state="normal")
         box.delete("1.0", "end")
         if error:
@@ -1466,8 +1658,8 @@ def run_gui() -> None:
             _bundle_colorable_ranges(content) if color_mode == "bundles" else []
         )
 
-        # Spans: (start, end, tag_or_None) — URLs + wallets + supply %
-        spans: list[tuple[int, int, str | None]] = []
+        # Spans: (start, end, tag_or_tuple) — URLs + wallets + supply %
+        spans: list[tuple[int, int, Any]] = []
         if link_urls:
             for m in URL_RE.finditer(content):
                 raw = m.group(0)
@@ -1476,9 +1668,19 @@ def run_gui() -> None:
         for m in SOL_ADDR_RE.finditer(content):
             s, e = m.start(), m.end()
             # Skip address if it sits inside an already-tagged URL
-            if any(s < pe and e > ps and tag == "url_link" for ps, pe, tag in spans):
+            if any(
+                s < pe and e > ps and tag == "url_link" for ps, pe, tag in spans
+            ):
                 continue
-            spans.append((s, e, "wallet_link"))
+            addr = m.group(0)
+            hold_tag = _wallet_hold_color_tag(
+                content, addr, s, wallet_hold_color
+            )
+            if hold_tag:
+                # Color tag first so its foreground wins; keep wallet_link for clicks
+                spans.append((s, e, (hold_tag, "wallet_link")))
+            else:
+                spans.append((s, e, "wallet_link"))
         if allow_pct:
             for m in HOLDER_PCT_RE.finditer(content):
                 if color_mode == "bundles" and not _in_any_range(
@@ -1488,6 +1690,9 @@ def run_gui() -> None:
                 # Leave Top1 / Top5 / Top10 summary line percentages uncolored
                 line = _line_containing(content, m.start())
                 if _is_top_summary_line(line):
+                    continue
+                # Alerts: skip Single holders total %; color Total bundle etc.
+                if color_mode == "alerts" and _alerts_skip_pct_color_line(line):
                     continue
                 try:
                     n = float(m.group(1))
@@ -1499,7 +1704,7 @@ def run_gui() -> None:
             # Do not color "[low priority]" / "· medium priority" labels — % only
 
         spans.sort(key=lambda t: (t[0], -(t[1] - t[0])))
-        cleaned: list[tuple[int, int, str | None]] = []
+        cleaned: list[tuple[int, int, Any]] = []
         last_end = -1
         for s, e, tag in spans:
             if s < last_end:
@@ -1593,9 +1798,13 @@ def run_gui() -> None:
         box = tab_widgets.get("holders")
         if box is None:
             return
-        # Wallets + Solscan URLs clickable (Creator wallet, top holders, authorities)
+        # Wallets clickable; >5% yellow · >10% red · skip known LP
         _insert_text_with_wallet_links(
-            box, content, error=error, link_urls=True
+            box,
+            content,
+            error=error,
+            link_urls=True,
+            wallet_hold_color=True,
         )
 
     def _render_about_text(content: str, *, error: bool = False) -> None:
@@ -1841,7 +2050,7 @@ def run_gui() -> None:
         "Run Analyze to load official coin facts and community tone.",
     )
 
-    # ── History Log tab (last 20 searches + download) ─────────────────
+    # ── History Log tab (last 200 searches + download) ────────────────
     history_frame = tk.Frame(notebook, bg=PANEL)
     notebook.add(history_frame, text="Logs")
     history_bar = tk.Frame(
@@ -1859,7 +2068,7 @@ def run_gui() -> None:
     ).pack(side="left", padx=(0, 10))
     tk.Label(
         hist_inner,
-        text=f"Keeps last {HISTORY_LOG_MAX} searches · oldest removed when full",
+        text=f"Keeps last {HISTORY_LOG_MAX} searches · oldest deleted on later lookups when full",
         bg=SURFACE,
         fg=MUTED,
         font=(FONT, 8),
@@ -2008,10 +2217,15 @@ def run_gui() -> None:
             if key == "holders":
                 _render_holders_text(content, error=error)
                 return
-            # Alerts: full wallet % colors; Bundles: total + suspect only
+            # Alerts: Total bundle % colored; Single holders total uncolored
             if key == "alerts":
                 _insert_text_with_wallet_links(
-                    box, content, error=error, color_holder_pct=True, color_mode="all"
+                    box,
+                    content,
+                    error=error,
+                    color_holder_pct=True,
+                    color_mode="alerts",
+                    wallet_hold_color=True,
                 )
                 return
             if key == "bundles":
@@ -2021,6 +2235,7 @@ def run_gui() -> None:
                     error=error,
                     color_holder_pct=True,
                     color_mode="bundles",
+                    wallet_hold_color=True,
                 )
                 return
             # About / News: clickable http(s) links → browser
@@ -2099,15 +2314,22 @@ def run_gui() -> None:
                 mkt = report.get("market") or {}
                 pair = mkt.get("pair") if isinstance(mkt.get("pair"), dict) else {}
                 pf = report.get("pumpfun") or {}
+                soc = report.get("socials") or {}
+                dex_soc = (
+                    soc.get("dexscreener")
+                    if isinstance(soc.get("dexscreener"), dict)
+                    else None
+                )
                 report["alerts"] = build_alerts(
                     report.get("holders") or {},
                     report.get("bundles") or {},
-                    socials=report.get("socials") or {},
+                    socials=soc,
                     pumpfun=pf,
                     token_address=tok.get("address"),
                     dex_id=pair.get("dex_id") or mkt.get("dex_id") or pf.get("dex_id"),
                     dexes=list(pf.get("dexes_seen") or []),
                     market=mkt,
+                    socials_dexscreener=dex_soc,
                 )
             except Exception:  # noqa: BLE001
                 pass

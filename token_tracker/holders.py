@@ -2,17 +2,22 @@
 Holder / wallet concentration analysis.
 
 Solana multi-source fusion:
-  - Helius / Solana RPC (getTokenLargestAccounts)
+  - Helius DAS getTokenAccounts (paginated full-ish holder list when Helius key set)
+  - Helius / Solana RPC (getTokenLargestAccounts) as fallback (~20 largest ATAs)
   - Rugcheck report (top holders + insiders + risks)
   - Solscan Pro/public token holders (optional SOLSCAN_API_KEY)
   - Birdeye holders + security (optional BIRDEYE_API_KEY)
 
 Bundles still have a separate comprehensive path; Holders tab uses this fusion.
+
+Env:
+  HOLDERS_MAX_ACCOUNTS  max token accounts to page via DAS (default 2000, max 10000)
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import ssl
 import urllib.request
@@ -22,6 +27,15 @@ from .env_config import has_helius, helius_api_key, load_dotenv, solana_rpc_url
 from .http_util import DEFAULT_HEADERS
 
 load_dotenv()
+
+
+def _holders_max_accounts() -> int:
+    """Cap DAS pagination (token accounts, before owner-aggregate)."""
+    try:
+        n = int((os.environ.get("HOLDERS_MAX_ACCOUNTS") or "2000").strip() or "2000")
+    except (TypeError, ValueError):
+        n = 2000
+    return max(50, min(n, 10000))
 
 
 def _ssl_context() -> ssl.SSLContext:
@@ -105,6 +119,454 @@ def is_known_lp_or_program(
     return False
 
 
+def _dex_pool_label(dex_id: str | None) -> str:
+    """Human labels parallel to Pump.fun style (… pool (liquidity))."""
+    d = (dex_id or "dex").strip().lower()
+    if "meteora" in d:
+        if "dlmm" in d:
+            return "Meteora DLMM pool (liquidity)"
+        if "damm" in d or "dyn" in d:
+            return "Meteora DAMM pool (liquidity)"
+        return "Meteora pool (liquidity)"
+    if "raydium" in d:
+        if "clmm" in d:
+            return "Raydium CLMM pool (liquidity)"
+        if "cpmm" in d:
+            return "Raydium CPMM pool (liquidity)"
+        return "Raydium pool (liquidity)"
+    if "orca" in d or "whirlpool" in d:
+        return "Orca Whirlpool pool (liquidity)"
+    if d in {"pumpswap", "pump-swap"} or "pumpswap" in d:
+        return "PumpSwap pool (liquidity)"
+    if d in {"pumpfun", "pump", "pump-fun"} or "pumpfun" in d:
+        return "Pump.fun bonding curve"
+    if "jupiter" in d:
+        return "Jupiter pool (liquidity)"
+    if "lifinity" in d:
+        return "Lifinity pool (liquidity)"
+    if "phoenix" in d:
+        return "Phoenix market (liquidity)"
+    pretty = (dex_id or "DEX").strip() or "DEX"
+    return f"{pretty} pool (liquidity)"
+
+
+def _ingest_dex_pair_row(
+    out: dict[str, str], p: dict[str, Any], mint_lower: str
+) -> None:
+    if not isinstance(p, dict):
+        return
+    base = ((p.get("baseToken") or {}).get("address") or "").strip().lower()
+    quote = ((p.get("quoteToken") or {}).get("address") or "").strip().lower()
+    if base != mint_lower and quote != mint_lower:
+        return
+    pair = (p.get("pairAddress") or "").strip()
+    if not pair or len(pair) < 32:
+        return
+    lab = _dex_pool_label(p.get("dexId"))
+    prev = out.get(pair)
+    # Prefer more specific Meteora / Raydium labels
+    if not prev:
+        out[pair] = lab
+        return
+    if "meteora" in lab.lower() and "meteora" not in prev.lower():
+        out[pair] = lab
+    elif "raydium" in lab.lower() and "raydium" not in prev.lower():
+        out[pair] = lab
+
+
+def fetch_dex_pool_accounts(mint: str | None) -> dict[str, str]:
+    """
+    Map pair/pool address → label for ALL Dex pairs on this mint.
+
+    Includes Meteora, Raydium, Orca, PumpSwap, etc. — not only the primary pair.
+    Sources: DexScreener token pairs + GeckoTerminal pools (best-effort).
+    """
+    m = (mint or "").strip()
+    if not m or len(m) < 32:
+        return {}
+    out: dict[str, str] = {}
+    ml = m.lower()
+    try:
+        from .http_util import get_json
+
+        data = get_json(
+            f"https://api.dexscreener.com/latest/dex/tokens/{m}",
+            timeout=12.0,
+            retries=0,
+        )
+        if isinstance(data, dict):
+            for p in data.get("pairs") or []:
+                if isinstance(p, dict):
+                    _ingest_dex_pair_row(out, p, ml)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # GeckoTerminal often lists Meteora pools DexScreener may under-index
+    try:
+        from .http_util import get_json
+
+        gt = get_json(
+            f"https://api.geckoterminal.com/api/v2/networks/solana/tokens/"
+            f"{m}/pools?page=1",
+            timeout=12.0,
+            retries=0,
+            headers={**DEFAULT_HEADERS, "Accept": "application/json"},
+        )
+        rows = (gt or {}).get("data") if isinstance(gt, dict) else None
+        if isinstance(rows, list):
+            for row in rows[:25]:
+                if not isinstance(row, dict):
+                    continue
+                attrs = row.get("attributes") or {}
+                addr = (
+                    (attrs.get("address") or row.get("id") or "")
+                    .split("_")[-1]
+                    .strip()
+                )
+                if not addr or len(addr) < 32:
+                    continue
+                name = str(attrs.get("name") or attrs.get("dex_id") or "").lower()
+                dex = str(attrs.get("dex_id") or attrs.get("dex") or name)
+                # Gecko id sometimes "solana_POOL"
+                if "meteora" in name or "meteora" in dex:
+                    lab = "Meteora pool (liquidity)"
+                else:
+                    lab = _dex_pool_label(dex or name)
+                if addr not in out or "meteora" in lab.lower():
+                    out[addr] = lab
+    except Exception:  # noqa: BLE001
+        pass
+
+    return out
+
+
+def _lp_label_rank(lab: str | None) -> int:
+    """Higher = more specific / preferred (Meteora must not lose to Pump)."""
+    low = (lab or "").lower()
+    if not low:
+        return 0
+    if "meteora" in low:
+        return 100
+    if "raydium" in low:
+        return 90
+    if "orca" in low or "whirlpool" in low:
+        return 90
+    if "pumpswap" in low:
+        return 70
+    if "pump.fun" in low or "bonding curve" in low or low.startswith("pump"):
+        return 60
+    if "liquidity pair" in low:
+        return 40
+    if "pool (liquidity)" in low or "liquidity" in low:
+        return 50
+    return 20
+
+
+def _merge_pool_label(pool_map: dict[str, str], addr: str, lab: str) -> None:
+    """Set pool_map[addr]=lab unless existing label ranks higher (e.g. Meteora)."""
+    a = (addr or "").strip()
+    lab = (lab or "").strip()
+    if not a or not lab:
+        return
+    prev = pool_map.get(a)
+    if not prev or _lp_label_rank(lab) >= _lp_label_rank(prev):
+        pool_map[a] = lab
+
+
+def _expand_pool_token_accounts(
+    mint: str, pool_map: dict[str, str]
+) -> dict[str, str]:
+    """
+    For each known pool owner, resolve token accounts for this mint
+    (getTokenAccountsByOwner) so Top Holders rows match even when the listed
+    address is the pool's token account rather than the pair id.
+    """
+    m = (mint or "").strip()
+    if not m or not pool_map:
+        return {}
+    extra: dict[str, str] = {}
+    # Prefer Helius when available
+    urls: list[str] = []
+    try:
+        key = helius_api_key()
+        if key:
+            urls.append(f"https://mainnet.helius-rpc.com/?api-key={key}")
+    except Exception:  # noqa: BLE001
+        pass
+    for u in _rpc_endpoints():
+        if u and u not in urls:
+            urls.append(u)
+    if not urls:
+        return {}
+
+    def _rpc_one(url: str, method: str, params: list[Any]) -> Any:
+        from .helius_rpc import is_helius_url, rpc_call
+
+        if is_helius_url(url):
+            return rpc_call(url, method, params, timeout=12.0, req_id=1)
+        body = json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={**DEFAULT_HEADERS, "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=6.0, context=_ssl_context()) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+        if isinstance(data, dict) and data.get("error"):
+            raise RuntimeError(str(data.get("error")))
+        return (data or {}).get("result")
+
+    # Only expand Meteora (and Raydium) pool owners — where Top Holders often
+    # show a token account, not the pair id. Keep fanout tiny for latency.
+    owners = [
+        (o, lab)
+        for o, lab in pool_map.items()
+        if any(k in (lab or "").lower() for k in ("meteora", "raydium"))
+    ][:6]
+    url = urls[0]
+    for owner, lab in owners:
+        try:
+            result = _rpc_one(
+                url,
+                "getTokenAccountsByOwner",
+                [
+                    owner,
+                    {"mint": m},
+                    {"encoding": "jsonParsed"},
+                ],
+            )
+            vals = (result or {}).get("value") or []
+            for v in vals if isinstance(vals, list) else []:
+                if not isinstance(v, dict):
+                    continue
+                pubkey = (v.get("pubkey") or "").strip()
+                if pubkey and len(pubkey) >= 32:
+                    _merge_pool_label(extra, pubkey, lab)
+        except Exception:  # noqa: BLE001
+            continue
+    return extra
+
+
+def apply_known_lp_tags(
+    holders: list[dict[str, Any]],
+    *,
+    mint: str | None = None,
+    pair_address: str | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Stamp is_known_program + human labels on holder rows.
+
+    Sources:
+      - hardcoded program map
+      - primary pair_address
+      - ALL DexScreener / Gecko pair addresses (Meteora, Raydium, …)
+      - per-mint Pump.fun curve/pool PDAs
+      - token accounts owned by those pools (so Top Holders match)
+      - label heuristics
+    Mutates rows in place; returns the same list for chaining.
+    """
+    pool_map: dict[str, str] = {}
+    m = (mint or "").strip()
+    if m:
+        try:
+            for addr, lab in (fetch_dex_pool_accounts(m) or {}).items():
+                _merge_pool_label(pool_map, addr, lab)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from .pumpfun import fetch_pump_lp_accounts, is_pump_mint
+
+            if is_pump_mint(m):
+                for addr, lab in (fetch_pump_lp_accounts(m) or {}).items():
+                    # Never overwrite a stronger Meteora/Raydium label with Pump
+                    _merge_pool_label(pool_map, addr, lab)
+        except Exception:  # noqa: BLE001
+            pass
+        # Expand pool → token accounts for this mint (Top Holders matching)
+        try:
+            for addr, lab in (_expand_pool_token_accounts(m, pool_map) or {}).items():
+                _merge_pool_label(pool_map, addr, lab)
+        except Exception:  # noqa: BLE001
+            pass
+
+    pair = (pair_address or "").strip()
+    if pair:
+        # Primary pair: only fill if unknown; don't demote Meteora → Liquidity pair
+        if pair not in pool_map:
+            # Infer label from dex map if we know this pair elsewhere
+            pool_map[pair] = "Liquidity pair"
+        # If primary pair was only "Liquidity pair" but dex map has better, keep better
+
+    # Lowercase map for case-insensitive address match
+    pool_map_l = {k.lower(): (k, v) for k, v in pool_map.items() if k}
+
+    def _stamp_pool(h: dict[str, Any], plab: str) -> None:
+        h["is_known_program"] = True
+        cur = (h.get("label") or "").strip()
+        if not cur or cur.lower() in {
+            "liquidity pair",
+            "unknown",
+            "known liquidity / program",
+        }:
+            h["label"] = plab
+            return
+        # Prefer higher-ranked label (Meteora > Pump)
+        if _lp_label_rank(plab) > _lp_label_rank(cur):
+            h["label"] = plab
+            return
+        if _lp_label_rank(plab) == _lp_label_rank(cur) and plab.lower() not in cur.lower():
+            # same rank, keep first (cleaner single label for pools)
+            if "meteora" in plab.lower() or "meteora" in cur.lower():
+                h["label"] = plab if "meteora" in plab.lower() else cur
+            return
+        # Do not append Pump onto an existing Meteora label
+        if "meteora" in cur.lower() and "pump" in plab.lower():
+            return
+        if plab.lower() not in cur.lower() and _lp_label_rank(plab) >= 50:
+            # optional second tag only for non-conflicting high-rank
+            if "pump" in plab.lower() and "meteora" in cur.lower():
+                return
+            h["label"] = cur + " · " + plab
+
+    for h in holders:
+        if not isinstance(h, dict):
+            continue
+        w = (h.get("wallet") or h.get("owner") or "").strip()
+        ata = (h.get("token_account") or "").strip()
+        if not w and not ata:
+            continue
+        if w in _KNOWN_OWNERS:
+            h["is_known_program"] = True
+            # Program id alone is weak — pool stamp below can override for real pools
+            if not h.get("label"):
+                h["label"] = _KNOWN_OWNERS[w]
+        # Match wallet or token account to known pool / pair addresses
+        best_hit: str | None = None
+        best_rank = -1
+        for addr in (w, ata):
+            if not addr:
+                continue
+            hit = pool_map.get(addr) or (
+                pool_map_l.get(addr.lower())[1]
+                if addr.lower() in pool_map_l
+                else None
+            )
+            if hit and _lp_label_rank(hit) > best_rank:
+                best_hit = hit
+                best_rank = _lp_label_rank(hit)
+        if best_hit:
+            _stamp_pool(h, best_hit)
+        if is_known_lp_or_program(
+            w,
+            label=h.get("label"),
+            is_known_program=bool(h.get("is_known_program")),
+        ):
+            h["is_known_program"] = True
+            if not h.get("label") and w in _KNOWN_OWNERS:
+                h["label"] = _KNOWN_OWNERS[w]
+            elif not h.get("label"):
+                h["label"] = "Known liquidity / program"
+    return holders
+
+
+def is_pump_or_dex_lp_text(*parts: Any) -> bool:
+    """True if label/notes/reason text looks like Pump.fun or DEX liquidity."""
+    blob = " ".join(str(p or "") for p in parts).lower()
+    if not blob.strip():
+        return False
+    keys = (
+        "pump.fun",
+        "pumpfun",
+        "pumpswap",
+        "bonding curve",
+        "associated bonding",
+        "liquidity pair",
+        "liquidity pool",
+        "raydium pool",
+        "raydium authority",
+        "raydium amm",
+        "raydium clmm",
+        "raydium cpmm",
+        "orca whirlpool",
+        "meteora",
+        "known liquidity",
+        "liquidity / program",
+        "pump swap",
+    )
+    return any(k in blob for k in keys)
+
+
+def pump_lp_addresses_for_mint(mint: str | None) -> set[str]:
+    """Per-mint Pump.fun curve/pool PDAs (empty if not a pump mint / fetch fails)."""
+    m = (mint or "").strip()
+    if not m:
+        return set()
+    try:
+        from .pumpfun import fetch_pump_lp_accounts, is_pump_mint
+
+        if not is_pump_mint(m):
+            return set()
+        return {
+            (a or "").strip()
+            for a in (fetch_pump_lp_accounts(m) or {})
+            if (a or "").strip()
+        }
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def known_pool_addresses_for_mint(mint: str | None) -> set[str]:
+    """
+    All known pool/LP addresses for a mint:
+    DexScreener pairs (Meteora, Raydium, …) + Pump curve/pool PDAs.
+    """
+    m = (mint or "").strip()
+    if not m:
+        return set()
+    out: set[str] = set()
+    try:
+        out |= {a for a in (fetch_dex_pool_accounts(m) or {}) if a}
+    except Exception:  # noqa: BLE001
+        pass
+    out |= pump_lp_addresses_for_mint(m)
+    return out
+
+
+def is_excluded_lp_wallet(
+    wallet: str | None = None,
+    *,
+    label: str | None = None,
+    notes: str | None = None,
+    reason: str | None = None,
+    is_known_program: bool = False,
+    mint: str | None = None,
+    pump_lp_set: set[str] | None = None,
+) -> bool:
+    """
+    True for wallets that must never enter same-slot multi-buys, Alerts risk
+    lists, Holders risk flags, or Ruggers/sellers / RugWatch uploads.
+    (Known DEX pools + Pump PDAs + program authorities.)
+    """
+    w = (wallet or "").strip()
+    if is_known_program or is_known_lp_or_program(
+        w, label=label, is_known_program=is_known_program
+    ):
+        return True
+    if is_pump_or_dex_lp_text(label, notes, reason):
+        return True
+    if w and w in _KNOWN_OWNERS:
+        return True
+    lp_set = pump_lp_set
+    if lp_set is None and mint:
+        lp_set = known_pool_addresses_for_mint(mint)
+    if w and lp_set and w in lp_set:
+        return True
+    return False
+
+
 def holding_priority_label(pct: float | None) -> str:
     """
     Priority by holding size (non-LP).
@@ -167,7 +629,8 @@ def analyze_holders_helius_only(
     pair_address: str | None = None,
 ) -> dict[str, Any]:
     """
-    Top holders **only** via Helius JSON-RPC (getTokenLargestAccounts).
+    Holders via Helius: prefer DAS getTokenAccounts (paginated, broad list),
+    fall back to getTokenLargestAccounts (~20 largest ATAs).
 
     Used as the sole input for bundle analysis. No Rugcheck, no free RPCs.
     """
@@ -186,15 +649,22 @@ def analyze_holders_helius_only(
         result = _solana_via_rpc_url(
             token_address, pair_address=pair_address, rpc_url=url
         )
-        result["source"] = "helius_rpc"
-        result["notes"] = (
-            "Holder snapshot from Helius RPC only (getTokenLargestAccounts). "
-            "Used for bundle heuristics — no Rugcheck merge on this path."
-        )
         meta = dict(result.get("meta") or {})
         meta["rpc_endpoint_host"] = "mainnet.helius-rpc.com"
         meta["bundle_source"] = "helius_only"
         result["meta"] = meta
+        src = str(result.get("source") or "helius_rpc")
+        result["source"] = src
+        if "das" not in src:
+            result["notes"] = (
+                "Holder snapshot from Helius getTokenLargestAccounts (~20 ATAs). "
+                "DAS full-list path unavailable — used for bundle heuristics."
+            )
+        else:
+            result["notes"] = (
+                "Holder snapshot from Helius DAS getTokenAccounts (paginated). "
+                "Used for bundle heuristics — no Rugcheck merge on this path."
+            )
         return result
     except Exception as exc:  # noqa: BLE001
         return _empty(f"Helius holder scan failed: {exc}")
@@ -205,13 +675,18 @@ def analyze_holders(
     token_address: str | None,
     *,
     pair_address: str | None = None,
+    include_rugwatch: bool = True,
 ) -> dict[str, Any]:
     if not chain_id or not token_address:
         return _empty("Missing chain or token address.")
 
     chain = chain_id.lower()
     if chain in {"solana", "sol"}:
-        return _solana_holders(token_address, pair_address=pair_address)
+        return _solana_holders(
+            token_address,
+            pair_address=pair_address,
+            include_rugwatch=include_rugwatch,
+        )
 
     if chain in {
         "ethereum",
@@ -269,7 +744,12 @@ def analyze_holders(
     return _empty(f"Holder analysis not implemented for chain '{chain}'.")
 
 
-def _solana_holders(mint: str, *, pair_address: str | None = None) -> dict[str, Any]:
+def _solana_holders(
+    mint: str,
+    *,
+    pair_address: str | None = None,
+    include_rugwatch: bool = True,
+) -> dict[str, Any]:
     """
     Multi-source Solana holders:
       Helius/RPC + Rugcheck + Solscan + Birdeye (best-effort each).
@@ -292,18 +772,19 @@ def _solana_holders(mint: str, *, pair_address: str | None = None) -> dict[str, 
         return _solana_via_rugcheck(mint, pair_address=pair_address)
 
     def _solscan() -> dict[str, Any]:
-        # Slightly larger page so Solscan can carry the list if Helius/RPC fails
-        return hsrc.fetch_solscan_holders(mint, limit=50)
+        # Larger page when Helius DAS is missing so fusion still has depth
+        return hsrc.fetch_solscan_holders(mint, limit=100)
 
     def _birdeye() -> dict[str, Any]:
-        return hsrc.fetch_birdeye_holders(mint, limit=40)
+        return hsrc.fetch_birdeye_holders(mint, limit=100)
 
     def _totals() -> dict[str, Any]:
         return hsrc.fetch_holder_totals(mint)
 
-    # Fetch all sources in parallel (was sequential — biggest holders latency win)
+    # Fetch all sources in parallel — Helius/RPC + Rugcheck + Solscan + Birdeye
+    # (holder_totals may also hit Pump.fun / DexScreener for counts only)
     jobs = {
-        "rpc": _rpc,
+        "rpc": _rpc,  # Helius when HELIUS_API_KEY set
         "rugcheck": _rug,
         "solscan": _solscan,
         "birdeye": _birdeye,
@@ -348,6 +829,7 @@ def _solana_holders(mint: str, *, pair_address: str | None = None) -> dict[str, 
         birdeye=birdeye_result,
         errors=errors,
         holder_totals=totals,
+        include_rugwatch=include_rugwatch,
     )
     if fused.get("ok"):
         return fused
@@ -385,6 +867,7 @@ def _fuse_holder_sources(
     birdeye: dict[str, Any] | None,
     errors: dict[str, str],
     holder_totals: dict[str, Any] | None = None,
+    include_rugwatch: bool = True,
 ) -> dict[str, Any]:
     """
     Merge wallets from all providers.
@@ -392,6 +875,7 @@ def _fuse_holder_sources(
     Prefer Helius/RPC balances when present.
     If Helius/RPC is down or empty, Solscan becomes the primary balance/% source.
     Rugcheck/Birdeye still fill gaps and flags.
+    include_rugwatch: when False, skip RugWatch flagged-wallet merge (user checkbox).
     """
     by_wallet: dict[str, dict[str, Any]] = {}
     sources_used: list[str] = []
@@ -472,14 +956,13 @@ def _fuse_holder_sources(
     if not by_wallet:
         return _empty("No holders from Helius/RPC, Rugcheck, Solscan, or Birdeye.")
 
-    # Known program labels
+    # Known program / LP labels (shared with Bundles path)
+    apply_known_lp_tags(
+        list(by_wallet.values()),
+        mint=mint,
+        pair_address=pair_address,
+    )
     for w, row in by_wallet.items():
-        if w in _KNOWN_OWNERS:
-            row["is_known_program"] = True
-            row["label"] = row.get("label") or _KNOWN_OWNERS[w]
-        if pair_address and w == pair_address:
-            row["is_known_program"] = True
-            row["label"] = row.get("label") or "Liquidity pair"
         if row.get("insider"):
             lab = row.get("label") or ""
             if "insider" not in lab.lower():
@@ -517,6 +1000,14 @@ def _fuse_holder_sources(
         base_extra.update(rug.get("meta") or {})
     if rpc and rpc.get("ok"):
         base_extra.update({k: v for k, v in (rpc.get("meta") or {}).items() if k not in base_extra})
+        # Prefer DAS unique owner count from Helius path when present
+        rsum = (rpc.get("summary") or {}) if isinstance(rpc, dict) else {}
+        if rsum.get("holders_on_mint") is not None:
+            base_extra["das_unique_owners"] = rsum.get("holders_on_mint")
+        if rsum.get("total_wallets") is not None and "das_unique_owners" not in base_extra:
+            base_extra["das_unique_owners"] = rsum.get("total_wallets")
+        if rpc.get("holders_on_mint") is not None:
+            base_extra["das_unique_owners"] = rpc.get("holders_on_mint")
     if birdeye and birdeye.get("security"):
         base_extra["birdeye_security"] = birdeye.get("security")
     if solscan and solscan.get("total_holders") is not None:
@@ -524,7 +1015,7 @@ def _fuse_holder_sources(
     if birdeye and birdeye.get("total_holders") is not None:
         base_extra["birdeye_total_holders"] = birdeye.get("total_holders")
 
-    # Total wallets (Pump.fun / Birdeye / DexScreener / Solscan)
+    # Total wallets (Pump.fun / Birdeye / DexScreener / Solscan / Helius)
     totals = holder_totals or {}
     by_src = dict(totals.get("by_source") or {})
     # Fill Birdeye from holder list total if dedicated totals call missed it
@@ -547,6 +1038,25 @@ def _fuse_holder_sources(
         by_src["solscan"] = solscan.get("total_holders")
     solscan_total = by_src.get("solscan")
 
+    # Helius DAS unique owners (from fusion rpc path meta, if present)
+    helius_unique = None
+    try:
+        if base_extra.get("das_unique_owners") is not None:
+            helius_unique = int(base_extra["das_unique_owners"])
+        elif rpc and isinstance(rpc.get("meta"), dict):
+            hu = rpc["meta"].get("das_unique_owners")
+            if hu is not None:
+                helius_unique = int(hu)
+    except (TypeError, ValueError):
+        helius_unique = None
+    if helius_unique is None:
+        try:
+            # Owner-aggregated map size when DAS rows were fused
+            if owner_totals:
+                helius_unique = len(owner_totals)
+        except Exception:  # noqa: BLE001
+            pass
+
     candidates = [
         n
         for n in (
@@ -556,6 +1066,7 @@ def _fuse_holder_sources(
             by_src.get("solscan"),
             solscan_total,
             totals.get("total_wallets"),
+            helius_unique,
         )
         if isinstance(n, int) and n >= 0
     ]
@@ -565,13 +1076,16 @@ def _fuse_holder_sources(
     base_extra["holder_provider_errors"] = errors
     base_extra["holder_totals"] = {
         "total_wallets": best_total,
+        "holders_on_mint": best_total,  # alias — full count, no %
         "by_source": {
             "pumpfun": by_src.get("pumpfun"),
             "birdeye": by_src.get("birdeye"),
             "dexscreener": by_src.get("dexscreener"),
             "solscan": by_src.get("solscan"),
+            "helius": helius_unique,
         },
         "solscan": solscan_total,
+        "helius_unique_owners": helius_unique,
         "sources_detail": totals.get("sources_detail") or {},
         "ok": best_total is not None,
     }
@@ -607,68 +1121,165 @@ def _fuse_holder_sources(
     )
     summary = dict(result.get("summary") or {})
     summary["total_wallets"] = best_total
+    summary["holders_on_mint"] = best_total  # full holder count (no list / no %)
     summary["total_wallets_by_source"] = {
         "pumpfun": by_src.get("pumpfun"),
         "birdeye": by_src.get("birdeye"),
         "dexscreener": by_src.get("dexscreener"),
         "solscan": by_src.get("solscan"),
+        "helius": helius_unique,
     }
     summary["top_list_size"] = min(14, len(result.get("holders") or []))
     result["summary"] = summary
     result["holder_totals"] = base_extra["holder_totals"]
+    result["holders_on_mint"] = best_total
 
-    # RugWatch flagged wallets (local DB) for this mint / top holders
-    try:
-        from .rugwatch_bridge import fetch_rugwatch_flagged
+    # RugWatch flagged wallets (optional — user checkbox on website)
+    if include_rugwatch:
+        try:
+            from .rugwatch_bridge import fetch_rugwatch_flagged
 
-        holder_addrs = [
-            (h.get("wallet") or "").strip()
-            for h in (result.get("holders") or [])
-            if h.get("wallet")
-        ]
-        # include creator if known
-        if base_extra.get("creator"):
-            holder_addrs.append(str(base_extra["creator"]))
-        rw = fetch_rugwatch_flagged(mint, holder_wallets=holder_addrs, min_score=0, limit=200)
-        result["rugwatch_flagged"] = rw
-        base_extra["rugwatch_flagged"] = {
-            "ok": rw.get("ok"),
-            "match_count": rw.get("match_count"),
-            "db_wallet_count": rw.get("db_wallet_count"),
-            "local_count": rw.get("local_count"),
-            "cloud_count": rw.get("cloud_count"),
-            "db_found": rw.get("db_found"),
-            "cloud_configured": rw.get("cloud_configured"),
-            "inventory": rw.get("inventory"),
-            # never surface local filesystem paths in holder meta
-            "error": rw.get("error"),
-            "sources": rw.get("sources"),
-        }
-        if rw.get("ok") and rw.get("match_count"):
-            n = int(rw["match_count"])
-            flags = list(result.get("flags") or [])
-            flags.insert(
-                0,
-                f"RugWatch: {n} flagged wallet(s) (local+cloud) linked to this mint "
-                f"or in top holders",
+            holder_addrs = [
+                (h.get("wallet") or "").strip()
+                for h in (result.get("holders") or [])
+                if h.get("wallet")
+            ]
+            # include creator if known
+            if base_extra.get("creator"):
+                holder_addrs.append(str(base_extra["creator"]))
+            rw = fetch_rugwatch_flagged(
+                mint, holder_wallets=holder_addrs, min_score=0, limit=500
             )
-            result["flags"] = flags
-            if summary.get("concentration_risk") in {"lower", "moderate"}:
-                summary["concentration_risk"] = "elevated"
-                result["summary"] = summary
-    except Exception as exc:  # noqa: BLE001
+            # Combined bag % + still/previously holding counts (cumulative on GitHub)
+            try:
+                stats = collect_flagged_holder_pcts(
+                    rw, list(result.get("holders") or [])
+                )
+                rw = dict(rw)
+                rw["flagged_total_pct"] = float(stats.get("total_pct") or 0)
+                rw["flagged_with_pct_count"] = int(stats.get("with_pct_count") or 0)
+                rw["flagged_shown_count"] = int(stats.get("shown_count") or 0)
+                rw["still_holding_count"] = int(stats.get("still_holding_count") or 0)
+                rw["previously_holding_scan"] = int(
+                    stats.get("previously_holding_count") or 0
+                )
+                try:
+                    from .flagged_hold_store import merge_mint_flagged_hold
+
+                    prev_info = merge_mint_flagged_hold(
+                        mint,
+                        still_addrs=list(stats.get("still_addrs") or []),
+                        prev_addrs=list(stats.get("prev_addrs") or []),
+                        push_github=True,
+                    )
+                    rw["previously_holding_count"] = int(
+                        prev_info.get("previously_holding") or 0
+                    )
+                    rw["ever_held_count"] = int(prev_info.get("ever_held") or 0)
+                    rw["previously_holding_added"] = int(
+                        prev_info.get("added_previously") or 0
+                    )
+                    rw["previously_holding_github"] = prev_info.get("github") or {}
+                except Exception as store_exc:  # noqa: BLE001
+                    rw["previously_holding_count"] = int(
+                        stats.get("previously_holding_count") or 0
+                    )
+                    rw["ever_held_count"] = rw["still_holding_count"] + rw[
+                        "previously_holding_count"
+                    ]
+                    rw["previously_holding_store_error"] = str(store_exc)
+            except Exception:  # noqa: BLE001
+                rw = dict(rw)
+                rw.setdefault("flagged_total_pct", 0.0)
+                rw.setdefault("flagged_with_pct_count", 0)
+                rw.setdefault("previously_holding_count", 0)
+                rw.setdefault("still_holding_count", 0)
+
+            result["rugwatch_flagged"] = rw
+            result["flagged_hold_pct"] = float(rw.get("flagged_total_pct") or 0)
+            result["flagged_with_pct_count"] = int(
+                rw.get("flagged_with_pct_count") or 0
+            )
+            result["flagged_still_holding"] = int(rw.get("still_holding_count") or 0)
+            result["flagged_previously_holding"] = int(
+                rw.get("previously_holding_count") or 0
+            )
+            base_extra["rugwatch_flagged"] = {
+                "ok": rw.get("ok"),
+                "match_count": rw.get("match_count"),
+                "db_wallet_count": rw.get("db_wallet_count"),
+                "cloud_wallet_count": rw.get("cloud_wallet_count"),
+                "db_found": rw.get("db_found"),
+                "flagged_total_pct": rw.get("flagged_total_pct"),
+                "flagged_with_pct_count": rw.get("flagged_with_pct_count"),
+                "still_holding_count": rw.get("still_holding_count"),
+                "previously_holding_count": rw.get("previously_holding_count"),
+                "ever_held_count": rw.get("ever_held_count"),
+                # never surface local filesystem paths in holder meta
+                "error": rw.get("error"),
+            }
+            if rw.get("ok") and (
+                rw.get("match_count") or (rw.get("flagged_with_pct_count") or 0) > 0
+            ):
+                n = int(rw.get("match_count") or rw.get("flagged_with_pct_count") or 0)
+                tot = float(rw.get("flagged_total_pct") or 0)
+                flags = list(result.get("flags") or [])
+                if tot > 0:
+                    flags.insert(
+                        0,
+                        f"RugWatch: flagged wallets hold {tot:.2f}% of supply "
+                        f"({int(rw.get('flagged_with_pct_count') or 0)} wallet(s))",
+                    )
+                else:
+                    flags.insert(
+                        0,
+                        f"RugWatch: {n} flagged wallet(s) linked to this mint or top holders",
+                    )
+                result["flags"] = flags
+                if tot > 0 and summary.get("concentration_risk") in {
+                    "lower",
+                    "moderate",
+                }:
+                    summary["concentration_risk"] = "elevated"
+                    result["summary"] = summary
+        except Exception as exc:  # noqa: BLE001
+            result["rugwatch_flagged"] = {
+                "ok": False,
+                "error": str(exc),
+                "linked_to_mint": [],
+                "in_top_holders": [],
+                "high_risk_db": [],
+            }
+            result["flagged_hold_pct"] = 0.0
+            result["flagged_with_pct_count"] = 0
+    else:
         result["rugwatch_flagged"] = {
-            "ok": False,
-            "error": str(exc),
+            "ok": True,
+            "skipped": True,
+            "enabled": False,
+            "match_count": 0,
             "linked_to_mint": [],
             "in_top_holders": [],
             "high_risk_db": [],
+            "all_flagged": [],
+            "note": "RugWatch flags off for this lookup (user unchecked).",
+        }
+        base_extra["rugwatch_flagged"] = {
+            "ok": True,
+            "skipped": True,
+            "enabled": False,
+            "match_count": 0,
         }
 
     primary_note = (
         "Balances prefer Solscan (Helius/RPC unavailable or empty). "
         if solscan_primary
         else "Balances prefer Helius/RPC; Solscan & Birdeye fill gaps. "
+    )
+    rw_note = (
+        "Flagged wallets section uses RugWatch (local + cloud) when enabled. "
+        if include_rugwatch
+        else "RugWatch flagged wallets skipped for this lookup. "
     )
     result["notes"] = (
         "Multi-source holders: "
@@ -677,7 +1288,7 @@ def _fuse_holder_sources(
         + primary_note
         + "Rugcheck adds insiders/risks. "
         + "Total wallet counts from Pump.fun + Birdeye + DexScreener + Solscan when available. "
-        + "Flagged wallets section reads local RugWatch DB. "
+        + rw_note
         + (result.get("notes") or "")
     ).strip()
     if errors:
@@ -910,7 +1521,13 @@ def _rugcheck_meta(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _rpc(url: str, method: str, params: list[Any]) -> Any:
-    payload = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
+    from .helius_rpc import is_helius_url, rpc_call
+
+    if is_helius_url(url):
+        return rpc_call(url, method, params, timeout=25.0, req_id=1)
+    payload = json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    ).encode()
     req = urllib.request.Request(
         url,
         data=payload,
@@ -943,6 +1560,16 @@ def _source_label(rpc_url: str) -> str:
 
 
 def _solana_via_rpc(mint: str, *, pair_address: str | None = None) -> dict[str, Any]:
+    # Prefer Helius DAS full-list when a Helius endpoint is available
+    for url in _rpc_endpoints():
+        if "helius" not in (url or "").lower():
+            continue
+        try:
+            return _solana_via_helius_das(
+                mint, pair_address=pair_address, rpc_url=url
+            )
+        except Exception:  # noqa: BLE001
+            break
     largest, used_url = _rpc_any("getTokenLargestAccounts", [mint])
     supply_res, _ = _rpc_any("getTokenSupply", [mint])
     return _holders_from_largest(
@@ -961,6 +1588,13 @@ def _solana_via_rpc_url(
     rpc_url: str,
 ) -> dict[str, Any]:
     """RPC path forced to a single endpoint (e.g. Helius only)."""
+    if "helius" in (rpc_url or "").lower():
+        try:
+            return _solana_via_helius_das(
+                mint, pair_address=pair_address, rpc_url=rpc_url
+            )
+        except Exception:  # noqa: BLE001
+            pass
     largest = _rpc(rpc_url, "getTokenLargestAccounts", [mint])
     supply_res = _rpc(rpc_url, "getTokenSupply", [mint])
     return _holders_from_largest(
@@ -971,6 +1605,188 @@ def _solana_via_rpc_url(
         used_url=rpc_url,
         owners_rpc_url=rpc_url,
     )
+
+
+def _solana_via_helius_das(
+    mint: str,
+    *,
+    pair_address: str | None = None,
+    rpc_url: str,
+) -> dict[str, Any]:
+    """
+    Paginated Helius DAS getTokenAccounts by mint → aggregate by owner.
+
+    getTokenLargestAccounts only returns ~20 ATAs. DAS pages up to
+    HOLDERS_MAX_ACCOUNTS (default 2000) for Ruggers / Holders / Bundles.
+    """
+    supply_res = _rpc(rpc_url, "getTokenSupply", [mint])
+    supply_ui = None
+    supply_raw = None
+    decimals = 0
+    try:
+        s = (supply_res or {}).get("value") or {}
+        supply_ui = float(s.get("uiAmount") or 0) or None
+        supply_raw = int(s.get("amount") or 0) or None
+        decimals = int(s.get("decimals") or 0)
+    except (TypeError, ValueError):
+        pass
+
+    max_acc = _holders_max_accounts()
+    page_limit = 1000
+    page = 1
+    token_rows: list[dict[str, Any]] = []
+    pages_scanned = 0
+    while len(token_rows) < max_acc and page <= 20:
+        need = max_acc - len(token_rows)
+        lim = min(page_limit, need)
+        try:
+            result = _rpc(
+                rpc_url,
+                "getTokenAccounts",
+                {
+                    "mint": mint,
+                    "page": page,
+                    "limit": lim,
+                    "options": {"showZeroBalance": False},
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            if not token_rows:
+                raise RuntimeError(f"Helius DAS getTokenAccounts failed: {exc}") from exc
+            break
+        batch = []
+        if isinstance(result, dict):
+            batch = list(result.get("token_accounts") or result.get("tokenAccounts") or [])
+        elif isinstance(result, list):
+            batch = list(result)
+        if not batch:
+            break
+        for row in batch:
+            if isinstance(row, dict):
+                token_rows.append(row)
+        pages_scanned += 1
+        if len(batch) < lim:
+            break
+        page += 1
+
+    if not token_rows:
+        raise RuntimeError("Helius DAS returned no token accounts for mint")
+
+    # Aggregate ATAs → owner wallet (max bag for multi-ATA owners)
+    owner_bal: dict[str, float] = {}
+    owner_ata_n: dict[str, int] = {}
+    owner_atas: dict[str, list[str]] = {}
+    for row in token_rows:
+        owner = (row.get("owner") or "").strip()
+        if not owner:
+            continue
+        amt_raw = row.get("amount")
+        ui = None
+        try:
+            if row.get("uiAmount") is not None:
+                ui = float(row["uiAmount"])
+            elif amt_raw is not None:
+                ui = float(amt_raw) / (10 ** max(0, decimals))
+        except (TypeError, ValueError):
+            ui = 0.0
+        ui = float(ui or 0.0)
+        if ui <= 0:
+            continue
+        owner_bal[owner] = owner_bal.get(owner, 0.0) + ui
+        owner_ata_n[owner] = owner_ata_n.get(owner, 0) + 1
+        ata = (row.get("address") or row.get("pubkey") or "").strip()
+        if ata:
+            owner_atas.setdefault(owner, []).append(ata)
+
+    if not owner_bal:
+        raise RuntimeError("Helius DAS: no positive balances after aggregate")
+
+    ordered = sorted(owner_bal.items(), key=lambda x: -x[1])
+    holders: list[dict[str, Any]] = []
+    for i, (owner, ui) in enumerate(ordered):
+        label = _KNOWN_OWNERS.get(owner)
+        if pair_address and owner == pair_address:
+            label = label or "Liquidity pair"
+        pct = (ui / supply_ui * 100.0) if supply_ui else None
+        holders.append(
+            {
+                "rank": i + 1,
+                "token_account": (owner_atas.get(owner) or [""])[0] or "",
+                "wallet": owner,
+                "balance": ui,
+                "pct_supply": pct,
+                "label": label,
+                "is_known_program": bool(label),
+                "insider": False,
+                "accounts": owner_ata_n.get(owner) or 1,
+            }
+        )
+
+    result = _build_result(
+        mint=mint,
+        holders=holders,
+        owner_totals=dict(owner_bal),
+        supply_ui=supply_ui,
+        supply_raw=supply_raw,
+        decimals=decimals,
+        source="helius_das",
+        pair_address=pair_address,
+        extra={
+            "rpc_endpoint_host": _host_only(rpc_url),
+            "das_pages": pages_scanned,
+            "das_token_accounts": len(token_rows),
+            "das_unique_owners": len(owner_bal),
+            "das_max_accounts": max_acc,
+        },
+    )
+    # Multi-account clusters from ATA counts (DAS has full multi-ATA picture)
+    multi = [
+        {
+            "wallet": w,
+            "combined_balance": bal,
+            "accounts": owner_ata_n.get(w) or 1,
+            "token_accounts": list(owner_atas.get(w) or [])[:8],
+            "pct_supply": (
+                (bal / supply_ui * 100.0) if supply_ui and supply_ui > 0 else None
+            ),
+            "combined_pct": (
+                (bal / supply_ui * 100.0) if supply_ui and supply_ui > 0 else None
+            ),
+        }
+        for w, bal in sorted(owner_bal.items(), key=lambda x: -x[1])
+        if (owner_ata_n.get(w) or 0) > 1
+    ]
+    if multi:
+        result["owner_clusters"] = multi[:40]
+    notes = (
+        f"Holder list from Helius DAS getTokenAccounts "
+        f"({len(token_rows)} ATAs → {len(owner_bal)} unique wallets"
+        f"{', capped' if len(token_rows) >= max_acc else ''}). "
+        "Not every dust account on huge mints; set HOLDERS_MAX_ACCOUNTS to raise cap."
+    )
+    result["notes"] = notes
+    s = dict(result.get("summary") or {})
+    s["accounts_returned"] = len(holders)
+    s["unique_wallets_in_top"] = len(holders)
+    # Full unique holder count from DAS (or cap floor if pagination hit max)
+    s["total_wallets"] = len(owner_bal)
+    s["holders_on_mint"] = len(owner_bal)
+    s["holder_source"] = "helius_das"
+    s["total_wallets_by_source"] = {"helius": len(owner_bal)}
+    result["summary"] = s
+    result["holders_on_mint"] = len(owner_bal)
+    result["holder_totals"] = {
+        "total_wallets": len(owner_bal),
+        "holders_on_mint": len(owner_bal),
+        "by_source": {"helius": len(owner_bal)},
+        "ok": True,
+        "partial": len(token_rows) >= max_acc,
+    }
+    meta = dict(result.get("meta") or {})
+    meta["das_unique_owners"] = len(owner_bal)
+    meta["holder_totals"] = result["holder_totals"]
+    result["meta"] = meta
+    return result
 
 
 def _holders_from_largest(
@@ -1042,6 +1858,7 @@ def _holders_from_largest(
         supply_raw=supply_raw,
         decimals=decimals,
         source=_source_label(used_url),
+        pair_address=pair_address,
         extra={"rpc_endpoint_host": _host_only(used_url)},
     )
 
@@ -1111,6 +1928,7 @@ def _build_result(
     supply_raw: int | None,
     decimals: int,
     source: str,
+    pair_address: str | None = None,
     extra_flags: list[str] | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -1129,15 +1947,8 @@ def _build_result(
         return sum(float(h.get("balance") or 0) for h in items[:n]) / supply_ui * 100.0
 
     # Tag LP/program wallets so concentration flags ignore them
-    for h in holders:
-        if is_known_lp_or_program(
-            h.get("wallet"),
-            label=h.get("label"),
-            is_known_program=bool(h.get("is_known_program")),
-        ):
-            h["is_known_program"] = True
-            if not h.get("label") and (h.get("wallet") or "") in _KNOWN_OWNERS:
-                h["label"] = _KNOWN_OWNERS[h["wallet"]]
+    # (same map as Holders tab: programs + pair + Pump PDAs)
+    apply_known_lp_tags(holders, mint=mint, pair_address=pair_address)
 
     non_lp = [
         h
@@ -1256,7 +2067,8 @@ def _build_result(
         "flags": flags,
         "meta": extra or {},
         "notes": (
-            "Holder data is a top-wallet snapshot (not every holder)."
+            "Holder data from the active source snapshot "
+            "(Helius DAS paginated list when available; otherwise top largest ATAs)."
             + helius_note
             + " Bundle/sniper detection is heuristic — multi-account same owner + concentration + "
             "Rugcheck insider flags when available."
@@ -1266,10 +2078,14 @@ def _build_result(
 
 def format_holders_text(data: dict[str, Any]) -> str:
     if not data.get("ok"):
-        return f"HOLDERS\n  {data.get('error') or data.get('notes') or 'unavailable'}\n"
+        return (
+            "── HOLDERS ──\n"
+            f"  {data.get('error') or data.get('notes') or 'unavailable'}\n"
+        )
 
+    # Section markers (── TITLE ──) are colored dim-green in the UI.
     lines = [
-        "HOLDERS / WALLETS",
+        "── HOLDERS / WALLETS ──",
         f"  Source: {data.get('source')}",
     ]
     ps = data.get("provider_status") or {}
@@ -1287,12 +2103,28 @@ def format_holders_text(data: dict[str, Any]) -> str:
     summary = data.get("summary") or {}
     totals = data.get("holder_totals") or (data.get("meta") or {}).get("holder_totals") or {}
     by = summary.get("total_wallets_by_source") or totals.get("by_source") or {}
-    total_w = summary.get("total_wallets")
+    total_w = (
+        summary.get("holders_on_mint")
+        if summary.get("holders_on_mint") is not None
+        else summary.get("total_wallets")
+    )
+    if total_w is None:
+        total_w = totals.get("holders_on_mint")
     if total_w is None:
         total_w = totals.get("total_wallets")
+    if total_w is None and data.get("holders_on_mint") is not None:
+        total_w = data.get("holders_on_mint")
+
+    # Full holder count only — no wallet list, no %
+    lines.append("")
+    lines.append("── HOLDERS ON MINT ──")
+    lines.append(f"  Holders on mint: {_fmt_count(total_w)}")
+    lines.append(
+        "  (Total unique wallets holding this token · no list · no %)"
+    )
 
     lines.append("")
-    lines.append("  ── TOTAL WALLETS ──────────────────────────────")
+    lines.append("── TOTAL WALLETS (by source) ──")
     lines.append(f"  Total wallets (holders): {_fmt_count(total_w)}")
     lines.append(f"    Pump.fun:     {_fmt_count(by.get('pumpfun'))}")
     lines.append(f"    Birdeye:      {_fmt_count(by.get('birdeye'))}")
@@ -1312,11 +2144,14 @@ def format_holders_text(data: dict[str, Any]) -> str:
             else ""
         )
     )
+    if by.get("helius") is not None:
+        lines.append(f"    Helius DAS:   {_fmt_count(by.get('helius'))}")
     lines.append(
-        "  (Best total = highest reported source · list below is top 14 only)"
+        "  (Best total = highest reported source · top list below is not the full mint)"
     )
 
     lines.append("")
+    lines.append("── CONCENTRATION ──")
     lines.append(f"  Concentration risk: {summary.get('concentration_risk')}")
     lines.append(
         f"  Top1 {_pct(summary.get('top1_pct'))} · "
@@ -1368,9 +2203,14 @@ def format_holders_text(data: dict[str, Any]) -> str:
         lines.append(f"  Rugcheck risks: {', '.join(str(r) for r in meta['risks'][:5])}")
 
     lines.append("")
-    lines.append("  Flags (known LP / program wallets excluded):")
-    for f in data.get("flags") or []:
-        lines.append(f"    • {f}")
+    lines.append("── FLAGS ──")
+    lines.append("  (known LP / program wallets excluded)")
+    flags_list = list(data.get("flags") or [])
+    if flags_list:
+        for f in flags_list:
+            lines.append(f"    • {f}")
+    else:
+        lines.append("    Flags will show here if value returns True")
     if data.get("filter_query"):
         lines.append("")
         lines.append(
@@ -1382,8 +2222,9 @@ def format_holders_text(data: dict[str, Any]) -> str:
     show_n = 40 if data.get("filter_query") else 14
     listed = (data.get("holders") or [])[:show_n]
     lines.append("")
+    lines.append("── TOP HOLDERS ──")
     lines.append(
-        f"  Top holders — showing {len(listed)}"
+        f"  Showing {len(listed)}"
         + (
             f" of {_fmt_count(total_w)} total"
             if total_w is not None
@@ -1392,26 +2233,98 @@ def format_holders_text(data: dict[str, Any]) -> str:
         + " · click wallet → Solscan:"
     )
     for h in listed:
-        label = f"  [{h['label']}]" if h.get("label") else ""
+        lab = (h.get("label") or "").strip()
+        # Same style as Pump.fun liquidity lines: [Pump…] / [Meteora pool (liquidity)]
+        label = f"  [{lab}]" if lab else ""
         pct = _pct(h.get("pct_supply"))
         pri = holding_priority_label(h.get("pct_supply"))
-        pri_s = f" · {pri} priority" if pri in {"low", "medium", "high", "critical"} else ""
+        # LP / pool rows: no bag-priority band (same idea as skipping risk flags)
+        is_lp = bool(h.get("is_known_program")) or is_known_lp_or_program(
+            h.get("wallet"), label=lab, is_known_program=bool(h.get("is_known_program"))
+        )
+        pri_s = (
+            ""
+            if is_lp
+            else (
+                f" · {pri} priority"
+                if pri in {"low", "medium", "high", "critical"}
+                else ""
+            )
+        )
         bal = h.get("balance")
         bal_s = f"{bal:,.4f}" if isinstance(bal, (int, float)) else str(bal)
         w = h.get("wallet") or ""
         lines.append(f"    #{h.get('rank')} {bal_s} ({pct}{pri_s}){label}")
         lines.append(f"         {w}")
+        if lab and is_lp:
+            # Second line echo — same pattern as Pump liquidity clarity
+            lines.append(f"         [{lab}]")
         if w:
             lines.append(f"         https://solscan.io/account/{w}")
 
     clusters = data.get("owner_clusters") or []
+    lines.append("")
     if clusters:
-        lines.append("")
-        lines.append("  Multi-account clusters (same wallet, several large ATAs):")
+        # Same pattern as Bundles launch-window: category total + subgroup totals
+        cl_rows: list[dict[str, Any]] = []
+        for c in clusters:
+            if not isinstance(c, dict):
+                continue
+            w = (c.get("wallet") or "").strip()
+            pct = None
+            if w and w in pct_by_wallet:
+                pct = pct_by_wallet[w]
+            elif c.get("combined_balance") is not None and summary.get("total_wallets"):
+                # best-effort from balance if supply known later — leave None
+                pct = None
+            # Try pct from holders map only
+            cl_rows.append({"wallet": w, "pct_supply": pct})
+        # Prefer combined_balance-derived share if we can match holder rows
+        for row in cl_rows:
+            w = row.get("wallet") or ""
+            if row.get("pct_supply") is None and w:
+                row["pct_supply"] = pct_by_wallet.get(w)
+        cl_total = 0.0
+        cl_n = 0
+        has_pct = False
+        for row in cl_rows:
+            try:
+                p = float(row["pct_supply"]) if row.get("pct_supply") is not None else None
+            except (TypeError, ValueError):
+                p = None
+            if p is not None:
+                cl_total += p
+                has_pct = True
+            if row.get("wallet"):
+                cl_n += 1
+        if cl_total > 100:
+            cl_total = 100.0
+        total_s = f"{cl_total:.2f}%" if has_pct else "n/a"
+        lines.append("── MULTI-ACCOUNT CLUSTERS ──")
+        lines.append(
+            f"  Same wallet, several large Associated Token Accounts — "
+            f"total {total_s} across {cl_n} wallet(s):"
+        )
         for c in clusters[:8]:
+            w = (c.get("wallet") or "").strip()
+            pct = pct_by_wallet.get(w)
+            pct_s = _pct(pct)
             lines.append(
-                f"    {c.get('wallet')} · {c.get('accounts')} accounts · bal {c.get('combined_balance')}"
+                f"    • {w}  ·  {c.get('accounts') or '?'} Associated Token Accounts"
+                f"  ·  total {pct_s}"
             )
+            lines.append(f"         {w}  holds {pct_s}")
+            bal = c.get("combined_balance")
+            if bal is not None:
+                try:
+                    lines.append(f"         bal {float(bal):,.4f}")
+                except (TypeError, ValueError):
+                    lines.append(f"         bal {bal}")
+    else:
+        lines.append("── MULTI-ACCOUNT CLUSTERS ──")
+        lines.append(
+            "  Multi-account clusters will show here if value returns True"
+        )
 
     # ── RugWatch flagged wallets ──────────────────────────────────────
     lines.extend(
@@ -1427,80 +2340,129 @@ def format_holders_text(data: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _format_rugwatch_flagged_section(
-    rw: dict[str, Any],
-    *,
+# Minimum remaining supply % to treat a flagged wallet as still holding.
+# Below this (or missing from top-holder snapshot) → sold out / left → hide.
+_FLAGGED_STILL_HOLD_MIN_PCT = 0.01
+
+
+def _flagged_notes_sold_out(notes: str | None) -> bool:
+    """True if notes clearly say they sold ≥99% of their bag (e.g. Ruggers upload)."""
+    t = str(notes or "").lower()
+    if not t:
+        return False
+    if "100.0% sold" in t or "100% sold" in t or "sold 100%" in t:
+        return True
+    # "99.0% sold" / "≥99%" / "sold ≥99%"
+    if "sold ≥99" in t or "sold >=99" in t or "≥99% sold" in t or ">=99% sold" in t:
+        return True
+    if re.search(r"\b99(?:\.\d+)?%\s*sold\b", t):
+        return True
+    if re.search(r"\bsold\s+99(?:\.\d+)?%\b", t):
+        return True
+    return False
+
+
+def collect_flagged_holder_pcts(
+    rw: dict[str, Any] | None,
     holders: list[dict[str, Any]] | None = None,
-) -> list[str]:
-    """List RugWatch-flagged wallets with ownership %; skip known LP/program wallets."""
-    lines: list[str] = [
-        "",
-        "  ── FLAGGED WALLETS (RugWatch local + cloud) ───",
-        "  This list is NOT bundlers and is NOT the Bundles tab.",
-        "  These are RugWatch watchlist wallets (heuristic — not proven ruggers).",
-        "  Sources: local SQLite on this PC + cloud list (if configured).",
-        "  Tags: [local] [cloud] [both] = where the wallet is stored.",
-        "  A [creator] tag means creator of SOME OTHER scanned token,",
-        "  NOT automatically the creator of THIS token (see Creator line above).",
-        "  [this mint] = linked to the token you are viewing now.",
-    ]
-    if not rw:
-        lines.append("  RugWatch: no data (scan holders to load).")
-        return lines
-    if not rw.get("ok"):
-        lines.append(f"  RugWatch: unavailable — {rw.get('error') or 'unknown error'}")
-        lines.append(
-            "  Tip: run RugWatch (local DB), Push cloud, and/or set in ATC .env:\n"
-            "       RUGWATCH_DB=…  and/or  RUGWATCH_WALLETS_URL=… or RUGWATCH_GITHUB_REPO=…"
-        )
-        return lines
+    *,
+    only_current_holders: bool = True,
+) -> dict[str, Any]:
+    """
+    Flagged (non-LP) wallets for this token.
 
-    all_flagged = list(rw.get("all_flagged") or [])
-    linked = list(rw.get("linked_to_mint") or [])
-    in_top = list(rw.get("in_top_holders") or [])
-    # Prefer full DB list; fall back to merged subsets
-    if not all_flagged:
-        seen: set[str] = set()
-        for group in (linked, in_top, list(rw.get("high_risk_db") or [])):
-            for w in group:
-                a = (w.get("address") or "").strip()
-                if a and a not in seen:
-                    seen.add(a)
-                    all_flagged.append(w)
+    only_current_holders=True (default): only wallets that STILL hold a known bag
+    on this mint (in top-holder snapshot with pct > dust). Sold-out / not listed
+    flagged wallets are omitted from Holders + Alerts combined %.
 
-    pct_by = _holder_pct_map(list(holders or []))
+    Returns:
+      wallets: [{wallet, pct, hold_priority, rank?, label?, ...}]
+      total_pct: sum of current bags
+      shown_count / with_pct_count / skipped_lp / skipped_sold
+    """
+    rw = rw or {}
+    holders = list(holders or [])
+    pct_by = _holder_pct_map(holders)
     label_by = {
         (h.get("wallet") or "").strip(): h.get("label")
-        for h in (holders or [])
+        for h in holders
         if (h.get("wallet") or "").strip()
     }
+    rank_by = {
+        (h.get("wallet") or "").strip(): h.get("rank")
+        for h in holders
+        if (h.get("wallet") or "").strip()
+    }
+    bal_by: dict[str, float | None] = {}
+    for h in holders:
+        w = (h.get("wallet") or "").strip()
+        if not w:
+            continue
+        try:
+            bal_by[w] = float(h["balance"]) if h.get("balance") is not None else None
+        except (TypeError, ValueError):
+            bal_by[w] = None
 
-    inv = rw.get("inventory") or {}
-    local_n = rw.get("local_count", inv.get("local_now", rw.get("db_wallet_count", 0)))
-    cloud_n = rw.get("cloud_count", inv.get("cloud_now", 0))
-    merged_n = inv.get("merged_unique", len(all_flagged))
-    lines.append(
-        f"  RugWatch inventory: local={local_n}  ·  cloud={cloud_n}  ·  "
-        f"merged unique={merged_n}"
-        + (f"  ·  matches on this mint/top: {rw.get('match_count', 0)}")
-    )
-    src = rw.get("sources") or {}
-    if src.get("cloud_error") and not cloud_n:
-        lines.append(f"  Cloud note: {src.get('cloud_error')}")
-    if src.get("local_error") and not local_n:
-        lines.append(f"  Local note: {src.get('local_error')}")
-    # Never show local filesystem paths (e.g. C:\\Users\\…\\rugwatch.db)
-    lines.append("  Known LP / program wallets are excluded from this list")
-    lines.append("  Click any blue wallet address → open Solscan")
-    lines.append("")
+    # Merge all RugWatch buckets then hard-dedupe by address (no double pull)
+    all_flagged_raw: list[dict[str, Any]] = list(rw.get("all_flagged") or [])
+    for group in (
+        list(rw.get("linked_to_mint") or []),
+        list(rw.get("in_top_holders") or []),
+        list(rw.get("high_risk_db") or []),
+    ):
+        all_flagged_raw.extend(group)
 
-    if not all_flagged:
-        lines.append(
-            "  (No wallets flagged in RugWatch yet — scan rugs in RugWatch to fill the list.)"
-        )
-        return lines
+    by_addr: dict[str, dict[str, Any]] = {}
+    for w in all_flagged_raw:
+        if not isinstance(w, dict):
+            continue
+        a = (w.get("address") or w.get("wallet") or "").strip()
+        if not a:
+            continue
+        prev = by_addr.get(a)
+        if prev is None:
+            row = dict(w)
+            row["address"] = a
+            by_addr[a] = row
+            continue
+        # Keep higher score; union mint links / flags
+        try:
+            if int(w.get("risk_score") or 0) > int(prev.get("risk_score") or 0):
+                merged = dict(w)
+                merged["address"] = a
+                # preserve richer flags from prev
+                if prev.get("on_this_mint"):
+                    merged["on_this_mint"] = True
+                if prev.get("in_top_holders"):
+                    merged["in_top_holders"] = True
+                by_addr[a] = merged
+                prev = by_addr[a]
+        except (TypeError, ValueError):
+            pass
+        if w.get("on_this_mint"):
+            prev["on_this_mint"] = True
+        if w.get("in_top_holders"):
+            prev["in_top_holders"] = True
+        mset = list(prev.get("flagged_from_mints") or [])
+        for mm in list(w.get("flagged_from_mints") or []):
+            if mm and mm not in mset:
+                mset.append(mm)
+        if mset:
+            prev["flagged_from_mints"] = mset
+            if not prev.get("flagged_from_mint"):
+                prev["flagged_from_mint"] = mset[0]
+        try:
+            prev["times_flagged"] = max(
+                int(prev.get("times_flagged") or 0),
+                int(w.get("times_flagged") or 0),
+                int(prev.get("times_seen") or 0),
+                int(w.get("times_seen") or 0),
+            )
+        except (TypeError, ValueError):
+            pass
 
-    # Sort: on-mint / in-top first, then by risk score
+    all_flagged = list(by_addr.values())
+
     def _sort_key(w: dict[str, Any]) -> tuple:
         on_mint = 1 if w.get("on_this_mint") else 0
         in_holders = 1 if w.get("in_top_holders") else 0
@@ -1510,85 +2472,280 @@ def _format_rugwatch_flagged_section(
     ordered = sorted(all_flagged, key=_sort_key)
     shown: list[dict[str, Any]] = []
     skipped_lp = 0
+    shown_seen: set[str] = set()
     for w in ordered:
         addr = (w.get("address") or "").strip()
-        if not addr:
+        if not addr or addr in shown_seen:
             continue
         lab = w.get("label") or w.get("role") or label_by.get(addr)
         if is_known_lp_or_program(addr, label=str(lab) if lab else None):
             skipped_lp += 1
             continue
+        shown_seen.add(addr)
         shown.append(w)
 
-    lines.append(
-        f"  Flagged wallets ({len(shown)} shown"
-        + (f", {skipped_lp} LP/program excluded" if skipped_lp else "")
-        + "):"
-    )
-    lines.append("")
-
-    for i, w in enumerate(shown[:100], start=1):
+    wallets_out: list[dict[str, Any]] = []
+    previously_out: list[dict[str, Any]] = []
+    still_addrs: list[str] = []
+    prev_addrs: list[str] = []
+    still_seen: set[str] = set()
+    prev_seen: set[str] = set()
+    total_pct = 0.0
+    with_pct = 0
+    skipped_sold = 0
+    for w in shown:
         addr = (w.get("address") or "").strip()
         if not addr:
             continue
-        tags: list[str] = []
-        origin = (w.get("origin") or "").strip().lower()
-        if origin in {"local", "cloud", "both"}:
-            tags.append(origin)
-        elif w.get("in_local") and w.get("in_cloud"):
-            tags.append("both")
-        elif w.get("in_cloud"):
-            tags.append("cloud")
-        elif w.get("in_local"):
-            tags.append("local")
-        if w.get("on_this_mint"):
-            tags.append("this mint")
-        if w.get("in_top_holders"):
-            tags.append("in top holders")
-        if w.get("role"):
-            tags.append(str(w.get("role")))
-        elif w.get("label"):
-            tags.append(str(w.get("label")))
         owns = pct_by.get(addr)
+        if owns is None:
+            for key, p in pct_by.items():
+                if key.lower() == addr.lower():
+                    owns = p
+                    addr = key  # use map key for bal lookup
+                    break
         try:
             owns_f = float(owns) if owns is not None else None
         except (TypeError, ValueError):
             owns_f = None
-        # Holding-size priority: ~2%–3% = low priority
-        hold_pri = holding_priority_label(owns_f)
-        if hold_pri in {"low", "low-moderate", "medium", "high", "critical"}:
+
+        notes = str(w.get("notes") or w.get("evidence") or "")
+        sold_out_notes = _flagged_notes_sold_out(notes)
+
+        # Still holding? Need known bag on this mint above dust threshold.
+        still_holds = (
+            owns_f is not None
+            and owns_f >= _FLAGGED_STILL_HOLD_MIN_PCT
+            and not sold_out_notes
+        )
+        # Dust balance with 0% also counts as gone
+        bal = bal_by.get(addr)
+        if still_holds and bal is not None and bal <= 0 and (owns_f or 0) <= 0:
+            still_holds = False
+
+        try:
+            times_flagged = int(
+                w.get("times_flagged")
+                if w.get("times_flagged") is not None
+                else w.get("times_seen") or 0
+            )
+        except (TypeError, ValueError):
+            times_flagged = 0
+        try:
+            times_seen = int(w.get("times_seen") or 0)
+        except (TypeError, ValueError):
+            times_seen = 0
+        if times_flagged <= 0 and times_seen > 0:
+            times_flagged = times_seen
+        row = {
+            "wallet": addr,
+            "pct": owns_f,
+            "hold_priority": holding_priority_label(owns_f),
+            "rank": rank_by.get(addr),
+            "label": w.get("label") or w.get("role") or label_by.get(addr),
+            "risk_score": w.get("risk_score"),
+            "times_seen": times_seen,
+            "times_flagged": times_flagged,
+            "flagged_from_mint": w.get("flagged_from_mint"),
+            "on_this_mint": bool(w.get("on_this_mint")),
+            "in_top_holders": bool(w.get("in_top_holders")),
+            "origin": (w.get("tag") or w.get("origin") or w.get("location") or ""),
+            "notes": notes,
+            "raw": w,
+            "still_holds": still_holds,
+        }
+
+        if still_holds:
+            if addr in still_seen:
+                continue
+            still_seen.add(addr)
+            still_addrs.append(addr)
+            wallets_out.append(row)
+            if owns_f is not None and owns_f >= _FLAGGED_STILL_HOLD_MIN_PCT:
+                total_pct += owns_f
+                with_pct += 1
+        else:
+            # Sold ≥99% / left list / not in top — count as previously holding
+            if addr in prev_seen or addr in still_seen:
+                continue
+            prev_seen.add(addr)
+            skipped_sold += 1
+            prev_addrs.append(addr)
+            previously_out.append(row)
+            if not only_current_holders:
+                wallets_out.append(row)
+
+    # Prefer largest bags first for alerts / display
+    wallets_out.sort(
+        key=lambda r: (
+            -(float(r["pct"]) if r.get("pct") is not None else -1.0),
+            -int(r.get("risk_score") or 0),
+        )
+    )
+    return {
+        "wallets": wallets_out,
+        "previously_wallets": previously_out,
+        "still_addrs": still_addrs,
+        "prev_addrs": prev_addrs,
+        "total_pct": round(total_pct, 4) if with_pct else 0.0,
+        "with_pct_count": with_pct,
+        "shown_count": len(wallets_out),
+        "skipped_lp": skipped_lp,
+        "skipped_sold": skipped_sold,
+        "previously_holding_count": skipped_sold,
+        "still_holding_count": len(still_addrs),
+        "only_current_holders": only_current_holders,
+    }
+
+
+def _format_rugwatch_flagged_section(
+    rw: dict[str, Any],
+    *,
+    holders: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    """List RugWatch-flagged wallets with ownership %; skip known LP/program wallets."""
+    # Compute totals first so the section header can show combined %
+    stats = collect_flagged_holder_pcts(rw, holders)
+    total_pct = float(stats.get("total_pct") or 0)
+    with_pct_n = int(stats.get("with_pct_count") or 0)
+    total_s = f"{total_pct:.2f}%" if with_pct_n else "n/a"
+    total_pri = holding_priority_label(total_pct if with_pct_n else None)
+    total_pri_s = (
+        f" · {total_pri} priority"
+        if total_pri in {"low", "medium", "high", "critical"}
+        else ""
+    )
+
+    still_n = int(
+        (rw or {}).get("still_holding_count")
+        or stats.get("still_holding_count")
+        or with_pct_n
+        or 0
+    )
+    still_line = (
+        f"  Still holding: {still_n}"
+        if still_n > 0
+        else "  Still holding will show here if value returns True"
+    )
+    combined_line = (
+        f"  Combined bag: {total_s}{total_pri_s}"
+        if with_pct_n > 0 and total_pct > 0
+        else "  Combined flagged bag % will show here if value returns True"
+    )
+    # "Previously holding" is not shown on Holders (sold/dumped wallets → Ruggers).
+    lines: list[str] = [
+        "",
+        "── FLAGGED WALLETS (RugWatch) ──",
+        still_line,
+        combined_line,
+    ]
+    if not rw:
+        lines.append("  RugWatch: no data (scan holders to load).")
+        return lines
+    if rw.get("skipped") or rw.get("enabled") is False:
+        lines.append(
+            "  RugWatch: off for this lookup (checkbox unchecked on Analyze)."
+        )
+        lines.append("  Flagged wallets were not loaded.")
+        return lines
+    if not rw.get("ok"):
+        lines.append(f"  RugWatch: unavailable — {rw.get('error') or 'unknown error'}")
+        lines.append(
+            "  Tip: run RugWatch + Push cloud, set RUGWATCH_DB and/or "
+            "RUGWATCH_WALLETS_URL (prefer .../data/wallets_index.json)."
+        )
+        return lines
+
+    local_n = int(rw.get("db_wallet_count") or 0)
+    cloud_n = int(rw.get("cloud_wallet_count") or 0)
+    local_shards = int(rw.get("local_shards") or 0)
+    cloud_shards = int(rw.get("cloud_shards") or 0)
+    lines.append(
+        f"  RugWatch local: {local_n} wallets"
+        + (f" ({local_shards} DB files)" if local_shards > 1 else "")
+        + f"  ·  cloud: {cloud_n}"
+        + (f" ({cloud_shards} shards)" if cloud_shards > 1 else "")
+        + f"  ·  matches on this mint/top: {rw.get('match_count', 0)}"
+    )
+    lines.append("  Tags: [local] · [cloud] · [both]")
+    lines.append("")
+
+    wallets = list(stats.get("wallets") or [])
+    skipped_lp = int(stats.get("skipped_lp") or 0)
+    if not wallets:
+        lines.append(
+            "  Flagged wallets will show here if value returns True"
+        )
+        return lines
+
+    # Category header like Bundles suspects / launch-window
+    lines.append(
+        f"  Flagged wallets (still holding) — total {total_s}{total_pri_s} "
+        f"across {len(wallets)} wallet(s)"
+        + (f" · {skipped_lp} LP excluded" if skipped_lp else "")
+        + ":"
+    )
+    lines.append("")
+
+    for i, row in enumerate(wallets[:100], start=1):
+        addr = (row.get("wallet") or "").strip()
+        if not addr:
+            continue
+        tags: list[str] = []
+        origin = str(row.get("origin") or "").strip()
+        if origin in {"local", "cloud", "both", "[local]", "[cloud]", "[both]"}:
+            tags.append(origin.strip("[]"))
+        if row.get("on_this_mint"):
+            tags.append("this mint")
+        if row.get("in_top_holders"):
+            tags.append("in top holders")
+        if row.get("label"):
+            tags.append(str(row.get("label")))
+        owns_f = row.get("pct")
+        try:
+            owns_num = float(owns_f) if owns_f is not None else None
+        except (TypeError, ValueError):
+            owns_num = None
+        hold_pri = (row.get("hold_priority") or holding_priority_label(owns_num) or "").strip()
+        # Keep priority on its own token so Alerts-style grouping is clear;
+        # the % itself is colored by the same Holders/Alerts scheme in the UI.
+        if hold_pri in {"low", "medium", "high", "critical"}:
             tags.append(f"{hold_pri} priority")
         tag_s = f"  [{', '.join(tags)}]" if tags else ""
-        score = w.get("risk_score")
-        seen_n = w.get("times_seen")
-        owns_s = _pct(owns)
-        if owns is None:
+        score = row.get("risk_score")
+        try:
+            flagged_n = int(
+                row.get("times_flagged")
+                if row.get("times_flagged") is not None
+                else row.get("times_seen") or 0
+            )
+        except (TypeError, ValueError):
+            flagged_n = 0
+        if owns_num is not None:
+            owns_s = f"{owns_num:.2f}%"
+        else:
             owns_s = "n/a (not in top snapshot)"
+        # Same idea as Ruggers Flagged: how many times RugWatch has flagged this address
+        flagged_s = f"  ·  flagged {flagged_n}×" if flagged_n > 0 else ""
         lines.append(
-            f"    #{i}  holds {owns_s}  ·  score={score}  seen×{seen_n}{tag_s}"
+            f"    #{i}  holds {owns_s}  ·  score={score}{flagged_s}{tag_s}"
         )
         # Address alone on its line so desktop link-tagger makes it clickable
         lines.append(f"         {addr}")
-        note = (w.get("notes") or w.get("evidence") or "").strip()
+        note = str(row.get("notes") or "").strip()
         if note:
             lines.append(f"         {(note[:100])}")
 
-    if len(shown) > 100:
-        lines.append(f"  … and {len(shown) - 100} more in RugWatch DB")
+    if len(wallets) > 100:
+        lines.append(f"  … and {len(wallets) - 100} more still holding")
 
-    # Quick callout if any match current token
-    mint_hits = [w for w in shown if w.get("on_this_mint") or w.get("in_top_holders")]
-    if mint_hits:
-        lines.append("")
+    lines.append("")
+    if with_pct_n:
         lines.append(
-            f"  ⚠ {len(mint_hits)} flagged wallet(s) tied to this mint or top holders"
+            f"  Combined bag still held: {total_s}"
+            + (f" ({total_pri} priority)" if total_pri_s else "")
+            + f" · {with_pct_n} wallet(s)"
         )
-    else:
-        lines.append("")
-        lines.append(
-            "  (None of these flagged wallets matched this mint’s top holders yet.)"
-        )
-
     return lines
 
 

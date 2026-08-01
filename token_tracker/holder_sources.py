@@ -49,7 +49,7 @@ def fetch_solscan_holders(mint: str, *, limit: int = 40) -> dict[str, Any]:
     Used as primary holder list when Helius/RPC fails (see holders._fuse_holder_sources).
     """
     key = solscan_api_key()
-    page_size = min(max(limit, 1), 50)
+    page_size = min(max(limit, 1), 100)
     params = urlencode(
         {
             "address": mint,

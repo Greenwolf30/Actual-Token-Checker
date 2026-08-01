@@ -43,7 +43,7 @@ def is_pump_pool_dex(dex_id: str | None) -> bool:
 
 def _pairs_have_pump_pool(pairs: list[dict[str, Any]] | None) -> bool:
     for p in pairs or []:
-        if is_pump_pool_dex(p.get("dexId")):
+        if is_pump_pool_dex(p.get("dexId") or p.get("dex_id")):
             return True
     return False
 
@@ -56,9 +56,9 @@ def is_pump_token(
     native: dict[str, Any] | None = None,
 ) -> bool:
     """
-    Pump.fun origin token — suffix mint OR pumpfun/pumpswap pool OR native API hit.
+    Pump.fun origin — suffix mint OR pumpfun/pumpswap pool OR native API hit.
 
-    Many graduated / legacy pump tokens no longer end with 'pump' but still trade on
+    Many graduated tokens no longer end with 'pump' but still trade on
     pumpfun/pumpswap or exist in the Pump.fun coin API.
     """
     if is_pump_mint(address):
@@ -73,48 +73,133 @@ def is_pump_token(
     return False
 
 
+def fetch_pump_lp_accounts(mint: str) -> dict[str, str]:
+    """
+    Map of wallet address → LP label for this pump mint.
+
+    Bonding curve / PumpSwap pool accounts are *per-mint PDAs*, not the global
+    program IDs in holders._KNOWN_OWNERS — so large LP bags look like whales
+    unless we resolve them from Pump.fun coin metadata.
+    """
+    m = (mint or "").strip()
+    if not m or not is_pump_mint(m):
+        return {}
+    out: dict[str, str] = {}
+    data: Any = None
+    for url in (
+        f"https://frontend-api-v3.pump.fun/coins/{m}",
+        f"https://frontend-api.pump.fun/coins/{m}",
+    ):
+        try:
+            data = get_json(url, timeout=10.0, retries=0)
+            if isinstance(data, dict) and (
+                data.get("bonding_curve")
+                or data.get("associated_bonding_curve")
+                or data.get("pump_swap_pool")
+            ):
+                break
+        except Exception:  # noqa: BLE001
+            data = None
+    if not isinstance(data, dict):
+        return {}
+
+    def _add(addr: Any, label: str) -> None:
+        a = (str(addr) if addr is not None else "").strip()
+        if a and len(a) >= 32:
+            out[a] = label
+
+    _add(data.get("bonding_curve"), "Pump.fun bonding curve")
+    _add(
+        data.get("associated_bonding_curve"),
+        "Pump.fun bonding curve (Associated Token Account)",
+    )
+    _add(data.get("pump_swap_pool"), "PumpSwap pool (liquidity)")
+    # Some payloads use raydium_pool after migrate
+    _add(data.get("raydium_pool"), "Raydium pool (liquidity)")
+    return out
+
+
 def classify_graduation(
     token_address: str | None,
     *,
     pairs: list[dict[str, Any]] | None = None,
     primary_dex_id: str | None = None,
+    native_complete: bool | None = None,
 ) -> dict[str, Any]:
     """
-    Decide bonding-curve vs graduated for a Pump.fun-style mint.
+    Decide bonding-curve vs graduated (Bonded yes/no) for a Pump.fun-style mint.
 
-    Rules (DexScreener-based; free public index):
-      - dexId == pumpfun  → still on bonding curve → graduated = no
-      - pump mint on pumpswap / raydium / meteora / orca (and no pumpfun pair)
-        → graduated = yes
-      - pump mint with no clear DEX signal → graduated = unknown
+    Rules (priority order):
+      1) Pump.fun native `complete=true` → graduated / Bonded: yes
+      2) Any open DEX pair (pumpswap / raydium / meteora / orca / …)
+         → graduated / Bonded: yes
+         (even if a leftover dexId=pumpfun pair still appears on DexScreener)
+      3) Only pumpfun bonding-curve pairs → still on curve / Bonded: no
+      4) Pump mint with no clear pair signal → unknown
+
+    IMPORTANT: Graduated tokens often still list a historical pumpfun pair.
+    Never treat "pumpfun anywhere in dexes" as decisive if a graduated venue exists.
     """
     mint = (token_address or "").strip()
     suffix_mint = is_pump_mint(mint)
-    dex_primary = (primary_dex_id or "").lower()
+    dex_primary = (primary_dex_id or "").lower().replace("_", "").replace("-", "")
     pair_dexes: list[str] = []
     for p in pairs or []:
-        d = (p.get("dexId") or "").lower()
-        if d:
-            pair_dexes.append(d)
+        if not isinstance(p, dict):
+            continue
+        d = str(p.get("dexId") or p.get("dex_id") or "").strip().lower()
+        d_norm = d.replace("_", "").replace("-", "")
+        if d_norm:
+            pair_dexes.append(d_norm)
+        # only pairs for this mint if we can check base
+        base = ((p.get("baseToken") or {}).get("address") or "").lower()
+        if mint and base and base != mint.lower():
+            # keep dex anyway if caller already filtered pairs to this token
+            pass
 
     if dex_primary and dex_primary not in pair_dexes:
         pair_dexes.append(dex_primary)
 
-    on_bonding = any(_norm_dex_id(d) == "pumpfun" for d in pair_dexes) or _norm_dex_id(
-        dex_primary
-    ) == "pumpfun"
-    on_pumpswap = any(is_pump_pool_dex(d) and _norm_dex_id(d) != "pumpfun" for d in pair_dexes)
-    graduated_dexes = {"pumpswap", "raydium", "meteora", "orca", "pumpswap-v2"}
-    on_grad_dex = any(_norm_dex_id(d) in graduated_dexes for d in pair_dexes)
+    # Normalize common labels
+    def _is_bonding_dex(d: str) -> bool:
+        return d in {"pumpfun", "pump"} or d.startswith("pumpfun")
 
-    # Native API only when pump signals exist (avoid extra call on unrelated tokens)
+    def _is_grad_dex(d: str) -> bool:
+        if not d or _is_bonding_dex(d):
+            return False
+        # PumpSwap + major Solana AMMs after migrate
+        if d in {
+            "pumpswap",
+            "pumpswapv2",
+            "raydium",
+            "raydiumclmm",
+            "raydiumcp",
+            "meteora",
+            "meteoradamm",
+            "orca",
+            "whirlpool",
+            "fluxbeam",
+            "lifinity",
+            "phoenix",
+        }:
+            return True
+        if d.startswith("pumpswap") or d.startswith("raydium") or d.startswith("meteora"):
+            return True
+        return False
+
+    has_bonding_pair = any(_is_bonding_dex(d) for d in pair_dexes)
+    has_grad_pair = any(_is_grad_dex(d) for d in pair_dexes)
+    primary_is_bonding = _is_bonding_dex(dex_primary)
+    primary_is_grad = _is_grad_dex(dex_primary)
+
     native = None
     if mint and (
         suffix_mint
-        or on_bonding
-        or on_pumpswap
+        or has_bonding_pair
+        or has_grad_pair
+        or primary_is_bonding
+        or primary_is_grad
         or _pairs_have_pump_pool(pairs)
-        or is_pump_pool_dex(primary_dex_id)
     ):
         native = try_native_coin(mint)
     pump_origin = is_pump_token(
@@ -123,22 +208,37 @@ def classify_graduation(
         primary_dex_id=primary_dex_id,
         native=native,
     )
+    # Legacy alias used throughout classify body
+    is_mint = suffix_mint or pump_origin
 
     graduated: bool | None
-    if on_bonding:
+    on_bonding_curve: bool
+
+    # 1) Native pump.fun complete flag (authoritative when present)
+    if native_complete is True:
+        graduated = True
+        on_bonding_curve = False
+    elif native_complete is False and not has_grad_pair and not primary_is_grad:
         graduated = False
-    elif pump_origin and (on_pumpswap or on_grad_dex):
+        on_bonding_curve = True
+    # 2) Any graduated venue → bonded/graduated yes (wins over leftover pumpfun pair)
+    elif has_grad_pair or primary_is_grad:
         graduated = True
-    elif pump_origin and not on_bonding and pair_dexes:
-        graduated = True
-    elif pump_origin and native and native.get("complete") is True:
-        graduated = True
-    elif pump_origin and native and native.get("complete") is False:
+        on_bonding_curve = False
+    # 3) Only bonding-curve venue(s)
+    elif has_bonding_pair or primary_is_bonding:
         graduated = False
-    elif pump_origin:
+        on_bonding_curve = True
+    elif is_mint and pair_dexes:
+        # Other dex labels we don't recognize — treat as off-curve if not pumpfun
+        graduated = True
+        on_bonding_curve = False
+    elif is_mint:
         graduated = None
+        on_bonding_curve = False
     else:
         graduated = None
+        on_bonding_curve = False
 
     status = "not_pump"
     if pump_origin:
@@ -148,22 +248,34 @@ def classify_graduation(
             status = "bonding"
         else:
             status = "unknown"
+    elif is_mint:
+        status = "unknown"
+
+    # Prefer a graduated dex_id for display when available
+    display_dex = dex_primary or (pair_dexes[0] if pair_dexes else None)
+    if graduated is True:
+        for d in pair_dexes:
+            if _is_grad_dex(d):
+                display_dex = d
+                break
 
     return {
-        # Back-compat: treat any pump-origin token as pump for UI/alerts/history
         "is_pump_mint": pump_origin,
         "mint_ends_with_pump": suffix_mint,
         "is_pump_origin": pump_origin,
-        "on_bonding_curve": bool(on_bonding),
+        "on_bonding_curve": bool(on_bonding_curve),
         "graduated": graduated,
         "graduated_label": (
             "yes" if graduated is True else "no" if graduated is False else "unknown"
         ),
         "status": status,
-        "dex_id": dex_primary or (pair_dexes[0] if pair_dexes else None),
+        "dex_id": display_dex,
         "dexes_seen": sorted(set(pair_dexes)),
-        "pump_url": f"https://pump.fun/{mint}" if pump_origin and mint else None,
+        "has_bonding_pair": has_bonding_pair,
+        "has_graduated_pair": has_grad_pair,
+        "native_complete": native_complete,
         "native_pump_api": bool(native),
+        "pump_url": f"https://pump.fun/{mint}" if pump_origin and mint else None,
     }
 
 
@@ -353,21 +465,397 @@ def pair_to_pump_record(pair: dict[str, Any]) -> dict[str, Any]:
 
 
 def try_native_coin(mint: str) -> dict[str, Any] | None:
+    """Fetch Pump.fun coin JSON (cached briefly)."""
+    m = (mint or "").strip()
+    if not m:
+        return None
+    try:
+        from .api_cache import TTL_PAIRS, cache_get, cache_set
+
+        key = f"pump:coin:{m.lower()}"
+        hit = cache_get(key)
+        if isinstance(hit, dict):
+            return hit
+        if hit == "":
+            return None
+    except Exception:  # noqa: BLE001
+        key = None
+        cache_set = None  # type: ignore[assignment]
+
     urls = [
-        f"https://frontend-api-v3.pump.fun/coins/{mint}",
-        f"https://frontend-api.pump.fun/coins/{mint}",
-        f"https://client-api-2-74b1891ee9f9.herokuapp.com/coins/{mint}",
+        f"https://frontend-api-v3.pump.fun/coins/{m}",
+        f"https://frontend-api.pump.fun/coins/{m}",
+        f"https://client-api-2-74b1891ee9f9.herokuapp.com/coins/{m}",
     ]
     for url in urls:
         try:
-            data = get_json(url, retries=1, timeout=8.0)
+            data = get_json(url, retries=1, timeout=10.0)
             if isinstance(data, dict) and (
                 data.get("mint") or data.get("symbol") or data.get("name")
             ):
+                if key and cache_set:
+                    cache_set(key, data, TTL_PAIRS)
                 return data
         except Exception:  # noqa: BLE001
             continue
+    if key and cache_set:
+        try:
+            from .api_cache import TTL_NEGATIVE
+
+            cache_set(key, "", TTL_NEGATIVE)
+        except Exception:  # noqa: BLE001
+            pass
     return None
+
+
+def _clean_about_text(text: Any) -> str:
+    import re
+
+    if text is None:
+        return ""
+    if isinstance(text, dict):
+        text = text.get("en") or text.get("text") or text.get("description") or ""
+    t = re.sub(r"<[^>]+>", " ", str(text or ""))
+    t = re.sub(r"\s+", " ", t).strip()
+    if t.lower() in {"", "n/a", "none", "null", "-", "tbd", "null description"}:
+        return ""
+    # Drop Pump.fun site chrome / SEO market blurbs (not the project About)
+    low = t.lower()
+    chrome_bits = (
+        "price today",
+        "live ",
+        "trade on solana via pump",
+        "market cap $",
+        "trade aq on",
+        "via pump.fun",
+    )
+    if any(b in low for b in chrome_bits) and (
+        "market cap" in low or "price today" in low or "trade " in low
+    ):
+        return ""
+    if low.startswith("live ") and "price" in low and "usd" in low:
+        return ""
+    return t
+
+
+def _about_from_coin_dict(coin: dict[str, Any]) -> str:
+    """
+    Extract the About-section prose from Pump.fun coin JSON.
+
+    UI "About" maps to description (and a few legacy aliases).
+    """
+    for key in (
+        "description",
+        "about",
+        "desc",
+        "body",
+        "bio",
+        "summary",
+        "story",
+        "project_description",
+        "token_description",
+    ):
+        got = _clean_about_text(coin.get(key))
+        if len(got) >= 8:
+            return got
+    # Nested blobs some API versions use
+    for nest_key in ("profile", "metadata", "info", "details"):
+        nest = coin.get(nest_key)
+        if isinstance(nest, dict):
+            for key in ("description", "about", "desc", "body", "bio"):
+                got = _clean_about_text(nest.get(key))
+                if len(got) >= 8:
+                    return got
+    return ""
+
+
+def _about_from_metadata_uri(uri: str | None) -> tuple[str, dict[str, str], dict[str, Any]]:
+    """Follow metadata_uri (what Pump.fun About often stores for the mint)."""
+    u = (uri or "").strip()
+    if not u:
+        return "", {}, {}
+    if u.startswith("ipfs://"):
+        cid = u[len("ipfs://") :].lstrip("/")
+        candidates = [
+            f"https://ipfs.io/ipfs/{cid}",
+            f"https://cloudflare-ipfs.com/ipfs/{cid}",
+            f"https://nftstorage.link/ipfs/{cid}",
+        ]
+    else:
+        candidates = [u]
+
+    from .http_util import get_json, get_text
+    import json
+
+    data: Any = None
+    for url in candidates:
+        try:
+            data = get_json(url, timeout=8.0, retries=0)
+            if isinstance(data, dict):
+                break
+        except Exception:  # noqa: BLE001
+            try:
+                raw = get_text(url, timeout=8.0, retries=0)
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    break
+            except Exception:  # noqa: BLE001
+                continue
+    if not isinstance(data, dict):
+        return "", {}, {}
+
+    desc = _clean_about_text(
+        data.get("description")
+        or data.get("desc")
+        or data.get("about")
+        or (data.get("properties") or {}).get("description")
+    )
+    links: dict[str, str] = {}
+    ext = data.get("extensions") or {}
+    if isinstance(ext, dict):
+        for k in ("website", "twitter", "telegram", "discord"):
+            if ext.get(k):
+                links[k] = str(ext[k])
+        if not desc and ext.get("description"):
+            desc = _clean_about_text(ext.get("description"))
+    ext_url = data.get("external_url")
+    if isinstance(ext_url, str) and ext_url.startswith("http"):
+        links.setdefault("website", ext_url)
+    meta = {
+        "name": data.get("name"),
+        "symbol": data.get("symbol"),
+    }
+    return desc, links, meta
+
+
+def _about_from_pumpfun_page(mint: str) -> str:
+    """
+    Last-resort: scrape pump.fun coin page meta / embedded JSON for About text.
+    """
+    import json
+    import re
+
+    m = (mint or "").strip()
+    if not m:
+        return ""
+    from .http_util import get_text
+
+    for url in (
+        f"https://pump.fun/coin/{m}",
+        f"https://pump.fun/{m}",
+        f"https://www.pump.fun/coin/{m}",
+    ):
+        try:
+            html = get_text(url, timeout=10.0, retries=0) or ""
+        except Exception:  # noqa: BLE001
+            continue
+        if not html or len(html) < 80:
+            continue
+        # og / twitter / meta description
+        for pat in (
+            r'property=["\']og:description["\']\s+content=["\']([^"\']+)["\']',
+            r'content=["\']([^"\']+)["\']\s+property=["\']og:description["\']',
+            r'name=["\']description["\']\s+content=["\']([^"\']+)["\']',
+            r'name=["\']twitter:description["\']\s+content=["\']([^"\']+)["\']',
+        ):
+            mm = re.search(pat, html, re.I)
+            if mm:
+                got = _clean_about_text(mm.group(1))
+                # Skip generic site chrome
+                if len(got) >= 12 and "pump.fun" not in got.lower()[:20]:
+                    low = got.lower()
+                    if "trade" in low and "pump.fun" in low and len(got) < 80:
+                        continue
+                    return got
+        # Next.js / embedded coin JSON with description
+        for pat in (
+            r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>',
+            r'"description"\s*:\s*"((?:\\.|[^"\\]){12,})"',
+        ):
+            mm = re.search(pat, html, re.I | re.S)
+            if not mm:
+                continue
+            blob = mm.group(1)
+            if pat.startswith(r"<script"):
+                try:
+                    data = json.loads(blob)
+                except Exception:  # noqa: BLE001
+                    continue
+                # Walk for description near this mint
+                found = _walk_json_for_description(data, mint=m)
+                if found:
+                    return found
+            else:
+                try:
+                    # unescape JSON string
+                    got = json.loads(f'"{blob}"')
+                except Exception:  # noqa: BLE001
+                    got = blob.encode("utf-8").decode("unicode_escape", errors="ignore")
+                got = _clean_about_text(got)
+                if len(got) >= 12:
+                    return got
+    return ""
+
+
+def _walk_json_for_description(obj: Any, *, mint: str, depth: int = 0) -> str:
+    if depth > 8:
+        return ""
+    if isinstance(obj, dict):
+        # Prefer nodes that mention this mint
+        mint_l = (mint or "").lower()
+        node_mint = str(obj.get("mint") or obj.get("address") or "").lower()
+        desc = _about_from_coin_dict(obj) if any(
+            k in obj for k in ("description", "about", "desc", "body")
+        ) else ""
+        if desc and (not mint_l or not node_mint or mint_l in node_mint or node_mint in mint_l):
+            if len(desc) >= 8:
+                return desc
+        for v in obj.values():
+            got = _walk_json_for_description(v, mint=mint, depth=depth + 1)
+            if got:
+                return got
+    elif isinstance(obj, list):
+        for it in obj[:40]:
+            got = _walk_json_for_description(it, mint=mint, depth=depth + 1)
+            if got:
+                return got
+    return ""
+
+
+def fetch_coin_about(mint: str) -> dict[str, Any]:
+    """
+    Resolve the Pump.fun coin *About* section for narrative.
+
+    Priority:
+      1) coin JSON description / about fields (API)
+      2) metadata_uri JSON description (same text About often loads)
+      3) pump.fun coin page meta / embedded JSON scrape
+
+    Returns:
+      {
+        ok, name, symbol, description, description_source,
+        links, uri, page_url, raw_coin
+      }
+    """
+    m = (mint or "").strip()
+    if not m:
+        return {"ok": False, "description": "", "links": {}}
+
+    coin = try_native_coin(m)
+    name = None
+    symbol = None
+    links: dict[str, str] = {}
+    uri = ""
+    desc = ""
+    desc_source = ""
+
+    if isinstance(coin, dict):
+        name = coin.get("name")
+        symbol = coin.get("symbol")
+        desc = _about_from_coin_dict(coin)
+        if desc:
+            desc_source = "pumpfun_about"
+        uri = str(
+            coin.get("metadata_uri")
+            or coin.get("uri")
+            or coin.get("metadataUri")
+            or ""
+        ).strip()
+        # Socials from coin row (shown on the same About/profile card)
+        tw = coin.get("twitter") or coin.get("twitter_url") or coin.get("twitterUrl")
+        if tw:
+            tw_s = str(tw).strip()
+            if tw_s and not tw_s.startswith("http"):
+                tw_s = f"https://x.com/{tw_s.lstrip('@')}"
+            if tw_s.startswith("http"):
+                links["twitter"] = tw_s
+        tg = coin.get("telegram") or coin.get("telegram_url")
+        if tg:
+            tg_s = str(tg).strip()
+            if tg_s and not tg_s.startswith("http"):
+                tg_s = f"https://t.me/{tg_s.lstrip('@')}"
+            if tg_s.startswith("http"):
+                links["telegram"] = tg_s
+        web = coin.get("website") or coin.get("website_url")
+        if web and str(web).startswith("http") and "pump.fun" not in str(web).lower():
+            links["website"] = str(web)
+        if uri.startswith("http"):
+            links.setdefault("metadata_uri", uri)
+
+    # About empty on coin row → metadata (Pump.fun About often uses this)
+    if len(desc) < 8 and uri:
+        meta_desc, meta_links, meta = _about_from_metadata_uri(uri)
+        if len(meta_desc) >= 8:
+            desc = meta_desc
+            desc_source = "pumpfun_about_metadata"
+            for k, v in meta_links.items():
+                links.setdefault(k, v)
+            name = name or meta.get("name")
+            symbol = symbol or meta.get("symbol")
+
+    # API blocked / empty → page scrape
+    if len(desc) < 8:
+        page_desc = _about_from_pumpfun_page(m)
+        if len(page_desc) >= 8:
+            desc = page_desc
+            desc_source = "pumpfun_about_page"
+
+    page_url = f"https://pump.fun/coin/{m}"
+    ok = bool(desc or name or symbol or coin)
+    return {
+        "ok": ok,
+        "name": name,
+        "symbol": symbol,
+        "description": desc[:1200] if desc else "",
+        "description_source": desc_source or ("pumpfun_coin" if coin else ""),
+        "links": links,
+        "uri": uri if uri.startswith("http") else "",
+        "page_url": page_url,
+        "raw_coin": coin if isinstance(coin, dict) else None,
+    }
+
+
+def is_prebond_coin(native: dict[str, Any] | None) -> bool:
+    """True while still on Pump.fun bonding curve (not migrated)."""
+    if not isinstance(native, dict):
+        return False
+    if native.get("complete") is True:
+        return False
+    # Some payloads only set pool fields after migrate
+    if native.get("complete") is False:
+        return True
+    # complete missing: treat as prebond if no graduate pool yet
+    if native.get("pump_swap_pool") or native.get("raydium_pool"):
+        return False
+    return True
+
+
+def pairs_for_prebond_mint(mint: str) -> list[dict[str, Any]]:
+    """
+    Market pairs for a *pump mint still on the bonding curve.
+
+    Prefer native Pump.fun API (price/mcap/curve) — do not wait on DexScreener
+    or Raydium for prebond tokens.
+    """
+    m = (mint or "").strip()
+    if not m or not is_pump_mint(m):
+        return []
+    native = try_native_coin(m)
+    if not native or not is_prebond_coin(native):
+        return []
+    pair = synthetic_pair_from_native(m, native)
+    if not pair:
+        return []
+    pair = dict(pair)
+    pair["dexId"] = "pumpfun"
+    pair["_source"] = "pumpfun_native_api"
+    pair["_prebond"] = True
+    pair["_graduated"] = False
+    pair["_is_pump_mint"] = True
+    # Bonding curve account is the "pair" for prebond
+    if native.get("bonding_curve"):
+        pair["pairAddress"] = native.get("bonding_curve")
+    return [pair]
 
 
 def synthetic_pair_from_native(mint: str, native: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -449,7 +937,7 @@ def synthetic_pair_from_native(mint: str, native: dict[str, Any] | None = None) 
         },
         "_source": "pumpfun_native_api",
         "_fallback": True,
-        "_is_pump_mint": is_pump_mint(addr) or bool(coin),
+        "_is_pump_mint": True,
         "_graduated": complete,
     }
     return pair
@@ -457,7 +945,8 @@ def synthetic_pair_from_native(mint: str, native: dict[str, Any] | None = None) 
 
 def pairs_from_pump_fallback(query: str) -> list[dict[str, Any]]:
     """
-    When DexScreener is unavailable, try Pump.fun native API for a mint.
+    Pump.fun native market pairs for a mint (prebond preferred, else graduated).
+    Used when DexScreener is empty/429 or as primary for *pump mints.
     """
     q = (query or "").strip()
     if ":" in q and not q.startswith("http"):
@@ -467,6 +956,11 @@ def pairs_from_pump_fallback(query: str) -> list[dict[str, Any]]:
     # Prefer pump-suffix mints; still try any solana-looking address
     if not (is_pump_mint(q) or (len(q) >= 32 and " " not in q)):
         return []
+    # Pre-bond: dedicated path
+    if is_pump_mint(q):
+        pre = pairs_for_prebond_mint(q)
+        if pre:
+            return pre
     pair = synthetic_pair_from_native(q)
     return [pair] if pair else []
 
@@ -486,7 +980,6 @@ def fetch_pumpfun_mcap_metrics(mint: str | None) -> dict[str, Any] | None:
       - usd_market_cap / market_cap
       - created_timestamp
       - virtual reserves for initial mcap estimate
-
     Works for any mint the Pump.fun API recognizes — not only …pump suffix addresses.
     """
     if not mint:

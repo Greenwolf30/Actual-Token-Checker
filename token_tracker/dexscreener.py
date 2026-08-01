@@ -1,9 +1,14 @@
-"""DexScreener API client with TTL cache (cuts repeat 429s)."""
+"""DexScreener API client with TTL cache (cuts repeat 429s).
+
+When DexScreener is in cooldown / over hourly budget, Solana mint lookups
+fall through to Raydium (market_failover + raydium modules).
+"""
 
 from __future__ import annotations
 
 from typing import Any
 
+from . import market_failover as mfail
 from .api_cache import TTL_NEGATIVE, TTL_PAIRS, TTL_SEARCH, cache_get, cache_set
 from .http_util import encode_query, get_json
 
@@ -15,8 +20,17 @@ def _is_rate_limit_error(exc: BaseException) -> bool:
     return "429" in msg or "rate-limited" in msg or "too many requests" in msg
 
 
+def _raydium_pairs_sol(addr: str) -> list[dict[str, Any]]:
+    try:
+        from . import raydium as rd
+
+        return list(rd.pairs_for_token(addr) or [])
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def search_pairs(query: str) -> list[dict[str, Any]]:
-    """Search DexScreener. Cached ~3 min. Raises on 429 after short retries."""
+    """Search DexScreener. Cached ~3 min. On 429/budget → Raydium for Sol mints."""
     q = (query or "").strip()
     if not q:
         return []
@@ -25,7 +39,20 @@ def search_pairs(query: str) -> list[dict[str, Any]]:
     if hit is not None:
         return list(hit)
 
+    looks_sol_mint = len(q) >= 32 and " " not in q and not q.lower().startswith("0x")
+    if not mfail.dexscreener_allowed():
+        if looks_sol_mint:
+            rd = _raydium_pairs_sol(q)
+            if rd:
+                cache_set(key, rd, TTL_SEARCH)
+                return rd
+        raise RuntimeError(
+            "DexScreener temporarily skipped (rate budget/cooldown). "
+            "Try a full Solana mint, wait ~1–2 minutes, or use Quick later."
+        )
+
     try:
+        mfail.record_dexscreener_call()
         data = get_json(
             f"{BASE}/latest/dex/search?{encode_query({'q': q})}",
             timeout=14.0,
@@ -33,6 +60,13 @@ def search_pairs(query: str) -> list[dict[str, Any]]:
         )
     except Exception as exc:  # noqa: BLE001
         cache_set(key, [], TTL_NEGATIVE)
+        if _is_rate_limit_error(exc):
+            mfail.record_dexscreener_429()
+            if looks_sol_mint:
+                rd = _raydium_pairs_sol(q)
+                if rd:
+                    cache_set(key, rd, TTL_SEARCH)
+                    return rd
         raise
 
     pairs = list(data.get("pairs") or []) if isinstance(data, dict) else []
@@ -50,7 +84,16 @@ def pairs_for_token(chain_id: str, token_address: str) -> list[dict[str, Any]]:
     if hit is not None:
         return list(hit)
 
+    sol = chain in {"solana", "sol"}
+    if sol and not mfail.dexscreener_allowed():
+        rd = _raydium_pairs_sol(addr)
+        if rd:
+            cache_set(key, rd, TTL_PAIRS)
+            return rd
+        return []
+
     try:
+        mfail.record_dexscreener_call()
         data = get_json(
             f"{BASE}/token-pairs/v1/{chain}/{addr}",
             timeout=14.0,
@@ -59,7 +102,18 @@ def pairs_for_token(chain_id: str, token_address: str) -> list[dict[str, Any]]:
     except Exception as exc:  # noqa: BLE001
         cache_set(key, [], TTL_NEGATIVE)
         if _is_rate_limit_error(exc):
+            mfail.record_dexscreener_429()
+            if sol:
+                rd = _raydium_pairs_sol(addr)
+                if rd:
+                    cache_set(key, rd, TTL_PAIRS)
+                    return rd
             raise
+        if sol:
+            rd = _raydium_pairs_sol(addr)
+            if rd:
+                cache_set(key, rd, TTL_PAIRS)
+                return rd
         return []
 
     if isinstance(data, list):
@@ -68,6 +122,10 @@ def pairs_for_token(chain_id: str, token_address: str) -> list[dict[str, Any]]:
         pairs = list(data.get("pairs") or [])
     else:
         pairs = []
+    if not pairs and sol:
+        rd = _raydium_pairs_sol(addr)
+        if rd:
+            pairs = rd
     cache_set(key, pairs, TTL_PAIRS if pairs else TTL_NEGATIVE)
     return pairs
 
@@ -84,7 +142,17 @@ def tokens_by_addresses(chain_id: str, addresses: list[str]) -> list[dict[str, A
     if hit is not None:
         return list(hit)
 
+    sol = chain in {"solana", "sol"}
+    if not mfail.dexscreener_allowed():
+        if sol and len(addresses) == 1:
+            rd = _raydium_pairs_sol(addresses[0])
+            if rd:
+                cache_set(key, rd, TTL_PAIRS)
+                return rd
+        return []
+
     try:
+        mfail.record_dexscreener_call()
         data = get_json(
             f"{BASE}/tokens/v1/{chain}/{joined}",
             timeout=14.0,
@@ -93,6 +161,12 @@ def tokens_by_addresses(chain_id: str, addresses: list[str]) -> list[dict[str, A
     except Exception as exc:  # noqa: BLE001
         cache_set(key, [], TTL_NEGATIVE)
         if _is_rate_limit_error(exc):
+            mfail.record_dexscreener_429()
+            if sol and len(addresses) == 1:
+                rd = _raydium_pairs_sol(addresses[0])
+                if rd:
+                    cache_set(key, rd, TTL_PAIRS)
+                    return rd
             raise
         return []
 
@@ -261,6 +335,111 @@ def pick_primary_pair(
     return max(pairs, key=score)
 
 
+def fetch_token_orders(
+    chain_id: str | None,
+    token_address: str | None,
+) -> dict[str, Any]:
+    """
+    DexScreener paid-order status for a token.
+
+    GET /orders/v1/{chainId}/{tokenAddress}
+    Returns raw orders + a simple paid yes/no:
+      paid = True  if any tokenProfile (or tokenAd) order is approved
+      paid = False if request OK and no approved paid order
+      paid = None  if fetch failed / unknown
+    """
+    chain = (chain_id or "").strip().lower() or "solana"
+    # DexScreener uses "solana" not "sol"
+    if chain in {"sol", "solana-mainnet", "mainnet-beta"}:
+        chain = "solana"
+    addr = (token_address or "").strip()
+    if not addr:
+        return {"ok": False, "paid": None, "orders": [], "error": "no token address"}
+
+    key = f"dx:orders:{chain}:{addr}"
+    hit = cache_get(key)
+    if hit is not None and isinstance(hit, dict):
+        return dict(hit)
+
+    url = f"{BASE}/orders/v1/{chain}/{addr}"
+    try:
+        raw = get_json(url, timeout=12)
+    except Exception as exc:  # noqa: BLE001
+        out = {
+            "ok": False,
+            "paid": None,
+            "orders": [],
+            "boosts": [],
+            "error": str(exc)[:200],
+            "chain_id": chain,
+            "token_address": addr,
+        }
+        cache_set(key, out, TTL_NEGATIVE)
+        return out
+
+    orders: list[dict[str, Any]] = []
+    boosts: list[Any] = []
+    if isinstance(raw, dict):
+        orders = list(raw.get("orders") or [])
+        boosts = list(raw.get("boosts") or [])
+    elif isinstance(raw, list):
+        orders = list(raw)
+
+    paid_types = {
+        "tokenprofile",
+        "token_profile",
+        "tokenad",
+        "token_ad",
+        "communitytakeover",
+        "community_takeover",
+    }
+    paid = False
+    paid_order: dict[str, Any] | None = None
+    for o in orders:
+        if not isinstance(o, dict):
+            continue
+        otype = str(o.get("type") or "").strip().lower().replace("-", "").replace("_", "")
+        # normalize tokenProfile → tokenprofile already; also accept spaced
+        otype_cmp = otype.replace(" ", "")
+        status = str(o.get("status") or "").strip().lower()
+        # approved / processing count as paid (not cancelled / on-hold / rejected)
+        if status in {"cancelled", "canceled", "rejected", "failed", "on-hold", "onhold"}:
+            continue
+        if otype_cmp in {
+            "tokenprofile",
+            "tokenad",
+            "communitytakeover",
+        } or "profile" in otype_cmp:
+            if status in {"approved", "processing", "pending", "active", "complete", "completed", ""}:
+                # empty status with paymentTimestamp still counts
+                if status or o.get("paymentTimestamp"):
+                    paid = True
+                    paid_order = o
+                    break
+        # Explicit payment timestamp on profile-ish types
+        if o.get("paymentTimestamp") and (
+            "profile" in otype_cmp or "ad" in otype_cmp or "boost" in otype_cmp
+        ):
+            if status not in {"cancelled", "canceled", "rejected", "failed"}:
+                paid = True
+                paid_order = o
+                break
+
+    out = {
+        "ok": True,
+        "paid": bool(paid),
+        "paid_label": "yes" if paid else "no",
+        "orders": orders,
+        "boosts": boosts,
+        "paid_order": paid_order,
+        "chain_id": chain,
+        "token_address": addr,
+        "error": None,
+    }
+    cache_set(key, out, TTL_PAIRS)
+    return out
+
+
 def extract_socials(pair: dict[str, Any]) -> dict[str, Any]:
     info = pair.get("info") or {}
     websites = []
@@ -367,27 +546,189 @@ def _url_from_handle(platform: str, handle: str) -> str:
     return ""
 
 
+def _f(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def pair_liquidity_usd(pair: dict[str, Any] | None) -> float | None:
+    """Extract USD liquidity from DexScreener-shaped or alt-provider pair dicts."""
+    if not isinstance(pair, dict):
+        return None
+    liq = pair.get("liquidity")
+    if isinstance(liq, dict):
+        for k in ("usd", "USD", "usdValue", "value"):
+            v = _f(liq.get(k))
+            if v is not None:
+                return v
+        # Some payloads nest {quote: {usd: N}}
+        q = liq.get("quote") if isinstance(liq.get("quote"), dict) else None
+        if q:
+            v = _f(q.get("usd") or q.get("USD"))
+            if v is not None:
+                return v
+        return None
+    # Bare number on pair
+    for k in ("liquidity_usd", "liquidityUsd", "tvl", "tvlUsd"):
+        v = _f(pair.get(k))
+        if v is not None:
+            return v
+    return _f(liq)
+
+
+def pair_volume_h24_usd(pair: dict[str, Any] | None) -> float | None:
+    """Extract 24h USD volume from DexScreener-shaped or alt-provider pair dicts."""
+    if not isinstance(pair, dict):
+        return None
+    vol = pair.get("volume")
+    if isinstance(vol, dict):
+        for k in ("h24", "h24USD", "usd24h", "usd_24h", "day", "d24"):
+            v = _f(vol.get(k))
+            if v is not None:
+                return v
+        # Avoid m5/h1 as stand-ins for 24h
+        return None
+    for k in (
+        "volume_h24_usd",
+        "volume_h24",
+        "volume24h",
+        "volume24hUsd",
+        "v24hUSD",
+        "v24h",
+    ):
+        v = _f(pair.get(k))
+        if v is not None:
+            return v
+    return _f(vol)
+
+
+def pair_price_change_h24(pair: dict[str, Any] | None) -> float | None:
+    """Extract 24h % price change from DexScreener-shaped or alt pair dicts."""
+    if not isinstance(pair, dict):
+        return None
+    chg = pair.get("priceChange") or pair.get("price_change_pct") or pair.get("priceChange24h")
+    if isinstance(chg, dict):
+        for k in ("h24", "h24Percentage", "day", "d24", "24h"):
+            v = _f(chg.get(k))
+            if v is not None:
+                return v
+        return None
+    v = _f(chg)
+    if v is not None:
+        return v
+    for k in (
+        "priceChange24h",
+        "price_change_h24",
+        "price_change_24h",
+        "h24ChangePercent",
+        "v24hChangePercent",
+    ):
+        v = _f(pair.get(k))
+        if v is not None:
+            return v
+    return None
+
+
+def enrich_summary_liquidity_volume(
+    summary: dict[str, Any],
+    pairs: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """
+    Fill missing/zero liquidity, 24h volume, or 24h % change on the primary
+    summary from other pairs for the same token (Raydium/Birdeye/DexScreener).
+    """
+    if not isinstance(summary, dict):
+        return summary
+    liq = summary.get("liquidity_usd")
+    vol = summary.get("volume_h24_usd")
+    pc = summary.get("price_change_pct")
+    if not isinstance(pc, dict):
+        pc = {}
+        summary["price_change_pct"] = pc
+    chg24 = pc.get("h24")
+    need_liq = liq is None or (isinstance(liq, (int, float)) and float(liq) <= 0)
+    need_vol = vol is None or (isinstance(vol, (int, float)) and float(vol) <= 0)
+    need_chg = chg24 is None
+
+    if not need_liq and not need_vol and not need_chg:
+        return summary
+
+    best_liq = float(liq or 0)
+    best_vol = float(vol or 0)
+    sum_vol = 0.0
+    best_chg = _f(chg24)
+    # Prefer the change from the pool with highest volume (most reliable)
+    best_chg_vol = -1.0
+    for p in pairs or []:
+        if not isinstance(p, dict):
+            continue
+        pl = pair_liquidity_usd(p)
+        pv = pair_volume_h24_usd(p)
+        if pl is not None and pl > best_liq:
+            best_liq = pl
+        if pv is not None and pv > 0:
+            sum_vol += pv
+            if pv > best_vol:
+                best_vol = pv
+        if need_chg:
+            pch = pair_price_change_h24(p)
+            if pch is not None:
+                score = float(pv or 0)
+                if score >= best_chg_vol:
+                    best_chg_vol = score
+                    best_chg = pch
+
+    if need_liq and best_liq > 0:
+        summary["liquidity_usd"] = best_liq
+    if need_vol:
+        # Token-wide 24h volume ≈ sum of pool volumes when primary was empty
+        fill = sum_vol if sum_vol > 0 else best_vol
+        if fill > 0:
+            summary["volume_h24_usd"] = fill
+    if need_chg and best_chg is not None:
+        pc["h24"] = best_chg
+        summary["price_change_pct"] = pc
+    return summary
+
+
 def summarize_pair(pair: dict[str, Any]) -> dict[str, Any]:
     base = pair.get("baseToken") or {}
     quote = pair.get("quoteToken") or {}
-    price_usd = _f(pair.get("priceUsd"))
-    mcap = _f(pair.get("marketCap"))
-    fdv = _f(pair.get("fdv"))
-    liq = _f((pair.get("liquidity") or {}).get("usd"))
-    vol = pair.get("volume") or {}
-    chg = pair.get("priceChange") or {}
+    info = pair.get("info") or {}
+    price_usd = _f(pair.get("priceUsd") or pair.get("price_usd") or pair.get("price"))
+    mcap = _f(pair.get("marketCap") or pair.get("market_cap_usd") or pair.get("mc"))
+    fdv = _f(pair.get("fdv") or pair.get("fdv_usd"))
+    liq = pair_liquidity_usd(pair)
+    vol_h24 = pair_volume_h24_usd(pair)
+    chg = pair.get("priceChange") or pair.get("price_change_pct") or {}
+    if not isinstance(chg, dict):
+        chg = {}
     txns = pair.get("txns") or {}
-    h24 = txns.get("h24") or {}
+    h24 = txns.get("h24") if isinstance(txns, dict) else {}
+    if not isinstance(h24, dict):
+        h24 = {}
+    image_url = (
+        info.get("imageUrl")
+        or pair.get("imageUrl")
+        or base.get("image")
+        or base.get("logoURI")
+        or None
+    )
 
     return {
-        "chain_id": pair.get("chainId"),
-        "dex_id": pair.get("dexId"),
-        "pair_address": pair.get("pairAddress"),
-        "pair_url": pair.get("url"),
+        "chain_id": pair.get("chainId") or pair.get("chain_id"),
+        "dex_id": pair.get("dexId") or pair.get("dex_id"),
+        "pair_address": pair.get("pairAddress") or pair.get("pair_address"),
+        "pair_url": pair.get("url") or pair.get("pair_url"),
         "base_token": {
             "address": base.get("address"),
             "name": base.get("name"),
             "symbol": base.get("symbol"),
+            "image_url": image_url,
         },
         "quote_token": {
             "address": quote.get("address"),
@@ -398,7 +739,7 @@ def summarize_pair(pair: dict[str, Any]) -> dict[str, Any]:
         "market_cap_usd": mcap,
         "fdv_usd": fdv,
         "liquidity_usd": liq,
-        "volume_h24_usd": _f(vol.get("h24")),
+        "volume_h24_usd": vol_h24,
         "price_change_pct": {
             "m5": _f(chg.get("m5")),
             "h1": _f(chg.get("h1")),
@@ -412,13 +753,6 @@ def summarize_pair(pair: dict[str, Any]) -> dict[str, Any]:
         "pair_created_at_ms": pair.get("pairCreatedAt"),
         "labels": pair.get("labels") or [],
         "boosts_active": ((pair.get("boosts") or {}).get("active")),
+        "image_url": image_url,
+        "_source": pair.get("_source"),
     }
-
-
-def _f(value: Any) -> float | None:
-    if value is None or value == "":
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None

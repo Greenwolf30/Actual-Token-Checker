@@ -7,6 +7,9 @@ load only from server-side .env and are never sent to the browser.
   GET  /              → web UI
   GET  /health
   GET  /api/health
+  GET  /api/rugwatch-counts  local DB + cloud wallet counts (no addresses)
+  POST /api/rugwatch/upload      proxy → RugWatch /api/upload (same-origin, no browser CORS)
+  POST /api/rugwatch/push-cloud  proxy → RugWatch /api/push-cloud
   POST /api/analyze   JSON: {"query": "...", "chain": "solana"?, "quick": false?}
   GET  /api/analyze?q=...&chain=solana&quick=0
 
@@ -19,21 +22,26 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import threading
 import time
 import traceback
+import urllib.error
+import urllib.request
 from collections import defaultdict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
+
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from token_tracker.env_config import load_dotenv  # noqa: E402
+from token_tracker.bundles import build_bundles_ui_payload  # noqa: E402
 from token_tracker.report import (  # noqa: E402
     format_about_section,
     format_alerts_section,
@@ -76,11 +84,15 @@ _SECRET_KEY_NAMES = re.compile(
     r"rpc_url|solana_rpc_url)$"
 )
 
-# Simple in-memory rate limit (per IP)
+# Per-IP rate limit + concurrent Analyze cap (protect shared server egress IP)
 _RATE_LOCK = threading.Lock()
 _RATE_HITS: dict[str, deque[float]] = defaultdict(deque)
-_RATE_MAX = 12  # analyzes per window
-_RATE_WINDOW = 60.0  # seconds
+# Default 6 analyzes / minute / IP (was 12). Override: ANALYZE_RATE_MAX
+_RATE_MAX = int(os.environ.get("ANALYZE_RATE_MAX") or 6)
+_RATE_WINDOW = float(os.environ.get("ANALYZE_RATE_WINDOW") or 60.0)
+# One in-flight Analyze per IP
+_MAX_INFLIGHT_PER_IP = int(os.environ.get("ANALYZE_MAX_INFLIGHT") or 1)
+_IP_INFLIGHT: dict[str, int] = defaultdict(int)
 
 # Optional shared secret so random internet clients can't burn your keys
 # Set WEB_API_TOKEN in .env to require header: X-API-Token: <token>
@@ -110,6 +122,7 @@ def _cors_allowed_origins() -> list[str] | None:
 
 
 def _rate_ok(ip: str) -> bool:
+    """Sliding-window max Analyzes per IP (counts every attempt that starts)."""
     now = time.time()
     with _RATE_LOCK:
         q = _RATE_HITS[ip]
@@ -119,6 +132,24 @@ def _rate_ok(ip: str) -> bool:
             return False
         q.append(now)
         return True
+
+
+def _acquire_inflight(ip: str) -> bool:
+    """At most N concurrent Analyzes per IP (default 1)."""
+    with _RATE_LOCK:
+        if _IP_INFLIGHT[ip] >= _MAX_INFLIGHT_PER_IP:
+            return False
+        _IP_INFLIGHT[ip] += 1
+        return True
+
+
+def _release_inflight(ip: str) -> None:
+    with _RATE_LOCK:
+        n = _IP_INFLIGHT.get(ip, 0) - 1
+        if n <= 0:
+            _IP_INFLIGHT.pop(ip, None)
+        else:
+            _IP_INFLIGHT[ip] = n
 
 
 def redact_text(text: str) -> str:
@@ -229,13 +260,24 @@ def _safe_links(report: dict[str, Any]) -> dict[str, str]:
         plat = (s.get("type") or s.get("platform") or "").lower()
         if url and plat in {"telegram", "discord", "website"}:
             links.setdefault(plat, str(url))
-    # narrative / coin fact links
+    # narrative / coin fact links (skip raw metadata JSON URI — not a user-facing page)
+    _skip_link_keys = {
+        "metadata_uri",
+        "metadataUri",
+        "metadata",
+        "uri",
+        "image",
+        "image_uri",
+        "imageUri",
+    }
     story = report.get("narrative") or {}
     cf = story.get("coin_facts") if isinstance(story.get("coin_facts"), dict) else {}
     pf = report.get("pumpfun") or {}
     if pf.get("pump_url"):
         links["pumpfun"] = str(pf["pump_url"])
     for k, v in (cf.get("links") or {}).items():
+        if str(k).lower() in {s.lower() for s in _skip_link_keys}:
+            continue
         if isinstance(v, str) and v.startswith("http") and k not in links:
             if "api-key" in v.lower():
                 continue
@@ -321,45 +363,145 @@ def _ruggers_track_snapshot(
     Client stores first-seen holdings per mint, then flags wallets that later
     sold ≥99% of that bag (or dropped off the list), including similar-size
     group members and creator.
+
+    Single sellers (client) only from plain holders ≥0.01% that are NOT
+    similar-size, multi-account, multi-send, insider, suspect, shared-funder,
+    launch-window, or fresh wallets.
     """
     holders = holders or {}
     bundles = bundles or {}
     meta = holders.get("meta") if isinstance(holders.get("meta"), dict) else {}
     creator = (meta.get("creator") or "").strip() or None
 
-    wallet_rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for h in list(holders.get("holders") or [])[:40]:
+    # Bundle-category sets — excluded from Ruggers Single lane
+    similar_wallets: set[str] = set()
+    multi_wallets: set[str] = set()
+    multi_send_wallets: set[str] = set()
+    insider_wallets: set[str] = set()
+    suspect_wallets: set[str] = set()
+    funding_wallets: set[str] = set()
+    launch_wallets: set[str] = set()
+    fresh_wallets: set[str] = set()
+
+    for c in list(holders.get("owner_clusters") or []) + list(
+        bundles.get("clusters") or []
+    ):
+        if not isinstance(c, dict):
+            continue
+        w = (c.get("wallet") or c.get("owner") or "").strip()
+        if w:
+            multi_wallets.add(w)
+
+    for h in list(holders.get("holders") or []):
+        if isinstance(h, dict) and h.get("insider"):
+            w = (h.get("wallet") or "").strip()
+            if w:
+                insider_wallets.add(w)
+    for h in list(bundles.get("insider_wallets") or []):
+        if isinstance(h, dict):
+            w = (h.get("wallet") or "").strip()
+        else:
+            w = str(h or "").strip()
+        if w:
+            insider_wallets.add(w)
+
+    for s in list(bundles.get("suspect_wallets") or []):
+        if isinstance(s, dict):
+            w = (s.get("wallet") or "").strip()
+        else:
+            w = str(s or "").strip()
+        if w:
+            suspect_wallets.add(w)
+
+    for fc in list(bundles.get("funding_clusters") or []):
+        if not isinstance(fc, dict):
+            continue
+        funder = (fc.get("funder") or "").strip()
+        if funder:
+            funding_wallets.add(funder)
+        for c in list(fc.get("children") or []):
+            if isinstance(c, dict):
+                w = (c.get("wallet") or "").strip()
+            else:
+                w = str(c or "").strip()
+            if w:
+                funding_wallets.add(w)
+
+    # Known LP / Pump.fun pool PDAs — never tag as launch-window multi-buys
+    lp_exclude: set[str] = set()
+    for h in list(holders.get("holders") or []):
         if not isinstance(h, dict):
             continue
         if h.get("is_known_program"):
-            continue
-        w = (h.get("wallet") or "").strip()
-        if not w or w in seen:
-            continue
-        seen.add(w)
-        pct = h.get("pct_supply")
-        try:
-            pct_f = float(pct) if pct is not None else None
-        except (TypeError, ValueError):
-            pct_f = None
-        bal = h.get("balance")
-        try:
-            bal_f = float(bal) if bal is not None else None
-        except (TypeError, ValueError):
-            bal_f = None
-        wallet_rows.append(
-            {
-                "wallet": w,
-                "pct_supply": pct_f,
-                "balance": bal_f,
-                "rank": h.get("rank"),
-                "label": h.get("label"),
-            }
-        )
+            hw = (h.get("wallet") or "").strip()
+            if hw:
+                lp_exclude.add(hw)
+        lab = (h.get("label") or "").strip().lower()
+        if lab and any(
+            k in lab
+            for k in (
+                "liquidity",
+                "pump",
+                "bonding",
+                "raydium",
+                "orca",
+                "meteora",
+                "pool",
+                "vault",
+                "amm",
+            )
+        ):
+            hw = (h.get("wallet") or "").strip()
+            if hw:
+                lp_exclude.add(hw)
+    try:
+        from token_tracker.holders import known_pool_addresses_for_mint
 
+        mint_for_lp = (
+            (holders.get("token_address") or holders.get("mint") or "")
+            or (bundles.get("token_address") or "")
+        )
+        # Pump + Meteora + Raydium + all Dex pair addresses for this mint
+        lp_exclude |= known_pool_addresses_for_mint(str(mint_for_lp))
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Launch-window disabled — never tag Ruggers wallets as in_launch
+    # (same_slot_groups left empty by bundle fusion).
+
+    # Fresh wallets (sole-token / near-sole — almost only this mint)
+    for fw in list(bundles.get("fresh_wallets") or []):
+        if isinstance(fw, dict):
+            w = (fw.get("wallet") or "").strip()
+        else:
+            w = str(fw or "").strip()
+        if w:
+            fresh_wallets.add(w)
+
+    # Multi-send (token + SOL): one sender → many receivers (NOT multi-account)
+    for mc in list(bundles.get("multi_send_clusters") or []) + list(
+        bundles.get("sol_multi_send_clusters") or []
+    ):
+        if not isinstance(mc, dict):
+            continue
+        sender = (mc.get("sender") or mc.get("funder") or "").strip()
+        if sender:
+            multi_send_wallets.add(sender)
+        for r in list(mc.get("receivers") or mc.get("children") or []):
+            if isinstance(r, dict):
+                w = (r.get("wallet") or "").strip()
+            else:
+                w = str(r or "").strip()
+            if w:
+                multi_send_wallets.add(w)
+        for row in list(mc.get("child_rows") or []):
+            if isinstance(row, dict):
+                w = (row.get("wallet") or "").strip()
+                if w:
+                    multi_send_wallets.add(w)
+
+    # Parse similar-size groups first (needed for tagging + Single exclusion)
     similar_groups: list[dict[str, Any]] = []
-    similar_wallets: set[str] = set()
     for i, g in enumerate(list(bundles.get("similar_size_groups") or [])[:12]):
         if not isinstance(g, dict):
             continue
@@ -379,7 +521,6 @@ def _ruggers_track_snapshot(
                 mp_f = None
             members_out.append({"wallet": mw, "pct_supply": mp_f})
             similar_wallets.add(mw)
-        # fallback when only wallets list present
         if not members_out:
             avg = g.get("avg_pct")
             try:
@@ -412,14 +553,87 @@ def _ruggers_track_snapshot(
             }
         )
 
-    # Mark similar on wallet rows; add similar-only wallets not already in top list
-    for row in wallet_rows:
-        row["in_similar"] = row["wallet"] in similar_wallets
+    SINGLE_MIN_PCT = 0.01  # Single lane: top→least holder cutoff
+
+    def _bundle_tags(addr: str) -> dict[str, Any]:
+        in_sim = addr in similar_wallets
+        in_multi = addr in multi_wallets
+        in_ms = addr in multi_send_wallets
+        in_ins = addr in insider_wallets
+        in_sus = addr in suspect_wallets
+        in_fund = addr in funding_wallets
+        in_launch = addr in launch_wallets
+        in_fresh = addr in fresh_wallets
+        # Multi-account stays multi. Suspect = similar-size + Rugcheck insider.
+        return {
+            "in_similar": in_sim,
+            "in_multi": in_multi,
+            "in_multi_send": in_ms,
+            "in_insider": in_ins,
+            "in_suspect": bool(in_sim or in_ins),
+            "in_funding": in_fund,
+            "in_launch": in_launch,
+            "in_fresh": in_fresh,
+            "exclude_from_single": bool(
+                in_sim
+                or in_ins
+                or in_multi
+                or in_ms
+                or in_fund
+                or in_launch
+                or in_fresh
+            ),
+        }
+
+    wallet_rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    # Full holder snapshot (not just top 15–20):
+    #  - any positive bag (pct > 0 or balance > 0)
+    #  - Single lane still requires ≥ 0.01% (exclude_from_single otherwise)
+    #  - LP / known programs skipped
+    for h in list(holders.get("holders") or []):
+        if not isinstance(h, dict):
+            continue
+        if h.get("is_known_program"):
+            continue
+        w = (h.get("wallet") or "").strip()
+        if not w or w in seen:
+            continue
+        pct = h.get("pct_supply")
+        try:
+            pct_f = float(pct) if pct is not None else None
+        except (TypeError, ValueError):
+            pct_f = None
+        bal = h.get("balance")
+        try:
+            bal_f = float(bal) if bal is not None else None
+        except (TypeError, ValueError):
+            bal_f = None
+        # Skip zero / empty bags only
+        if pct_f is not None and pct_f <= 0:
+            if bal_f is None or bal_f <= 0:
+                continue
+        if pct_f is None and (bal_f is None or bal_f <= 0):
+            continue
+        seen.add(w)
+        row: dict[str, Any] = {
+            "wallet": w,
+            "pct_supply": pct_f,
+            "balance": bal_f,
+            "rank": h.get("rank"),
+            "label": h.get("label"),
+        }
+        row.update(_bundle_tags(w))
+        # Single lane needs known % ≥ cutoff; smaller bags still track for Ruggers
+        if pct_f is None or pct_f < SINGLE_MIN_PCT:
+            row["exclude_from_single"] = True
+        wallet_rows.append(row)
+
+    # Similar-only wallets not already listed (still track Similar sellers)
     for addr in similar_wallets:
         if addr in seen:
             continue
         seen.add(addr)
-        # find pct from groups
         pct_f = None
         for g in similar_groups:
             for m in g.get("members") or []:
@@ -428,56 +642,359 @@ def _ruggers_track_snapshot(
                     break
             if pct_f is not None:
                 break
-        wallet_rows.append(
-            {
-                "wallet": addr,
-                "pct_supply": pct_f,
-                "balance": None,
-                "rank": None,
-                "label": None,
-                "in_similar": True,
-            }
-        )
+        row = {
+            "wallet": addr,
+            "pct_supply": pct_f,
+            "balance": None,
+            "rank": None,
+            "label": None,
+        }
+        row.update(_bundle_tags(addr))
+        row["in_similar"] = True
+        row["exclude_from_single"] = True
+        wallet_rows.append(row)
+
+    # Fresh-only wallets not already listed (track Fresh wallets sellers)
+    for addr in fresh_wallets:
+        if addr in seen:
+            continue
+        seen.add(addr)
+        pct_f = None
+        for fw in list(bundles.get("fresh_wallets") or []):
+            if isinstance(fw, dict) and (fw.get("wallet") or "").strip() == addr:
+                try:
+                    pct_f = (
+                        float(fw["pct_supply"])
+                        if fw.get("pct_supply") is not None
+                        else None
+                    )
+                except (TypeError, ValueError):
+                    pct_f = None
+                break
+        row = {
+            "wallet": addr,
+            "pct_supply": pct_f,
+            "balance": None,
+            "rank": None,
+            "label": "fresh",
+        }
+        row.update(_bundle_tags(addr))
+        row["in_fresh"] = True
+        row["exclude_from_single"] = True
+        wallet_rows.append(row)
+
+    # Multi-send-only wallets not already listed
+    for addr in multi_send_wallets:
+        if addr in seen:
+            continue
+        seen.add(addr)
+        row = {
+            "wallet": addr,
+            "pct_supply": None,
+            "balance": None,
+            "rank": None,
+            "label": "multi-send",
+        }
+        row.update(_bundle_tags(addr))
+        row["in_multi_send"] = True
+        row["exclude_from_single"] = True
+        wallet_rows.append(row)
+
+    # Shared SOL (funding) funder + children not already listed.
+    # Without this, only top holders get in_funding — most Shared SOL bags
+    # never freeze into Ruggers, so sells never appear under Shared SOL section.
+    for addr in funding_wallets:
+        if addr in seen:
+            continue
+        seen.add(addr)
+        pct_f = None
+        for fc in list(bundles.get("funding_clusters") or []):
+            if not isinstance(fc, dict):
+                continue
+            funder = (fc.get("funder") or fc.get("sender") or "").strip()
+            if funder == addr:
+                try:
+                    pct_f = (
+                        float(fc["funder_pct"])
+                        if fc.get("funder_pct") is not None
+                        else (
+                            float(fc["sender_pct"])
+                            if fc.get("sender_pct") is not None
+                            else None
+                        )
+                    )
+                except (TypeError, ValueError):
+                    pct_f = None
+                break
+            for row_c in list(fc.get("child_rows") or []):
+                if isinstance(row_c, dict) and (row_c.get("wallet") or "").strip() == addr:
+                    try:
+                        pct_f = (
+                            float(row_c["pct_supply"])
+                            if row_c.get("pct_supply") is not None
+                            else None
+                        )
+                    except (TypeError, ValueError):
+                        pct_f = None
+                    break
+            if pct_f is not None:
+                break
+            for c in list(fc.get("children") or []):
+                cw = (
+                    (c.get("wallet") or "").strip()
+                    if isinstance(c, dict)
+                    else str(c or "").strip()
+                )
+                if cw == addr:
+                    if isinstance(c, dict):
+                        try:
+                            pct_f = (
+                                float(c["pct_supply"])
+                                if c.get("pct_supply") is not None
+                                else None
+                            )
+                        except (TypeError, ValueError):
+                            pct_f = None
+                    break
+            if pct_f is not None:
+                break
+        row = {
+            "wallet": addr,
+            "pct_supply": pct_f,
+            "balance": None,
+            "rank": None,
+            "label": "shared SOL funder",
+        }
+        row.update(_bundle_tags(addr))
+        row["in_funding"] = True
+        row["exclude_from_single"] = True
+        wallet_rows.append(row)
 
     if creator and creator not in seen:
-        wallet_rows.append(
-            {
-                "wallet": creator,
-                "pct_supply": None,
-                "balance": None,
-                "rank": None,
-                "label": "creator",
-                "in_similar": creator in similar_wallets,
-            }
-        )
-        # try fill creator pct from holders list if present earlier
+        c_pct = None
+        c_bal = None
+        c_rank = None
         for h in list(holders.get("holders") or []):
             if not isinstance(h, dict):
                 continue
             if (h.get("wallet") or "").strip() == creator:
                 try:
-                    wallet_rows[-1]["pct_supply"] = (
+                    c_pct = (
                         float(h["pct_supply"]) if h.get("pct_supply") is not None else None
                     )
                 except (TypeError, ValueError):
-                    pass
+                    c_pct = None
                 try:
-                    wallet_rows[-1]["balance"] = (
-                        float(h["balance"]) if h.get("balance") is not None else None
-                    )
+                    c_bal = float(h["balance"]) if h.get("balance") is not None else None
                 except (TypeError, ValueError):
-                    pass
+                    c_bal = None
+                c_rank = h.get("rank")
                 break
+        row = {
+            "wallet": creator,
+            "pct_supply": c_pct,
+            "balance": c_bal,
+            "rank": c_rank,
+            "label": "creator",
+            "baseline_pending": c_pct is None and c_bal is None,
+        }
+        row.update(_bundle_tags(creator))
+        row["exclude_from_single"] = True  # creator never Single
+        wallet_rows.append(row)
+        seen.add(creator)
 
+    # RugWatch-flagged addresses that actually touch THIS mint only.
+    # Never dump global high_risk_db / all_flagged — those are unrelated wallets.
+    # Client Ruggers: only after ≥99% sell do they enter Flagged section.
+    flagged_addresses: list[dict[str, Any]] = []
+    rw = holders.get("rugwatch_flagged") if isinstance(holders.get("rugwatch_flagged"), dict) else {}
+    if rw and rw.get("ok") and not rw.get("skipped"):
+        seen_f: set[str] = set()
+        for group_key in ("in_top_holders", "linked_to_mint"):
+            for w in list(rw.get(group_key) or []):
+                if not isinstance(w, dict):
+                    continue
+                addr = (w.get("address") or w.get("wallet") or "").strip()
+                if not addr or addr in seen_f:
+                    continue
+                seen_f.add(addr)
+                fm = w.get("flagged_from_mint")
+                if not fm:
+                    fms = list(w.get("flagged_from_mints") or [])
+                    fm = fms[0] if fms else None
+                flagged_addresses.append(
+                    {
+                        "wallet": addr,
+                        "risk_score": w.get("risk_score"),
+                        "label": w.get("label") or w.get("role"),
+                        "origin": w.get("origin") or w.get("tag") or w.get("location"),
+                        "notes": w.get("notes"),
+                        "times_flagged": int(
+                            w.get("times_flagged") or w.get("times_seen") or 0
+                        ),
+                        "mint_flag_count": int(w.get("mint_flag_count") or 0),
+                        "flagged_from_mints": [fm] if fm else [],
+                        "flagged_from_mint": fm,
+                        "on_this_mint": bool(
+                            w.get("on_this_mint") or group_key == "linked_to_mint"
+                        ),
+                        "in_top_holders": bool(
+                            w.get("in_top_holders") or group_key == "in_top_holders"
+                        ),
+                    }
+                )
+                if len(flagged_addresses) >= 80:
+                    break
+            if len(flagged_addresses) >= 80:
+                break
+        if len(flagged_addresses) < 80:
+            by_addr: dict[str, dict[str, Any]] = {}
+            for group_key in ("in_top_holders", "linked_to_mint", "all_flagged"):
+                for w in list(rw.get(group_key) or []):
+                    if not isinstance(w, dict):
+                        continue
+                    a = (w.get("address") or w.get("wallet") or "").strip()
+                    if a and a not in by_addr:
+                        by_addr[a] = w
+            for addr in list(seen):
+                if addr in seen_f:
+                    continue
+                w = by_addr.get(addr)
+                if not w:
+                    continue
+                seen_f.add(addr)
+                fm = w.get("flagged_from_mint")
+                if not fm:
+                    fms = list(w.get("flagged_from_mints") or [])
+                    fm = fms[0] if fms else None
+                flagged_addresses.append(
+                    {
+                        "wallet": addr,
+                        "risk_score": w.get("risk_score"),
+                        "label": w.get("label") or w.get("role"),
+                        "origin": w.get("origin") or w.get("tag") or w.get("location"),
+                        "notes": w.get("notes"),
+                        "times_flagged": int(
+                            w.get("times_flagged") or w.get("times_seen") or 0
+                        ),
+                        "mint_flag_count": int(w.get("mint_flag_count") or 0),
+                        "flagged_from_mints": [fm] if fm else [],
+                        "flagged_from_mint": fm,
+                        "on_this_mint": bool(w.get("on_this_mint")),
+                        "in_top_holders": True,
+                    }
+                )
+                if len(flagged_addresses) >= 80:
+                    break
+
+    # Sort by bag size; keep full snapshot for Ruggers (not top-15/20 only).
+    # Soft cap protects JSON size on huge mints (HOLDERS_MAX / DAS already caps source).
+    wallet_rows.sort(
+        key=lambda r: (
+            -(float(r["pct_supply"]) if r.get("pct_supply") is not None else -1.0),
+            str(r.get("wallet") or ""),
+        )
+    )
+    max_track = 5000
     return {
-        "ok": bool(holders.get("ok")) and bool(wallet_rows),
+        # ok if holders succeeded OR we at least have some wallet rows
+        # (empty rows still return a track so the client can seed this mint)
+        "ok": bool(holders.get("ok")) or bool(wallet_rows),
         "creator": creator,
-        "wallets": wallet_rows[:50],
+        "single_min_pct": SINGLE_MIN_PCT,
+        "wallets": wallet_rows[:max_track],
+        "wallet_count": len(wallet_rows),
+        "wallets_capped": len(wallet_rows) > max_track,
         "similar_groups": similar_groups,
+        "flagged_addresses": flagged_addresses,
     }
 
 
-def build_public_payload(report: dict[str, Any]) -> dict[str, Any]:
+
+def apply_lite_response(payload: dict[str, Any]) -> dict[str, Any]:
+    """Shrink an analyze payload for Opera GX / low-power browsers.
+
+    Drops ruggers wallet lists, long snapshots, and full Bundles tables so
+    JSON.parse + first paint stay interactive.
+    """
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        return payload
+    out = dict(payload)
+    out["lite"] = True
+    # Sections: keep short overview/alerts only
+    secs = out.get("sections") if isinstance(out.get("sections"), dict) else {}
+    slim_secs: dict[str, str] = {}
+    for key, max_len in (
+        ("overview", 6000),
+        ("alerts", 8000),
+        ("maps", 4000),
+        ("about", 5000),
+        ("holders", 14000),
+        # Keep enough Bundles report for green titles / blue wallets / % colors
+        ("bundles", 16000),
+    ):
+        val = secs.get(key)
+        if val is None:
+            continue
+        s = redact_text(str(val))
+        if len(s) > max_len:
+            s = s[:max_len] + "\n\n… truncated (lite mode) …"
+        slim_secs[key] = s
+    out["sections"] = slim_secs
+    # Bundles cards: summary numbers only (wallet tables stay client-side off)
+    bv = out.get("bundles_view")
+    if isinstance(bv, dict):
+        out["bundles_view"] = {
+            "ok": bv.get("ok"),
+            "error": bv.get("error"),
+            "summary": bv.get("summary") if isinstance(bv.get("summary"), dict) else {},
+            "token_address": bv.get("token_address"),
+        }
+    # history_meta: keep a CAP on ruggers_track so Ruggers can detect without freezing
+    hm = out.get("history_meta") if isinstance(out.get("history_meta"), dict) else {}
+    rt = hm.get("ruggers_track")
+    slim_rt = None
+    if isinstance(rt, dict):
+        slim_rt = {
+            "ok": rt.get("ok"),
+            "address": rt.get("address"),
+            "chain": rt.get("chain"),
+            "symbol": rt.get("symbol"),
+            "name": rt.get("name"),
+            "creator": rt.get("creator"),
+            "similar_groups": (rt.get("similar_groups") or [])[:12],
+            "flagged_addresses": list(rt.get("flagged_addresses") or [])[:40],
+        }
+        wallets = rt.get("wallets") if isinstance(rt.get("wallets"), list) else []
+        # Cap wallet rows — enough for baseline, small enough for Opera
+        slim_rt["wallets"] = wallets[:60]
+        slim_rt["wallets_capped"] = len(wallets) > 60
+        slim_rt["wallet_count"] = len(wallets)
+    out["history_meta"] = {
+        "holders_ok": hm.get("holders_ok"),
+        "flagged_still_holding": hm.get("flagged_still_holding"),
+        "flagged_previously_holding": hm.get("flagged_previously_holding"),
+        "concentration_risk": hm.get("concentration_risk"),
+        "top1_pct": hm.get("top1_pct"),
+        "top5_pct": hm.get("top5_pct"),
+        "top10_pct": hm.get("top10_pct"),
+        "bundle_risk": hm.get("bundle_risk"),
+        "bundle_pct": hm.get("bundle_pct"),
+        "dex_id": hm.get("dex_id"),
+        "pumpfun": hm.get("pumpfun"),
+        "holders_snapshot": _clip_log_snapshot(
+            hm.get("holders_snapshot") or slim_secs.get("holders"), max_chars=4000
+        ),
+        "bundles_snapshot": _clip_log_snapshot(
+            hm.get("bundles_snapshot") or slim_secs.get("bundles"), max_chars=3000
+        ),
+        "ruggers_track": slim_rt,
+        "lite": True,
+    }
+    return out
+
+
+def build_public_payload(report: dict[str, Any], *, lite: bool = False) -> dict[str, Any]:
     """Client-safe analyze response (formatted tabs + summary, no keys)."""
     if not report.get("ok"):
         return {
@@ -508,7 +1025,16 @@ def build_public_payload(report: dict[str, Any]) -> dict[str, Any]:
     market = report.get("market") or {}
     pair = market.get("pair") if isinstance(market.get("pair"), dict) else {}
 
-    return {
+    # Structured card UI for Bundles tab (not raw text / not full JSON dump)
+    try:
+        bundles_view = sanitize_public(build_bundles_ui_payload(bundles))
+    except Exception:  # noqa: BLE001
+        bundles_view = {
+            "ok": False,
+            "error": "Bundles UI payload failed — use full Analyze on Solana.",
+        }
+
+    payload = {
         "ok": True,
         "query": report.get("query"),
         "generated_at": report.get("generated_at"),
@@ -518,6 +1044,7 @@ def build_public_payload(report: dict[str, Any]) -> dict[str, Any]:
         "market": _safe_market_summary(report),
         "links": _safe_links(report),
         "sections": sections,
+        "bundles_view": bundles_view,
         "alerts_meta": {
             "priority_count": alerts.get("priority_count") or 0,
             "summary": redact_text(str(alerts.get("summary") or "")),
@@ -526,10 +1053,26 @@ def build_public_payload(report: dict[str, Any]) -> dict[str, Any]:
         # Text snapshots are clipped so ~20 entries fit in localStorage.
         "history_meta": {
             "holders_ok": bool(holders.get("ok")),
+            "flagged_still_holding": int(
+                holders.get("flagged_still_holding")
+                or (holders.get("rugwatch_flagged") or {}).get("still_holding_count")
+                or 0
+            ),
+            "flagged_previously_holding": int(
+                holders.get("flagged_previously_holding")
+                or (holders.get("rugwatch_flagged") or {}).get("previously_holding_count")
+                or 0
+            ),
             "concentration_risk": hsum.get("concentration_risk"),
             "top1_pct": hsum.get("top1_pct"),
             "top5_pct": hsum.get("top5_pct"),
             "top10_pct": hsum.get("top10_pct"),
+            "holders_on_mint": hsum.get("holders_on_mint")
+            if hsum.get("holders_on_mint") is not None
+            else hsum.get("total_wallets"),
+            "total_wallets": hsum.get("total_wallets")
+            if hsum.get("total_wallets") is not None
+            else hsum.get("holders_on_mint"),
             "bundle_risk": bsum.get("bundle_risk"),
             "bundle_pct": bsum.get("total_bundle_pct")
             or bsum.get("estimated_bundle_pct")
@@ -576,24 +1119,67 @@ def build_public_payload(report: dict[str, Any]) -> dict[str, Any]:
             )
         ),
     }
+    if lite:
+        return apply_lite_response(payload)
+    return payload
 
 
-def run_analyze(query: str, *, chain: str | None, quick: bool) -> dict[str, Any]:
+def run_analyze(
+    query: str,
+    *,
+    chain: str | None,
+    quick: bool,
+    include_rugwatch: bool = True,
+    include_fresh: bool = True,
+    include_multi_send: bool = True,
+    include_shared_sol: bool = True,
+    include_fresh_multi_send: bool | None = None,
+    lite: bool = False,
+) -> dict[str, Any]:
     load_dotenv()
     from token_tracker.analyze import analyze_token
+    from token_tracker.analyze_gate import analyze_cached
 
     q = (query or "").strip()
     if not q:
         return {"ok": False, "error": "query is required"}
     if len(q) > 200:
         return {"ok": False, "error": "query too long"}
+    if include_fresh_multi_send is False:
+        include_fresh = False
+        include_multi_send = False
+
+    def _live() -> dict[str, Any]:
+        try:
+            report = analyze_token(
+                q,
+                chain=chain or None,
+                include_holders=not quick,
+                quick=quick,
+                include_rugwatch=bool(include_rugwatch),
+                include_fresh=bool(include_fresh),
+                include_multi_send=bool(include_multi_send),
+                include_shared_sol=bool(include_shared_sol),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "ok": False,
+                "error": redact_text(f"Analyze failed: {exc}"),
+                "detail": redact_text(traceback.format_exc()[-800:]),
+            }
+        # Always build full payload for cache; lite strip applied after
+        return build_public_payload(report, lite=False)
 
     try:
-        report = analyze_token(
-            q,
-            chain=chain or None,
-            include_holders=not quick,
+        payload, source = analyze_cached(
+            _live,
+            query=q,
+            chain=chain,
             quick=quick,
+            include_rugwatch=bool(include_rugwatch),
+            include_fresh=bool(include_fresh),
+            include_multi_send=bool(include_multi_send),
+            include_shared_sol=bool(include_shared_sol),
         )
     except Exception as exc:  # noqa: BLE001
         return {
@@ -601,7 +1187,13 @@ def run_analyze(query: str, *, chain: str | None, quick: bool) -> dict[str, Any]
             "error": redact_text(f"Analyze failed: {exc}"),
             "detail": redact_text(traceback.format_exc()[-800:]),
         }
-    return build_public_payload(report)
+    if isinstance(payload, dict):
+        # Non-secret debug: helps confirm cache is working (safe for clients)
+        payload.setdefault("cache", source)
+        if lite:
+            payload = apply_lite_response(payload)
+        return payload
+    return {"ok": False, "error": "Analyze returned empty result"}
 
 
 class _ThreadedServer(ThreadingHTTPServer):
@@ -779,6 +1371,30 @@ class WebHandler(BaseHTTPRequestHandler):
                     {"ok": True, "profile_views": 0, "analyzes": 0, "error": str(exc)[:120]},
                 )
 
+        # RugWatch local SQLite + cloud list sizes (no wallet addresses returned)
+        if path in {"/api/rugwatch-counts", "/api/rugwatch_counts", "/rugwatch-counts"}:
+            try:
+                from token_tracker.rugwatch_bridge import rugwatch_wallet_counts
+
+                full = str((qs.get("full") or ["0"])[0]).strip().lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                    "full",
+                }
+                return self._json(200, rugwatch_wallet_counts(full_cloud=full))
+            except Exception as exc:  # noqa: BLE001
+                return self._json(
+                    200,
+                    {
+                        "ok": False,
+                        "local": {"count": 0, "db_found": False, "ok": False},
+                        "cloud": {"count": 0, "url_set": False, "ok": False},
+                        "sources": [],
+                        "error": str(exc)[:200],
+                    },
+                )
+
         if path in {"/api/view", "/api/hit"}:
             try:
                 stats = record_profile_view(self._client_ip())
@@ -807,16 +1423,63 @@ class WebHandler(BaseHTTPRequestHandler):
             q = (qs.get("q") or qs.get("query") or [""])[0]
             chain = (qs.get("chain") or [None])[0]
             quick = (qs.get("quick") or ["0"])[0] in {"1", "true", "yes"}
-            return self._handle_analyze(q, chain=chain, quick=quick)
+            # Default on when param omitted; only "0/false/no" disables
+            rw_raw = (qs.get("rugwatch") or qs.get("include_rugwatch") or ["1"])[0]
+            include_rugwatch = str(rw_raw).strip().lower() not in {
+                "0",
+                "false",
+                "no",
+                "off",
+            }
+            def _qs_bool(keys: list[str], default: bool = True) -> bool:
+                for k in keys:
+                    if k in qs and qs.get(k):
+                        return str(qs.get(k)[0]).strip().lower() not in {
+                            "0",
+                            "false",
+                            "no",
+                            "off",
+                        }
+                return default
+
+            include_fresh = _qs_bool(["fresh", "include_fresh"], True)
+            include_multi_send = _qs_bool(
+                ["multi_send", "include_multi_send"], True
+            )
+            include_shared_sol = _qs_bool(
+                ["shared_sol", "include_shared_sol", "funding", "include_funding"],
+                True,
+            )
+            # Legacy combined param
+            if "fresh_multi" in qs or "include_fresh_multi_send" in qs:
+                combined = _qs_bool(
+                    ["fresh_multi", "include_fresh_multi_send"], True
+                )
+                if not combined:
+                    include_fresh = False
+                    include_multi_send = False
+            return self._handle_analyze(
+                q,
+                chain=chain,
+                quick=quick,
+                include_rugwatch=include_rugwatch,
+                include_fresh=include_fresh,
+                include_multi_send=include_multi_send,
+                include_shared_sol=include_shared_sol,
+            )
 
         # Static files from /web
         if path == "/" or path == "/index.html":
             return self._serve_static("index.html")
-        # On-site documentation (full user guide in web/documentation.txt)
+        # On-site documentation (full user guide = web/documentation.txt
+        # which is kept in sync with repo-root DOCUMENTATION.txt)
         if path in {"/docs", "/docs/", "/documentation", "/documentation/"}:
             return self._serve_static("docs.html")
-        if path in {"/DOCUMENTATION.txt", "/Documentation.txt"}:
-            return self._serve_static("documentation.txt")
+        if path.lower() in {
+            "/documentation.txt",
+            "/documentations.txt",
+        } or path in {"/DOCUMENTATION.txt", "/Documentation.txt"}:
+            return self._serve_doc_text()
         if path.startswith("/"):
             rel = path.lstrip("/")
             # block path traversal
@@ -834,18 +1497,224 @@ class WebHandler(BaseHTTPRequestHandler):
             stats = record_profile_view(self._client_ip())
             return self._json(200, stats)
 
+        # Same-origin proxy → live RugWatch (avoids browser CORS / HTML 502 = Failed to fetch)
+        if path in {
+            "/api/rugwatch/upload",
+            "/api/rugwatch-upload",
+            "/api/rugwatch/push-cloud",
+            "/api/rugwatch-push-cloud",
+        }:
+            return self._proxy_rugwatch_post(path)
+
         if path == "/api/analyze":
             body = self._read_json()
             q = str(body.get("query") or body.get("q") or "").strip()
             chain = body.get("chain")
             chain_s = str(chain).strip() if chain else None
             quick = bool(body.get("quick"))
-            return self._handle_analyze(q, chain=chain_s, quick=quick)
+            lite = bool(body.get("lite"))
+            # Default True; explicit false/0/off disables RugWatch flags
+            if "include_rugwatch" in body:
+                include_rugwatch = bool(body.get("include_rugwatch"))
+            elif "rugwatch" in body:
+                include_rugwatch = bool(body.get("rugwatch"))
+            else:
+                include_rugwatch = True
+            # Default True; uncheck Fresh / Multi-send to skip those Helius scans
+            if "include_fresh" in body:
+                include_fresh = bool(body.get("include_fresh"))
+            elif "fresh" in body:
+                include_fresh = bool(body.get("fresh"))
+            else:
+                include_fresh = True
+            if "include_multi_send" in body:
+                include_multi_send = bool(body.get("include_multi_send"))
+            elif "multi_send" in body:
+                include_multi_send = bool(body.get("multi_send"))
+            else:
+                include_multi_send = True
+            if "include_shared_sol" in body:
+                include_shared_sol = bool(body.get("include_shared_sol"))
+            elif "shared_sol" in body:
+                include_shared_sol = bool(body.get("shared_sol"))
+            elif "include_funding" in body:
+                include_shared_sol = bool(body.get("include_funding"))
+            elif "funding" in body:
+                include_shared_sol = bool(body.get("funding"))
+            else:
+                include_shared_sol = True
+            # Legacy combined: only if neither separate flag sent
+            if (
+                "include_fresh" not in body
+                and "fresh" not in body
+                and "include_multi_send" not in body
+                and "multi_send" not in body
+            ):
+                if "include_fresh_multi_send" in body:
+                    if not bool(body.get("include_fresh_multi_send")):
+                        include_fresh = False
+                        include_multi_send = False
+                elif "fresh_multi" in body:
+                    if not bool(body.get("fresh_multi")):
+                        include_fresh = False
+                        include_multi_send = False
+            # Lite only strips huge response fields (ruggers lists, etc.).
+            # Fresh / Multi-send / Shared SOL follow the client's checkboxes.
+            return self._handle_analyze(
+                q,
+                chain=chain_s,
+                quick=quick,
+                include_rugwatch=include_rugwatch,
+                include_fresh=include_fresh,
+                include_multi_send=include_multi_send,
+                include_shared_sol=include_shared_sol,
+                lite=lite,
+            )
 
         return self._json(404, {"ok": False, "error": "not found"})
 
+    def _proxy_rugwatch_post(self, path: str) -> None:
+        """
+        Forward Ruggers Upload / Push cloud to the live RugWatch host from this
+        server (server-to-server). Browser only talks same-origin to ATC → no
+        CORS / HTML-502-as-Failed-to-fetch.
+        """
+        try:
+            from token_tracker.rugwatch_bridge import rugwatch_site_url
+        except Exception as exc:  # noqa: BLE001
+            return self._json(
+                500,
+                {
+                    "ok": False,
+                    "error": f"RugWatch bridge unavailable: {exc}",
+                    "proxy": True,
+                },
+            )
+        base = rugwatch_site_url()
+        if not base:
+            return self._json(
+                503,
+                {
+                    "ok": False,
+                    "error": "RUGWATCH_URL is disabled or unset on this ATC host.",
+                    "proxy": True,
+                },
+            )
+        if "push" in path:
+            remote_path = "/api/push-cloud"
+        else:
+            remote_path = "/api/upload"
+        remote_url = base.rstrip("/") + remote_path
+
+        # Read raw body (already consumed if _read_json was used — read here only)
+        n = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(n) if n else b"{}"
+        if not raw:
+            raw = b"{}"
+
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "Actual-Token-Checker-rugwatch-proxy/1.0",
+        }
+        # Forward optional RugWatch site token from browser
+        tok = (self.headers.get("X-API-Token") or "").strip()
+        if tok:
+            headers["X-API-Token"] = tok
+
+        # Wake + retry (Render free tier cold start / brief 502)
+        last_err = "unknown"
+        for attempt in range(4):
+            try:
+                req = urllib.request.Request(
+                    remote_url,
+                    data=raw,
+                    headers=headers,
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    body = resp.read()
+                    code = int(getattr(resp, "status", 200) or 200)
+                    # Prefer pass-through JSON
+                    try:
+                        payload = json.loads(body.decode("utf-8", errors="replace") or "{}")
+                    except json.JSONDecodeError:
+                        payload = {
+                            "ok": False,
+                            "error": "RugWatch returned non-JSON",
+                            "proxy": True,
+                            "status": code,
+                            "body_preview": body[:200].decode("utf-8", errors="replace"),
+                        }
+                        return self._json(502 if code >= 500 else code, payload)
+                    if isinstance(payload, dict):
+                        payload.setdefault("proxy", True)
+                        payload.setdefault("proxy_target", remote_url)
+                    return self._json(code, payload)
+            except urllib.error.HTTPError as exc:
+                err_body = b""
+                try:
+                    err_body = exc.read() or b""
+                except Exception:  # noqa: BLE001
+                    err_body = b""
+                # Retry gateway / cold-start
+                if exc.code in (502, 503, 504) and attempt < 3:
+                    last_err = f"HTTP {exc.code}"
+                    time.sleep(2.5 + attempt * 2.0)
+                    continue
+                try:
+                    payload = json.loads(err_body.decode("utf-8", errors="replace") or "{}")
+                    if isinstance(payload, dict):
+                        payload.setdefault("proxy", True)
+                        payload.setdefault("proxy_target", remote_url)
+                        return self._json(int(exc.code), payload)
+                except Exception:  # noqa: BLE001
+                    pass
+                return self._json(
+                    int(exc.code) if exc.code else 502,
+                    {
+                        "ok": False,
+                        "error": f"RugWatch HTTP {exc.code}",
+                        "proxy": True,
+                        "proxy_target": remote_url,
+                        "body_preview": err_body[:200].decode("utf-8", errors="replace"),
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                last_err = str(exc)
+                if attempt < 3:
+                    time.sleep(2.5 + attempt * 2.0)
+                    continue
+                return self._json(
+                    502,
+                    {
+                        "ok": False,
+                        "error": f"Could not reach RugWatch at {remote_url}: {last_err}",
+                        "proxy": True,
+                        "proxy_target": remote_url,
+                    },
+                )
+        return self._json(
+            502,
+            {
+                "ok": False,
+                "error": f"RugWatch unreachable after retries: {last_err}",
+                "proxy": True,
+                "proxy_target": remote_url,
+            },
+        )
+
     def _handle_analyze(
-        self, query: str, *, chain: str | None, quick: bool
+        self,
+        query: str,
+        *,
+        chain: str | None,
+        quick: bool,
+        include_rugwatch: bool = True,
+        include_fresh: bool = True,
+        include_multi_send: bool = True,
+        include_shared_sol: bool = True,
+        lite: bool = False,
     ) -> None:
         if not self._check_gate():
             return self._json(
@@ -861,22 +1730,115 @@ class WebHandler(BaseHTTPRequestHandler):
                 429,
                 {
                     "ok": False,
-                    "error": f"Rate limit: max {_RATE_MAX} analyzes per {_RATE_WINDOW:.0f}s.",
+                    "error": (
+                        f"Rate limit: max {_RATE_MAX} analyzes per "
+                        f"{_RATE_WINDOW:.0f}s from your IP. Wait and try again."
+                    ),
                 },
             )
         if not (query or "").strip():
             return self._json(400, {"ok": False, "error": "query is required"})
+        if not _acquire_inflight(ip):
+            return self._json(
+                429,
+                {
+                    "ok": False,
+                    "error": (
+                        "Another Analyze is already running from your IP. "
+                        "Wait for it to finish (one at a time protects shared API limits)."
+                    ),
+                },
+            )
 
-        # Analyze can take a while (holders / narrative)
-        result = run_analyze(query.strip(), chain=chain, quick=quick)
+        # Analyze can take a while (holders / narrative); cache+single-flight inside
+        try:
+            result = run_analyze(
+                query.strip(),
+                chain=chain,
+                quick=quick,
+                include_rugwatch=include_rugwatch,
+                include_fresh=include_fresh,
+                include_multi_send=include_multi_send,
+                include_shared_sol=include_shared_sol,
+                lite=lite,
+            )
+        finally:
+            _release_inflight(ip)
         try:
             record_analyze(ok=bool(result.get("ok")))
         except Exception:  # noqa: BLE001
             pass
         code = 200 if result.get("ok") else 422
-        if result.get("error") and "Rate limit" in str(result.get("error")):
+        err = str(result.get("error") or "")
+        if "Rate limit" in err or "already running" in err:
             code = 429
         return self._json(code, result)
+
+    def _serve_doc_text(self) -> None:
+        """Serve the Token Checker user guide as plain text (no-cache).
+
+        Prefer web/documentation.txt; fall back to repo-root DOCUMENTATION.txt
+        so Docs still works if only the root file is present on the host.
+        """
+        candidates = [
+            WEB_DIR / "documentation.txt",
+            ROOT / "DOCUMENTATION.txt",
+            WEB_DIR / "DOCUMENTATION.txt",
+        ]
+        target = next((p for p in candidates if p.is_file()), None)
+        if target is None:
+            return self._json(
+                404,
+                {
+                    "ok": False,
+                    "error": (
+                        "documentation.txt not found. Expected web/documentation.txt "
+                        "or DOCUMENTATION.txt next to web_server.py."
+                    ),
+                },
+            )
+        data = target.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self._cors()
+        self.end_headers()
+        self.wfile.write(data)
+        return None
+
+
+    def _inject_asset_hashes(self, rel: str, data: bytes, ctype: str) -> bytes:
+        """Rewrite app.js/styles.css query strings to content hashes (cache bust)."""
+        if rel not in {"index.html", "docs.html"} and not rel.endswith(".html"):
+            return data
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            return data
+        import hashlib
+        import re as _re
+
+        def file_hash(name: str) -> str:
+            path = WEB_DIR / name
+            if not path.is_file():
+                return "missing"
+            return hashlib.md5(path.read_bytes()).hexdigest()[:10]
+
+        app_h = file_hash("app.js")
+        css_h = file_hash("styles.css")
+        text = _re.sub(
+            r'src="(/app\.js)\?v=[^"]*"',
+            f'src="\\1?v=h-{app_h}"',
+            text,
+        )
+        text = _re.sub(
+            r'href="(/styles\.css)\?v=[^"]*"',
+            f'href="\\1?v=h-{css_h}"',
+            text,
+        )
+        return text.encode("utf-8")
 
     def _serve_static(self, rel: str) -> None:
         if not WEB_DIR.is_dir():
@@ -896,6 +1858,21 @@ class WebHandler(BaseHTTPRequestHandler):
             return self._json(404, {"ok": False, "error": "not found"})
         data = target.read_bytes()
         ctype = STATIC_TYPES.get(target.suffix.lower(), "application/octet-stream")
+        if target.suffix.lower() in {".html"}:
+            data = self._inject_asset_hashes(rel, data, ctype)
+        # Always revalidate HTML/JS so Docs + app updates appear after deploy
+        if target.suffix.lower() in {".html", ".js", ".txt", ".css"}:
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-cache, must-revalidate")
+            # Stronger for JS: never use stale cached app without revalidation
+            if target.suffix.lower() in {".js", ".css"}:
+                self.send_header("Cache-Control", "no-store")
+            self._cors()
+            self.end_headers()
+            self.wfile.write(data)
+            return None
         return self._bytes(200, data, ctype)
 
 

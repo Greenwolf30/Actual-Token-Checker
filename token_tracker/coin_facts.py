@@ -65,11 +65,15 @@ _CHAIN_TO_CG: dict[str, str] = {
     "near": "near-protocol",
 }
 
-# Sources whose free-text counts as "official project copy"
+# Sources whose free-text counts as "official project copy" (real prose only).
+# Jupiter tags/organic score are NOT prose — never treat as official description.
 _OFFICIAL_SOURCES = {
     "coingecko",
     "metadata_uri",
     "pumpfun",
+    "pumpfun_about",
+    "pumpfun_about_metadata",
+    "pumpfun_about_page",
     "birdeye",
     "dexscreener",
     "coinmarketcap",
@@ -77,8 +81,14 @@ _OFFICIAL_SOURCES = {
     "solscan",
     "rugcheck_meta",
     "geckoterminal",
-    "jupiter",
 }
+
+# Tag/metadata lines that must never become "stated purpose/story"
+_NON_PROSE_DESC = re.compile(
+    r"^(jupiter\s*tags|organic\s*score|tags?\s*:|verified on jupiter|"
+    r"listing tags|categories?\s*:)",
+    re.I,
+)
 
 
 def fetch_coin_facts(
@@ -163,26 +173,42 @@ def fetch_coin_facts(
         except Exception:  # noqa: BLE001
             pass
 
-    # 4) Pump.fun coin page
-    if (token_address or "").lower().endswith("pump") or is_sol:
+    # 4) Pump.fun coin About section (primary narrative for *pump mints)
+    is_pump = (token_address or "").lower().endswith("pump")
+    if is_pump or is_sol:
         try:
             pf = _from_pumpfun(token_address)
             if pf.get("ok"):
                 sources.append("pumpfun_coin")
-                if pf.get("description"):
-                    descriptions.append((4.5, "pumpfun", pf["description"]))
+                about = (pf.get("description") or "").strip()
+                about_src = pf.get("description_source") or "pumpfun"
+                if about:
+                    # Prefer Pump.fun About over other APIs for pump mints
+                    weight = 5.3 if is_pump else 4.7
+                    # Canonical label for About tab / sources list
+                    src_label = (
+                        "pumpfun_about"
+                        if "pumpfun" in str(about_src).lower()
+                        else str(about_src)
+                    )
+                    descriptions.append((weight, src_label, about))
+                    sources.append("pumpfun_about")
                 links.update(pf.get("links") or {})
                 name_resolved = pf.get("name") or name_resolved
                 symbol_resolved = pf.get("symbol") or symbol_resolved
-                # If we still lack metadata URI, try pumping description as story
-                if not meta_uri and pf.get("uri"):
-                    meta_uri = pf["uri"]
+                if pf.get("uri"):
+                    meta_uri = meta_uri or pf["uri"]
                     links.setdefault("metadata_uri", pf["uri"])
+                    links.setdefault("pumpfun", pf.get("page_url") or f"https://pump.fun/coin/{token_address}")
+                # If About came only from API and meta still has distinct prose, keep both
+                if pf.get("uri") and not about:
                     try:
                         mu = _from_metadata_uri(pf["uri"])
                         if mu.get("ok") and mu.get("description"):
                             sources.append("metadata_uri")
-                            descriptions.append((4.8, "metadata_uri", mu["description"]))
+                            descriptions.append(
+                                (5.1 if is_pump else 4.8, "pumpfun_about_metadata", mu["description"])
+                            )
                             links.update(mu.get("links") or {})
                     except Exception:  # noqa: BLE001
                         pass
@@ -232,19 +258,24 @@ def fetch_coin_facts(
     except Exception:  # noqa: BLE001
         pass
 
-    # 8) Jupiter token search (tags + name; sometimes no free-text desc)
+    # 8) Jupiter token search — tags/name only (never use tag string as official blurb)
     if is_sol:
         try:
             jup = _from_jupiter(token_address)
             if jup.get("ok"):
                 sources.append("jupiter")
-                if jup.get("description"):
-                    descriptions.append((3.8, "jupiter", jup["description"]))
                 tags.extend(jup.get("tags") or [])
                 name_resolved = jup.get("name") or name_resolved
                 symbol_resolved = jup.get("symbol") or symbol_resolved
                 if jup.get("is_verified"):
                     tags.append("jupiter_verified")
+                if jup.get("organic_score_label"):
+                    tags.append(f"organic:{jup.get('organic_score_label')}")
+                # Only accept real free-text if API ever returns one (not fabricated tags)
+                if jup.get("description") and _is_prose_description(
+                    jup["description"], "jupiter_prose"
+                ):
+                    descriptions.append((3.8, "jupiter_prose", jup["description"]))
         except Exception:  # noqa: BLE001
             pass
 
@@ -302,28 +333,42 @@ def fetch_coin_facts(
     except Exception:  # noqa: BLE001
         pass
 
-    # Pick best official description (highest weight, longest sensible text)
+    # Pick best official description (highest weight, longest *prose* text)
     official = ""
     official_source = ""
     description_fragments: list[dict[str, str]] = []
-    seen_desc: set[str] = set()
+    seen_desc: list[str] = []
     if descriptions:
+        # Prefer known prose sources (pumpfun / metadata / CG / dex) over tags
         descriptions.sort(key=lambda x: (x[0], len(x[2])), reverse=True)
         for w, src, text in descriptions:
             cleaned = _clean_desc(text)
             if len(cleaned) < 12:
                 continue
-            key = cleaned.lower()[:100]
-            if key in seen_desc:
+            low = cleaned.lower()
+            # Near-dupe: same mint description mirrored across pumpfun/metadata/dex
+            if any(
+                low == s
+                or (len(low) >= 24 and (low[:70] == s[:70] or low in s or s in low))
+                for s in seen_desc
+            ):
                 continue
-            seen_desc.add(key)
-            description_fragments.append({"source": src, "text": cleaned[:900]})
-            if not official and len(cleaned) >= 20:
+            seen_desc.append(low)
+            is_prose = _is_prose_description(cleaned, src)
+            # Keep fragments for UI only when they are real prose (or non-jupiter)
+            if is_prose or src not in {"jupiter", "jupiter_prose"}:
+                if is_prose or src != "jupiter":
+                    description_fragments.append({"source": src, "text": cleaned[:900]})
+            if not official and is_prose and len(cleaned) >= 20:
                 official = cleaned
                 official_source = src
-        if not official and description_fragments:
-            official = description_fragments[0]["text"]
-            official_source = description_fragments[0]["source"]
+        # Never fall back to tag-only Jupiter lines as official
+        if not official:
+            for fr in description_fragments:
+                if _is_prose_description(fr.get("text") or "", fr.get("source") or ""):
+                    official = (fr.get("text") or "")[:1200]
+                    official_source = fr.get("source") or ""
+                    break
 
     # De-dupe categories + tags
     cat_out: list[str] = []
@@ -374,6 +419,9 @@ def fetch_coin_facts(
     if official and official_source in {
         "coingecko",
         "pumpfun",
+        "pumpfun_about",
+        "pumpfun_about_metadata",
+        "pumpfun_about_page",
         "dexscreener",
         "metadata_uri",
         "birdeye",
@@ -441,6 +489,32 @@ def _clean_desc(text: str) -> str:
     if t.lower() in {"", "n/a", "none", "null", "-", "tbd", "null description"}:
         return ""
     return t
+
+
+def _is_prose_description(text: str, source: str = "") -> bool:
+    """True if text looks like a real project blurb, not tags/scores."""
+    t = _clean_desc(text)
+    if len(t) < 20:
+        return False
+    src = (source or "").lower()
+    if src == "jupiter":
+        # Jupiter lite API has tags, not free-text project stories
+        return False
+    if _NON_PROSE_DESC.search(t):
+        return False
+    if re.match(r"^jupiter tags:", t, re.I):
+        return False
+    if "organic score" in t.lower() and "jupiter" in t.lower():
+        return False
+    # Mostly "tag: value · tag: value" metadata lines
+    if t.count("·") >= 1 and len(t) < 80 and ":" in t and " " not in t[t.find(":") + 1 : t.find(":") + 8]:
+        # still allow normal sentences with colons
+        pass
+    # Reject pure tag lists: "foo, bar, baz" with no sentence structure
+    if re.fullmatch(r"[\w\s,/\-·:]+", t) and t.count(",") >= 2 and "." not in t and len(t) < 100:
+        if any(k in t.lower() for k in ("launchpad", "verified", "organic", "unknown")):
+            return False
+    return True
 
 
 def _from_coingecko(chain_id: str | None, address: str) -> dict[str, Any]:
@@ -581,12 +655,19 @@ def _from_dexscreener(
                 links.setdefault("website", str(w["url"]))
                 ok = True
 
+    # Cached DexScreener extras (pairs already often have socials — avoid spam)
     try:
-        data = get_json(
-            f"https://api.dexscreener.com/latest/dex/tokens/{address}",
-            timeout=_TIMEOUT,
-            retries=0,
-        )
+        from .api_cache import TTL_PAIRS, TTL_SEARCH, cache_get, cache_set
+
+        tok_key = f"dx:tokens_meta:{(chain_id or '').lower()}:{address.lower()}"
+        data = cache_get(tok_key)
+        if data is None:
+            data = get_json(
+                f"https://api.dexscreener.com/latest/dex/tokens/{address}",
+                timeout=_TIMEOUT,
+                retries=0,
+            )
+            cache_set(tok_key, data if data is not None else {}, TTL_PAIRS)
         pairs = (data or {}).get("pairs") if isinstance(data, dict) else None
         if isinstance(pairs, list):
             for p in pairs[:8]:
@@ -614,12 +695,23 @@ def _from_dexscreener(
     except Exception:  # noqa: BLE001
         pass
 
+    # Latest profiles feed is shared — cache whole list briefly (not per-mint)
     try:
-        profiles = get_json(
-            "https://api.dexscreener.com/token-profiles/latest/v1",
-            timeout=_TIMEOUT,
-            retries=0,
-        )
+        from .api_cache import TTL_SEARCH, cache_get, cache_set
+
+        prof_key = "dx:token_profiles_latest_v1"
+        profiles = cache_get(prof_key)
+        if profiles is None:
+            profiles = get_json(
+                "https://api.dexscreener.com/token-profiles/latest/v1",
+                timeout=_TIMEOUT,
+                retries=0,
+            )
+            cache_set(
+                prof_key,
+                profiles if profiles is not None else [],
+                TTL_SEARCH,
+            )
         if isinstance(profiles, list):
             al = address.lower()
             for row in profiles:
@@ -646,34 +738,29 @@ def _from_dexscreener(
 
 
 def _from_pumpfun(mint: str) -> dict[str, Any]:
-    for url in (
-        f"https://frontend-api.pump.fun/coins/{mint}",
-        f"https://frontend-api-v3.pump.fun/coins/{mint}",
-    ):
-        try:
-            data = get_json(url, timeout=6.0, retries=0)
-        except Exception:  # noqa: BLE001
-            continue
-        if not isinstance(data, dict):
-            continue
-        desc = (data.get("description") or data.get("desc") or "").strip()
-        links: dict[str, str] = {}
-        if data.get("twitter"):
-            links["twitter"] = str(data["twitter"])
-        if data.get("telegram"):
-            links["telegram"] = str(data["telegram"])
-        if data.get("website"):
-            links["website"] = str(data["website"])
-        uri = data.get("metadata_uri") or data.get("uri") or data.get("image_uri") or ""
-        return {
-            "ok": True,
-            "name": data.get("name"),
-            "symbol": data.get("symbol"),
-            "description": desc[:1200],
-            "links": links,
-            "uri": str(uri) if uri and str(uri).startswith("http") else "",
-        }
-    return {"ok": False}
+    """
+    Pump.fun About section for narrative (description on the coin page).
+
+    Uses shared fetch_coin_about: API description → metadata_uri → page scrape.
+    """
+    try:
+        from . import pumpfun as pf_mod
+
+        about = pf_mod.fetch_coin_about(mint)
+    except Exception:  # noqa: BLE001
+        about = None
+    if not isinstance(about, dict) or not about.get("ok"):
+        return {"ok": False}
+    return {
+        "ok": True,
+        "name": about.get("name"),
+        "symbol": about.get("symbol"),
+        "description": (about.get("description") or "")[:1200],
+        "description_source": about.get("description_source") or "pumpfun_about",
+        "links": about.get("links") or {},
+        "uri": about.get("uri") or "",
+        "page_url": about.get("page_url") or "",
+    }
 
 
 def _from_rugcheck(mint: str) -> dict[str, Any]:
@@ -817,7 +904,7 @@ def _from_metadata_uri(uri: str) -> dict[str, Any]:
     if isinstance(ext, str) and ext.startswith("http"):
         links["website"] = ext
     elif isinstance(ext, dict):
-        for k in ("website", "twitter", "telegram", "discord"):
+        for k in ("website", "twitter", "telegram", "discord", "linkedin"):
             if ext.get(k):
                 links[k] = str(ext[k])
         if ext.get("description") and not desc:
@@ -921,21 +1008,15 @@ def _from_jupiter(mint: str) -> dict[str, Any]:
     for t in row.get("tags") or []:
         if isinstance(t, str) and t.strip():
             tags.append(t.strip())
-    # Build a short "what Jupiter says" string from tags when no free-text desc
-    desc = ""
-    if tags:
-        desc = "Jupiter tags: " + ", ".join(tags[:8])
-        if row.get("organicScoreLabel"):
-            desc += f" · organic score: {row.get('organicScoreLabel')}"
-        if row.get("isVerified"):
-            desc += " · verified on Jupiter"
-
+    # Do NOT invent a description from tags (that polluted About "stated purpose")
+    organic = row.get("organicScoreLabel")
     return {
         "ok": True,
         "name": row.get("name"),
         "symbol": (str(row.get("symbol") or "").lstrip("$") or None),
-        "description": desc,
+        "description": "",  # tags only — never official prose
         "tags": tags,
+        "organic_score_label": organic,
         "is_verified": bool(row.get("isVerified")),
     }
 
@@ -991,7 +1072,7 @@ def _from_solscan(mint: str) -> dict[str, Any]:
             or ""
         )
         links: dict[str, str] = {}
-        for k in ("website", "twitter", "telegram", "discord"):
+        for k in ("website", "twitter", "telegram", "discord", "linkedin"):
             if d.get(k):
                 links[k] = str(d[k])
         if meta.get("website"):

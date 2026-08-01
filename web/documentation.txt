@@ -2,15 +2,19 @@
   ACTUAL DATA TOKEN CHECKER — USER GUIDE
 ================================================================================
   Live site:   https://actual-token-checker.onrender.com
-  Local site:  python run_web.py  →  http://127.0.0.1:8080/
-  Desktop app: python desktop_app.py
+  Self-host:   python run_web.py  →  http://127.0.0.1:8080/
 
   This guide explains what each part of the app does, in plain language —
   including Quick mode, social scores, news, wallets, Rugcheck / creators,
-  the About tab, the Ruggers sell-out tracker, and how YOU save seller
-  wallets into RugWatch (your local serial-rugger database on the desktop).
+  the About tab (incl. LinkedIn section), the Ruggers sell-out tracker
+  (all seller lanes + sticky sell↔swing), the RugWatch Analyze checkbox,
+  yellow Ruggers Upload/Export on every seller section, and how flags use
+  local + cloud.
 
   Everything here is a HEURISTIC from public data. Not financial advice.
+  Last major docs update: 2026-07-23 (Total = multi + Similar-sized rules;
+  Similar near-exact + Rugcheck insider; Single holders list + no similar bleed;
+  Ruggers measurable baseline / storage; RugWatch unique-by-address merge).
 ================================================================================
 
 
@@ -26,6 +30,16 @@ pulls public market and risk data and shows it in tabs:
 
 It does NOT trade for you, custody funds, or guarantee a token is safe.
 
+What this guide covers vs RugWatch
+  THIS DOC (Actual Data Token Checker)
+    - Analyze UI, tabs, Quick mode, Ruggers lanes, Logs, Alerts, Maps, About
+    - How Actual Data Token Checker *reads* Flagged (RugWatch) and shows hold %
+    - How Ruggers Upload/Export *sends* wallets into YOUR RugWatch
+  RUGWATCH DOC (separate app — RugCheck Documentation.md)
+    - Building the wallet list, risk_score 0–100, Monitor, Push/Pull cloud
+    - Scan mint, Add/Upload wallets, Local database shards, capacity
+  Do not paste full RugWatch manuals into Actual Data Token Checker docs (and vice versa).
+
 
 --------------------------------------------------------------------------------
 2. HOW TO USE THE SITE
@@ -35,19 +49,53 @@ It does NOT trade for you, custody funds, or guarantee a token is safe.
   2. Paste a mint address, 0x address, or name/ticker.
   3. Optional: pick a chain (auto / solana / robinhood / ethereum / …).
   4. Optional: check Quick (faster, less detail — see §3).
-  5. Click Analyze.
-  6. Read the tabs. Click blue links to open explorers / X / news.
-
+  5. Optional: check RugWatch (yellow) — include flagged wallets on Analyze
+     (default ON). Uncheck to ignore local + cloud RugWatch lists for this run.
+  6. Click Analyze.
+  7. Read the tabs. Click blue links to open explorers / X / news.
 
 
 Navigation bar (compact)
-  [logo] | Docs | GitHub | Stats API | Badge
+  [logo]  [RugWatch]  |  Docs | GitHub | Stats API | Badge
 
-  Docs → /docs.html on this website (loads web/documentation.txt)
-  Also: /documentation.txt (raw text) · /docs (same as docs.html)
+  Logo stays far left.
+  RugWatch (yellow letters) sits immediately to the right of the logo and
+    opens the RugWatch website (default http://127.0.0.1:8790/ — set
+    rugwatchUrl in web/config.js when you have a public URL).
+  Docs / Documentation → GitHub DOCUMENTATION.txt
+    https://github.com/Greenwolf30/Actual-Token-Checker/blob/main/DOCUMENTATION.txt
+  Also on site: /docs.html · /documentation.txt (local copies)
   GitHub → https://github.com/Greenwolf30/Actual-Token-Checker
   Footer “Documentation” link opens the on-site guide (not only GitHub).
   Analyze is the search button under the title.
+
+Analyze options (next to the search form)
+  quick      — faster market-only style run (see §3)
+  RugWatch   — yellow checkbox; when checked, Holders merge RugWatch
+               flagged wallets from Local database + cloud URL. When unchecked,
+               that section is skipped for this lookup. Choice is remembered
+               in this browser.
+  Fresh      — Fresh / sole-token Helius scan · up to ~36 pings (see §6.3g)
+  Multi-send — token multi-send Helius scan · up to ~21 pings (see §6.3g)
+  Shared SOL — Shared SOL funder 1-hop · HEAVIEST · up to ~156 pings (see §6.3g)
+               also powers SOL multi-send when Multi-send is on
+
+  Last-known (no re-scan): After you Analyze a mint with Fresh / Multi-send /
+  Shared SOL ON, those results are remembered for that mint on the server.
+  If you turn a box OFF and Analyze again, Bundles still shows the last known
+  values for that box labeled “(last known) · no re-scan” — zero new Helius
+  pings for that scan. They keep showing until you check the box again to
+  re-scan live. (Also noted in the site bottom warning banner.)
+
+  Optimal use:
+    - Day-to-day: prefer Shared SOL unchecked (heaviest cost) unless you need
+      funder/funded wallets; use Fresh and/or Multi-send as needed.
+    - First time you need all three for a mint: check Fresh + Multi-send +
+      Shared SOL together on ONE Analyze (fewer total pings than three runs).
+    - After that: uncheck what you do not need; last known still shows until
+      you check the box again for a live re-scan.
+    - 429s (free ~10 RPS): wait 30–60s — rate limit ≠ monthly credit burn.
+  Full ping tables: §6.3g.
 
 
 --------------------------------------------------------------------------------
@@ -69,8 +117,38 @@ Quick OFF (full Analyze)
 
 
 --------------------------------------------------------------------------------
+3b. UI CHROME (WEBSITE — NOT A REPORT TAB)
+--------------------------------------------------------------------------------
+
+Top nav
+  Logo · RugWatch (yellow — opens RugWatch site) · Docs · GitHub · Stats API · Badge
+  views pill — public profile views for this site
+  server status pill — API health
+  Gear / ? — optional site passcode (WEB_API_TOKEN); keys never go in the browser
+
+Search row
+  Query box · chain filter · Quick · RugWatch checkbox · Analyze
+
+Summary bar (after Analyze)
+  Logo · name/symbol · mint (click yellow to copy / open Solscan)
+  Price · MC · Liq · Vol 24h · 24h change
+  Link bar: dexscreener · solscan · twitter · website · telegram · discord · …
+  Hidden by design: metadata_uri / raw image JSON (still used inside About)
+
+Report tabs
+  Section titles use dim-green ── TITLE ── markers (major sections only).
+  Empty/false-only blocks stay default color (not greened).
+
+Footer
+  Disclaimer · profile views / analyzes · public stats · badge · generated time
+
+
+--------------------------------------------------------------------------------
 4. OVERVIEW TAB
 --------------------------------------------------------------------------------
+
+Section titles (website): ── MARKET ── · ── PUMP.FUN ── · ── INITIAL MARKET CAP ──
+  · ── ALL-TIME HIGH ── · ── SOCIALS ──
 
 Shows market structure from DexScreener (and Pump.fun when useful):
 
@@ -78,6 +156,7 @@ Shows market structure from DexScreener (and Pump.fun when useful):
   Pair / DEX (e.g. Raydium, Pump.fun, Uniswap)
   Social links from the pair profile (X, Telegram, website)
   Pump.fun status when relevant: still on bonding curve vs graduated
+  Initial MC estimate and ATH MC estimate when history is available
 
 Pump.fun fallback
   - If DexScreener is rate-limited (HTTP 429) and the mint looks like a
@@ -85,14 +164,39 @@ Pump.fun fallback
     snapshot from Pump.fun’s public coin API.
   - That snapshot is thinner than full DexScreener data.
 
-DexScreener cache
-  - Same search/pair is remembered ~2–3 minutes so re-analyzing the same
-    mint does not spam DexScreener as hard.
+DexScreener / Analyze cache (server, in-memory)
+  - Same DexScreener search/pair is remembered ~2–3 minutes.
+  - Full Analyze result for the same mint is cached ~90s (Quick ~45s).
+  - Concurrent Analyzes of the same mint share one live fetch (single-flight).
+  - Per-IP: max ~6 Analyzes / 60s and one Analyze at a time (protects shared
+    host IP from rate limits). Env: ANALYZE_CACHE_TTL_FULL, ANALYZE_RATE_MAX.
+  - Mint addresses use targeted token-pairs / Pump before broad DexScreener
+    search to cut free-API pings.
+  - DexScreener soft budget (~400 calls/hour) + ~90s cooldown after HTTP 429;
+    Solana mints then fall back to Raydium API v3 (pools/price). Env:
+    DEXSCREENER_HOUR_BUDGET, DEXSCREENER_COOLDOWN_SEC.
+  - Pre-bond *pump tokens: native Pump.fun API is primary (price/mcap/curve);
+    DexScreener/Raydium are not required while still on the bonding curve.
+  - Multi-source stack (use what responds; no single point of failure):
+      Market: Pump (prebond) → DexScreener → Raydium → Birdeye → Rugcheck → Pump
+      Holders: Helius/RPC + Rugcheck + Solscan + Birdeye (fused in parallel)
+      LP labels: known programs + Pump curve/pool PDAs
 
 
 --------------------------------------------------------------------------------
 5. HOLDERS TAB & WALLET SCHEME
 --------------------------------------------------------------------------------
+
+Website section markers (dim green):
+  ── HOLDERS / WALLETS ── · ── TOTAL WALLETS ── · ── CONCENTRATION ──
+  · ── FLAGS ── · ── TOP HOLDERS ── · ── MULTI-ACCOUNT CLUSTERS ──
+  · ── FLAGGED WALLETS (RugWatch) ──
+
+  Total wallets by source when available (Pump.fun / Birdeye / DexScreener /
+  Solscan). Top holders with supply % priority colors. Creator, mint/freeze
+  authority when known. RugWatch flagged **still-holding** wallets when
+  checkbox ON (see §12b). Sold/dumped flagged wallets are not listed here
+  (see Ruggers Flagged).
 
 Purpose
   Show who holds the token (top wallets) and how concentrated supply is.
@@ -108,8 +212,18 @@ Display (website)
 Solana
   Multi-source fusion when possible:
     Helius / Solana RPC, Rugcheck top holders, Solscan, Birdeye, Pump.fun
-  Known LP / AMM / program wallets are labeled and usually treated as
-  “not a random human bag” for risk lists.
+  Known LP / AMM / program wallets are labeled and treated as pool vaults,
+  not risk whales / sellers:
+    - Hardcoded program map (Raydium / Orca / Meteora programs, …)
+    - ALL DexScreener pair addresses for the mint (Meteora, Raydium, Orca,
+      PumpSwap, Pump.fun, …) — not only the primary pair
+    - Pump.fun per-mint curve / pool PDAs
+  Those addresses are excluded from:
+    - Holders risk flags / concentration “flagged whale” lines
+    - Alerts over-2% / whale priority lists
+    - Bundles similar-sized / multi-account / Single / optional categories
+    - Ruggers sellers / Upload-Export payloads
+  They may still appear in Top Holders with an LP label (for context only).
 
 Other chains (Ethereum, Base, Robinhood, …)
   Market works via DexScreener.
@@ -146,8 +260,30 @@ What people often ask
   coordinated wallets,” not a proof that one person owns those wallets.
 
   The app looks at top-holder snapshots and risk tags, then estimates a
-  total_bundle_pct (% of total supply). That single number drives the
-  Alerts “bundle band” messages below.
+  total_bundle_pct. Cap 100%. Each wallet counts once (max hold % if it
+  appears in more than one category) — no double-count across sections.
+
+  Total (multi + similar-sized) — unique wallets only
+
+    Always in Total
+      • Multi-account (one owner, several large Associated Token Accounts)
+
+    Similar-sized in Total only when Fresh, Multi-send, AND Shared SOL are
+    ALL unchecked this Analyze:
+      • Near-exact same bag size groups (§6.3h)
+      • Rugcheck insider-flagged (same Similar-sized section — not multi-account)
+
+    When any of Fresh / Multi-send / Shared SOL is checked this Analyze:
+      • That optional’s wallets enter Total (if the box is on this run)
+      • Similar-sized is still LISTED for reference but excluded from Total
+      • Unchecked optionals do not enter Total even if “(last known)” is shown
+
+    Never in Total
+      • Single holders (standalone bags — list only; see §6.3h)
+      • Launch-window (disabled)
+      • LP / known program wallets
+
+  Launch-window is disabled. Total % drives Alerts “bundle band” messages.
 
   This is NOT:
     - A professional sniper-graph product
@@ -161,10 +297,14 @@ What people often ask
     - Rugcheck (insiders, rugged flag, risk names, networks)
     - Birdeye (optional): bundler / sniper / insider / dev tags, security flags
     - Heuristics on the holder list:
-        * Multi-account clusters (one wallet, several large ATAs)
+        * Multi-account clusters (one owner, several large Associated Token
+          Accounts — see §6.3b)
         * Similar-sized non-LP top wallets (look like coordinated buys)
         * Concentration of top wallets excluding known LP / programs
-        * Same-slot multi-buy style signals when available (Jito-style / Helius)
+        * Same-slot multi-buy style signals when available (Jito-style / Helius;
+          see §6.3c)
+        * Fresh / sole-token wallets (almost only this mint on the wallet)
+        * Multi-send: one owner sent this mint (or SOL) to many wallets
 
   If holders fail, bundles usually cannot run.
 
@@ -172,25 +312,174 @@ What people often ask
   is Solana-focused.
 
 6.3 What the Bundles tab shows
-  - Summary: estimated total bundle % of supply (when available)
-  - Similar-size total %: combined supply of unique wallets that sit in
-    similar-size groups (wallets with nearly the same holding size)
-  - Signals: e.g. multi-ATA clusters, similar-size groups, Rugcheck insiders,
-    Birdeye bundler/sniper tags, rugged flag
-  - Lists of suspect / flagged wallets (heuristic)
-  - Top10 ex-LP (see §6.3a)
-  - Notes that methods are partial
+  Section titles use dim-green markers (website card UI). Hold % uses the same
+  low → medium → high → critical color bands as Holders.
 
-  Display (website) — % color bands (same as Holders priority scheme)
-  - Total % bundles, Similar-size total, Suspect total: colored by %
-  - Each wallet’s percent holdings in every group is colored the same way:
-      multi-account clusters, similar-size group members, insiders, suspects
-      (lines look like “wallet  holds X%”)
-  - Similar-size group header (right side): “sum X%” = combined holdings of
-      all wallets in that group; colored with the same priority bands
-  - Group headers (≈ avg % / range) also use the bands
-  - Cluster balances ("bal …") shown in yellow
+  Summary boxes (top stats bar)
+  - Total (multi + similar-sized) — unique wallets; rules in §6.1
+  - Multi-account total %
+  - Similar-sized total % (near-exact bags + Rugcheck insider combined)
+  - Fresh / Multi-send / Shared SOL totals (live or last-known when box off)
+  - Single holders total % (standalone bags — NOT in Total)
+  - Top10 ex-LP (see §6.3a)
+  - Bundle risk score (0–100 heuristic — full formula in §6.3i)
+
+  List sections (website cards)
+  - Multi-account clusters — one owner, several large ATAs (§6.3b, §6.3e)
+  - Shared SOL funder — 1-hop common SOL funder (Helius; checkbox)
+  - Fresh wallets — almost only this mint (§6.3f)
+  - Multi-send (one → many) — token multi-send only here (§6.3e);
+    Shared SOL stays in its own section
+  - Similar-sized wallets — near-exact bag groups + Rugcheck insiders (§6.3h)
+  - Single holders — full list of standalone bags ≥0.01% not in any category
+    above; section total + hold-% colors (§6.3h). Never includes similar
+    cluster members.
+
+  Launch-window: disabled (no Helius same-slot scan; no Bundles section).
+
+  Display notes
+  - Section headers: “total X% · N wallet(s)” (or cluster counts)
+  - Similar group head: wallets ≈ avg % each · sum group total
+  - Single holders: slate accent panel; total recomputed after excluding Similar
   - Top10 ex-LP stays uncolored (summary only — see §6.3a)
+
+  Bundles categories compared (not interchangeable)
+    | Section              | What it tracks                              |
+    |----------------------|---------------------------------------------|
+    | Multi-account        | Same owner, multiple large Associated Token |
+    |                      | Accounts under that one owner — §6.3b       |
+    | Multi-send           | One wallet sent this mint to many others    |
+    |                      | — §6.3e  (NOT multi-account)                |
+    | Fresh / sole-token   | Holder whose bag is almost only this mint   |
+    |                      | (few/no other SPL tokens) — §6.3f           |
+    | Shared SOL funder    | Same funding parent (1-hop SOL)             |
+    | Similar-sized        | Exact / near-exact bag clusters (≥3) plus   |
+    |                      | Rugcheck insider — §6.3h (NOT multi)        |
+    | Single holders       | Standalone ≥0.01% bags in no category above |
+    |                      | — list only; not in Total — §6.3h           |
+    | Insider (Rugcheck)   | Shown inside Similar-sized (not its own Total)|
+
+6.3h Similar-sized vs Single holders
+  Website section: Similar-sized wallets  |  Single holders
+
+  Similar-sized = two sources in ONE section
+    A) Near-exact bag clusters among non-LP top holders
+    B) Rugcheck insider-flagged wallets (same section; not multi-account)
+
+  Near-exact / exact bag matching (A)
+    Two wallets match if either:
+      • absolute supply-% gap ≤ 0.02 percentage points
+        (exact same bag always matches — e.g. 2.00% vs 2.00%), OR
+      • relative gap ≤ 0.5% of the larger bag (float noise on bigger holds)
+    Same idea on raw balance when % is missing.
+
+  Gates to form a cluster
+    • Non-LP / non-known-program
+    • Each bag ≥ 0.15% of supply (smaller exact bags are ignored as dust)
+    • At least 3 wallets that all match each other (2 exact wallets ≠ a group)
+
+  Examples
+    Three wallets at exactly 2.0%     → Similar-sized group
+    Three at 1.50 / 1.51 / 1.52%      → Similar-sized (within 0.02 pp)
+    Two wallets at exactly 2.0%       → NOT a group (need 3+) → may be Single
+    Ten wallets at exactly 0.05%      → NOT similar (under 0.15% dust gate)
+
+  Single holders (list + total)
+    Non-LP bags ≥ 0.01% of supply that are NOT in:
+      multi-account · multi-send · Shared SOL · Fresh · Similar-sized
+      (including Rugcheck insider)
+    Shown as a full wallet table with total % and hold-% color bands.
+    Standalone only — never counted in Total (multi + similar-sized).
+
+  Hard rule (v151+)
+    Any wallet that is a member of a Similar-sized group (or Rugcheck insider)
+    is stripped from Single on the server and again in the browser. Similar
+    cluster wallets appear only under Similar-sized.
+
+  Total interaction
+    Similar-sized enters Total only when Fresh, Multi-send, and Shared SOL
+    are all unchecked (§6.1). Single never enters Total.
+
+
+6.3i Bundle risk score (0–100) — how it works
+
+  What it is
+    A single 0–100 “bundle-like risk” number shown in the Bundles summary bar
+    (label: lower / moderate / elevated / high). Higher = more signals that
+    look like coordinated / concentrated non-LP ownership.
+
+    It is a heuristic from the top-holder snapshot — NOT legal proof of
+    collusion, NOT a sniper-graph product, and NOT the same as Total %.
+
+  Where the score draws its data from
+    Input = Holders tab result for this Analyze (holders must succeed first).
+
+    Primary sources fused into that holder list (Solana full Analyze):
+      • Helius DAS / RPC — token accounts, multi-ATA owner clusters, bag sizes
+      • Rugcheck — insider flags, risks, rugged-style tags when present
+      • Solscan / Birdeye (optional keys) — extra holder rows / totals
+      • Known LP / program labels — excluded from multi + similar risk groups
+
+    Optional Bundles categories (Fresh, Multi-send, Shared SOL) do NOT add
+    points to this score. They affect Total % rules and UI lists only.
+
+  Score components (added, then clamped to 0–100)
+    Code: token_tracker/bundles.py → analyze_bundles()
+
+    1) Multi-account clusters (cap +35)
+       Source: owner_clusters / multi-ATA (one wallet, several large ATAs).
+       Known LP / pool owners are dropped before scoring.
+       Formula:  min(35, 12 + clusters×8 + extra_ATAs×4)
+         extra_ATAs = total ATAs in clusters − number of cluster owners
+
+    2) Similar-sized top wallets (cap +25)
+       Source: near-exact bag groups among non-LP top holders (§6.3h gates).
+       Uses the LARGEST similar group only (by wallet count).
+       Weighting (current): only 50% of that group’s wallet count is used
+         for the score (UI still lists 100% of the group).
+       Formula:  min(25, 8 + (n × 0.5) × 4)
+         where n = wallets in the largest similar-size group
+
+    3) Rugcheck insider-flagged accounts (cap +25)
+       Source: holder rows with insider=true (non-LP).
+       Formula:  min(25, 10 + insiders×6)
+
+    4) Concentration — Top10 ex-LP (cap +20 / +12 / +6)
+       Source: summary.top10_pct_excluding_known_programs (§6.3a).
+         ≥ 85% → +20
+         ≥ 70% → +12
+         ≥ 55% → +6
+         else   → +0
+
+    Final score = min(100, round(sum of components above))
+    Risk label:
+      ≥ 70  high
+      ≥ 45  elevated
+      ≥ 25  moderate
+      else  lower
+
+  Example
+    Multi: 2 clusters, 5 ATAs total
+      → min(35, 12 + 2×8 + (5−2)×4) = min(35, 40) = 35
+    Similar: largest group has 8 wallets
+      → n_for_score = 4; min(25, 8 + 4×4) = min(25, 24) = 24
+    Insiders: 1
+      → min(25, 10 + 6) = 16
+    Top10 ex-LP: 62%
+      → +6
+    Total risk score = min(100, 35+24+16+6) = 81 → high
+
+  What the score does NOT use
+    - Fresh / Multi-send / Shared SOL / Launch-window scans
+    - Single holders list
+    - RugWatch cloud / Ruggers Flagged
+    - Social / news / sentiment
+    - Full mint holder count (Holders on mint) — display only, not in score
+
+  UI note
+    Website colors Bundle risk by score bands (green ≤25 · yellow ≤50 ·
+    orange ≤70 · red above). Re-Analyze after deploy to refresh the number.
+
 
 6.3a What “Top10 ex-LP” means
   Top10 ex-LP = combined % of supply held by the top non-LP / non-program
@@ -211,6 +500,582 @@ What people often ask
     - Shown on Bundles (and may appear in Logs bundles snapshot).
     - That % is NOT colored with the wallet holding priority bands
       (same idea as Top1 / Top5 / Top10 summary lines).
+
+6.3b What an Associated Token Account is (multi-account clusters)
+  On Solana, your wallet (owner address) does not hold SPL tokens directly.
+  Each token mint uses a separate token account. The standard one for
+  “this owner + this mint” is the Associated Token Account.
+
+    Wallet / owner  — the key people usually share (what Actual Data Token Checker colors as
+                      the holder when possible)
+    Associated Token Account — the on-chain account that actually holds
+                      that mint’s balance for that owner
+    Mint            — the token itself (contract / mint address)
+
+  Multi-account / multi Associated Token Account cluster
+    - Same owner controls more than one large token account for this mint
+    - Holder lists sometimes show the token-account address, not the owner
+    - Actual Data Token Checker rolls those up by owner when it can, so one person is not counted
+      as several unrelated holders
+    - Shown under ── MULTI-ACCOUNT CLUSTERS ── and Ruggers “Multi-account
+      clusters (1 Owner)”
+
+  This is a heuristic (“looks like one operator with several bags”), not
+  proof of identity.
+
+  Multi-account is NOT multi-send
+    - Multi-account = one owner, several of their own token accounts (structure
+      of how they hold).
+    - Multi-send = one wallet transferred tokens/SOL out to many other wallets
+      (distribution / fan-out). See §6.3e for the full contrast.
+
+6.3c Launch-window slots and same-slot multi-buys (reference)
+
+  ---------------------------------------------------------------------------
+  QUICK GLOSSARY (moved off the Bundles UI — read here)
+  ---------------------------------------------------------------------------
+  Slot
+    Solana chain time unit (~400 ms under normal conditions). Many txs can
+    land in one slot.
+
+  Launch-window
+    Early mint history Actual Data Token Checker scanned (toward older activity) —
+    not the full trading tape and not a guaranteed “second zero of launch.”
+
+  Same-slot multi-buys
+    Several different wallets bought this mint in the same Solana slot.
+    Multiple slot rows = multiple early co-timed bursts, not one owner repeated.
+
+  holds %
+    CURRENT bag size when known (from the holders snapshot when the address
+    matches) — not launch fill size / “% bought at that slot.” holds n/a =
+    current % unknown (not proof of a sell).
+
+  (These four lines used to appear under ── LAUNCH-WINDOW ── in Bundles;
+   they are documentation-only so the tab stays data-first.)
+
+  ---------------------------------------------------------------------------
+  PURPOSE (plain summary)
+  ---------------------------------------------------------------------------
+  Launch-window ≈ early mint history (toward the beginning of the token’s
+  on-chain life in the scan window) — NOT “the start of each buy cluster”
+  as a separate concept, and NOT a guaranteed “block 0 / first second of
+  launch” clock. Actual Data Token Checker paginates mint signatures toward older activity and
+  finds multi-wallet same-slot buy bursts in that early range.
+
+  Same-slot multi-buys = several DIFFERENT wallets bought this mint in the
+  SAME Solana slot (~400 ms). Multiple slot rows = multiple early moments
+  (a short history of co-timed buy bursts), not one owner repeated.
+
+  Percents on those wallets (holds X%) = CURRENT bag size from the holders
+  snapshot when the address matches — NOT “% bought at launch.” Remaining
+  holders who still appear in holders get a current % tied to that wallet;
+  holds n/a means current % unknown (not proof of a sell).
+
+  ---------------------------------------------------------------------------
+  PURPOSE (technical)
+  ---------------------------------------------------------------------------
+  Launch-window answers: “In early mint history, which multi-wallet buy
+  bursts landed in the same Solana slot?” It is a TIME-sliced BUY history
+  reconstructed from Helius-enhanced transaction data — not a live holders
+  table and not a Jito archive dump.
+
+  UI also shows timestamps:
+    - Each slot group: block time (UTC) when known from getTransaction
+    - Each wallet line under a slot: same slot time (and first-buy time when
+      available from the early-buyer map)
+
+  UI location
+    Bundles tab → ── LAUNCH-WINDOW ──
+    Bundles Signals → “Launch-window same-slot multi-wallet buys” (when hit)
+    Ruggers → “Same-slot multi-buys (bots) (launch-window)” — yellow banner;
+              sellers tagged at first full Analyze when Quick is OFF.
+              Description notes possible bots / snipers / MEV-bundle entry /
+              team multi-wallet buys (heuristic, not proof).
+
+  Related (not the same signal)
+    Multi-account     → same owner, multiple Associated Token Accounts (§6.3b)
+    Multi-send        → one sender → many receivers (token or SOL) (§6.3e)
+    Fresh / sole-token → wallet holds almost only this mint (§6.3f)
+    Similar-size      → similar current bag size (not time)
+    Shared SOL funder → common 1-hop SOL parent (not slot)
+    Holders tab       → current concentration snapshot
+
+
+  ---------------------------------------------------------------------------
+  SOLANA SLOT (chain definition)
+  ---------------------------------------------------------------------------
+  - Slot = discrete unit of Solana leader schedule / block production time
+    (on the order of ~400 ms under normal conditions; not a wall-clock minute).
+  - Many transactions may confirm in one slot; a single wallet may send
+    multiple txs inside one slot.
+  - “Same slot” on Actual Data Token Checker means the same integer slot field from getTransaction,
+    i.e. the same on-chain time bucket — not “same day” and not “same human
+    session.”
+
+
+  ---------------------------------------------------------------------------
+  HOW TOKEN CHECKER BUILDS SLOT GROUPS (pipeline)
+  ---------------------------------------------------------------------------
+  Source label in reports: jito_style / helius_enhanced_txs_same_slot_launch_window
+  Requires Helius (RPC / enhanced path). Without Helius the section stays empty
+  or unavailable.
+
+  1) Signature collection
+     - getSignaturesForAddress on the mint, paginated toward older activity
+       (launch / early window), not only the latest trades.
+     - Caps: limited signature pages and a max number of full tx fetches
+       (implementation defaults are finite — not an exhaustive chain archive).
+
+  2) Transaction decode
+     - For each signature: getTransaction (jsonParsed).
+     - Read slot (and blockTime when present).
+     - Extract buyers for this mint (§ buyer extraction below).
+
+  3) Bucket by slot
+     - by_slot[slot] ← list of { signature, buyers[], block_time }
+     - Within a slot, unique buyer addresses are unioned (set).
+
+  4) Emit group only if multi-wallet
+     - A slot becomes a displayed group only if unique_buyers >= 2.
+     - Single-wallet slots are dropped (not “multi-buy”).
+     - Group fields include: slot, tx_count, unique_buyers, wallets[],
+       signatures (sample), block_time, strength (medium if 2 wallets,
+       high if 3+).
+
+  5) Rank and attach
+     - Groups sorted by strength (unique_buyers, then tx_count).
+     - Fusion attaches current supply % from the holders map when the
+       address matches (see % semantics below).
+     - Bundles UI shows up to the top groups (not every historical slot).
+
+  Buyer extraction (per tx, best-effort)
+    - Fee payer (message.accountKeys[0]), and/or
+    - Token balance owners for this mint where post balance > pre balance
+      (owner field from pre/post token balances).
+    - Addresses are wallet/owner-oriented when balances expose owner; not a
+      guarantee against edge-case program accounts.
+
+
+  ---------------------------------------------------------------------------
+  UI LAYOUT MAP (Bundles → Launch-window)
+  ---------------------------------------------------------------------------
+  Conceptual structure of the report block:
+
+    ── LAUNCH-WINDOW ──
+    │
+    ├─ (glossary is not on the Bundles UI — see QUICK GLOSSARY above)
+    │
+    ├─ Same-slot multi-buys — total T% across N wallet(s):
+    │     T% = sum of UNIQUE wallets’ CURRENT supply % (deduped; cap 100)
+    │     N  = unique wallet count across all listed groups
+    │     Pump.fun / known LP vaults are excluded from the list and totals
+    │     (not shown as a note on the Bundles UI line)
+    │     (not sum of per-slot totals; repeats do not double-count T% / N)
+    │
+    ├─ • slot <SLOT_ID> @ <UTC time>: <U> wallets / <Tx> txs  ·  total G%
+    │  │    SLOT_ID = Solana slot integer
+    │  │    UTC     = blockTime for that slot when available
+    │  │    U       = unique non-LP buyers in THIS slot only
+    │  │    Tx      = transactions Actual Data Token Checker attributed to this slot bucket
+    │  │    G%      = sum of unique wallets’ CURRENT % inside this slot
+    │  │              (n/a if no % known for any member)
+    │  │
+    │  ├─ <wallet_A>  holds 22.00%  · @ <UTC>   ← CURRENT bag % + slot time
+    │  ├─ <wallet_B>  holds n/a     · @ <UTC>   ← CURRENT % unknown (see below)
+    │  └─ …
+    │
+    ├─ • slot <SLOT_ID_2> @ <UTC>: …
+    │  └─ <wallet_A>  holds 22.00%  · @ <UTC>   ← SAME address, DIFFERENT slot
+    │                                   (same CURRENT % reprinted)
+    │
+    └─ (empty placeholder if no multi-wallet slot groups)
+
+  Signals (summary line, when fusion fires)
+    “Launch-window same-slot multi-wallet buys”
+      → highlights the strongest group (most unique_buyers), with slot id,
+        wallet/tx counts, and how many slot groups / sigs were scanned.
+
+
+  ---------------------------------------------------------------------------
+  SEMANTICS: WHAT A SLOT REPRESENTS
+  ---------------------------------------------------------------------------
+  A slot row IS
+    - One time bucket in reconstructed early multi-wallet buy activity
+    - A set of DISTINCT addresses that increased mint exposure (buyer set)
+      in transactions landing in that slot
+    - Part of a partial history of buy *bursts*, not a complete trade tape
+
+  A slot row is NOT
+    - One owner (unless the group happens to list only addresses you later
+      prove related via multi-account / funder — Launch-window alone does not)
+    - Current holders roster for the mint
+    - Proof of Jito inclusion, same searcher, or same human operator
+    - The % of supply purchased *in that slot*
+
+
+  ---------------------------------------------------------------------------
+  MULTIPLE SLOTS AND THE SAME ADDRESS
+  ---------------------------------------------------------------------------
+  If address W appears under slot S1 and slot S2:
+    - W was classified as a buyer in (at least) both time buckets.
+    - That is multiple on-chain time periods of buy-side activity, not
+      multiple distinct owners.
+    - holds X% under both lines is the SAME current snapshot value
+      (reprinted for context), not “bought X% in S1 and another X% in S2.”
+    - Category total T% / N still count W once.
+
+  Example (illustrative)
+
+    Time ──►  [slot 500]     [slot 512]     [slot 520]     … later …
+                 W,A,B          W,C            W,D
+                 buy burst      buy burst      buy burst
+
+    Now holders snapshot: W ≈ 22%
+
+    UI:
+      • slot 500: …  W holds 22%   A holds …   B holds …
+      • slot 512: …  W holds 22%   C holds …
+      • slot 520: …  W holds 22%   D holds …
+
+    Interpretation:
+      W participated in three multi-wallet slots; current bag still ~22%
+      (net of all later sells/transfers — not a rising total of 22%×3).
+
+
+  ---------------------------------------------------------------------------
+  PERCENTAGES AND “n/a”
+  ---------------------------------------------------------------------------
+  holds P%
+    - P is CURRENT supply percentage from the Analyze holders fusion map
+      when the address matches a known holder row.
+    - It is NOT estimated buy size at launch, not cost basis, not per-slot
+      fill size.
+
+  holds n/a
+    - CURRENT % unavailable for that address in this run.
+    - Typical causes: not in top-holder snapshot; bag too small / sold down;
+      address not joined to owner map; holders path incomplete.
+    - Does NOT mean the wallet is nonexistent, invalid, or “sold for sure.”
+    - The address still appeared as a historical buyer in that slot.
+
+  Slot “total G%” / category “total T%”
+    - Aggregates of current holder % over unique wallets in scope.
+    - Unknown % wallets contribute no numeric share (they still count toward
+      wallet counts when listed).
+
+
+  ---------------------------------------------------------------------------
+  MULTIPLE WALLETS INSIDE ONE SLOT (OWNERSHIP)
+  ---------------------------------------------------------------------------
+  Addresses listed under one slot are different public keys unless the string
+  is identical. Launch-window does not merge them into one owner.
+
+    Same slot, different addresses  →  co-temporal buys (coordination signal)
+    Same address, different slots   →  one wallet, multi-period buy activity
+    Multi-account section           →  same owner, multiple Associated Token
+                                       Accounts (ownership heuristic)
+    Shared SOL funder               →  different wallets, common funder hop
+
+  Same-slot multi-wallet activity is consistent with bots, snipers, team
+  wallets, or independent buyers colliding on the same slot. Actual Data Token Checker records the
+  pattern; it does not adjudicate which story is true.
+
+
+  ---------------------------------------------------------------------------
+  DEPENDENCIES AND LIMITS
+  ---------------------------------------------------------------------------
+  - Solana-focused; full same-slot fusion is not the primary path on EVM
+    chains.
+  - Needs Helius; scan depth is capped (not full mint lifetime).
+  - Prefers older collected signatures (launch-oriented window), so recent-
+    only activity may be under-represented if outside the scanned set.
+
+  ---------------------------------------------------------------------------
+  See also §6.3d TIME SLOTS for what timestamps mean (on-chain vs Ruggers).
+  ---------------------------------------------------------------------------
+  - Buyer extraction is heuristic (fee payer + balance deltas).
+  - Strength labels and suspect tagging are risk heuristics, not forensic
+    identity.
+
+  Quick mode
+    Full holder/bundle paths (including launch-window enrichment) are reduced
+    or skipped; use full Analyze for Launch-window + Ruggers baseline tags.
+
+
+--------------------------------------------------------------------------------
+6.3d TIME SLOTS
+--------------------------------------------------------------------------------
+
+  Two different timestamp systems. Do not mix them up.
+
+  ---------------------------------------------------------------------------
+  A) BUNDLES — same-slot multi-buys (on-chain)
+  ---------------------------------------------------------------------------
+  What the number next to “slot” is
+    - The Solana slot ID (integer from getTransaction.slot)
+    - ~400 ms chain time bucket — not a wallet count or a %
+
+  What “@ YYYY-MM-DD HH:MM:SS UTC” means
+    - On-chain time for that activity (transaction blockTime), when known
+    - When those multi-wallet buys landed on Solana for that slot
+    - NOT the time you clicked Analyze / looked up the mint
+
+  Where Actual Data Token Checker sources it
+    1) Helius Solana RPC: getSignaturesForAddress on the mint
+    2) Helius: getTransaction (jsonParsed) for each signature scanned
+    3) Fields used: slot + blockTime (unix seconds → displayed UTC)
+    4) Buyers inferred from the same tx (balance increase / fee payer), then
+       grouped by slot (need ≥2 wallets for a multi-buy group)
+
+  Launch-window vs slot time
+    - Launch-window = early mint history Actual Data Token Checker scanned (toward older activity)
+    - Slot timestamp = when that particular co-timed buy burst confirmed
+    - holds X% next to a wallet = CURRENT bag from holders map (if known),
+      not “% bought at that timestamp”
+
+  Limits
+    - Only txs inside the capped early scan (not full mint lifetime)
+    - Needs Helius; missing blockTime → slot number only
+    - Heuristic buyers; not a full DEX trade tape
+
+
+  ---------------------------------------------------------------------------
+  B) RUGGERS — wallet row timestamps (tracking, this browser)
+  ---------------------------------------------------------------------------
+  These are NOT on-chain buy times. They are when THIS site’s full Analyze
+  updated local Ruggers tracking for that wallet on this mint.
+
+  | Label   | Meaning                                                      |
+  |---------| | ------------------------------------------------------------ |
+  | seen    | First time Actual Data Token Checker tracked this wallet on this mint (baseline /  |
+  |         | first status).                                               |
+  | sold    | First time tracking marked them a seller (≥99% of first bag  |
+  |         | or equivalent rule after a later Analyze).                   |
+  | swing   | First time tracking saw a buy-back after a sell (if shown).  |
+
+  Not shown
+    - “last” (last status refresh) is intentionally omitted from the UI.
+
+  Example
+    Analyze 1 full → wallet in baseline     → seen
+    Analyze 2      → bag sold ≥99%          → sold
+    Analyze 3      → holding again          → swing (if buy-back)
+
+  Storage
+    - Browser localStorage for this mint track (not a global server clock)
+    - Different from Bundles @ UTC (Helius blockTime)
+
+
+  ---------------------------------------------------------------------------
+  QUICK COMPARE
+  ---------------------------------------------------------------------------
+  | Where              | Source              | Means                          |
+  |--------------------|---------------------|--------------------------------|
+  | Bundles slot @ UTC | Helius blockTime    | On-chain buy / slot time       |
+  | Bundles slot #     | Solana slot integer | Which chain time bucket        |
+  | Ruggers seen/sold  | Browser tracking    | When Analyze recorded events   |
+  | Ruggers swing      | Browser tracking    | When buy-back was detected     |
+
+
+6.3e Multi-send vs multi-account (NOT the same)
+
+  Multi-send is NOT multi-account clusters. They answer different questions
+  and appear in different Bundles sections.
+
+  ---------------------------------------------------------------------------
+  MULTI-ACCOUNT CLUSTERS  (── MULTI-ACCOUNT CLUSTERS ──)  — see also §6.3b
+  ---------------------------------------------------------------------------
+  What
+    One wallet owner holds this mint across several large Associated Token
+    Accounts (ATAs). Structure of how they hold — still one owner.
+
+  Question it answers
+    “Is this one operator’s bag split across multiple token accounts?”
+
+  What you see
+    Owner address · how many Associated Token Accounts · total % for that
+    owner (combined bag).
+
+  Source
+    Holder snapshot / owner-cluster heuristics (roll token accounts up by
+    owner when possible).
+
+  What it is NOT
+    Not “this wallet sent tokens to other people.”
+    Not proof of multiple people.
+
+  ---------------------------------------------------------------------------
+  MULTI-SEND (ONE → MANY)  (── MULTI-SEND (ONE → MANY) ──)
+  ---------------------------------------------------------------------------
+  What
+    One wallet transferred this mint (token multi-send) or SOL (SOL multi-
+    send / shared-funder style fan-out) to many different receiver wallets.
+
+  Question it answers
+    “Did someone seed or distribute tokens/SOL out to many wallets?”
+
+  What you see
+    - Summary “Multi-send total” = combined current supply % of unique
+      wallets involved (senders + receivers when % known)
+    - Flat list of those wallets by current hold % (largest first)
+    - Cluster breakdown: sender → N receivers, cluster total %, receivers
+      listed by hold %
+
+  Flavors
+    Token multi-send  — one owner sent THIS mint to many wallets
+                        (Helius recent mint tx history; full Analyze)
+    SOL multi-send    — one funder sent SOL to many children
+                        (same idea as ── SHARED SOL FUNDER ── fan-out)
+
+  What it is NOT
+    Not multi-account clusters (those stay under one owner’s ATAs).
+    Not proof the receivers are the same person as the sender.
+    Best-effort from capped history — not a full archive.
+
+  ---------------------------------------------------------------------------
+  SIDE-BY-SIDE
+  ---------------------------------------------------------------------------
+  |                     | Multi-account              | Multi-send              |
+  |---------------------|----------------------------|-------------------------|
+  | Who                 | One owner                  | One sender → many       |
+  |                     |                            | receivers               |
+  | What happens        | Holds via several ATAs     | Sends out to others     |
+  | Wallets involved    | One owner (many accounts)  | Many distinct wallets   |
+  | Bundles section     | MULTI-ACCOUNT CLUSTERS     | MULTI-SEND (ONE → MANY) |
+  | Typical story       | One bag, split accounts    | Distribution / seeding  |
+
+  Both can appear on the same mint. Treat them as separate heuristics.
+
+
+6.3f Fresh wallets (notation)
+
+  Section in Bundles: ── FRESH WALLETS ──
+  Summary line:       Fresh total: X%  (N wallet(s))
+  Ruggers section:    Fresh wallets (same sell ≥99% / Swing identity rules)
+
+  What “fresh wallets” means here
+    A holder of THIS mint whose wallet has almost no other SPL tokens with
+    balance — typically only this mint (tag sole-token) or near-sole
+    (very few other tokens). Heuristic via Helius
+    getTokenAccountsByOwner + getBalance; full Analyze; Solana-focused.
+
+  Question it answers
+    “Which current holders look like new or single-purpose bags for this
+    coin (not diversified portfolios)?”
+
+  What you see (same layout style as multi-send)
+    - Summary “Fresh total” = combined current supply % of unique fresh
+      wallets (when % known)
+    - Section header: total X% across N wallet(s)
+    - Flat list sorted by current hold % (largest first):
+        #N  wallet  holds X%  ·  SOL bal  ·  other tokens=N  ·  tag
+
+  Tags
+    sole-token       — only this mint with balance (0 other SPL tokens)
+    near-sole-token  — at most a tiny number of other tokens (scan cap)
+
+  Limits / notation
+    - Fresh ≠ “brand-new wallet on chain” as a birth date; it means
+      “almost only this mint in token inventory right now.”
+    - Closed ATAs / zero balances / other chains are not counted as
+      “other tokens.”
+    - Seeded from non-LP top holders / suspects / similar / early buyers
+      (capped RPC scan) — not every holder on the mint.
+    - Not the same as multi-account, multi-send, similar-size, or
+      launch-window (see comparison table in §6.3).
+    - Heuristic only — not KYC or identity proof.
+
+  UI location
+    Bundles tab → summary “Fresh total” + ── FRESH WALLETS ──
+    Bundles Signals → “Fresh wallets” when any are found
+    Ruggers tab → Fresh wallets (sellers after ≥99% of first bag)
+
+
+6.3g Helius pings — per feature / checkbox (full Analyze)
+
+  These are approximate JSON-RPC calls to Helius on a full Analyze (not Quick).
+  Free Helius: ~1M credits/month (reset monthly), ~10 req/s. This app throttles
+  near ~8/s and retries 429s. Caps/typical ranges — not exact every mint.
+  Most standard RPC methods cost ~1 credit each on Helius.
+
+  ── A) Per feature (what each piece costs alone) ──────────────────────────
+
+  ┌──────────────────────────┬──────────────┬────────────────────────────────┐
+  │ Feature / checkbox       │ Approx pings │ Notes                          │
+  ├──────────────────────────┼──────────────┼────────────────────────────────┤
+  │ Holders (tab + Bundles)  │ ~6           │ Always on full Analyze         │
+  │                          │              │ (~3 per path × 2 paths)        │
+  ├──────────────────────────┼──────────────┼────────────────────────────────┤
+  │ Shared SOL (checkbox)    │ 0 – ~156     │ HEAVIEST optional scan         │
+  │                          │              │ up to 12 wallets × (1 sig list │
+  │                          │              │ + up to 12 getTransaction)     │
+  │                          │              │ Powers Shared SOL funder +     │
+  │                          │              │ SOL multi-send                 │
+  ├──────────────────────────┼──────────────┼────────────────────────────────┤
+  │ Fresh (checkbox)         │ 0 – ~36      │ up to 12 wallets × 3 RPCs each │
+  │                          │              │ (token accounts ×2 + balance)  │
+  ├──────────────────────────┼──────────────┼────────────────────────────────┤
+  │ Multi-send (checkbox)    │ 0 – ~21      │ Token multi-send only:         │
+  │  · token multi-send      │              │ 1 getSignatures + ≤20 getTx    │
+  │  · SOL multi-send        │ +0           │ Reuses Shared SOL data (no     │
+  │                          │              │ extra pings if Shared SOL on)  │
+  ├──────────────────────────┼──────────────┼────────────────────────────────┤
+  │ RugWatch (checkbox)      │ 0            │ No Helius (local + cloud list) │
+  ├──────────────────────────┼──────────────┼────────────────────────────────┤
+  │ Multi-account clusters   │ 0 extra      │ From holders snapshot only     │
+  ├──────────────────────────┼──────────────┼────────────────────────────────┤
+  │ Similar-size / insider / │ 0 extra      │ From holders / Rugcheck data   │
+  │ suspect (display)        │              │                                │
+  ├──────────────────────────┼──────────────┼────────────────────────────────┤
+  │ Launch-window            │ 0            │ Disabled (not run)             │
+  └──────────────────────────┴──────────────┴────────────────────────────────┘
+
+  Rank by load (high → low): Shared SOL ≫ Fresh > Multi-send (token) >
+  holders base. RugWatch / multi-account / similar-size add no Helius pings.
+
+  ── B) Optional checkboxes only (add-on cost) ─────────────────────────────
+
+  ┌────────────────────────────────┬─────────────────────────────────────────┐
+  │ Checkboxes ON                  │ Approx extra Helius pings               │
+  ├────────────────────────────────┼─────────────────────────────────────────┤
+  │ Shared SOL only                │ up to ~156                              │
+  │ Fresh only                     │ up to ~36                               │
+  │ Multi-send only                │ up to ~21  (token; SOL multi empty)     │
+  │ Fresh + Multi-send             │ up to ~57  (Shared SOL off)             │
+  │ Shared SOL + Multi-send        │ up to ~177 (token multi + funding)      │
+  │ Shared SOL + Fresh             │ up to ~192                              │
+  │ All three (Fresh+Multi+Shared) │ up to ~213                              │
+  │ All optional OFF               │ 0 extra                                 │
+  └────────────────────────────────┴─────────────────────────────────────────┘
+
+  ── C) Full Analyze totals (holders ~6 + optional) ────────────────────────
+
+  ┌────────────────────────────────┬──────────────────┬──────────────────────┐
+  │ Checkboxes (full Analyze)      │ Typical pings    │ Worst case (approx)  │
+  ├────────────────────────────────┼──────────────────┼──────────────────────┤
+  │ All optional OFF               │ ~6–20            │ ~20                  │
+  │ Multi-send only                │ ~20–40           │ ~30                  │
+  │ Fresh only                     │ ~30–50           │ ~45                  │
+  │ Fresh + Multi (Shared off)     │ ~50–80           │ ~65                  │
+  │ Shared SOL only                │ ~50–100          │ ~162                 │
+  │ Shared SOL + Multi             │ ~70–130          │ ~185                 │
+  │ Shared SOL + Fresh             │ ~80–140          │ ~200                 │
+  │ Fresh + Multi + Shared SOL     │ ~90–150          │ ~220                 │
+  └────────────────────────────────┴──────────────────┴──────────────────────┘
+
+  Notes
+    - First time you need Fresh + Multi-send + Shared SOL: check all three on
+      ONE Analyze (fewer total pings than three separate runs — base ~6 once).
+    - Shared SOL is the heaviest load. Uncheck it to save the most credits.
+    - Token multi-send works with Multi-send alone (needs Helius).
+    - SOL multi-send only fills when Shared SOL also ran (same funding data).
+    - 429s on free Helius (~10 RPS) are rate limits, not the same as credit burn;
+      wait 30–60s after a 429 before re-clicking Analyze.
+    - Quick mode skips holders/bundles Helius-heavy paths (much lighter).
+    - HELIUS_API_KEY is server-side only (Render / .env), not web/config.js.
+    - Free plan: 1M credits refresh monthly (see Helius dashboard).
+
 
 6.4 Bundle % alert scheme (Alerts tab)
   Alerts use ONE number: estimated bundle % of supply
@@ -271,8 +1136,13 @@ What people often ask
     - High bundle % with many smaller similar wallets
 
 6.7 Extra signals that feed risk (not the same as the % bands)
-  - Multi-ATA clusters (one owner, several accounts)
-  - Similar-sized top wallets
+  - Multi Associated Token Account clusters (one owner, several token
+    accounts — §6.3b) — not multi-send
+  - Multi-send one → many (token and/or SOL fan-out — §6.3e) — not multi-account
+  - Fresh / sole-token wallets (almost only this mint — §6.3f)
+  - Similar-sized top wallets (exact / near-exact clusters + Rugcheck insider — §6.3h)
+  - Single holders list (standalone ≥0.01%; not in Total — §6.3h)
+  - Launch-window same-slot multi-buys — disabled (see §6.3c for historical notes)
   - Rugcheck insider_count, rugged=true, risk names (bundle/sniper/insider/…)
   - Birdeye bundler/sniper/insider/dev % tags (if API key set)
   - Mint/freeze authority style security flags (Birdeye)
@@ -360,6 +1230,10 @@ alerts you can read.
 9. MAPS TAB
 --------------------------------------------------------------------------------
 
+Website section markers: ── MAPS — Bubblemaps ── · ── TOKEN ── · ── MAP LINKS ──
+  · ── MAP LINKS ── · ── DATA API ── (when Pro API is attempted)
+
+
 Links to Bubblemaps (and similar) wallet-cluster visualizations when the
 chain is supported. Click through to explore holders visually.
 Robinhood / EVM maps depend on Bubblemaps support for that chain.
@@ -369,31 +1243,138 @@ Robinhood / EVM maps depend on Bubblemaps support for that chain.
 10. ABOUT TAB — SECTIONS EXPLAINED
 --------------------------------------------------------------------------------
 
-About is split into story + community + news + links.
+About is built from several public sources (not one API). Full Analyze loads
+it; Quick mode often skips or thins this work.
 
+About is split into major sections (dim-green ── TITLE ── on the website):
+
+  ── NARRATIVE ──           storyline, theme, description sources, hooks
+  ── X / COMMUNITY POSTS ── tone, sources, recent posts
+  ── PUBLIC NEWS ──         public news headlines + links
+  ── LINKS ──               website, DexScreener, Solscan, X, Telegram, etc.
+  ── LINKEDIN ──            its own section (profiles/company pages + snippets)
+
+Not financial advice. Text is best-effort, filtered, and can be empty when
+APIs block or the token is too new.
+
+Top summary link bar (under market summary)
+  Shows dexscreener · solscan · twitter · website · telegram · etc.
+  Does NOT show raw metadata_uri / image JSON links (hidden by design).
+  metadata_uri is still used internally for About text when available.
+
+--------------------------------------------------------------------------------
+10.0 WHERE THE DATA COMES FROM (SOURCE MAP)
+--------------------------------------------------------------------------------
+
+A) Official / listing copy (“what the project claims”) — coin_facts
+  Used first for the storyline and “official description.”
+  Best-effort, short timeouts; failures are soft (no crash).
+
+  | Source                         | What we take                          |
+  |--------------------------------|---------------------------------------|
+  | CoinGecko contract endpoint    | Description, categories, links        |
+  | On-chain metadata URI (JSON)   | Metaplex-style description / links    |
+  | Pump.fun coin JSON API         | Description, name, twitter, telegram, |
+  |   (not HTML scrape of pump.fun)| website, metadata URI when present    |
+  | Birdeye (when available)       | Description / extensions              |
+  | DexScreener pair / profile     | Description, socials, websites        |
+  | CoinMarketCap (when found)     | Description / links                   |
+  | Jupiter / token lists          | Tags (meme, AI, …)                    |
+  | Solscan (when used)            | Metadata / links                      |
+  | Rugcheck                       | Meta description, risk text notes     |
+  | Project website OG / meta      | Page description when a site is linked|
+
+  Pump.fun detail
+  - About does NOT scrape the HTML page https://pump.fun/<mint>.
+  - It calls the same style of JSON the site uses, e.g.:
+      frontend-api.pump.fun/coins/{mint}
+      frontend-api-v3.pump.fun/coins/{mint}
+  - That JSON supplies description + social URLs when the API responds.
+  - Cloudflare / API downtime → no Pump data for that run (normal).
+
+  Raydium
+  - Used for MARKET pairs/price fallback when DexScreener is weak — NOT for
+    About narrative copy (no description/social feed from Raydium).
+
+B) Community / web chatter — social_sources (secondary only)
+  | Source                    | Role                                      |
+  |---------------------------|-------------------------------------------|
+  | X / Twitter               | Project handle posts + $ticker search     |
+  | Reddit public search JSON | Recent posts mentioning ticker/name       |
+  | Google News RSS           | Headlines                                 |
+  | LinkedIn                  | Profile links + site:linkedin.com search |
+  | DuckDuckGo HTML           | Web blurbs (may tag TikTok/IG/LinkedIn)   |
+  | Linked social URLs        | IG/TikTok/X/Telegram/LinkedIn on profile  |
+
+  X / Twitter detail
+  - Primary handle usually from DexScreener socials (and extra X links).
+  - Optional X API (if X_BEARER_TOKEN set) + free Nitter-style mirrors.
+  - Pump.fun twitter field: stored as a linked social + coin links.
+  - Full X timeline/bio scrape uses the project handle — mainly when Dex
+    (or merged socials) provide it. Pump-only X is always noted as a link;
+    posts/bio may not run if that handle is never set as twitter_handle.
+  - Does NOT resolve “creator wallet → personal X account” by itself.
+
+  Reddit / LinkedIn / TikTok / Instagram
+  - No free full-feed APIs for IG/TikTok/LinkedIn.
+  - Reddit: public search.json (best-effort).
+  - LinkedIn: profile links on the token + DuckDuckGo site:linkedin.com.
+  - IG/TikTok: only public links and search mentions, not full scrapes.
+
+C) What About does NOT use
+  - RugWatch local/cloud wallet database (that is Holders / Alerts / Ruggers)
+  - Full holder scans
+  - Paid news terminals (Bloomberg, etc.)
+  - Invented backstory when no official copy exists
+
+Priority rule
+  Official/listing descriptions rank above community/web chatter.
+  Community snippets are filtered to mentions of this ticker, name, or
+  contract when possible.
+
+--------------------------------------------------------------------------------
 10.1 NARRATIVE (“What this token is about”)
+--------------------------------------------------------------------------------
+
   - Multi-paragraph storyline from official descriptions first, then
     filtered community/web text.
-  - Sources can include: CoinGecko, on-chain metadata URI, Pump.fun,
-    Birdeye, DexScreener profile, website meta/OG, Jupiter tags,
-    Rugcheck meta, etc.
   - Theme labels (politics, AI, animal meme, CTO, …) come from keyword
-    matching on name/description/posts — see theme keywords in the app’s
-    narrative module if you need the full lists.
+    matching on name/description/posts.
   - Confidence: high / medium / low depending on whether real project
-    copy was found.
+    copy was found (and which source won).
+  - “Hype:” (single block; not “Why people seem interested” / Key hooks) may include:
+      · listing categories / tags / theme fits
+      · Reddit / news / social signals when they add real content
+      · market move / bonding-curve FOMO when real
+  - Interest + attention drivers are merged and de-duplicated (no repeated
+    language; no restating the official description).
+  - LinkedIn is only in the About ── LINKEDIN ── section (not under Hype).
+    Hollow lines like “metadata is available” with no prose are not shown.
   - If no official description exists, the app refuses to invent a
-    backstory.
+    backstory (market tags + filtered chatter only).
 
+--------------------------------------------------------------------------------
 10.2 Description sources / listing tags / risk notes
-  - Short labeled quotes from each string source.
+--------------------------------------------------------------------------------
+
+  - Short labeled quotes from each string source (e.g. [pumpfun], [coingecko]).
   - Jupiter-style tags when present.
   - Rugcheck risk text (context, not a novel).
 
+--------------------------------------------------------------------------------
 10.3 X / COMMUNITY POSTS (social / web score)
+--------------------------------------------------------------------------------
+
   Where: About → “X / COMMUNITY POSTS”
 
-  Fields you see
+  Compact meta (always with values or n/a)
+    Tone: <label> · score <n|n/a> · kind <kind> · posts analyzed <n>
+    Sources: <list or n/a>
+    Handle / Profile when known
+    Summary / Note when present
+    Then: Recent X posts (or empty-message)
+
+  Fields
     Label   bullish | bearish | mixed | neutral | unknown
     Score   about −1.0 (bearish) to +1.0 (bullish)
     Kind    how the score was made (see below)
@@ -401,7 +1382,7 @@ About is split into story + community + news + links.
     Sample posts     recent snippets (may include links)
 
   Kind: text-based (x_text / social_web_text)
-    - Reads posts (project X via free mirrors, optional X API, search).
+    - Reads posts (project X via free mirrors, optional X API, $ticker search).
     - Counts positive vs negative keyword hits (lexicon).
     - score = (positive − negative) / (positive + negative)
     - Labels:
@@ -427,8 +1408,13 @@ About is split into story + community + news + links.
   Important
     - Keyword scoring is crude (slang, sarcasm, and bots break it).
     - Empty posts → score may fall back to market_crowd or unknown.
+    - Pump.fun-linked X is a social link; timeline scrape needs a project
+      handle (usually DexScreener) to populate sample posts.
 
+--------------------------------------------------------------------------------
 10.4 PUBLIC NEWS
+--------------------------------------------------------------------------------
+
   Where: About → “PUBLIC NEWS”
 
   What it is
@@ -456,9 +1442,21 @@ About is split into story + community + news + links.
     - Not verified PR unless it shows up in public search
     - Not a trading signal by itself
 
-10.5 LINKS
-  Website, X, Telegram, DexScreener, Solscan / explorers (including
-  Robinhood Blockscout when chain is robinhood), etc.
+--------------------------------------------------------------------------------
+10.5 LINKS + LINKEDIN
+--------------------------------------------------------------------------------
+
+── LINKS ──
+  Website, X, Telegram, DexScreener, Pump.fun page, Solscan / explorers
+  (including Robinhood Blockscout when chain is robinhood), Bubblemaps, etc.
+
+  Merged from DexScreener socials, coin_facts links (Pump.fun API
+  twitter/telegram/website), and narrative URLs. LinkedIn is NOT mixed
+  into this block.
+
+── LINKEDIN ──
+  Own About section. Company / profile pages and public search snippets
+  when found (LinkedIn has no free full feed API). Empty placeholder if none.
 
 
 --------------------------------------------------------------------------------
@@ -467,45 +1465,128 @@ About is split into story + community + news + links.
 
 Subtitle: Ruggers
 
-The Ruggers tab sits next to About (before Logs) on the website. It tracks
-wallets from your first successful full Analyze of a mint, then lists only
-those that later sold out almost completely.
+The Ruggers tab sits next to About (before Logs) on the website. It freezes
+a holder/bundle baseline on your FIRST full Analyze of a mint, then on later
+Analyzes lists only wallets that sold ≥99% of that first bag (or left the
+holder list). Buy-backs go to Swing with the same origin label.
 
 Not financial advice. “Seller” / “swing” labels are heuristics from holder
 snapshots, not proof of a rug or intent.
 
 What Ruggers is for
-  - Freeze who held what on your FIRST full lookup of a token (from the
-    same holder/bundle data that feeds Logs).
-  - On later Analyzes of that mint, find wallets that sold ≥99% of that
-    first bag — or disappeared from the holder list.
-  - Separate similar-size group members from single whales and the creator.
-  - Flag buy-backs after a dump as swing (section: Swing traders).
-  - Help YOU spot dump wallets so you can copy them into RugWatch yourself
-    (see §12 — RugWatch is your local DB; the website does not fill it).
+  - Freeze who held what on FIRST full lookup (Holders + Bundles tags).
+  - On later Analyzes, list wallets that sold ≥99% of that first bag.
+  - Keep each wallet in its category (creator / similar / multi / funder /
+    insider / launch / suspect / single / Flagged RugWatch).
+  - Sticky: if they never buy back, they stay in that section permanently
+    (this browser). Buy-back → Swing (label kept) → sell again → same section.
+  - Upload / Export seller wallets into YOUR RugWatch list (see §12).
+  - Each wallet row shows timestamps when known (see §6.3d TIME SLOTS):
+      seen · sold · swing (buy-back). No “last” line.
+    Browser-local tracking times — not on-chain buy times.
 
 How tracking starts (first lookup)
   After a successful full Analyze (Quick OFF) with holders:
 
-  1. Top non-LP holders from the Holders snapshot are stored as a baseline.
-  2. Similar-size wallets from Bundles (similar-size groups) are included.
+  1. Category wallets + plain holders with measurable bag ≥ 0.01% are frozen
+     as baseline (cap ~450 wallets per mint so the browser can save the track).
+  2. Bundles tags attach: similar-sized (near-exact + Rugcheck insider),
+     multi-account, multi-send, shared funder, fresh.
   3. Creator wallet (when known) is included.
   4. Each wallet’s first supply % (and balance when known) is frozen.
-  5. That freeze is what later “sold % of holdings” is measured against.
+     Without a measurable first bag, a later dump cannot be proven.
+  5. Origin lane is frozen once (see chart below). Later Analyzes do not
+     rename the wallet to another lane (except promote into similar-sized
+     in rare cases).
+
+  Seller lists stay empty until a SECOND full Analyze of the same mint after
+  dumps. Console may show “baseline freeze” then “compare”.
+
+New holders on later Analyzes (after the first full Analyze)
+  On each subsequent full Analyze:
+
+  1. Any NEW trackable wallet currently holding is enrolled — first bag =
+     what they hold on that first sight (null bags may be filled while listed).
+  2. RugWatch-flagged wallets that show up as holders later are enrolled too.
+  3. If they later sell ≥99% of that first-sight bag (or drop off holders):
+       · On RugWatch list → Ruggers Flagged (RugWatch) ↔ Swing
+       · Similar-sized (and not forced Flagged) → Similar-sized ↔ Swing
+       · Otherwise plain holder → Single ↔ Swing
+       · Creator still only the one mint creator address
+  4. Wallets Uploaded from this mint’s Ruggers sections still stay in their
+     origin section on this mint (not re-routed to Flagged here).
 
   Quick mode does not start or update Ruggers (no full holder scan).
+  Track is stored in this browser (localStorage + in-memory fallback). Old
+  dual-key / huge freezes were trimmed so baselines actually save (v148+).
+
+Where each Ruggers section comes from (Holders / Bundles)
+
+  | Ruggers section                         | Tied to (at first full Analyze)           |
+  |-----------------------------------------|-------------------------------------------|
+  | Creator (sold ≥99%)                     | The one mint creator wallet only          |
+  |                                         | (never a list of many “creators”)         |
+  | Similar-sized wallets (sellers)         | Bundles near-exact bag groups + Rugcheck  |
+  |                                         | insider — same as Bundles Similar-sized   |
+  |                                         | (§6.3h); NOT multi-account                |
+  | Multi-account clusters (1 Owner)        | Holders/Bundles owner clusters (multiple  |
+  |                                         | Associated Token Accounts — §6.3b)        |
+  | Multi-send (one → many)                 | Bundles multi-send (token + SOL fan-out)  |
+  |                                         | — NOT multi-account (§6.3e)               |
+  | Shared SOL funder clusters (1-Owner)    | Bundles funding clusters (1-hop SOL)      |
+  | Fresh wallets                           | Bundles fresh wallets (almost only this   |
+  |                                         | mint) — §6.3f; same sell/swing identity   |
+  | Single wallets (sellers)                | Plain holders ≥0.01%, none of the above   |
+  |                                         | (see “Lane: Single” below)                |
+  | Flagged wallets (RugWatch)              | YOUR RugWatch cloud/local + sold ≥99%     |
+  | Swing traders                           | Buy-back after ≥99% sell (any origin lane)|
+
+  Launch-window lane: disabled (no same-slot multi-buy Ruggers section).
+
+  Priority if a wallet fits more than one lane at first discovery:
+    creator → similar-sized (similar/insider) → multi → multi_send →
+    funding → fresh → single
+
+  Every lane keeps the same wallet identity fields: first bag %, sold % of
+  supply, holds % on Swing, seen/sold/swing times, sticky origin label,
+  Export + Upload.
+
+  Flagged (RugWatch) is a separate path (sold while on your RugWatch list),
+  not a Bundles category name. Title on the site: Flagged wallets (RugWatch)
+  with “RugWatch” in dim yellow.
+
+Lane: Single (Single wallets (sellers))
+  “Single” is an origin lane — not “one-time seller” and not “sold alone.”
+
+  Who lands here (at FIRST full Analyze of this mint):
+    - Non-LP holder with a measurable bag ≥ ~0.01% of supply, AND
+    - Not creator, not similar-sized (near-exact cluster or Rugcheck insider),
+      not multi-account, not multi-send, not shared funder, not fresh
+      (after the priority list above).
+
+  Meaning in plain language:
+    A “normal-looking” plain holder who later dumped ≥99% of that first bag
+    (or dropped off the holder list). No special Bundles/cluster tag beat
+    them into a higher lane. Matches Bundles Single holders (§6.3h).
+
+  Sticky like other origin lanes:
+    - Once Single on this mint, later Analyzes do not re-lane them just
+      because tags change.
+    - Sell → stay under Single; buy-back → Swing (label kept single);
+      sell swing bag → back to Single.
+
+  Not Single:
+    - Creator, Similar-sized (exact/near-exact groups + Rugcheck insider),
+      Multi, Multi-send, Shared funder, Fresh (higher priority)
+    - Flagged (RugWatch) path (separate — sold while already on your list)
+    - Holders who never had a measurable first bag on first full Analyze
 
 Does the number of lookups before they sell matter?
   NO. Lookup count does not matter.
 
   - Sale is always measured against the FIRST full lookup bag only.
-  - It does not matter if the dump shows up on the 2nd, 3rd, 10th, or
-    50th full Analyze of the same mint.
-  - Creator, similar wallets, and single wallets from that first freeze
-    are all treated the same way: whenever a later full Analyze first
-    shows they sold ≥99% (or dropped off the list), they count as sellers.
-  - Intermediate lookups do not reset or weaken tracking. You do not need
-    to “catch” the sell on a particular lookup number.
+  - Dump can appear on the 2nd, 3rd, 10th, or 50th full Analyze — same rule.
+  - Intermediate lookups do not reset tracking.
 
   Example
     Lookup 1: wallet holds 5% (frozen as first bag)
@@ -519,125 +1600,284 @@ What “sold ≥99%” means
     remaining_first_bag ≤ 1% of first bag
     OR the wallet is no longer on the holder list (treated as sold 100%)
 
+  “Dropped off holder list” (UI reason text)
+    Shown on a seller row when reason = not_listed.
+
+    Meaning:
+      We froze a positive first bag on an earlier full Analyze for this mint,
+      and on a later full Analyze that wallet is no longer on the top-holders
+      snapshot. Ruggers treats that as sold 100% of the first bag
+      (same seller threshold family as ≥99%).
+
+    UI companion texts on seller rows:
+      dropped off holder list  — had first bag → gone from holders → full dump
+      dumped ≥99% of first bag  — still listed, remaining ≤1% of first bag
+      dumped full first bag     — still listed at ~0 of first bag
+      sold ≥99% of swing bag → back to origin  — dumped after a buy-back
+
+    Safety rule (not a false sell):
+      Unknown / empty first bag + off the holder list is NOT counted as a sell.
+      (Common for creator-style wallets that hold but sit outside top-N —
+       we never freeze a real bag for them, so “gone from list” alone is not
+       treated as 100% sold.)
+
+    Display on seller rows also shows “now not listed” when they are off the
+    current holder snapshot (vs “now X%” when still listed).
+
   Examples
     First hold 5.00% of supply → still listed with 0.04% → seller (~99.2% sold)
     First hold 5.00% → still listed with 0.10% → NOT listed (only 98% sold)
-    First hold 5.00% → gone from top holders → seller (not listed anymore)
+    First hold 5.00% → gone from top holders → seller
+      (UI: “dropped off holder list”; treated as 100% of first bag)
     First hold 5.00% → sold out, then later holds 1% again → swing
     First hold 5.00% → still holding until 10th lookup, then sold ≥99%
       → still a seller (lookup number does not matter)
+    Never had measurable first bag → off list → NOT a seller
+      (unknown baseline; avoids false “100% sold”)
 
   Wallets that never sold ≥99% are ignored (not shown).
 
-Sections on the Ruggers tab
-  1. Creator (sold ≥99%)
-       Creator only, and only if they sold ≥99% of first bag or left the list
-       on any later full Analyze (2nd, 10th, … — count does not matter).
-  2. Similar wallets (sellers)
-       Wallets that were in a similar-size group on first lookup and later
-       sold ≥99% / dropped off the list (any later lookup). Listed as SELLER.
-  3. Single wallets (sellers)
-       Individual top holders (not in a similar group) that sold ≥99% or
-       are no longer listed on any later full Analyze. Listed as SELLER.
-  4. Swing traders
-       Wallets that previously met the seller rule, then bought back on a
-       later lookup. Labeled swing (not seller).
+Sell ↔ Swing loop (all sticky origin lanes)
+  1. Sell ≥99% of first bag → stay in that section (sticky / permanent if no return)
+  2. Buy-back → Swing traders, label KEPT:
+       e.g. multi-account · swing · insider · swing · flagged · swing
+  3. Sell ≥99% of the swing bag again → back to the SAME origin section
+  4. Buy-back again → Swing … (loop continues)
 
-Labels
-  seller  — sold ≥99% of first bag or dropped off the holder list
-  swing   — was a seller, then reappeared with holdings (buy-back)
+  If they never buy back → they stay in their seller section permanently
+  (this browser’s localStorage; until you clear site data).
 
-Buttons
-  Refresh     — redraw the panel from browser storage
-  Clear mint  — delete tracking for the current / selected mint only
-  Clear all   — wipe all Ruggers tracking on this browser
+Labels (examples)
+  multi-account · seller   similar-sized · seller   single · seller
+  creator · seller         flagged · seller
+  multi-account · swing    flagged · swing    creator · swing   single · swing
+  similar-sized · swing
+  seller / swing heuristics only — not legal proof of collusion
+
+  Section titles (each Ruggers category head)
+    Show wallet count plus a mint-supply total for that category when > 0%:
+      Seller sections: sum of sold_supply_pct → e.g. 4.2% supply sold
+      Swing traders: sum of holds / bought-back supply → e.g. 1.1% supply bought
+    If the total is 0%, the supply pill is hidden (count only).
+    Deduped by address, capped at 100%. Hover the pill for the explanation.
+
+  Per-row status phrases (sellers — not Swing) often include:
+    dropped off holder list | dumped ≥99% of first bag | dumped full first bag
+  See “Dropped off holder list” under What “sold ≥99%” means above.
+
+UI controls (website)
+  - No Refresh / Clear mint / Clear all toolbar (removed).
+  - Tracked mint: scrollable dropdown (max height; does not fill the screen).
+  - Search previous lookup by CA (local only — no network).
+  - Left-click mint address (yellow) to copy CA.
+
+Per-section actions (every seller section — not Swing)
+  Export (gray)  — download JSON / address list for RugWatch manual import
+  Upload (yellow)— CLOUD upload path for that section’s NEW wallets:
+                   1) import into YOUR RugWatch Local database
+                   2) Push cloud → GitHub wallets_index / cloud shards
+                   Requires RugWatch running (default http://127.0.0.1:8790)
+                   with GITHUB_TOKEN. Configure rugwatchUrl in config.js.
+
+  After Upload (same mint)
+    - Creator → stay Creator ↔ Swing (never Ruggers Flagged on this mint)
+    - Similar → permanent Similar pin ↔ Swing (never Ruggers Flagged on this mint)
+      including wallets that were similar when uploaded
+    - Single → stay Single ↔ Swing (never Ruggers Flagged on this mint after Upload
+      from Single — same idea as Similar; upload is recorded per mint)
+    - multi / funder / insider / launch / suspect
+      → stay under that category on this mint (also on cloud; never Flagged here
+      after Upload from that section)
+    - Holders “Flagged wallets (RugWatch)” can still list them if they match
+      the RugWatch list — that is Holders matching, not the Ruggers Flagged section
+    - On OTHER mints, cloud-listed wallets can enter Ruggers Flagged when they
+      sell ≥99% (unless that mint freezes them as creator/similar or uploaded there)
 
 Where it lives
   Website only: browser localStorage key adtc_ruggers_track
-  (separate from Logs). Not uploaded to the server. Not shared across
-  browsers / devices. Clearing site data resets it.
+  (separate from Logs). Not on the Actual Data Token Checker server. Not shared across devices.
+  Clearing site data resets it.
 
-  Multiple mints: use the dropdown on the Ruggers tab to switch.
+  Multiple mints: use the scrollable “Tracked mint” dropdown to switch.
 
 Typical workflow
-  1. Full Analyze a new mint (Quick off) → baseline freezes (may show
-     empty seller sections — nothing has dumped yet).
-  2. Later, Analyze the same mint again (2nd, 3rd, 10th… — any later full
-     run; how many times you looked first does not change the rule).
-  3. Open Ruggers → see who sold ≥99% of their first bag, by section.
-  4. If a dumper buys back, they move to Swing traders.
-  5. To keep wallets long-term as serial suspects in YOUR RugWatch database,
-     copy them into RugWatch yourself — see §12. The website does not write
-     into that database for you.
+  1. Full Analyze a new mint (Quick off) → baseline freezes (seller sections
+     empty until someone dumps).
+  2. Later, full Analyze the same mint again (any later run).
+  3. Open Ruggers → sellers under Creator / Similar / Multi / Funder /
+     Insider / Launch / Suspect / Single / Flagged (RugWatch).
+  4. Buy-back → Swing (same label). Dump again → same section.
+  5. Upload or Export any seller section → YOUR RugWatch (see §12).
 
 What Ruggers is not
   - Not a live mempool dump alert
   - Not proof wallets are the same person or a “rug team”
-  - Not RugWatch (RugWatch is the separate desktop serial-wallet database)
-  - Not auto-sync to RugWatch — you must copy wallets yourself (see §12)
+  - Not RugWatch itself (RugWatch is the separate wallet database / website)
   - Not updated by Quick-only searches
   - Not a substitute for Solscan trade history (top-holder snapshots only)
+  - Yellow Upload needs YOUR RugWatch instance; not a shared public police database
+  - Insider-flagged (Rugcheck) ≠ Flagged wallets (RugWatch)
 
 
 --------------------------------------------------------------------------------
-12. SAVING SELLER WALLETS TO RUGWATCH (MANUAL — YOU BUILD YOUR OWN LIST)
+12. SAVING SELLER WALLETS TO RUGWATCH (LOCAL + CLOUD)
 --------------------------------------------------------------------------------
 
-Subtitle: RugWatch (manual)
+Subtitle: Actual Data Token Checker side only — full RugWatch product guide is separate
 
-Read this even if you only use the website.
+Two different tools (do not mix them up)
+  Ruggers (this site)
+    - Dump spotting for mints you analyze in THIS browser (localStorage).
+    - Seller / swing = ≥99% of first bag (see §11). Not a RugWatch score.
 
-Two different things (do not mix them up)
-  Ruggers (website tab)
-    - Temporary dump spotting for mints you analyze in THIS browser.
-    - Stored only in browser localStorage (not on the website host).
-    - Does NOT create or update any serial-rugger database by itself.
+  RugWatch (separate app / website)
+    - YOUR wallet warehouse (local SQLite + optional GitHub cloud).
+    - Owns risk_score 0–100, times_seen, labels, Monitor, Push/Pull cloud.
+    - Full how-to: RugWatch “RugCheck Documentation.md” (How wallets are rated,
+      Add/Upload, Monitor, cloud). Do not duplicate that manual here.
 
-  RugWatch (desktop tool)
-    - THIS is where you build your serial-rugger / flagged-wallet database.
-    - Local SQLite on your PC (e.g. rugwatch.db under your RugWatch data
-      folder) — your own database of wallets you chose to track.
-    - The token checker can READ that DB (Holders “flagged wallets”) when
-      the file is present; it does not invent the list for you.
+Ways to grow YOUR RugWatch list from Actual Data Token Checker Ruggers
+  A) Yellow Upload on any seller section → RugWatch /api/upload + Push cloud
+  B) Export file → RugWatch “Upload manual wallets” → Push cloud
+  C) Copy address → RugWatch Add wallet (you set score)
 
-So when the guide says the website does not create a “server-side serial
-rugger database,” it means: the live site (Render / web host) does not
-store serial ruggers for everyone and does not auto-fill RugWatch.
-It does NOT mean “there is no database.” RugWatch IS your database — you
-create and grow it by adding wallets (including sellers you copy from
-Ruggers).
+What Actual Data Token Checker does after wallets are in cloud
+  - Live site: merges RugWatch **server** local (via RUGWATCH_URL) + **cloud**
+    (RUGWATCH_WALLETS_URL) → tags [local] / [cloud] / [both]
+  - Shows hold % on the mint; does NOT invent a token-level RugWatch rating
 
-What you should do (manual workflow)
-  1. Run full Analyzes (Quick OFF) so Ruggers can baseline and update.
-  2. When Creator / Similar / Single seller sections list wallets, copy
-     each address you care about (from the Ruggers tab UI).
-  3. Optional: paste into your own notes (text file, spreadsheet) with
-     mint, date, and why (e.g. “creator sold ≥99% after 3rd lookup”).
-  4. Open RugWatch on the desktop and add those wallets into YOUR
-     RugWatch database / serial-rugger tracking (the way RugWatch supports).
-     That is how your serial-rugger DB grows.
-  5. When new sellers appear on later lookups (2nd, 10th, any later full
-     Analyze — count does not matter; see §11), copy and add those too.
-
-What the website host will NOT do
-  - Will NOT write Ruggers sellers into RugWatch automatically
-  - Will NOT host a shared public “serial rugger police” DB for all users
-  - Will NOT replace your local RugWatch database
-  - Will NOT sync your browser Ruggers list to other users or devices
-
-Why add sellers to RugWatch yourself
-  - Ruggers “seller” = ≥99% of that wallet’s first-lookup bag (or left the
-    holder list) on one mint you tracked — a heuristic, not a court verdict.
-  - YOU decide which wallets belong in the long-term RugWatch database.
-  - Once they are in RugWatch, later token checks can show them as flagged
-    when that local DB is available.
+What Actual Data Token Checker will NOT do
+  - Shared public “serial rugger police” database for all users
+  - Host your private RugWatch scores (you curate scores in RugWatch)
+  - Sync browser Ruggers lists across devices
 
 Summary
-  Ruggers  = temporary browser tool to spot dumps on a mint.
-  RugWatch = YOUR serial-rugger / flagged-wallet database (local desktop).
-  Link them by hand: copy seller from Ruggers → add in RugWatch.
-  That is how the serial-rugger database is created and updated — by you,
-  in RugWatch — not automatically by the website server.
+  Ruggers  = temporary dump tracker (this browser).
+  RugWatch = your scored wallet list + cloud (see RugWatch docs for scoring).
+  Actual Data Token Checker flags = match list → Holders / Ruggers Flagged (RugWatch) / Alerts.
+
+
+--------------------------------------------------------------------------------
+12b. WHERE Actual Data Token Checker GETS FLAGGED WALLETS (LOCAL, CLOUD, OR BOTH)
+--------------------------------------------------------------------------------
+
+Subtitle: Flagged wallets (RugWatch) on Actual Data Token Checker — not Rugcheck insiders
+
+Ruggers title: Flagged wallets (RugWatch) — “RugWatch” in dim yellow.
+Holders: FLAGGED WALLETS (RugWatch) when the checkbox is ON.
+
+Sources Actual Data Token Checker merges
+  1) Local  — live RugWatch **server** list via RUGWATCH_URL
+              (/api/stats count, /api/wallets match) — not a file on the user’s machine
+  2) Cloud  — RUGWATCH_WALLETS_URL (prefer wallets_index.json multi-shard)
+
+Tags on matches: [local] · [cloud] · [both]
+
+Wallet counts on the Actual Data Token Checker site (RugWatch wallets bar)
+  Full-width bar under the title:
+    Local database N · Cloud M · Refresh
+
+  Local database (how Actual Data Token Checker fills the number)
+    Live RugWatch site GET {RUGWATCH_URL}/api/stats → stats.wallets
+    (mirrors RugWatch’s **server** Local database — not anything on a user’s machine).
+    Default RUGWATCH_URL=https://rugwatch.onrender.com
+    Set RUGWATCH_URL=off to disable remote local.
+
+  Cloud — wallets_index.json (GitHub). Same list Analyze merges when on.
+
+  Analyze matching when RugWatch checkbox is ON:
+    local wallets = GET RugWatch /api/wallets (server list)
+    + cloud shards. Tags [local] / [cloud] / [both].
+
+  Unique by address (no double pulls)
+    The same CA is never listed twice. Local DB shards, cloud shards, and
+    remote /api/wallets are merged into one row per address (highest risk
+    score kept; [both] when local and cloud both know it). Holders flagged
+    totals and combined bag % also dedupe by address so one wallet cannot
+    inflate still-holding count or combined %.
+
+  API: GET /api/rugwatch-counts
+       JSON: { local: {count, source: rugwatch_site|…, …}, cloud: {…} }
+       Does not return wallet addresses.
+
+Live Actual Data Token Checker site: Local via RugWatch **server** mirror
+and/or Cloud (GitHub); often both when RugWatch is awake.
+Nothing for the flagged-wallet warehouse is stored on the visitor’s machine.
+
+Checkbox OFF → no RugWatch merge for that Analyze.
+
+Wallet risk_score (0–100)
+  Defined and edited only in RugWatch. See RugWatch docs:
+  “How wallets are rated (risk score)”. Actual Data Token Checker may show score when present;
+  hold-% colors are Actual Data Token Checker concentration bands, not the RugWatch score.
+
+Do not confuse with
+  Insider-flagged (Rugcheck) — third-party holder tags in Bundles / Ruggers
+  Insider section. Not your RugWatch list.
+
+
+--------------------------------------------------------------------------------
+12c. WALLET CAPACITY (SERVER, CLOUD, AND THIS SITE)
+--------------------------------------------------------------------------------
+
+Subtitle: How many wallets can you store and still serve flags well?
+
+Actual Data Token Checker does not own a separate flagged-wallet warehouse.
+Capacity is driven by **RugWatch server Local database** and **GitHub cloud**.
+Full charts: RugWatch **EXTERNAL_STORAGE.md** and **RugCheck Documentation.md**
+→ “How many wallets? (capacity scheme)”.
+
+Designed limits (RugWatch — no hard total ceiling)
+  | Store                         | Per file (default) | When full                         |
+  |-------------------------------|--------------------|-----------------------------------|
+  | Local database (server SQLite)| 100,000 wallets    | rugwatch_002.db, _003, …          |
+  | Cloud JSON (GitHub)           | 100,000 wallets    | wallets_cloud_002.json, … + index |
+
+  Totals scale with shards: 1 file ≈ 100k · 2 ≈ 200k · 10 ≈ 1M · …
+
+Where data lives (server and cloud only)
+  | Store                                      | Location                              |
+  |--------------------------------------------|---------------------------------------|
+  | RugWatch Local database                    | **Hosting server** disk only          |
+  | Cloud wallet list                          | **GitHub** (index + shards)           |
+  | Actual Data Token Checker flagged warehouse| None — reads server local + cloud     |
+  | Browser (either site)                      | Never holds the wallet warehouse      |
+  | User machine / desktop                     | **Not used** for the wallet warehouse |
+
+  Cloud always lives on **your GitHub** (wallets_index.json + shards).
+
+Effective ranges (speed / free hosting — not code hard caps)
+  | Total wallets         | Hosted server (e.g. free Render) | Cloud (GitHub) | Flags on this site   |
+  |-----------------------|----------------------------------|----------------|----------------------|
+  | Hundreds – few k      | Ideal                            | Ideal          | Ideal                |
+  | ~10k – 100k           | OK                               | Strong         | OK                   |
+  | ~100k – few hundred k | Heavy; may OOM                   | Multi-shard OK | Slower Analyze flags |
+  | ~1M+                  | Not recommended free             | Possible       | Risky on free hosts  |
+
+  Practical sweet spot for free Render + free Actual Data Token Checker:
+  **tens of thousands to about 100k**; stretch toward **low hundreds of k** only
+  if you keep notes short and avoid huge Pulls mid-work.
+
+Rough cloud size
+  10k ≈ 2–5 MB · 100k ≈ 20–50 MB · 200k ≈ 40–100 MB (longer notes = larger).
+  Server RAM, Push/Pull time, and Analyze load of all shards hit first.
+
+What bottlenecks first
+  - Free server RAM / ephemeral disk (large Pull or load)
+  - GitHub Push with many shards
+  - RugWatch website listing huge wallet tables in the browser
+  - This site’s Analyze merging a huge cloud index
+  - Provider free tiers (Helius, etc.) — separate from wallet count
+
+Guidance for users of this site
+  1. Prefer the **index** URL for RUGWATCH_WALLETS_URL (every cloud shard).
+  2. Keep cloud curated (serial-suspects only); do not dump millions.
+  3. Always **Push cloud** after Upload so hosted flags stay current.
+  4. For very large lists, use always-on hosting (not free-tier only).
+
+This site’s Logs / Ruggers track
+  Browser localStorage only (max 200 Logs). Not counted toward RugWatch local
+  or cloud capacity.
 
 
 --------------------------------------------------------------------------------
@@ -648,23 +1888,22 @@ Subtitle: Logs
 
 The Logs tab is a private log of tokens you have already searched.
 It sits next to Overview, Holders, Bundles, Alerts, Maps, About, and Ruggers
-on the desktop app and the website. Use it to look back at recent analyzes
-without typing every mint again.
+on the website. Use it to look back at recent analyzes without typing every
+mint again.
 
-  Desktop: saved in history_log.json next to the app.
-  Website: saved in this browser only (localStorage).
+  Website: saved in this browser only (localStorage). Nothing is written
+  to a desktop wallet warehouse or to the server for Logs.
 
 What Logs is for
   - See a list of your last token searches in one place.
   - Review market, holder, bundle, and alert snapshots from those runs.
   - Download the list to a file for your own notes.
 
-When a search is saved
-  - A row is added only after a successful full Analyze finishes
-    (status shows OK / full data loaded).
-  - Failed searches (not found, errors) are not saved.
-  - Quick or partial loads wait until the full run completes before
-    they appear in Logs.
+When a search is saved (website)
+  - Saved after Analyze returns ok (including many Quick runs).
+  - Failed searches (not found / hard errors) are not saved.
+  - Full Analyze with holders is preferred for rich snapshots; Quick may
+    still log a thinner entry if the market result was ok.
   - Searching the same token again adds another row (each run is kept
     as its own entry).
 
@@ -694,53 +1933,77 @@ What each entry shows
   holders/bundles list, run Analyze again and open Holders / Bundles.
 
 How many entries
-  - Logs keeps up to 20 searches.
+  - Logs keeps up to 200 searches.
   - Newest is at the top.
-  - When you go past 20, the oldest entry is removed automatically.
+  - When you go past 200, the oldest entry is deleted automatically on each consecutive lookup.
+
+Search previous lookup by CA (website)
+  Paste a mint / CA into the Logs search box → Search (or Enter).
+  Finds a prior Logs entry saved in this browser only (no network).
+  Same idea as Ruggers CA search, separate storage from Ruggers.
 
 Where it lives
-  Desktop
-  - Saved as history_log.json next to the app.
-  Website
+  Website only for Logs storage:
   - Saved in your browser only (not on the server, not shared with others).
   - Clearing site data / another browser / private mode starts empty.
-  - Different from the small search-bar dropdown (desktop only).
+  - Not written to a desktop app file or to RugWatch local/cloud.
 
 Buttons
   Refresh
-    Reloads the Logs list from storage (desktop: history_log.json on
-    disk; website: this browser’s saved data). Use if the tab looks
-    stale after Analyze, or after you reopened the app. Does not
-    re-scan tokens and does not call APIs.
+    Reloads the Logs list from this browser’s saved data. Use if the tab
+    looks stale after Analyze. Does not re-scan tokens and does not call APIs.
 
   Clear
-    After you confirm, deletes ALL Logs entries for this app/browser.
-    Cannot be undone. Desktop empties history_log.json; website clears
-    localStorage. Does not affect Overview/Holders for the token you
-    currently have open.
+    After you confirm, deletes ALL Logs entries for this browser.
+    Cannot be undone. Clears localStorage only. Does not affect
+    Overview/Holders for the token you currently have open.
 
   Download
-    Saves the current Logs list to a file you choose.
+    Saves the current Logs list to a download file on your device only.
     · .txt — readable text (same layout as the tab, including
       holders/bundles snapshots)
     · .json — full structured data for backup or tools
     Does not delete Logs from the app. Does not re-fetch market data.
+    Does NOT upload to RugWatch cloud, GitHub, or any Actual Data Token Checker server.
+    Private browser/app log only.
+
+Upload vs Logs (important)
+  The Logs tab does NOT push wallets to the cloud database.
+  Cloud upload (RugWatch GitHub wallet list / index) is on the
+  Ruggers tab:
+
+    Ruggers → Creator / Similar / Single → yellow Upload
+      → imports into YOUR RugWatch Local database
+      → Push cloud → GitHub (cloud wallet count increases)
+
+  Requirements for that Upload: RugWatch website running (default
+  http://127.0.0.1:8790), GITHUB_TOKEN set in RugWatch .env, and
+  rugwatchUrl in web/config.js pointing at that site.
+
+  Summary
+    Logs Download     = save search history as a download file (not cloud)
+    Ruggers Upload    = send seller wallets to RugWatch cloud server
+                        (GitHub via your RugWatch instance)
 
 How to use it
   1. Analyze a token and wait until the run finishes successfully.
   2. Open the Logs tab — that token should be first on the list, with
      holders and bundles snapshots under the summary.
   3. Keep analyzing other tokens (up to 20 kept).
-  4. Use Download if you want a copy of the log.
-  5. Use Clear only if you want an empty Logs list.
-  6. Use Refresh if the list did not update after Analyze.
+  4. Use Download if you want a local copy of the log (not cloud).
+  5. To grow the RugWatch cloud list, open Ruggers → yellow Upload
+     (see §11–§12), not Logs.
+  6. Use Clear only if you want an empty Logs list.
+  7. Use Refresh if the list did not update after Analyze.
 
 What Logs is not
   - Not a live price feed or live holders feed.
+  - Not the place that uploads wallets to RugWatch / cloud (that is
+    Ruggers yellow Upload, or RugWatch’s own Push cloud).
   - Not a camera image — “snapshot” means a frozen text copy of the
     Holders / Bundles report at Analyze time.
   - Not a full export of every report field beyond what was stored
-    (use Export JSON on desktop for the full current report).
+    (use Export on Ruggers for wallet lists; Logs Download for history).
   - Not a safety rating or “safe list.” Past results are for your
     reference only.
 
@@ -756,7 +2019,120 @@ What Logs is not
 
 
 --------------------------------------------------------------------------------
-15. COMMON QUESTIONS
+15. PREVENTING 429s, BREAKDOWNS, AND SLOW FETCHING
+--------------------------------------------------------------------------------
+
+  You cannot eliminate every slowdown, but you can stop most breakdowns and
+  429 storms with habits + plan choices. This applies to Actual Data Token Checker
+  (and RugWatch when Upload / flags use cloud).
+
+Why you get 429s and slowness
+  | Cause                              | What happens                                      |
+  |------------------------------------|---------------------------------------------------|
+  | Provider free tiers                 | Too many Helius / Birdeye / DexScreener calls →    |
+  |   (Helius, Birdeye, DexScreener)   | HTTP 429 “rate limited”                           |
+  | Many full Analyzes at once         | Free host does ~1 heavy job well; parallel clicks |
+  |                                    | stack and time out                                |
+  | Cold starts (free web sleep)       | First request after idle ~30–90s feels “broken”   |
+  | Large RugWatch cloud               | Pull / Actual Data Token Checker flags load big JSON → slow or OOM      |
+  | Immediate retries after 429        | Makes the limit worse                             |
+
+  429 is usually the API provider refusing more traffic — not
+  “the app permanently broken.”
+
+Practical prevention (do these first)
+  1. One full Analyze at a time.
+     Wait until Holders / Bundles / Alerts finish before the next mint.
+     Parallel full runs burn Helius and DexScreener fastest.
+
+  2. Prefer Quick when you only need price / overview.
+     Full Analyze = holders + bundles + flags + more provider calls.
+     Use full only when you need that depth.
+
+  3. Do not spam Refresh / re-Analyze the same CA.
+     Re-running the same mint in a loop is a common 429 trigger.
+
+  4. Keep RugWatch cloud curated, not millions of wallets.
+     Ideal: hundreds – low tens of thousands.
+     Strong free-host range: ~10k – ~100k (see §12c).
+     Heavy: 100k–200k+ (slower Push/Pull, slower flags).
+     Upload from Ruggers only when you care about those sellers.
+
+  5. Wake services before heavy work.
+     Open Actual Data Token Checker (and RugWatch if you will Upload) once after idle, wait for
+     cold start, then Analyze / Upload. Avoid Upload while RugWatch is
+     still sleeping.
+
+  6. Site passcode on (WEB_API_TOKEN).
+     Cuts random traffic that burns your keys.
+
+  7. Do not share free-tier API URLs publicly.
+     Bots + many people clicking Analyze share the same rate limit.
+
+Keys / tiers (biggest real fix for 429s)
+  | Provider      | Free reality                         | Better for stability              |
+  |---------------|--------------------------------------|-----------------------------------|
+  | Helius        | Monthly caps + RPC rate limits       | Paid / higher tier if you Analyze |
+  |               |                                      | a lot (best ROI for 429s)         |
+  | Birdeye       | Tight rate limits                    | Optional; skip if not needed      |
+  | DexScreener   | Public, easy to 429                  | Full mint + wait; do not hammer   |
+  | GitHub cloud  | Fine for light Push/Pull             | PAT set; do not Push every few    |
+  |               |                                      | seconds                           |
+  | Render free   | Sleep + small RAM                    | Paid always-on if you hate cold   |
+  |               |                                      | starts                            |
+
+  Rule of thumb: if you hit 429s often, upgrade Helius before anything else.
+  Holders / deep work live there.
+
+Hosting habits (e.g. free Render)
+  - Treat free as personal, light use — not multi-user production.
+  - Expect sleep after ~15 minutes idle.
+  - Avoid two free services both cold at once (Actual Data Token Checker + RugWatch): open
+    RugWatch first, then Actual Data Token Checker Upload.
+  - Large cloud Pull on free can OOM / restart — pull when idle, not mid-
+    Analyze.
+
+Stable day-to-day workflow
+  1. Open Actual Data Token Checker + RugWatch (wake cold starts).
+  2. One mint → Quick or full Analyze.
+  3. Wait for finish.
+  4. If Ruggers has new sellers → Upload once (do not spam).
+  5. Pause between mints (even 5–15 seconds helps public APIs).
+  6. Do not Pull cloud every few minutes.
+
+What “slow” usually is (not always a crash)
+  | Symptom                         | Likely cause                          |
+  |---------------------------------|---------------------------------------|
+  | 30–90s first load               | Free cold start                       |
+  | Holders empty / provider notes  | 429 or missing / exhausted API key    |
+  | Upload hangs                    | RugWatch asleep                       |
+  | Flags slow                      | Large cloud index / many shards       |
+  | Random timeouts                 | Concurrent Analyzes or free CPU limit |
+
+Optional upgrades if you want fewer headaches
+  1. Helius paid (best ROI for 429s).
+  2. Always-on host for Actual Data Token Checker (and RugWatch if you Upload daily).
+  3. Use Logs instead of re-fetching the same mint.
+  4. (Optional code later) retry with backoff on 429, single-flight Analyze
+     queue, short TTL cache per mint.
+
+Short checklist
+  [ ] One Analyze at a time
+  [ ] Do not re-check the same CA every few seconds
+  [ ] Wake RugWatch before Upload
+  [ ] Passcode on
+  [ ] Cloud not huge unless you need it
+  [ ] Helius key valid and not over monthly cap
+  [ ] Accept free-tier cold starts or pay for always-on
+
+Bottom line
+  Breakdowns and 429s are mostly rate limits + free hosting + concurrent
+  full scans — not Logs size or UI colors. Steady one-at-a-time use +
+  Helius headroom + a smaller cloud prevents most of it.
+
+
+--------------------------------------------------------------------------------
+16. COMMON QUESTIONS
 --------------------------------------------------------------------------------
 
 Q: Can visitors add their own Helius keys?
@@ -765,6 +2141,12 @@ A: No. Keys stay on the server. Gear = site passcode only (if enabled).
 Q: Why DexScreener 429 / bad response?
 A: Public rate limits. Wait, use Quick, use full mint, enable site passcode
    so fewer people spam Analyze. Cache reduces repeat hits.
+   See §15 for a full guide (429s, cold starts, cloud size, workflow).
+
+Q: Why is Analyze slow or timing out?
+A: Free host cold start, concurrent full Analyzes, provider 429s, or a large
+   RugWatch cloud. Follow §15 (one Analyze at a time, wake services, Helius
+   headroom).
 
 Q: Do view counts reset daily?
 A: Total views do not reset daily. “Unique today” does. Free hosting may
@@ -772,32 +2154,75 @@ A: Total views do not reset daily. “Unique today” does. Free hosting may
 
 Q: Why is LP unlocked on a Pump.fun coin?
 A: LP-lock check is classic pool lock %, not a full bonding-curve model.
-   On desktop Alerts, that LP-unlock warning is skipped for Pump.fun /
-   PumpSwap pools (and classic “…pump” mints) because those venues do
-   not map cleanly to locked LP pools.
+   That LP-unlock warning is skipped for Pump.fun / PumpSwap pools (and
+   classic “…pump” mints) because those venues do not map cleanly to
+   locked LP pools.
 
 Q: Does a clean Alerts tab mean safe?
 A: No. Absence of flags ≠ safety.
 
-Q: Where did my Logs go after reinstall or moving the app?
-A: Desktop Logs are saved in history_log.json next to the app. Website
-   Logs live in the browser only. If you move the app folder or clear
-   site data, the list may be gone. Use Download to keep a backup.
+Q: Where did my Logs go after clearing the browser or private mode?
+A: Logs live in this browser only (localStorage). Clearing site data or
+   using another browser starts empty. Use Download to keep a backup.
 
 Q: Is there a serial-rugger database? Who creates it?
-A: Yes — RugWatch on your desktop is that database (local SQLite, wallets
-   you flag). The website Ruggers tab does not create or update it. Copy
-   seller addresses from Ruggers and add them in RugWatch yourself (§12).
-   The live website host does not keep a shared serial-rugger DB for all
-   users.
+A: Yes — **your RugWatch** list (server Local database + optional GitHub
+   cloud), wallets **you** flag or Upload. The Ruggers tab only tracks
+   sellers in this browser until you Upload. The live Actual Data Token
+   Checker host does not keep a shared police database for all users.
 
 Q: If a wallet sells on my 10th lookup, do they still count as a seller?
 A: Yes. Lookup count does not matter. Sales are always measured against
    the first full Analyze bag (see §11).
 
+Q: Why are seller lists empty after one Analyze?
+A: First full Analyze freezes the baseline only. Sellers appear on a later
+   full Analyze after wallets dump ≥99% of that first bag (Quick does not
+   update Ruggers). Need a measurable first bag (supply % or balance).
+
+Q: Are exact same-size bags in Similar-sized?
+A: Yes. Exact bags match; also near-exact (≤0.02 pp or ≤0.5% relative).
+   Need ≥3 wallets and each bag ≥0.15% supply (§6.3h).
+
+Q: Can similar-cluster wallets appear under Single holders?
+A: No (v151+). Server and UI strip any Similar-sized / Rugcheck insider
+   address from Single. Two exact wallets alone are not a cluster (need 3+).
+
 
 --------------------------------------------------------------------------------
-16. DISCLAIMER
+16b. FEATURE CHECKLIST (Actual Data Token Checker — vs what is documented)
+--------------------------------------------------------------------------------
+
+| Area | Documented? |
+|------|-------------|
+| Analyze, Quick, chain filter, RugWatch checkbox | §2–3 |
+| UI chrome (nav, views, passcode, link bar) | §3b |
+| Overview / Holders / Bundles / Alerts / Maps | §4–9 |
+| About (Narrative, X, News, Links, LinkedIn) | §10 |
+| Ruggers all lanes + sticky sell↔swing + Upload | §11 |
+| Flagged (RugWatch) local/cloud on Analyze | §12b |
+| Logs (200 entries, snapshots, CA search) | §13 |
+| Robinhood / 429 / deploy tips | §14–15 |
+| RugWatch **wallet scoring 0–100** | RugWatch docs only (pointer in §12) |
+| RugWatch Monitor / Scan mint UI | RugWatch docs only |
+
+Congruence notes (code vs older wording)
+  - Ruggers toolbar Clear mint / Clear all / Refresh: **removed** (doc §11).
+  - Logs: website may log successful **Quick** runs too (not only full).
+  - Docs page loads web/documentation.txt (+ GitHub fallback).
+  - Total = multi-account always + Similar-sized only when Fresh / Multi-send /
+    Shared SOL are all off (§6.1). Single holders list is never in Total.
+  - Similar-sized = near-exact bags (≥3, ≥0.15%) + Rugcheck insider (§6.3h).
+    Exact bags included. No similar-cluster wallets in Single (v151+).
+  - Launch-window Bundles / Ruggers scans: **disabled**.
+  - Ruggers needs two full Analyzes + measurable first bag; Quick skips Ruggers.
+  - RugWatch merge is unique by address across local + cloud (§12b).
+
+If a button exists on the RugWatch site only, it belongs in RugWatch docs.
+
+
+--------------------------------------------------------------------------------
+17. DISCLAIMER
 --------------------------------------------------------------------------------
 
   Heuristics only. Data can be wrong, late, or incomplete.

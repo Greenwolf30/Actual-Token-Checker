@@ -7,14 +7,15 @@ Sources (best-effort, short timeouts — never require paid keys):
   - X via Nitter search RSS ($TICKER / name) + project account bio
   - Google News RSS
   - Reddit public search JSON
-  - DuckDuckGo HTML lite (often surfaces TikTok / IG / news blurbs)
+  - LinkedIn via DuckDuckGo site:linkedin.com search + profile links
+  - DuckDuckGo HTML lite (TikTok / IG / LinkedIn / news blurbs)
 
 Authoritative string elements (CoinGecko, metadata URI, Birdeye, Jupiter,
 Solscan, Rugcheck, CMC, website OG) are fetched in coin_facts.py and merged
 into the About narrative separately.
 
-Instagram & TikTok have no free public API; we capture mentions that appear
-in news/search snippets and linked social URLs instead of full scrapes.
+Instagram, TikTok, and LinkedIn have no free full-feed API; we capture
+public links + search snippets instead of full scrapes.
 """
 
 from __future__ import annotations
@@ -90,6 +91,7 @@ def gather_narrative_sources(
         pass
 
     # ── Pump.fun coin metadata ─────────────────────────────────────────
+    pump_twitter: str | None = None
     if token_address and (
         (token_address or "").lower().endswith("pump")
         or pump_url
@@ -99,11 +101,26 @@ def gather_narrative_sources(
             pf = _from_pumpfun(token_address)
             for s in pf.get("snippets") or []:
                 snippets.append(s)
-                platforms.add("pumpfun")
+                platforms.add(s.get("platform") or "pumpfun")
             for d in pf.get("descriptions") or []:
                 descriptions.append(d)
             if pf.get("used"):
                 sources_used.append("pumpfun_coin")
+                platforms.add("pumpfun")
+            pump_twitter = (pf.get("twitter_handle") or "").strip().lstrip("@") or None
+            # Promote Pump.fun X as project handle when Dex did not supply one
+            if pump_twitter and not (twitter_handle or "").strip():
+                twitter_handle = pump_twitter
+            for u in (
+                pf.get("twitter_url"),
+                pf.get("website"),
+                pf.get("telegram"),
+            ):
+                if u and str(u).startswith("http"):
+                    if social_urls is None:
+                        social_urls = []
+                    if str(u) not in social_urls:
+                        social_urls = list(social_urls) + [str(u)]
         except Exception:  # noqa: BLE001
             pass
 
@@ -178,7 +195,18 @@ def gather_narrative_sources(
     except Exception:  # noqa: BLE001
         pass
 
-    # ── DuckDuckGo (TikTok / IG / web blurbs) ───────────────────────────
+    # ── LinkedIn (site search + already-linked company/profile URLs) ────
+    try:
+        li = _from_linkedin(symbol, name, urls)
+        for s in li:
+            snippets.append(s)
+            platforms.add("linkedin")
+        if li:
+            sources_used.append("linkedin_search")
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ── DuckDuckGo (TikTok / IG / LinkedIn / web blurbs) ────────────────
     try:
         ddg = _from_duckduckgo(symbol, name)
         for s in ddg:
@@ -211,6 +239,10 @@ def gather_narrative_sources(
     if "tiktok" not in platforms and "instagram" not in platforms:
         notes_parts.append(
             "TikTok/Instagram full feeds need official APIs; only public links/search mentions are used."
+        )
+    if "linkedin" not in platforms:
+        notes_parts.append(
+            "LinkedIn has no free full API; only profile links and public search snippets are used when found."
         )
 
     return {
@@ -366,73 +398,103 @@ def _from_dexscreener(
 
 
 def _from_pumpfun(mint: str) -> dict[str, Any]:
-    """Best-effort Pump.fun coin JSON (often Cloudflare-blocked)."""
+    """
+    Pump.fun coin *About* section for narrative (API + metadata + page).
+
+    Prefer shared fetch_coin_about so About tab matches the pump.fun card.
+    """
     snippets: list[dict[str, Any]] = []
     descriptions: list[dict[str, str]] = []
     used = False
-    endpoints = [
-        f"https://frontend-api.pump.fun/coins/{mint}",
-        f"https://frontend-api-v3.pump.fun/coins/{mint}",
-        f"https://client-api-2-74b1891ee9f9.herokuapp.com/coins/{mint}",
-    ]
-    for url in endpoints:
-        try:
-            data = get_json(url, timeout=6.0, retries=0)
-        except Exception:  # noqa: BLE001
-            continue
-        if not isinstance(data, dict):
-            continue
-        desc = (
-            data.get("description")
-            or data.get("desc")
-            or data.get("body")
-            or ""
+    twitter_handle: str | None = None
+    about: dict[str, Any] | None = None
+    try:
+        from . import pumpfun as pf_mod
+
+        about = pf_mod.fetch_coin_about(mint)
+    except Exception:  # noqa: BLE001
+        about = None
+
+    if not isinstance(about, dict) or not about.get("ok"):
+        return {
+            "snippets": [],
+            "descriptions": [],
+            "used": False,
+            "twitter_handle": None,
+        }
+
+    desc = re.sub(r"\s+", " ", str(about.get("description") or "")).strip()
+    name = about.get("name") or ""
+    symbol = about.get("symbol") or ""
+    page = about.get("page_url") or f"https://pump.fun/coin/{mint}"
+    links = about.get("links") if isinstance(about.get("links"), dict) else {}
+    twitter_u = str(links.get("twitter") or "").strip()
+    telegram_u = str(links.get("telegram") or "").strip()
+    website_u = str(links.get("website") or "").strip()
+    if website_u and "pump.fun" in website_u.lower():
+        website_u = ""
+    if twitter_u:
+        twitter_handle = _handle_from_url(twitter_u)
+
+    src_label = about.get("description_source") or "pumpfun_about"
+    # Prefer real About prose alone (not name-only blobs)
+    if desc and len(desc) >= 8:
+        descriptions.append(
+            {
+                "source": "pumpfun_about",
+                "text": desc[:900],
+                "url": page,
+            }
         )
-        name = data.get("name") or ""
-        symbol = data.get("symbol") or ""
-        twitter = data.get("twitter") or data.get("twitter_url") or ""
-        telegram = data.get("telegram") or ""
-        website = data.get("website") or ""
-        text_bits = [str(desc or "").strip()]
-        if name or symbol:
-            text_bits.insert(0, f"{name} (${symbol})".strip())
-        blob = " ".join(t for t in text_bits if t)
-        if blob:
-            descriptions.append(
-                {
-                    "source": "pumpfun",
-                    "text": blob[:900],
-                    "url": f"https://pump.fun/{mint}",
-                }
-            )
+        snippets.append(
+            {
+                "source": "pumpfun_about",
+                "platform": "pumpfun",
+                "text": desc[:320],
+                "url": page,
+                "weight": 4.5,
+            }
+        )
+        used = True
+    elif name or symbol:
+        snippets.append(
+            {
+                "source": "pumpfun_coin",
+                "platform": "pumpfun",
+                "text": f"{name} (${symbol}) on Pump.fun".strip(),
+                "url": page,
+                "weight": 2.0,
+            }
+        )
+        used = True
+
+    for label, val in (
+        ("twitter", twitter_u),
+        ("telegram", telegram_u),
+        ("website", website_u),
+    ):
+        if val:
             snippets.append(
                 {
-                    "source": "pumpfun_coin",
-                    "platform": "pumpfun",
-                    "text": (str(desc).strip() or blob)[:320],
-                    "url": f"https://pump.fun/{mint}",
-                    "weight": 4.0,
+                    "source": "pumpfun_links",
+                    "platform": _platform_from_url(val) if label != "website" else "web",
+                    "text": f"Linked on Pump.fun: {label} {val}",
+                    "url": val,
+                    "weight": 2.2 if label == "twitter" else 1.5,
                 }
             )
             used = True
-        for label, val in (
-            ("twitter", twitter),
-            ("telegram", telegram),
-            ("website", website),
-        ):
-            if val and isinstance(val, str) and val.startswith("http"):
-                snippets.append(
-                    {
-                        "source": "pumpfun_links",
-                        "platform": _platform_from_url(val),
-                        "text": f"Linked on Pump.fun: {label} {val}",
-                        "url": val,
-                        "weight": 1.5,
-                    }
-                )
-        if used:
-            break
-    return {"snippets": snippets, "descriptions": descriptions, "used": used}
+
+    return {
+        "snippets": snippets,
+        "descriptions": descriptions,
+        "used": used,
+        "twitter_handle": twitter_handle,
+        "website": website_u,
+        "telegram": telegram_u,
+        "twitter_url": twitter_u,
+        "about_source": src_label,
+    }
 
 
 def _from_linked_socials(urls: list[str]) -> list[dict[str, Any]]:
@@ -446,7 +508,11 @@ def _from_linked_socials(urls: list[str]) -> list[dict[str, Any]]:
         plat = _platform_from_url(u)
         handle = _handle_from_url(u)
         text = f"{plat} profile linked: {handle or u}"
-        weight = 2.0 if plat in {"tiktok", "instagram", "x", "youtube"} else 1.0
+        weight = (
+            2.0
+            if plat in {"tiktok", "instagram", "x", "youtube", "linkedin"}
+            else 1.0
+        )
         out.append(
             {
                 "source": "profile_link",
@@ -629,14 +695,113 @@ def _from_reddit(symbol: str | None, name: str | None) -> list[dict[str, Any]]:
     return out
 
 
+def _from_linkedin(
+    symbol: str | None,
+    name: str | None,
+    social_urls: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    LinkedIn as narrative source (best-effort, no official free API):
+      1) Profile/company URLs already on Dex/project links
+      2) DuckDuckGo site:linkedin.com search for ticker/name
+    """
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    # Linked URLs first (company page / profile on the token)
+    for raw in social_urls or []:
+        u = (raw or "").strip()
+        if not u or "linkedin.com" not in u.lower():
+            continue
+        key = u.rstrip("/").lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        handle = _handle_from_url(u)
+        out.append(
+            {
+                "source": "linkedin_link",
+                "platform": "linkedin",
+                "text": f"LinkedIn linked on project profile: {handle or u}",
+                "url": u if u.startswith("http") else "https://" + u.lstrip("/"),
+                "weight": 2.4,
+            }
+        )
+
+    # Public web search restricted to LinkedIn
+    queries: list[str] = []
+    if symbol:
+        queries.append(f"site:linkedin.com {symbol} crypto OR solana OR token OR company")
+        queries.append(f'site:linkedin.com/company "{symbol}"')
+    if name and len(name) > 2:
+        queries.append(f'site:linkedin.com "{name}" crypto OR blockchain OR token')
+
+    for q in queries[:2]:
+        url = f"https://duckduckgo.com/html/?q={quote_plus(q)}"
+        try:
+            page = get_text(
+                url,
+                timeout=_TIMEOUT,
+                retries=0,
+                headers={
+                    **DEFAULT_HEADERS,
+                    "Accept": "text/html,application/xhtml+xml",
+                },
+            )
+        except Exception:  # noqa: BLE001
+            continue
+        # Titles + snippets; also capture linkedin.com hrefs when present
+        for m in re.finditer(
+            r'href="(https?://[^"]*linkedin\.com[^"]*)"[^>]*>(.*?)</a>'
+            r'|class="result__snippet"[^>]*>(.*?)</(?:a|td|div)>'
+            r'|class="result__a"[^>]*>(.*?)</a>',
+            page,
+            re.I | re.S,
+        ):
+            href = (m.group(1) or "").strip()
+            raw = m.group(2) or m.group(3) or m.group(4) or ""
+            text = html.unescape(re.sub(r"<[^>]+>", " ", raw))
+            text = re.sub(r"\s+", " ", text).strip()
+            if href and "linkedin.com" in href.lower():
+                key = href.rstrip("/").lower()
+                if key not in seen:
+                    seen.add(key)
+                    out.append(
+                        {
+                            "source": "linkedin_search",
+                            "platform": "linkedin",
+                            "text": (text or "LinkedIn result")[:320],
+                            "url": href,
+                            "weight": 2.1 if _NARRATIVE_HINTS.search(text or "") else 1.7,
+                        }
+                    )
+            elif text and len(text) >= 30 and "linkedin" in text.lower():
+                key = text[:80].lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(
+                    {
+                        "source": "linkedin_search",
+                        "platform": "linkedin",
+                        "text": text[:320],
+                        "url": "",
+                        "weight": 1.8 if _NARRATIVE_HINTS.search(text) else 1.5,
+                    }
+                )
+            if len(out) >= 10:
+                return out
+    return out
+
+
 def _from_duckduckgo(symbol: str | None, name: str | None) -> list[dict[str, Any]]:
-    """HTML lite search — picks up TikTok/IG/news blurbs in result snippets."""
+    """HTML lite search — picks up TikTok/IG/LinkedIn/news blurbs in result snippets."""
     queries = []
     if symbol:
-        queries.append(f"{symbol} memecoin narrative OR tiktok OR instagram")
+        queries.append(f"{symbol} memecoin narrative OR tiktok OR instagram OR linkedin")
         queries.append(f"${symbol} pump.fun OR solana")
     if name and len(name) > 2:
-        queries.append(f'"{name}" crypto meme story OR narrative')
+        queries.append(f'"{name}" crypto meme story OR narrative OR linkedin')
 
     out: list[dict[str, Any]] = []
     for q in queries[:2]:
@@ -670,6 +835,8 @@ def _from_duckduckgo(symbol: str | None, name: str | None) -> list[dict[str, Any
                 plat = "tiktok"
             elif "instagram" in low or " insta " in f" {low} ":
                 plat = "instagram"
+            elif "linkedin" in low:
+                plat = "linkedin"
             elif "twitter" in low or " x.com" in low:
                 plat = "x"
             out.append(
@@ -678,7 +845,11 @@ def _from_duckduckgo(symbol: str | None, name: str | None) -> list[dict[str, Any
                     "platform": plat,
                     "text": text[:320],
                     "url": "",
-                    "weight": 1.6 if plat in {"tiktok", "instagram"} else 1.2,
+                    "weight": (
+                        1.6
+                        if plat in {"tiktok", "instagram", "linkedin"}
+                        else 1.2
+                    ),
                 }
             )
             if len(out) >= 12:
@@ -725,6 +896,8 @@ def _platform_from_url(url: str) -> str:
         return "tiktok"
     if "instagram" in host:
         return "instagram"
+    if "linkedin" in host:
+        return "linkedin"
     if "twitter" in host or host in {"x.com", "www.x.com"}:
         return "x"
     if "youtube" in host or "youtu.be" in host:

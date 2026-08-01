@@ -19,8 +19,9 @@
   --shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 8px 32px rgba(0, 0, 0, 0.35);
   --radius: 10px;
   --radius-sm: 6px;
-  --font: "Inter", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-  --mono: "JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, ui-monospace, monospace;
+  /* Primary UI fonts (loaded from Google Fonts in index.html; system fallbacks after) */
+  --font: Inter, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, "Liberation Mono", ui-monospace, monospace;
   --tab-height: 40px;
 }
 
@@ -43,16 +44,23 @@ body::before {
   content: "";
   position: fixed;
   inset: 0;
-  pointer-events: none;
+  /* Must never steal clicks (Opera GX “looks fine, nothing works”) */
+  pointer-events: none !important;
   background:
     radial-gradient(ellipse 80% 50% at 50% -20%, rgba(79, 140, 255, 0.07), transparent 55%),
     linear-gradient(180deg, #0c0e13 0%, var(--bg) 40%);
   z-index: 0;
 }
 
+html,
+body {
+  pointer-events: auto;
+}
+
 .app {
   position: relative;
   z-index: 1;
+  pointer-events: auto;
   max-width: 1080px;
   margin: 0 auto;
   padding: 28px 20px 48px;
@@ -77,13 +85,21 @@ body::before {
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  justify-content: flex-end; /* links flush to far right */
+  justify-content: flex-end; /* Docs/GitHub pack to the right */
   gap: 6px 10px;
   padding: 6px 10px;
   width: 100%;
 }
+/* Logo + RugWatch tab glued left */
+.nav-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: auto;
+  flex-shrink: 0;
+}
 .site-nav-inner .nav-brand {
-  margin-right: auto; /* logo stays left; links pack to the right */
+  margin-right: 0;
 }
 .nav-brand {
   display: inline-flex;
@@ -132,6 +148,146 @@ body::before {
   color: var(--text);
   background: var(--accent-soft);
   border-color: var(--accent-border);
+}
+
+/* RugWatch nav tab — dimmer yellow */
+.nav-link-rugwatch {
+  color: #c4a84a;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border-color: rgba(180, 150, 60, 0.28);
+  background: rgba(180, 150, 60, 0.06);
+  margin: 0;
+}
+.nav-link-rugwatch:hover {
+  color: #d4bc6a;
+  background: rgba(180, 150, 60, 0.12);
+  border-color: rgba(180, 150, 60, 0.4);
+}
+
+.check-rugwatch {
+  color: #c4a84a;
+  font-weight: 500;
+}
+.check-rugwatch input {
+  accent-color: #c4a84a;
+}
+.check-shared-sol {
+  color: #d4a060;
+  font-weight: 500;
+}
+.check-shared-sol input {
+  accent-color: #e0a050;
+}
+
+/* RugWatch wallet counts bar (mirrors RugWatch local/cloud pills + stats) */
+.rw-wallet-counts {
+  background: var(--bg-elevated);
+  border: 1px solid rgba(180, 150, 60, 0.28);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  box-shadow: var(--shadow);
+  margin-bottom: 2px;
+}
+.rw-wallet-counts-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+.rw-wallet-counts-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #c4a84a;
+  flex-shrink: 0;
+}
+.rw-wallet-counts .pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.rw-wallet-stats {
+  flex: 1 1 200px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  line-height: 1.35;
+}
+.rw-wallet-refresh {
+  margin-left: auto;
+  font-size: 0.72rem !important;
+  padding: 4px 12px !important;
+}
+.pill-wallets,
+.pill-cloud {
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.78rem !important;
+  font-weight: 600 !important;
+  padding: 6px 14px !important;
+}
+.pill-wallets:hover,
+.pill-cloud:hover {
+  border-color: rgba(180, 150, 60, 0.5);
+  background: rgba(180, 150, 60, 0.12);
+}
+.pill-wallets,
+.pill-wallets.ok {
+  color: #8ee4a8;
+  border-color: rgba(52, 199, 89, 0.35);
+  background: rgba(52, 199, 89, 0.1);
+}
+.pill-cloud,
+.pill-cloud.ok {
+  color: #7ec8e3;
+  border-color: rgba(126, 200, 227, 0.4);
+  background: rgba(126, 200, 227, 0.1);
+}
+.pill-wallets.warn,
+.pill-cloud.warn {
+  color: #e0a050;
+  border-color: rgba(255, 159, 10, 0.35);
+  background: rgba(255, 159, 10, 0.08);
+}
+.pill-wallets.bad,
+.pill-cloud.bad {
+  color: var(--bad);
+  border-color: rgba(255, 69, 58, 0.3);
+  background: rgba(255, 69, 58, 0.08);
+}
+.top {
+  flex-wrap: wrap;
+}
+.status-row {
+  flex-wrap: wrap;
+}
+
+/* Ruggers → dimmer yellow Upload */
+.rug-upload-btn {
+  color: #1c1810 !important;
+  font-weight: 600 !important;
+  background: #c4a84a !important;
+  border: 1px solid #9a8438 !important;
+  border-radius: 7px;
+  padding: 5px 12px !important;
+}
+.rug-upload-btn:hover:not(:disabled) {
+  background: #d4bc6a !important;
+  border-color: #c4a84a !important;
+}
+.rug-upload-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+.rug-section-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
 }
 
 /* Documentation page */
@@ -369,6 +525,25 @@ button, .ghost, .primary {
   gap: 16px;
   align-items: flex-start;
 }
+.sum-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1 1 220px;
+}
+.sum-logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  object-fit: cover;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.sum-identity-text {
+  min-width: 0;
+}
 .sum-name {
   font-size: 1.1rem;
   font-weight: 600;
@@ -384,13 +559,19 @@ button, .ghost, .primary {
 .mono { font-family: var(--mono); }
 .sum-stats {
   display: grid;
-  grid-template-columns: repeat(5, minmax(72px, 1fr));
-  gap: 8px 18px;
+  grid-template-columns: repeat(5, minmax(64px, 1fr));
+  gap: 8px 14px;
+  flex: 1 1 320px;
+  min-width: min(100%, 340px);
+  max-width: 100%;
+  box-sizing: border-box;
 }
 .sum-stats > div {
   padding: 4px 0;
   border-left: 1px solid var(--border);
-  padding-left: 12px;
+  padding-left: 10px;
+  min-width: 0;
+  overflow: hidden;
 }
 .sum-stats > div:first-child {
   border-left: 0;
@@ -406,10 +587,32 @@ button, .ghost, .primary {
   margin-bottom: 3px;
 }
 .sum-stats .v {
+  display: block;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   font-size: 0.95rem;
   letter-spacing: -0.01em;
+}
+.sum-stats .sum-updated {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.62rem;
+  font-weight: 500;
+  color: var(--text-muted, #8a8f98);
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.sum-stats .sum-updated[hidden] {
+  display: none !important;
+}
+.sum-market-updated {
+  display: block;
+  margin-top: 8px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted, #8a8f98);
+  letter-spacing: 0.02em;
 }
 .sum-stats .up { color: var(--good); }
 .sum-stats .down { color: var(--bad); }
@@ -417,27 +620,70 @@ button, .ghost, .primary {
 .links {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   margin-top: 14px;
   padding-top: 12px;
   border-top: 1px solid var(--border);
+  align-items: center;
 }
-.links a {
+.links a,
+.links a.ext-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   color: var(--text-secondary);
   text-decoration: none;
-  font-size: 0.75rem;
-  font-weight: 500;
+  font-size: 0.72rem;
+  font-weight: 600;
   border: 1px solid var(--border);
   background: var(--bg-input);
-  padding: 4px 11px;
+  padding: 4px 9px 4px 6px;
   border-radius: 999px;
-  text-transform: capitalize;
-  transition: color 0.12s, border-color 0.12s, background 0.12s;
+  text-transform: none;
+  letter-spacing: 0.01em;
+  transition: color 0.12s, border-color 0.12s, background 0.12s, box-shadow 0.12s;
+  line-height: 1.2;
+  max-width: 100%;
+  height: 24px;
+  box-sizing: border-box;
 }
-.links a:hover {
+.links a:hover,
+.links a.ext-link-btn:hover {
   color: var(--accent);
   border-color: var(--accent-border);
   background: var(--accent-soft);
+}
+.links .ext-link-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+  align-items: center;
+  justify-content: center;
+}
+.links .ext-link-icon svg {
+  display: block;
+  width: 12px;
+  height: 12px;
+}
+.links .ext-link-label {
+  white-space: nowrap;
+}
+/* Brand-tinted hover accents */
+.links a.ext-link-dexscreener:hover {
+  border-color: rgba(104, 247, 163, 0.45);
+  box-shadow: 0 0 0 1px rgba(104, 247, 163, 0.12);
+}
+.links a.ext-link-solscan:hover {
+  border-color: rgba(76, 141, 255, 0.45);
+  box-shadow: 0 0 0 1px rgba(76, 141, 255, 0.12);
+}
+.links a.ext-link-twitter:hover {
+  border-color: rgba(231, 233, 234, 0.35);
+}
+.links a.ext-link-pumpfun:hover {
+  border-color: rgba(134, 239, 42, 0.5);
+  box-shadow: 0 0 0 1px rgba(134, 239, 42, 0.12);
 }
 
 /* ── Tab bar (segmented + underline hybrid) ─────────────── */
@@ -522,9 +768,10 @@ button, .ghost, .primary {
   animation: fadeIn 0.18s ease;
 }
 .panel.active { display: block; }
-/* Logs / Ruggers panels need flex so the body can scroll correctly */
+/* Logs / Ruggers / Bundles need flex so the body can scroll correctly */
 .panel.panel-logs.active { display: flex; }
 .panel.panel-ruggers.active { display: flex; }
+.panel.panel-bundles.active { display: flex; }
 
 /* ── Ruggers tab ─────────────────────────────────────────── */
 .panel-ruggers {
@@ -535,6 +782,258 @@ button, .ghost, .primary {
 .panel-ruggers.active {
   display: flex;
 }
+/* Ruggers: Tracked mint (left) + CA search (right) */
+.rug-mint-search-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px 14px;
+  margin-top: 12px;
+  width: 100%;
+}
+.rug-mint-pick-wrap {
+  flex: 0 1 auto;
+  min-width: 160px;
+  position: relative;
+  z-index: 5;
+}
+.rug-mint-pick-label {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+/* Custom scrollable mint dropdown (not a native select list) */
+.rug-mint-dd {
+  position: relative;
+  min-width: 180px;
+  max-width: min(300px, 80vw);
+}
+.rug-mint-dd-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  text-align: left;
+}
+.rug-mint-dd-btn:hover {
+  border-color: var(--accent-border, rgba(79, 140, 255, 0.45));
+}
+.rug-mint-dd.is-open .rug-mint-dd-btn {
+  border-color: var(--accent-border, rgba(79, 140, 255, 0.45));
+  box-shadow: 0 0 0 2px var(--accent-soft, rgba(79, 140, 255, 0.12));
+}
+.rug-mint-dd-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.rug-mint-dd-caret {
+  flex: 0 0 auto;
+  opacity: 0.7;
+  font-size: 0.7rem;
+}
+.rug-mint-dd.is-open .rug-mint-dd-caret {
+  transform: rotate(180deg);
+}
+.rug-mint-dd-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 50;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  background: var(--bg-panel, #12161e);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  /* Scroll — does not fill the screen */
+  max-height: min(220px, 38vh);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-muted) transparent;
+}
+.rug-mint-dd-list::-webkit-scrollbar {
+  width: 8px;
+}
+.rug-mint-dd-list::-webkit-scrollbar-thumb {
+  background: var(--text-muted);
+  border-radius: 4px;
+}
+.rug-mint-dd-opt {
+  padding: 7px 10px;
+  font-size: 0.8rem;
+  font-family: var(--mono);
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rug-mint-dd-opt:hover {
+  background: var(--accent-soft, rgba(79, 140, 255, 0.12));
+  color: var(--text);
+}
+.rug-mint-dd-opt.is-active {
+  color: var(--accent, #4f8cff);
+  background: rgba(79, 140, 255, 0.1);
+  font-weight: 600;
+}
+.rug-mint-select-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  border: 0 !important;
+}
+.rug-ca-search {
+  flex: 1 1 220px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  min-width: 200px;
+  max-width: 420px;
+  margin-left: auto;
+}
+.rug-ca-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 6px 4px 10px;
+}
+.rug-ca-search-row:focus-within {
+  border-color: rgba(180, 150, 60, 0.55);
+  box-shadow: 0 0 0 2px rgba(180, 150, 60, 0.12);
+}
+.rug-ca-icon {
+  color: var(--text-muted);
+  font-size: 1rem;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.rug-ca-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 8px 4px;
+  font-size: 0.84rem;
+  outline: none;
+}
+.rug-ca-input::placeholder {
+  color: var(--text-muted);
+}
+.rug-ca-go {
+  flex-shrink: 0;
+  background: rgba(180, 150, 60, 0.2);
+  color: #c4a84a;
+  border: 1px solid rgba(180, 150, 60, 0.4);
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.rug-ca-go:hover {
+  background: rgba(180, 150, 60, 0.32);
+  color: #d4bc6a;
+}
+.rug-ca-status {
+  display: block;
+  margin: 6px 2px 0;
+  font-size: 0.75rem;
+  color: var(--warn);
+  text-align: right;
+}
+.rug-ca-status.ok {
+  color: var(--good);
+}
+@media (max-width: 700px) {
+  .rug-mint-search-row {
+    flex-direction: column;
+  }
+  .rug-ca-search {
+    max-width: none;
+    width: 100%;
+    margin-left: 0;
+  }
+  .rug-ca-status {
+    text-align: left;
+  }
+}
+/* Logs CA search (under history bar) */
+.logs-ca-search {
+  flex: none;
+  width: 100%;
+  max-width: none;
+  margin: 0 0 10px;
+  margin-left: 0;
+}
+.logs-ca-search .rug-ca-status {
+  text-align: left;
+}
+.logs-entry.logs-hit {
+  outline: 1px solid rgba(180, 150, 60, 0.55);
+  background: rgba(180, 150, 60, 0.08);
+  border-radius: 8px;
+  scroll-margin-top: 12px;
+}
+/* Yellow copyable CA — Ruggers + Logs */
+a.copy-mint,
+.copy-mint,
+.rug-title a.copy-mint,
+.logs-entry-sub a.copy-mint,
+.logs-ca-copy {
+  color: #c4a84a !important;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-weight: 500;
+}
+a.copy-mint:hover,
+.copy-mint:hover,
+.rug-title a.copy-mint:hover,
+.logs-entry-sub a.copy-mint:hover,
+.logs-ca-copy:hover {
+  color: #d4bc6a !important;
+}
+/* Top summary mint — yellow, opens Solscan (address text only, no URL shown) */
+#sumAddr a.sum-mint-link {
+  color: #c4a84a !important;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-weight: 500;
+  word-break: break-all;
+}
+#sumAddr a.sum-mint-link:hover {
+  color: #d4bc6a !important;
+}
+
 .ruggers-body {
   flex: 1;
   overflow: auto;
@@ -563,22 +1062,38 @@ button, .ghost, .primary {
   color: var(--text-secondary);
   line-height: 1.45;
 }
-.rug-mint-pick {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 10px;
-  font-size: 0.78rem;
-  color: var(--text-muted);
+/* RugWatch label in Ruggers section titles — dim yellow */
+.rug-section-title .rug-label-rugwatch,
+.rug-label-rugwatch {
+  color: #b8a85c;
+  font-weight: 600;
+  opacity: 0.92;
 }
-.rug-mint-pick select {
-  background: var(--bg-input);
+/* Same-slot multi-buys — dim yellow on DESCRIPTION strip only (not title head / body) */
+.rug-section-title .rug-label-launch-bots,
+.rug-label-launch-bots,
+.rug-section-title .rug-label-launch-window,
+.rug-label-launch-window {
+  color: #b8a85c;
+  font-weight: 600;
+  opacity: 0.92;
+}
+/* Title row stays default elevated styling */
+.rug-section.rug-section-launch-bots > .rug-section-head {
+  background: var(--bg-elevated);
+  border-bottom-color: var(--border);
+}
+.rug-section.rug-section-launch-bots > .rug-section-head .rug-section-title {
   color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 4px 8px;
-  font-size: 0.78rem;
-  max-width: min(360px, 70vw);
+  background: transparent;
+  opacity: 1;
+}
+/* Subcategory / hint under the title — dim yellow banner */
+.rug-section.rug-section-launch-bots > .rug-section-hint {
+  color: #b8a85c;
+  background: rgba(184, 168, 92, 0.1);
+  border-bottom: 1px solid rgba(184, 168, 92, 0.22);
+  padding: 8px 12px;
 }
 .rug-section {
   margin: 14px 0;
@@ -630,6 +1145,68 @@ button, .ghost, .primary {
   color: var(--accent);
   border: 1px solid var(--accent-border);
 }
+/* Ruggers / Bundles shared supply-% bands (same as Holders) */
+.rug-wallet-meta .pct-low,
+.rug-supply-sold.pct-low,
+.rug-supply-bought.pct-low,
+.bun-section-total .pct-low,
+.bun-table .pct-low,
+.bun-cluster-head .pct-low {
+  color: #6a9e78;
+  font-weight: 500;
+}
+.rug-wallet-meta .pct-medium,
+.rug-supply-sold.pct-medium,
+.rug-supply-bought.pct-medium,
+.bun-section-total .pct-medium,
+.bun-table .pct-medium,
+.bun-cluster-head .pct-medium {
+  color: #b8a85c;
+  font-weight: 500;
+}
+.rug-wallet-meta .pct-high,
+.rug-supply-sold.pct-high,
+.rug-supply-bought.pct-high,
+.bun-section-total .pct-high,
+.bun-table .pct-high,
+.bun-cluster-head .pct-high {
+  color: #c47a4a;
+  font-weight: 600;
+}
+.rug-wallet-meta .pct-critical,
+.rug-supply-sold.pct-critical,
+.rug-supply-bought.pct-critical,
+.bun-section-total .pct-critical,
+.bun-table .pct-critical,
+.bun-cluster-head .pct-critical {
+  color: #c45c5c;
+  font-weight: 600;
+}
+
+.rug-supply-sold,
+.rug-supply-bought {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  font-family: var(--mono);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+/* Seller sections: sold supply (amber) */
+.rug-supply-sold {
+  color: #e0a050;
+  background: rgba(255, 159, 10, 0.1);
+  border: 1px solid rgba(255, 159, 10, 0.28);
+}
+/* Swing: bought / held supply — green */
+.rug-supply-bought {
+  color: #34c759;
+  background: rgba(52, 199, 89, 0.16);
+  border: 1px solid rgba(52, 199, 89, 0.45);
+}
 .rug-section-hint {
   margin: 0;
   padding: 6px 12px 4px;
@@ -676,14 +1253,45 @@ button, .ghost, .primary {
   flex-shrink: 0;
 }
 .rug-tag-seller {
-  background: rgba(255, 69, 58, 0.15);
-  color: #ff6b63;
-  border: 1px solid rgba(255, 69, 58, 0.35);
+  background: rgba(180, 80, 75, 0.12);
+  color: #c47a7a;
+  border: 1px solid rgba(180, 80, 75, 0.28);
 }
 .rug-tag-swing {
-  background: rgba(255, 159, 10, 0.15);
-  color: #ffb340;
-  border: 1px solid rgba(255, 159, 10, 0.4);
+  background: rgba(180, 140, 50, 0.12);
+  color: #c4a84a;
+  border: 1px solid rgba(180, 140, 50, 0.28);
+}
+/* Creator — permanent label (same sell/swing loop as Similar/Single) */
+.rug-tag-creator {
+  background: rgba(70, 140, 160, 0.14);
+  color: #7eb8c4;
+  border: 1px solid rgba(70, 140, 160, 0.35);
+}
+.rug-wallet-creator .rug-wallet-meta {
+  color: #8aa8b0;
+}
+/* Already on RugWatch — separate from new similar sellers */
+.rug-tag-flagged {
+  background: rgba(140, 100, 180, 0.14);
+  color: #b89ad4;
+  border: 1px solid rgba(140, 100, 180, 0.32);
+}
+/* Flagged buy-back on Swing — keep purple scheme */
+.rug-tag-flagged-swing {
+  background: rgba(140, 100, 180, 0.2);
+  color: #cbb0e8;
+  border: 1px solid rgba(160, 120, 200, 0.45);
+}
+.rug-wallet-flagged .rug-wallet-meta {
+  color: #9a8aab;
+}
+.rug-wallet-flagged-swing {
+  border-left: 3px solid rgba(160, 120, 200, 0.55);
+  padding-left: 6px;
+}
+.rug-wallet-flagged-swing .rug-wallet-meta {
+  color: #a994c0;
 }
 .rug-footer-meta {
   margin: 12px 0 0;
@@ -691,11 +1299,21 @@ button, .ghost, .primary {
   color: var(--text-muted);
 }
 .ruggers-body a.wallet-link {
-  color: var(--accent);
+  color: #6a8fc4;
   text-decoration: none;
 }
 .ruggers-body a.wallet-link:hover {
   text-decoration: underline;
+  color: #8aa8d4;
+}
+.rug-wallet-main {
+  color: #b8c0cc;
+}
+.rug-section-title {
+  color: #c8ced8;
+}
+.rug-section-hint {
+  color: #7a8494;
 }
 
 /* History / Logs tab toolbar */
@@ -832,6 +1450,373 @@ button, .ghost, .primary {
   to { opacity: 1; }
 }
 
+/* ── Bundles card UI (structured, not raw text dump) ──────── */
+/* Must stay display:none when inactive — never override .panel hide */
+.panel-bundles {
+  display: none;
+  flex-direction: column;
+  min-height: 0;
+}
+.panel-bundles.active {
+  display: flex;
+}
+.bundles-ui {
+  flex: 1;
+  overflow: auto;
+  max-height: min(68vh, 880px);
+  padding: 12px 14px 24px;
+}
+/* Version + delta system indicator (confirms client build loaded) */
+.bun-delta-note {
+  display: block;
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid rgba(230, 208, 122, 0.35);
+  background: rgba(230, 208, 122, 0.08);
+  color: #e6d07a;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.bun-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.bun-stat {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  padding: 10px 12px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+.bun-stat-label {
+  display: block;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bun-stat-value {
+  font-size: 1.05rem;
+  font-weight: 600;
+  /* Default only when no pct-* class — otherwise Total/Multi look plain white */
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+/* Hold-% colors inside top boxes must win over .bun-stat-value color */
+.bun-stat-value .pct-low,
+.bun-stat-value .pct-medium,
+.bun-stat-value .pct-high,
+.bun-stat-value .pct-critical {
+  font-weight: 700;
+}
+.bun-stat-value .bun-pct-zero,
+.bun-stat-value.bun-pct-zero {
+  color: var(--text-muted, #8a8f98) !important;
+  font-weight: 600;
+}
+/* Last updated under Fresh / Multi-send / Shared SOL — fit inside box, no bleed */
+.bun-stat-sub {
+  display: block;
+  margin-top: 4px;
+  padding-top: 3px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.55rem;
+  font-weight: 500;
+  color: var(--text-muted, #8a8f98);
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+  max-width: 100%;
+  min-width: 0;
+  max-height: 2.8em;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-line;
+  hyphens: auto;
+  box-sizing: border-box;
+  visibility: visible;
+  opacity: 1;
+}
+/* Since-last-Analyze relative change (1–25 green · 25–50 yellow · 50–75 orange · 75–99 red) */
+/* Delta sits next to the %: 24% (d +24%) — always visible */
+.bun-stat-delta-row {
+  display: inline;
+  margin-left: 4px;
+}
+/* bun-stat-delta as chip under the % */
+.bun-stat-value .bun-stat-delta,
+.bun-stat-delta {
+  display: inline-block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  margin-left: 6px;
+  font-size: 0.88rem !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  vertical-align: baseline;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+.bun-stat-delta.bun-delta-green { color: #7dba8a !important; }
+.bun-stat-delta.bun-delta-yellow { color: #d4c15c !important; }
+.bun-stat-delta.bun-delta-orange { color: #e08a4a !important; }
+.bun-stat-delta.bun-delta-red { color: #e06a6a !important; }
+.bun-stat-delta.bun-delta-flat {
+  color: #e6d07a !important; /* bright amber so (=0) is never invisible */
+  font-weight: 800 !important;
+  opacity: 1 !important;
+}
+
+/* Classic: arrow sits inline after the % */
+.bun-stat-value .bun-stat-delta {
+  display: inline !important;
+  margin-left: 6px !important;
+  margin-top: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  width: auto !important;
+  font-size: 0.85rem !important;
+  font-weight: 700 !important;
+  vertical-align: baseline !important;
+}
+
+.bun-client-ver {
+  color: var(--text-muted, #8a8f98);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+/* Supply % bands — !important so default .bun-stat-value white never wins */
+.bun-stat-value .pct-low,
+.bun-stat-value.pct-low,
+.bun-section-total .pct-low,
+.bun-cluster-head .pct-low,
+.bun-table .pct-low { color: #6a9e78 !important; }
+.bun-stat-value .pct-medium,
+.bun-stat-value.pct-medium,
+.bun-section-total .pct-medium,
+.bun-cluster-head .pct-medium,
+.bun-table .pct-medium { color: #b8a85c !important; }
+.bun-stat-value .pct-high,
+.bun-stat-value.pct-high,
+.bun-section-total .pct-high,
+.bun-cluster-head .pct-high,
+.bun-table .pct-high { color: #c47a4a !important; }
+.bun-stat-value .pct-critical,
+.bun-stat-value.pct-critical,
+.bun-section-total .pct-critical,
+.bun-cluster-head .pct-critical,
+.bun-table .pct-critical { color: #c45c5c !important; }
+/* Bundle risk score: 1–25 green · 25–50 yellow · 50–75 orange · 75–100 red */
+.bun-stat-value .risk-score-green,
+.bun-stat-value.risk-score-green,
+.risk-score-green { color: #6a9e78 !important; font-weight: 600; }
+.bun-stat-value .risk-score-yellow,
+.bun-stat-value.risk-score-yellow,
+.risk-score-yellow { color: #b8a85c !important; font-weight: 600; }
+.bun-stat-value .risk-score-orange,
+.bun-stat-value.risk-score-orange,
+.risk-score-orange { color: #c47a4a !important; font-weight: 600; }
+.bun-stat-value .risk-score-red,
+.bun-stat-value.risk-score-red,
+.risk-score-red { color: #c45c5c !important; font-weight: 600; }
+.bun-meta {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin: 0 0 12px;
+  line-height: 1.45;
+}
+.bun-signals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.bun-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+.bun-chip strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.bun-chip.sev-high,
+.bun-chip.sev-critical {
+  border-color: rgba(196, 92, 92, 0.35);
+  background: rgba(196, 92, 92, 0.08);
+}
+.bun-chip.sev-medium,
+.bun-chip.sev-elevated {
+  border-color: rgba(184, 168, 92, 0.35);
+  background: rgba(184, 168, 92, 0.08);
+}
+.bun-section {
+  margin: 14px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+.bun-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+}
+.bun-section-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #6a9e78; /* dim green section titles */
+  letter-spacing: 0.02em;
+}
+/* Single holders — cool slate accent (distinct from multi/similar greens) */
+.bun-section-single {
+  border-color: rgba(120, 160, 200, 0.35);
+}
+.bun-section-single .bun-section-head {
+  background: linear-gradient(
+    90deg,
+    rgba(90, 140, 190, 0.14) 0%,
+    var(--bg-elevated) 55%
+  );
+  border-bottom-color: rgba(120, 160, 200, 0.28);
+}
+.bun-section-single .bun-section-title {
+  color: #8eb4d4;
+}
+.bun-section-single .bun-section-total {
+  color: #a8c4dc;
+}
+.bun-section-single .bun-sub {
+  background: rgba(90, 140, 190, 0.08);
+  border-top-color: rgba(120, 160, 200, 0.2);
+}
+.bun-section-single .bun-table th {
+  background: rgba(90, 140, 190, 0.12);
+  color: #9bb8d0;
+}
+.bun-section-single .bun-table tr:nth-child(even) td {
+  background: rgba(90, 140, 190, 0.04);
+}
+.bun-section-total {
+  font-size: 0.78rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+.bun-section-body {
+  padding: 0;
+}
+.bun-empty {
+  margin: 0;
+  padding: 12px 14px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.bun-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+.bun-table th {
+  text-align: left;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  font-weight: 500;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.15);
+}
+.bun-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  vertical-align: top;
+}
+.bun-table tr:last-child td {
+  border-bottom: none;
+}
+.bun-table .mono,
+.bun-wallet {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  word-break: break-all;
+}
+.bun-table a.wallet-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+.bun-table a.wallet-link:hover {
+  text-decoration: underline;
+}
+.bun-sub {
+  margin: 0;
+  padding: 8px 12px 4px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.12);
+}
+.bun-cluster {
+  border-top: 1px solid var(--border);
+}
+.bun-cluster:first-child {
+  border-top: none;
+}
+.bun-cluster-head {
+  padding: 10px 12px 6px;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+.bun-cluster-head .mono {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  color: var(--text);
+  word-break: break-all;
+}
+.bun-hint {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+.bun-hint strong {
+  color: var(--text);
+}
+
 .report {
   margin: 0;
   white-space: pre-wrap;
@@ -879,11 +1864,69 @@ button, .ghost, .primary {
   font-weight: 500;
 }
 
-/* Token holding amounts (balances) — yellow */
+/* Token holding amounts (balances) — dim yellow (not bright) */
+/* All tabs: section titles + subcategories — dim green (marks different sections) */
+.report .bundle-cat-name,
+.report .section-title-green,
+.logs-col-body .bundle-cat-name,
+.logs-col-body .section-title-green {
+  color: #7aab88;
+  font-weight: 600;
+  opacity: 0.88;
+  letter-spacing: 0.02em;
+}
+/* Bundles: "Same-slot multi-buys" line title — dim green */
+.report .bundle-same-slot-title,
+.logs-col-body .bundle-same-slot-title {
+  color: #7aab88;
+  font-weight: 600;
+  opacity: 0.9;
+  letter-spacing: 0.02em;
+}
+/* Major category headers (── NARRATIVE ──, ── ALERT SLOTS ──, ALL-CAPS blocks) */
+.report .section-title-major,
+.logs-col-body .section-title-major {
+  color: #7aab88;
+  font-weight: 700;
+  opacity: 0.95;
+  letter-spacing: 0.05em;
+}
+/* Ruggers HTML section titles */
+.rug-section-title {
+  color: #6a9e7a !important;
+  opacity: 0.88;
+}
+.rug-section-title .rug-count {
+  opacity: 0.75;
+  color: #6a9e7a;
+}
+/* Logs column titles */
+.logs-col-title {
+  color: #6a9e7a !important;
+  opacity: 0.85;
+}
+/* Logs entry headers */
+.logs-entry-head {
+  color: #6a9e7a !important;
+  opacity: 0.9;
+}
+/* Summary bar labels (Price, MC, …) as subcategories */
+.sum-stats .k {
+  color: #6a9e7a !important;
+  opacity: 0.8;
+}
+/* Main report tab buttons — subtle green for inactive titles */
+.tabs .tab {
+  color: #7a9e88;
+}
+.tabs .tab.active {
+  color: #8fbf9a;
+}
+
 .report .hold-amt,
 .logs-col-body .hold-amt {
-  color: #e8c84a;
-  font-weight: 600;
+  color: #b8a85c;
+  font-weight: 500;
 }
 
 /* Clickable wallet addresses */
@@ -900,6 +1943,44 @@ button, .ghost, .primary {
   color: #9fd0ff;
 }
 
+/* Wallet address hold colors — dim (match pct-medium / pct-critical) */
+.report a.wallet-link.wallet-hold-yellow,
+.logs-col-body a.wallet-link.wallet-hold-yellow,
+pre.report a.wallet-hold-yellow {
+  color: #b8a85c !important; /* dim yellow >5% */
+  font-weight: 500;
+}
+.report a.wallet-link.wallet-hold-yellow:hover,
+.logs-col-body a.wallet-link.wallet-hold-yellow:hover,
+pre.report a.wallet-hold-yellow:hover {
+  color: #c9b96e !important;
+}
+
+.report a.wallet-link.wallet-hold-red,
+.logs-col-body a.wallet-link.wallet-hold-red,
+pre.report a.wallet-hold-red {
+  color: #b86b66 !important; /* dim red >10% */
+  font-weight: 500;
+}
+.report a.wallet-link.wallet-hold-red:hover,
+.logs-col-body a.wallet-link.wallet-hold-red:hover,
+pre.report a.wallet-hold-red:hover {
+  color: #c87f7a !important;
+}
+
+/* Known LP / liquidity pair addresses — muted off-white / gray */
+.report a.wallet-link.wallet-hold-lp,
+.logs-col-body a.wallet-link.wallet-hold-lp,
+pre.report a.wallet-hold-lp {
+  color: #9aa3b2 !important;
+  font-weight: 500;
+}
+.report a.wallet-link.wallet-hold-lp:hover,
+.logs-col-body a.wallet-link.wallet-hold-lp:hover,
+pre.report a.wallet-hold-lp:hover {
+  color: #b0b8c6 !important;
+}
+
 /* Custom scrollbar for report */
 .report::-webkit-scrollbar { width: 8px; height: 8px; }
 .report::-webkit-scrollbar-track { background: transparent; }
@@ -910,6 +1991,49 @@ button, .ghost, .primary {
 .report::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 /* ── Footer ─────────────────────────────────────────────── */
+/* Helius Fresh + Multi-send warning (always visible; stronger when both on) */
+.helius-warn-banner {
+  margin: 8px 0 4px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(196, 122, 74, 0.55);
+  background: rgba(196, 122, 74, 0.16);
+  color: #e0b48a;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  font-weight: 500;
+}
+.helius-warn-banner strong {
+  color: #f0c49a;
+  font-weight: 700;
+}
+.helius-warn-banner.helius-warn-active {
+  border-color: rgba(255, 159, 10, 0.75);
+  background: rgba(255, 159, 10, 0.22);
+  color: #ffc078;
+  box-shadow: 0 0 0 1px rgba(255, 159, 10, 0.2);
+}
+.helius-warn-banner.helius-warn-active strong {
+  color: #ffd4a0;
+}
+
+/* Total bundle % exclusions (similar-size + suspect) — yellow banner */
+.bundle-pct-exclude-banner {
+  margin: 6px 0 4px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(212, 175, 55, 0.65);
+  background: rgba(212, 175, 55, 0.18);
+  color: #e8d48a;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  font-weight: 500;
+}
+.bundle-pct-exclude-banner strong {
+  color: #f5e6a8;
+  font-weight: 700;
+}
+
 .foot {
   display: flex;
   flex-wrap: wrap;
@@ -1020,4 +2144,10 @@ code {
   .site-nav-inner { flex-direction: column; align-items: flex-start; }
   .nav-links { width: 100%; }
   .nav-link { padding: 6px 10px; font-size: 0.78rem; }
+}
+
+/* Always-visible flat delta (green 0%) */
+.bun-stat-delta.bun-delta-green {
+  color: #7dba8a !important;
+  font-weight: 800 !important;
 }

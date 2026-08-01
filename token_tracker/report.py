@@ -59,8 +59,9 @@ def format_pretty(report: dict[str, Any]) -> str:
     lines.append(f"  {token.get('address')}")
     lines.append("=" * 72)
 
+    # Section markers (── TITLE ──) are colored dim-green in the UI.
     lines.append("")
-    lines.append("MARKET")
+    lines.append("── MARKET ──")
     lines.append(f"  Price:          {_usd(market.get('price_usd'))}")
     lines.append(f"  Market cap:     {_usd(market.get('market_cap_usd'))}")
     lines.append(f"  FDV:            {_usd(market.get('fdv_usd'))}")
@@ -81,7 +82,7 @@ def format_pretty(report: dict[str, Any]) -> str:
     pump = report.get("pumpfun") or {}
     if pump.get("is_pump_mint") or pump.get("on_bonding_curve") or pump.get("graduated") is True:
         lines.append("")
-        lines.append("PUMP.FUN")
+        lines.append("── PUMP.FUN ──")
         # Explicit yes/no for graduated (main ask)
         grad = pump.get("graduated")
         if grad is True:
@@ -111,7 +112,7 @@ def format_pretty(report: dict[str, Any]) -> str:
             lines.append(f"  Pump.fun:       {pump.get('pump_url')}")
 
     lines.append("")
-    lines.append("INITIAL MARKET CAP (estimate)")
+    lines.append("── INITIAL MARKET CAP ──")
     lines.append(f"  Est. initial MC: {_usd(init.get('estimated_usd'))}")
 
     lines.append(f"  As of:           {init.get('as_of') or 'n/a'}")
@@ -121,7 +122,7 @@ def format_pretty(report: dict[str, Any]) -> str:
         lines.append(f"  Method:          {init.get('method')}")
 
     lines.append("")
-    lines.append("ALL-TIME HIGH (estimate over available history)")
+    lines.append("── ALL-TIME HIGH ──")
     # Price omitted — MC is the primary estimate shown in Overview
     lines.append(f"  ATH market cap:  {_usd(ath.get('estimated_market_cap_usd'))}")
     lines.append(f"  As of:           {ath.get('as_of') or 'n/a'}")
@@ -132,7 +133,7 @@ def format_pretty(report: dict[str, Any]) -> str:
         lines.append(f"  Method:          {ath.get('method')}")
 
     lines.append("")
-    lines.append("SOCIALS")
+    lines.append("── SOCIALS ──")
     try:
         from .alerts import dexscreener_socials_updated
 
@@ -157,7 +158,7 @@ def format_pretty(report: dict[str, Any]) -> str:
         lines.append("  (none listed on DexScreener)")
 
     lines.append("")
-    lines.append("X / COMMUNITY SENTIMENT")
+    lines.append("── X / COMMUNITY SENTIMENT ──")
     kind = sent.get("kind") or ("x_text" if x.get("posts_analyzed") else "unknown")
     lines.append(f"  Label:           {sent.get('label')}")
     lines.append(f"  Score:           {sent.get('score')}")
@@ -179,7 +180,7 @@ def format_pretty(report: dict[str, Any]) -> str:
 
     holders = report.get("holders") or {}
     lines.append("")
-    lines.append("HOLDERS / WALLETS")
+    lines.append("── HOLDERS / WALLETS ──")
     if holders.get("ok"):
         summary = holders.get("summary") or {}
         lines.append(f"  Source:          {holders.get('source')}")
@@ -209,7 +210,7 @@ def format_pretty(report: dict[str, Any]) -> str:
 
     bundles = report.get("bundles") or {}
     lines.append("")
-    lines.append("BUNDLES / COORDINATED WALLETS")
+    lines.append("── BUNDLES / COORDINATED WALLETS ──")
     if bundles.get("ok"):
         bs = bundles.get("summary") or {}
         lines.append(
@@ -229,7 +230,8 @@ def format_pretty(report: dict[str, Any]) -> str:
         else:
             lines.append("  Total % bundles: n/a (none flagged)")
         lines.append(
-            f"  Clusters:        {bs.get('multi_account_clusters')} multi-ATA · "
+            f"  Clusters:        {bs.get('multi_account_clusters')} multi "
+            f"Associated Token Account · "
             f"similar groups {bs.get('similar_size_groups')} · "
             f"insiders {bs.get('insider_accounts')}"
         )
@@ -247,7 +249,7 @@ def format_pretty(report: dict[str, Any]) -> str:
             lines.append("  Multi-account clusters:")
             for c in clusters[:8]:
                 lines.append(
-                    f"    {c.get('wallet')} · {c.get('accounts')} ATAs · "
+                    f"    {c.get('wallet')} · {c.get('accounts')} Associated Token Accounts · "
                     f"~{_pct(c.get('pct_supply'))} · bal {c.get('combined_balance')}"
                 )
         groups = bundles.get("similar_size_groups") or []
@@ -262,7 +264,7 @@ def format_pretty(report: dict[str, Any]) -> str:
             st = (bundles.get("summary") or {}).get("suspect_total_pct")
             sn = (bundles.get("summary") or {}).get("suspect_wallet_count") or len(suspects)
             lines.append(
-                f"  Suspect wallets — total {_pct(st)} across {sn} wallet(s):"
+                f"  Similar-sized wallets — total {_pct(st)} across {sn} wallet(s):"
             )
             for sw in suspects[:10]:
                 reasons = ", ".join(sw.get("reasons") or [])
@@ -275,7 +277,7 @@ def format_pretty(report: dict[str, Any]) -> str:
         lines.append(f"  {bundles.get('error') or bundles.get('notes') or 'n/a'}")
 
     lines.append("")
-    lines.append("ABOUT / NEWS")
+    lines.append("── ABOUT / NEWS ──")
     lines.append("  (See About tab for full X sentiment, narrative, and public news events.)")
     lines.append(f"  Headline: {story.get('headline') or 'n/a'}")
     news_n = len(story.get("news_events") or [])
@@ -308,6 +310,7 @@ def format_overview(report: dict[str, Any]) -> str:
     pump = report.get("pumpfun") or {}
 
     lines: list[str] = []
+    # Section markers (── TITLE ──) are colored dim-green in the UI.
     lines.append("=" * 72)
     lines.append(
         f"  {token.get('name')} (${token.get('symbol')})  |  {token.get('chain_id')}"
@@ -315,7 +318,7 @@ def format_overview(report: dict[str, Any]) -> str:
     lines.append(f"  {token.get('address')}")
     lines.append("=" * 72)
     lines.append("")
-    lines.append("MARKET")
+    lines.append("── MARKET ──")
     lines.append(f"  Price:          {_usd(market.get('price_usd'))}")
     lines.append(f"  Market cap:     {_usd(market.get('market_cap_usd'))}")
     lines.append(f"  FDV:            {_usd(market.get('fdv_usd'))}")
@@ -332,7 +335,7 @@ def format_overview(report: dict[str, Any]) -> str:
 
     if pump.get("is_pump_mint") or pump.get("on_bonding_curve") or pump.get("graduated") is True:
         lines.append("")
-        lines.append("PUMP.FUN")
+        lines.append("── PUMP.FUN ──")
         grad = pump.get("graduated")
         if grad is True:
             grad_s = "yes"
@@ -349,7 +352,7 @@ def format_overview(report: dict[str, Any]) -> str:
             lines.append(f"  Pump.fun:       {pump.get('pump_url')}")
 
     lines.append("")
-    lines.append("INITIAL MARKET CAP (estimate)")
+    lines.append("── INITIAL MARKET CAP ──")
     lines.append(f"  Est. initial MC: {_usd(init.get('estimated_usd'))}")
     lines.append(f"  As of:           {init.get('as_of') or 'n/a'}")
     if init.get("source"):
@@ -358,7 +361,7 @@ def format_overview(report: dict[str, Any]) -> str:
         lines.append(f"  Method:          {init.get('method')}")
 
     lines.append("")
-    lines.append("ALL-TIME HIGH (estimate)")
+    lines.append("── ALL-TIME HIGH ──")
     # Price omitted — Overview shows ATH market cap only (faster path, clearer UI)
     lines.append(f"  ATH market cap:  {_usd(ath.get('estimated_market_cap_usd'))}")
     lines.append(f"  As of:           {ath.get('as_of') or 'n/a'}")
@@ -369,7 +372,7 @@ def format_overview(report: dict[str, Any]) -> str:
         lines.append(f"  Method:          {ath.get('method')}")
 
     lines.append("")
-    lines.append("SOCIALS")
+    lines.append("── SOCIALS ──")
     lines.append("  (Click blue links to open in your browser)")
     try:
         from .alerts import dexscreener_socials_updated
@@ -435,12 +438,15 @@ def format_holders_section(report: dict[str, Any]) -> str:
         return format_holders_text(holders)
     except Exception:  # noqa: BLE001
         if not holders.get("ok"):
-            return f"HOLDERS\n  {holders.get('error') or holders.get('notes') or 'Run Analyze first.'}\n"
+            return (
+                "── HOLDERS ──\n"
+                f"  {holders.get('error') or holders.get('notes') or 'Run Analyze first.'}\n"
+            )
         return json.dumps(holders, indent=2, default=str)
 
 
 def format_bundles_section(report: dict[str, Any]) -> str:
-    """Bundles tab body."""
+    """Bundles tab body — always human text, never raw JSON."""
     if report.get("_raw_bundles_text"):
         return str(report["_raw_bundles_text"])
     bundles = report.get("bundles") or {}
@@ -448,10 +454,23 @@ def format_bundles_section(report: dict[str, Any]) -> str:
         from .bundles import format_bundles_text
 
         return format_bundles_text(bundles)
-    except Exception:  # noqa: BLE001
-        if not bundles.get("ok"):
-            return f"BUNDLES\n  {bundles.get('error') or bundles.get('notes') or 'Run Analyze first.'}\n"
-        return json.dumps(bundles, indent=2, default=str)
+    except Exception as exc:  # noqa: BLE001
+        # Do not dump JSON into the UI (looks like "code"). Keep a short error.
+        err = (
+            bundles.get("error")
+            or bundles.get("notes")
+            or "Bundles could not be formatted."
+        )
+        return (
+            "── BUNDLES ──\n"
+            f"  {err}\n"
+            f"  (formatter note: {exc})\n"
+            "\n"
+            "  Tips:\n"
+            "  · Use full Analyze (not Quick) on a Solana mint\n"
+            "  · Holders must succeed first\n"
+            "  · Helius needed for funding / fresh / multi-send / launch-window\n"
+        )
 
 
 def format_maps_section(report: dict[str, Any]) -> str:
@@ -473,7 +492,7 @@ def format_maps_section(report: dict[str, Any]) -> str:
             return format_maps_text(maps)
         except Exception as exc:  # noqa: BLE001
             return (
-                "MAPS — Bubblemaps\n"
+                "── MAPS — Bubblemaps ──\n"
                 f"  Could not build map links: {exc}\n"
                 "  Run Analyze first, then open Maps.\n"
             )
@@ -490,7 +509,7 @@ def format_alerts_section(report: dict[str, Any]) -> str:
     alerts = report.get("alerts")
     if alerts is None:
         return (
-            "ALERTS\n"
+            "── ALERTS ──\n"
             "  Things to watch out for immediately\n\n"
             "  Run Analyze first.\n"
             "  Top priority will show if there are any of: unlocked liquidity,\n"
@@ -504,12 +523,20 @@ def format_alerts_section(report: dict[str, Any]) -> str:
         return str(alerts)
 
 
+def _will_show_placeholder(label: str) -> str:
+    """Empty-slot copy — same style as Alerts (“if value returns True”)."""
+    name = (label or "Value").strip()
+    return f"  {name} will show here if value returns True"
+
+
 def format_about_section(report: dict[str, Any]) -> str:
     """About tab: Narrative storyline + X posts + Public News + Links."""
     if not report.get("ok") and not report.get("narrative") and not report.get("community_sentiment_x"):
         return (
-            "ABOUT\n"
+            "── ABOUT ──\n"
             "  Run Analyze to load narrative, X posts, and public news.\n"
+            + _will_show_placeholder("Narrative, X posts, and public news")
+            + "\n"
         )
 
     token = report.get("token") or {}
@@ -529,15 +556,23 @@ def format_about_section(report: dict[str, Any]) -> str:
     lines.append("=" * 72)
 
     # ── NARRATIVE (storyline) ─────────────────────────────────────────
+    # Section markers (── TITLE ──) are colored dim-green in the UI.
     lines.append("")
-    lines.append("NARRATIVE")
+    lines.append("── NARRATIVE ──")
     lines.append("  What this token is about")
-    headline = story.get("headline") or (
-        f"{token.get('name') or 'Token'} (${token.get('symbol') or '?'})"
-    )
-    lines.append(f"  {headline}")
-    if story.get("theme"):
-        lines.append(f"  Theme:  {story.get('theme')}")
+    has_story = bool(story.get("headline") or story.get("theme") or story.get("storyline"))
+    if has_story or story:
+        headline = story.get("headline") or (
+            f"{token.get('name') or 'Token'} (${token.get('symbol') or '?'})"
+        )
+        lines.append(f"  {headline}")
+        if story.get("theme"):
+            lines.append(f"  Theme:  {story.get('theme')}")
+        else:
+            lines.append(_will_show_placeholder("Theme / category"))
+    else:
+        lines.append(_will_show_placeholder("Token story / theme"))
+
     cf = story.get("coin_facts") if isinstance(story.get("coin_facts"), dict) else {}
     conf = (cf or {}).get("confidence") or ""
     srcs = story.get("sources_used") or []
@@ -548,6 +583,8 @@ def format_about_section(report: dict[str, Any]) -> str:
         if srcs:
             bits.append("sources: " + ", ".join(str(s) for s in srcs[:14]))
         lines.append("  (" + " · ".join(bits) + ")")
+    else:
+        lines.append(_will_show_placeholder("Confidence / sources"))
 
     lines.append("")
     storyline = (story.get("storyline") or story.get("paragraph") or "").strip()
@@ -559,23 +596,58 @@ def format_about_section(report: dict[str, Any]) -> str:
             lines.append(_wrap(p, indent="  ", width=72))
             lines.append("")
     else:
-        lines.append("  (No narrative yet — run a full Analyze.)")
+        lines.append(_will_show_placeholder("Narrative storyline"))
         lines.append("")
 
-    # Multi-source string elements that built the "what is this token" story
+    official_desc = (story.get("official_description") or "").strip()
+    if not official_desc and isinstance(cf, dict):
+        official_desc = str(cf.get("official_description") or "").strip()
+
+    def _already_shown_prose(text: str, *pools: str) -> bool:
+        t = re.sub(r"\s+", " ", (text or "")).strip().lower()
+        if len(t) < 20:
+            return False
+        head = t[:48]
+        for pool in pools:
+            p = re.sub(r"\s+", " ", (pool or "")).strip().lower()
+            if not p:
+                continue
+            if head in p or t in p or (len(p) >= 24 and p[:48] in t):
+                return True
+        return False
+
+    # Multi-source string elements — only *new* prose not already in the storyline
     fragments = list(story.get("description_fragments") or [])
     if not fragments and isinstance(cf, dict):
         fragments = list(cf.get("description_fragments") or [])
-    if fragments:
+    frag_lines: list[str] = []
+    seen_fr: list[str] = []
+    for fr in fragments:
+        src = fr.get("source") or "?"
+        text = re.sub(r"\s+", " ", str(fr.get("text") or "")).strip()
+        if not text:
+            continue
+        if _already_shown_prose(text, storyline, official_desc):
+            continue
+        key = text.lower()
+        if any(
+            key == s
+            or (len(key) >= 24 and (key[:60] == s[:60] or key in s or s in key))
+            for s in seen_fr
+        ):
+            continue
+        seen_fr.append(key)
+        if len(text) > 180:
+            text = text[:177] + "…"
+        frag_lines.append(f"    • [{src}] {text}")
+        if len(frag_lines) >= 6:
+            break
+    if frag_lines:
         lines.append("  Description sources (string elements):")
-        for fr in fragments[:8]:
-            src = fr.get("source") or "?"
-            text = re.sub(r"\s+", " ", str(fr.get("text") or "")).strip()
-            if not text:
-                continue
-            if len(text) > 180:
-                text = text[:177] + "…"
-            lines.append(f"    • [{src}] {text}")
+        lines.extend(frag_lines)
+        lines.append("")
+    else:
+        lines.append(_will_show_placeholder("Description sources (string elements)"))
         lines.append("")
 
     listing_tags = story.get("listing_tags") or (
@@ -583,6 +655,9 @@ def format_about_section(report: dict[str, Any]) -> str:
     ) or []
     if listing_tags:
         lines.append("  Listing tags: " + ", ".join(str(t) for t in listing_tags[:12]))
+        lines.append("")
+    else:
+        lines.append(_will_show_placeholder("Listing tags"))
         lines.append("")
 
     risk_notes = list(story.get("risk_notes") or [])
@@ -593,43 +668,124 @@ def format_about_section(report: dict[str, Any]) -> str:
         for r in risk_notes[:5]:
             lines.append(f"    • {r}")
         lines.append("")
+    else:
+        lines.append(_will_show_placeholder("Rugcheck risk text"))
+        lines.append("")
 
-    why = story.get("why_interested") or []
-    if why:
-        lines.append("  Key hooks:")
-        for w in _dedupe_str_list(why)[:5]:
-            lines.append(f"    • {w}")
+    why = list(story.get("why_interested") or [])
+    hype_drv = list(story.get("hype_drivers") or [])
+    # Single Hype block: merge interest + drivers, drop restated / duplicate language
+    hook_lines: list[str] = []
+    shown_why: list[str] = []
+    for w in _dedupe_str_list(why + hype_drv):
+        ws = re.sub(r"\s+", " ", str(w or "")).strip()
+        if not ws:
+            continue
+        low = ws.lower()
+        if low.startswith("stated purpose/story"):
+            continue
+        if "publishes an official description" in low:
+            continue
+        core = re.sub(
+            r"^(fits theme/category|secondary angle|listed under)\s*:?\s*",
+            "",
+            ws,
+            flags=re.I,
+        ).strip()
+        if _already_shown_prose(core, storyline, official_desc):
+            continue
+        if any(
+            core.lower() == s
+            or (len(core) >= 24 and (core[:50].lower() == s[:50] or core.lower() in s))
+            or (len(core) >= 30 and s in core.lower())
+            or (len(s) >= 30 and core.lower() in s)
+            for s in shown_why
+        ):
+            continue
+        shown_why.append(core.lower())
+        hook_lines.append(f"    • {ws}")
+        if len(hook_lines) >= 6:
+            break
+    if hook_lines:
+        lines.append("  Hype:")
+        lines.extend(hook_lines)
+        lines.append("")
+    else:
+        lines.append(_will_show_placeholder("Hype"))
+        lines.append("")
+
+    # Official description only if storyline never included it
+    if official_desc and not _already_shown_prose(official_desc, storyline):
+        od = official_desc if len(official_desc) <= 400 else official_desc[:397] + "…"
+        lines.append("  Official description:")
+        lines.append(_wrap(od, indent="    ", width=72))
+        lines.append("")
+    elif not official_desc:
+        lines.append(_will_show_placeholder("Official description"))
         lines.append("")
 
     # ── X / COMMUNITY POSTS ───────────────────────────────────────────
+    # Compact meta (always with values) so nothing crowds/covers post text.
     lines.append("-" * 72)
     lines.append("")
-    lines.append("X / COMMUNITY POSTS")
+    lines.append("── X / COMMUNITY POSTS ──")
     kind = sent.get("kind") or ("x_text" if x.get("posts_analyzed") else "unknown")
-    lines.append(f"  Label:           {sent.get('label')}")
-    lines.append(f"  Score:           {sent.get('score')}")
-    lines.append(f"  Kind:            {kind}")
-    lines.append(f"  Posts analyzed:  {x.get('posts_analyzed')}")
+    label = sent.get("label")
+    label_missing = (
+        label is None or str(label).strip() == "" or str(label).lower() == "none"
+    )
+    label_s = "n/a" if label_missing else str(label).strip()
+    score = sent.get("score")
+    score_missing = score is None or score == ""
+    if score_missing:
+        score_s = "n/a"
+    else:
+        try:
+            score_s = f"{float(score):g}"
+        except (TypeError, ValueError):
+            score_s = str(score)
+    posts_n = x.get("posts_analyzed")
+    if posts_n is None or posts_n == "":
+        posts_s = "0"
+    else:
+        posts_s = str(posts_n)
+    srcs = [str(s) for s in (x.get("sources_used") or []) if s]
+    srcs_missing = not srcs
+    srcs_s = ", ".join(srcs) if srcs else "n/a"
+    # One tight meta line + optional handle / summary / note
+    lines.append(
+        f"  Tone: {label_s} · score {score_s} · kind {kind} · posts analyzed {posts_s}"
+    )
+    lines.append(f"  Sources: {srcs_s}")
+    if label_missing or score_missing or srcs_missing:
+        lines.append(
+            _will_show_placeholder("X tone / score / sources (when metrics exist)")
+        )
     tw_handle = (
         (x.get("twitter_handle") or socials.get("twitter_handle") or "")
         .strip()
         .lstrip("@")
     )
     if tw_handle:
-        lines.append(f"  Handle:          @{tw_handle}")
-        lines.append(f"  X profile:")
-        lines.append(f"    https://x.com/{tw_handle}")
+        lines.append(f"  Handle: @{tw_handle}")
+        lines.append(f"  Profile: https://x.com/{tw_handle}")
     else:
-        lines.append("  Handle:          (none on DexScreener)")
-    lines.append(f"  Sources:         {', '.join(x.get('sources_used') or [])}")
-    if sent.get("summary"):
-        lines.append(f"  Summary:         {sent.get('summary')}")
-    if x.get("notes"):
-        lines.append(f"  Note:            {x.get('notes')}")
+        lines.append(_will_show_placeholder("X handle / profile"))
+    summary = (sent.get("summary") or "").strip()
+    if summary:
+        lines.append("  Summary: " + summary)
+    else:
+        lines.append(_will_show_placeholder("X sentiment summary"))
+    notes = (x.get("notes") or "").strip()
+    if notes:
+        lines.append("  Note: " + notes)
+
     samples = x.get("sample_posts") or []
+    lines.append("")
     if samples:
         lines.append("  Recent X posts:")
         seen_posts: set[str] = set()
+        shown = 0
         for p in samples[:10]:
             text = (p.get("text") or "").replace("\n", " ").strip()
             if not text:
@@ -638,8 +794,8 @@ def format_about_section(report: dict[str, Any]) -> str:
             if key in seen_posts:
                 continue
             seen_posts.add(key)
-            if len(text) > 140:
-                text = text[:137] + "..."
+            if len(text) > 160:
+                text = text[:157] + "..."
             lines.append(f"    • {text}")
             post_url = (p.get("url") or p.get("link") or "").strip()
             src = p.get("source") or ""
@@ -649,14 +805,17 @@ def format_about_section(report: dict[str, Any]) -> str:
                 lines.append(f"      {post_url}")
             elif src:
                 lines.append(f"      ({src})")
+            shown += 1
+        if shown == 0:
+            lines.append(_will_show_placeholder("Recent X post text"))
     else:
-        lines.append("  (No sample posts fetched — tone may use market-crowd fallback.)")
+        lines.append(_will_show_placeholder("Recent X posts"))
 
     # ── PUBLIC NEWS ───────────────────────────────────────────────────
     lines.append("")
     lines.append("-" * 72)
     lines.append("")
-    lines.append("PUBLIC NEWS")
+    lines.append("── PUBLIC NEWS ──")
     lines.append("  Public news events")
     lines.append("  (Click blue links to open in your browser)")
     news = list(story.get("news_events") or [])
@@ -682,23 +841,83 @@ def format_about_section(report: dict[str, Any]) -> str:
             if shown >= 12:
                 break
         if shown == 0:
-            lines.append("  (No distinct public news headlines found for this token.)")
+            lines.append(_will_show_placeholder("Public news headlines"))
     else:
-        lines.append("  (No public news events found for this token right now.)")
+        lines.append(_will_show_placeholder("Public news events"))
         lines.append("  Sources checked: Google News RSS + web search snippets.")
 
     # ── LINKS ─────────────────────────────────────────────────────────
     lines.append("")
     lines.append("-" * 72)
     lines.append("")
-    lines.append("LINKS  (click blue URLs to open)")
+    lines.append("── LINKS ──")
+    lines.append("  (click blue URLs to open)")
     link_lines = _collect_about_links(report, story, socials, x)
-    if link_lines:
-        for lab, url in link_lines:
+    # LinkedIn lives in its own section below — keep general LINKS clean
+    other_links = [
+        (lab, url)
+        for lab, url in link_lines
+        if "linkedin" not in str(lab).lower()
+        and "linkedin.com" not in str(url).lower()
+    ]
+    linkedin_links = [
+        (lab, url)
+        for lab, url in link_lines
+        if "linkedin" in str(lab).lower() or "linkedin.com" in str(url).lower()
+    ]
+    # Also pull LinkedIn-only finds that might not have been labeled
+    linkedin_links.extend(_collect_about_linkedin(report, story, socials, x))
+    # Dedupe LinkedIn by URL
+    seen_li: set[str] = set()
+    li_unique: list[tuple[str, str]] = []
+    for lab, url in linkedin_links:
+        key = str(url).rstrip("/").lower()
+        if key in seen_li:
+            continue
+        seen_li.add(key)
+        li_unique.append((lab, url))
+    linkedin_links = li_unique
+
+    if other_links:
+        for lab, url in other_links:
             lines.append(f"  {lab}:")
             lines.append(f"    {url}")
     else:
-        lines.append("  (No website / social URLs found on DexScreener or coin APIs.)")
+        lines.append(_will_show_placeholder("Website / social links"))
+
+    # ── LINKEDIN (own section) ────────────────────────────────────────
+    lines.append("")
+    lines.append("-" * 72)
+    lines.append("")
+    lines.append("── LINKEDIN ──")
+    lines.append("  (company / profile links + public search snippets)")
+    if linkedin_links:
+        for lab, url in linkedin_links:
+            lines.append(f"  {lab}:")
+            lines.append(f"    {url}")
+    else:
+        lines.append(_will_show_placeholder("LinkedIn profile / company page"))
+        # Surface any LinkedIn narrative snippets (text-only) when no URL
+        social_pack = report.get("social_narrative_sources") or {}
+        li_snips = [
+            s
+            for s in (social_pack.get("snippets") or [])
+            if isinstance(s, dict)
+            and (s.get("platform") or "").lower() == "linkedin"
+            and (s.get("text") or "").strip()
+        ]
+        if li_snips:
+            lines.append("  Public snippets:")
+            for s in li_snips[:6]:
+                text = re.sub(r"\s+", " ", str(s.get("text") or "")).strip()
+                if len(text) > 160:
+                    text = text[:157] + "…"
+                lines.append(f"    • {text}")
+                u = (s.get("url") or "").strip()
+                if u:
+                    if not u.startswith("http"):
+                        u = "https://" + u.lstrip("/")
+                    lines.append(f"      {u}")
 
     lines.append("")
     lines.append("-" * 72)
@@ -805,21 +1024,87 @@ def _collect_about_links(
         else:
             add("Website", w)
 
-    # Coin facts / narrative links
+    # Coin facts / narrative links (LinkedIn excluded here → own About section)
     cf = story.get("coin_facts") if isinstance(story.get("coin_facts"), dict) else {}
     links = (cf or {}).get("links") if isinstance((cf or {}).get("links"), dict) else {}
     if not links:
         facts = report.get("coin_facts") or {}
         links = facts.get("links") if isinstance(facts.get("links"), dict) else {}
     for k, v in (links or {}).items():
+        kl = str(k).lower()
+        if "linkedin" in kl:
+            continue
+        if isinstance(v, str) and "linkedin.com" in v.lower():
+            continue
         add(str(k).replace("_", " ").title(), v)
 
-    # Official source if it's a URL
-    add("Official source", story.get("official_source"))
+    # Official source if it's a URL (skip LinkedIn — own section)
+    off = story.get("official_source")
+    if not (isinstance(off, str) and "linkedin.com" in off.lower()):
+        add("Official source", off)
 
     # Bubblemaps if present
     maps = report.get("maps") or {}
     add("Bubblemaps", maps.get("iframe_url") or maps.get("url") or maps.get("public_url"))
+
+    return out
+
+
+def _collect_about_linkedin(
+    report: dict[str, Any],
+    story: dict[str, Any],
+    socials: dict[str, Any],
+    x: dict[str, Any],
+) -> list[tuple[str, str]]:
+    """LinkedIn URLs only — for the About ── LINKEDIN ── section."""
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def add(label: str, raw: Any) -> None:
+        if not raw:
+            return
+        if isinstance(raw, dict):
+            raw = raw.get("url") or raw.get("link") or raw.get("handle") or ""
+        url = _normalize_url(str(raw))
+        if not url:
+            return
+        lab = (label or "LinkedIn").strip() or "LinkedIn"
+        if "linkedin.com" not in url.lower() and "linkedin" not in lab.lower():
+            return
+        key = url.rstrip("/").lower()
+        if key in seen:
+            return
+        seen.add(key)
+        out.append((lab if "linkedin" in lab.lower() else "LinkedIn", url))
+
+    cf = story.get("coin_facts") if isinstance(story.get("coin_facts"), dict) else {}
+    links = (cf or {}).get("links") if isinstance((cf or {}).get("links"), dict) else {}
+    if not links:
+        facts = report.get("coin_facts") or {}
+        links = facts.get("links") if isinstance(facts.get("links"), dict) else {}
+    add("LinkedIn", (links or {}).get("linkedin"))
+    for k, v in (links or {}).items():
+        if "linkedin" in str(k).lower() or (
+            isinstance(v, str) and "linkedin.com" in v.lower()
+        ):
+            add(str(k).replace("_", " ").title() if k else "LinkedIn", v)
+
+    for s in socials.get("socials") or []:
+        if not isinstance(s, dict):
+            continue
+        plat = (s.get("platform") or s.get("type") or "").lower()
+        url = s.get("url") or s.get("handle") or ""
+        if "linkedin" in plat or (isinstance(url, str) and "linkedin.com" in url.lower()):
+            add("LinkedIn", url)
+
+    social_pack = report.get("social_narrative_sources") or {}
+    for s in social_pack.get("snippets") or []:
+        if not isinstance(s, dict):
+            continue
+        if (s.get("platform") or "").lower() == "linkedin" and s.get("url"):
+            add("LinkedIn", s.get("url"))
+        elif isinstance(s.get("url"), str) and "linkedin.com" in s["url"].lower():
+            add("LinkedIn", s.get("url"))
 
     return out
 

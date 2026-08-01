@@ -62,8 +62,18 @@ def _normalize_chain(chain: str | None) -> str | None:
 
 def resolve_pairs(query: str, chain: str | None = None) -> list[dict[str, Any]]:
     """
-    Resolve market pairs. Uses DexScreener (cached) first; on 429 / empty for
-    pump-style mints, falls back to Pump.fun native coin API.
+    Resolve market pairs — multi-provider cascade (Solana-focused extras):
+
+    1) Pre-bond *pump → native Pump.fun
+    2) DexScreener (cached; budget/429 → skip)
+    3) Raydium API v3 (Solana pools)
+    4) Birdeye token overview (needs BIRDEYE_API_KEY)
+    5) Rugcheck report price/mcap (thin pair)
+    6) Pump.fun native (graduated / fallback)
+    7) GeckoTerminal ticker resolve when search is noisy
+
+    Holders (separate path) fuse Helius + Rugcheck + Solscan + Birdeye.
+
     Supports Solana, EVM, and Robinhood Chain (DexScreener chainId=robinhood).
     """
     q = query.strip()
@@ -79,8 +89,57 @@ def resolve_pairs(query: str, chain: str | None = None) -> list[dict[str, Any]]:
         except Exception:  # noqa: BLE001
             return []
 
+    def _pump_prebond_first(mint_q: str) -> list[dict[str, Any]]:
+        """Pre-bond *pump mints: native Pump.fun only (skip Dex/Raydium)."""
+        try:
+            return pf.pairs_for_prebond_mint(mint_q)
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _alt_sol_market(mint_q: str) -> list[dict[str, Any]]:
+        """Raydium + Birdeye + Rugcheck market pairs (no DexScreener)."""
+        from . import market_sources as msrc
+        from . import raydium as rd
+
+        parts: list[list[dict[str, Any]]] = []
+        try:
+            parts.append(rd.pairs_for_token(mint_q) or [])
+        except Exception:  # noqa: BLE001
+            parts.append([])
+        try:
+            parts.append(msrc.birdeye_pairs_for_mint(mint_q) or [])
+        except Exception:  # noqa: BLE001
+            parts.append([])
+        try:
+            parts.append(msrc.rugcheck_pairs_for_mint(mint_q) or [])
+        except Exception:  # noqa: BLE001
+            parts.append([])
+        try:
+            parts.append(_pump_fallback(mint_q) or [])
+        except Exception:  # noqa: BLE001
+            parts.append([])
+        return msrc.merge_pair_lists(*parts)
+
+    def _prefer_pumpfun_pairs(
+        pairs_in: list[dict[str, Any]], mint_q: str
+    ) -> list[dict[str, Any]]:
+        """If list has pumpfun bonding pairs, put them first for prebond mints."""
+        if not pairs_in or not pf.is_pump_mint(mint_q):
+            return pairs_in
+        pumpfun = [
+            p
+            for p in pairs_in
+            if (p.get("dexId") or "").lower() in {"pumpfun", "pump"}
+            or p.get("_prebond")
+            or p.get("_source") == "pumpfun_native_api"
+        ]
+        if pumpfun:
+            rest = [p for p in pairs_in if p not in pumpfun]
+            return pumpfun + rest
+        return pairs_in
+
     def _direct_token_pairs(addr: str, preferred: str | None) -> list[dict[str, Any]]:
-        """Hit DexScreener token-pairs for one or several chains."""
+        """Hit DexScreener token-pairs for one or several chains (cached)."""
         chains: list[str] = []
         if preferred:
             chains.append(preferred)
@@ -110,17 +169,108 @@ def resolve_pairs(query: str, chain: str | None = None) -> list[dict[str, Any]]:
         maybe_chain, maybe_addr = q.split(":", 1)
         maybe_chain = _normalize_chain(maybe_chain) or maybe_chain.lower()
         if maybe_chain and maybe_addr:
+            # Pre-bond pump: native Pump.fun is source of truth
+            pre = _pump_prebond_first(maybe_addr)
+            if pre:
+                return pre
             try:
                 pairs = dx.pairs_for_token(maybe_chain, maybe_addr)
                 if pairs:
-                    return pairs
+                    got = _prefer_pumpfun_pairs(pairs, maybe_addr)
+                    if maybe_chain in {"solana", "sol"} or pf.is_pump_mint(maybe_addr):
+                        alts = _alt_sol_market(maybe_addr)
+                        if alts:
+                            from . import market_sources as msrc
+
+                            return _prefer_pumpfun_pairs(
+                                msrc.merge_pair_lists(got, alts), maybe_addr
+                            )
+                    return got
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
+            if maybe_chain in {"solana", "sol"} or pf.is_pump_mint(maybe_addr):
+                alts = _alt_sol_market(maybe_addr)
+                if alts:
+                    return _prefer_pumpfun_pairs(alts, maybe_addr)
             fb = _pump_fallback(maybe_addr)
             if fb:
                 return fb
 
-    # Looks like an address — search, optionally filter chain
+    # Pure address: multi-source cascade
+    looks_like_addr = bool(ADDRESS_RE.match(q)) or (
+        len(q) >= 32 and " " not in q and not q.startswith("http")
+    )
+    if looks_like_addr:
+        mint = q.split(":")[-1] if ":" in q else q
+        solish = (not chain) or chain in {"solana", "sol"} or pf.is_pump_mint(mint)
+
+        # 1) Pre-bond *pump → Pump.fun native only
+        pre = _pump_prebond_first(mint)
+        if pre:
+            return pre
+
+        # 2) DexScreener targeted pairs (uses Raydium on DX cooldown inside client)
+        direct = _direct_token_pairs(mint, chain or ("solana" if solish else chain))
+        if direct:
+            exact = [
+                p
+                for p in direct
+                if ((p.get("baseToken") or {}).get("address") or "").lower()
+                == mint.lower()
+            ]
+            got = _prefer_pumpfun_pairs(exact or direct, mint)
+            # Enrich with alts if thin (e.g. only price-only raydium stub)
+            if solish and len(got) < 2:
+                alts = _alt_sol_market(mint)
+                if alts:
+                    from . import market_sources as msrc
+
+                    return _prefer_pumpfun_pairs(msrc.merge_pair_lists(got, alts), mint)
+            return got
+
+        # 3) Broad DexScreener search
+        pairs_addr: list[dict[str, Any]] = []
+        try:
+            pairs_addr = dx.search_pairs(q)
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            pairs_addr = []
+        if chain:
+            pairs_addr = [
+                p
+                for p in pairs_addr
+                if (p.get("chainId") or "").lower() == chain.lower()
+            ]
+        exact = [
+            p
+            for p in pairs_addr
+            if ((p.get("baseToken") or {}).get("address") or "").lower()
+            == mint.lower()
+        ]
+        if exact:
+            got = _prefer_pumpfun_pairs(exact, mint)
+            if solish:
+                alts = _alt_sol_market(mint)
+                if alts:
+                    from . import market_sources as msrc
+
+                    return _prefer_pumpfun_pairs(msrc.merge_pair_lists(got, alts), mint)
+            return got
+
+        # 4) Full alt stack: Raydium + Birdeye + Rugcheck + Pump
+        if solish:
+            alts = _alt_sol_market(mint)
+            if alts:
+                return _prefer_pumpfun_pairs(alts, mint)
+
+        fb = _pump_fallback(mint)
+        if fb:
+            return fb
+        if last_err and not pairs_addr:
+            raise last_err
+        return pairs_addr
+
+    # Symbol / name — DexScreener search (cached ~3 min)
     pairs: list[dict[str, Any]] = []
     try:
         pairs = dx.search_pairs(q)
@@ -134,25 +284,6 @@ def resolve_pairs(query: str, chain: str | None = None) -> list[dict[str, Any]]:
 
     if chain:
         pairs = [p for p in pairs if (p.get("chainId") or "").lower() == chain.lower()]
-
-    # If query is a pure address, prefer pairs where baseToken matches
-    if ADDRESS_RE.match(q) or (len(q) >= 32 and " " not in q):
-        exact = [
-            p
-            for p in pairs
-            if ((p.get("baseToken") or {}).get("address") or "").lower() == q.lower()
-        ]
-        if exact:
-            return exact
-        direct = _direct_token_pairs(q, chain)
-        if direct:
-            return direct
-        fb = _pump_fallback(q)
-        if fb:
-            return fb
-        if last_err and not pairs:
-            raise last_err
-        return pairs
 
     # Symbol / name: DexScreener search is noisy (copycats). GeckoTerminal pool
     # search ranks by real reserves/volume and usually hits the canonical mint.
@@ -206,13 +337,27 @@ def analyze_token(
     pair_address: str | None = None,
     include_holders: bool = True,
     quick: bool = False,
+    include_rugwatch: bool = True,
+    include_fresh: bool = True,
+    include_multi_send: bool = True,
+    include_shared_sol: bool = True,
+    include_fresh_multi_send: bool | None = None,
 ) -> dict[str, Any]:
     """
     Build a full token report.
 
     quick=True: market + basic fields only (fast first paint for the GUI).
     Skips slow OHLCV history, social scrape, holders, and bundles.
+    include_rugwatch=False: skip RugWatch flagged-wallet merge on holders.
+    include_fresh=False: skip Fresh wallets Helius scan.
+    include_multi_send=False: skip Multi-send (token Helius scan + SOL
+    multi-send re-label from funding; no Multi-send totals/section).
+    include_shared_sol=False: skip Shared SOL funder Helius scan (heaviest).
+    include_fresh_multi_send=False (legacy): skip fresh + multi-send.
     """
+    if include_fresh_multi_send is False:
+        include_fresh = False
+        include_multi_send = False
     try:
         pairs = resolve_pairs(query, chain=chain)
     except Exception as exc:  # noqa: BLE001
@@ -291,18 +436,189 @@ def analyze_token(
         return {"ok": False, "error": "Could not select a primary pair.", "query": query}
 
     pair_summary = dx.summarize_pair(primary)
+    # Primary pool (esp. Raydium price-only / Rugcheck / Pump synthetic) often
+    # lacks liquidity or 24h volume — fill from other pairs for this token.
+    try:
+        pair_summary = dx.enrich_summary_liquidity_volume(pair_summary, pairs)
+    except Exception:  # noqa: BLE001
+        pass
     socials = dx.extract_socials(primary)
+    # Snapshot DexScreener-only socials BEFORE Pump.fun enrichment.
+    socials_dexscreener = {
+        "websites": list(socials.get("websites") or []),
+        "socials": list(socials.get("socials") or []),
+        "twitter_handle": socials.get("twitter_handle"),
+        "extra_twitter_handles": list(socials.get("extra_twitter_handles") or []),
+        "image_url": socials.get("image_url"),
+        "header_url": socials.get("header_url"),
+        "source": "dexscreener",
+        "checked": True,
+    }
+    socials["dexscreener"] = socials_dexscreener
+    socials["checked"] = True
 
     network = gt.network_id(pair_summary.get("chain_id"))
     token_addr = (pair_summary.get("base_token") or {}).get("address")
     base = pair_summary.get("base_token") or {}
 
-    # Pump.fun bonding vs graduated is local (no network) — cheap
+    # DexScreener paid profile (orders API) — used by Alerts "DexScreener paid"
+    dexscreener_paid: dict[str, Any] = {
+        "ok": False,
+        "paid": None,
+        "paid_label": "unknown",
+    }
+    try:
+        dexscreener_paid = dx.fetch_token_orders(
+            pair_summary.get("chain_id") or "solana",
+            token_addr,
+        )
+        socials["dexscreener_paid"] = dexscreener_paid
+        socials_dexscreener["dexscreener_paid"] = dexscreener_paid
+        pair_summary["dexscreener_paid"] = dexscreener_paid.get("paid")
+        pair_summary["dexscreener_paid_label"] = dexscreener_paid.get("paid_label")
+    except Exception:  # noqa: BLE001
+        dexscreener_paid = {
+            "ok": False,
+            "paid": None,
+            "paid_label": "unknown",
+            "error": "orders fetch failed",
+        }
+        socials["dexscreener_paid"] = dexscreener_paid
+
+    # Last-resort: GeckoTerminal token endpoint (reserve + 24h volume + price % )
+    try:
+        need_liq = not pair_summary.get("liquidity_usd")
+        need_vol = not pair_summary.get("volume_h24_usd")
+        pc0 = pair_summary.get("price_change_pct")
+        if not isinstance(pc0, dict):
+            pc0 = {}
+            pair_summary["price_change_pct"] = pc0
+        need_chg = pc0.get("h24") is None
+        if (need_liq or need_vol or need_chg) and network and token_addr:
+            gtok = gt.fetch_token(network, token_addr)
+            # fetch_token may return attributes node or full {data:{attributes}}
+            attrs = None
+            if isinstance(gtok, dict):
+                if isinstance(gtok.get("attributes"), dict):
+                    attrs = gtok.get("attributes")
+                else:
+                    attrs = ((gtok.get("data") or {}).get("attributes"))
+            if isinstance(attrs, dict):
+                if need_liq:
+                    res = dx._f(  # noqa: SLF001 — shared float parser
+                        attrs.get("total_reserve_in_usd")
+                        or attrs.get("reserve_in_usd")
+                    )
+                    if res is not None and res > 0:
+                        pair_summary["liquidity_usd"] = res
+                if need_vol:
+                    vol_obj = attrs.get("volume_usd") or {}
+                    if isinstance(vol_obj, dict):
+                        gv = dx._f(vol_obj.get("h24"))  # noqa: SLF001
+                    else:
+                        gv = dx._f(vol_obj)
+                    if gv is not None and gv > 0:
+                        pair_summary["volume_h24_usd"] = gv
+                if need_chg:
+                    # Gecko: price_change_percentage.h24 or similar
+                    pcp = attrs.get("price_change_percentage") or {}
+                    ch = None
+                    if isinstance(pcp, dict):
+                        ch = dx._f(  # noqa: SLF001
+                            pcp.get("h24") or pcp.get("24h") or pcp.get("day")
+                        )
+                    if ch is None:
+                        ch = dx._f(  # noqa: SLF001
+                            attrs.get("price_change_percentage_h24")
+                            or attrs.get("price_change_24h")
+                        )
+                    if ch is not None:
+                        pc0["h24"] = ch
+                        pair_summary["price_change_pct"] = pc0
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Pump.fun bonding vs graduated — prefer market pairs; refined after native coin
     pump_meta = pf.classify_graduation(
         token_addr,
         pairs=pairs,
         primary_dex_id=pair_summary.get("dex_id"),
     )
+    # Enrich socials from Pump.fun coin JSON (X / website / telegram) so About
+    # can scrape the project handle even when DexScreener omits socials.
+    # Also use native `complete` to fix Bonded yes/no (graduated tokens often
+    # still list a leftover dexId=pumpfun pair on DexScreener).
+    try:
+        native = pf.try_native_coin(token_addr) if token_addr else None
+        if isinstance(native, dict):
+            complete = native.get("complete")
+            if complete is not None:
+                try:
+                    pump_meta = pf.classify_graduation(
+                        token_addr,
+                        pairs=pairs,
+                        primary_dex_id=pair_summary.get("dex_id"),
+                        native_complete=bool(complete),
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+            tw = (
+                native.get("twitter")
+                or native.get("twitter_url")
+                or native.get("twitterUrl")
+                or ""
+            )
+            tw_s = str(tw).strip()
+            if tw_s and not tw_s.startswith("http"):
+                tw_s = f"https://x.com/{tw_s.lstrip('@')}"
+            if tw_s.startswith("http") and (
+                "x.com/" in tw_s.lower() or "twitter.com/" in tw_s.lower()
+            ):
+                h = dx._handle_from_url(tw_s) if hasattr(dx, "_handle_from_url") else ""
+                if not h:
+                    # fallback parse
+                    import re as _re
+
+                    m = _re.search(
+                        r"(?:x|twitter)\.com/(@?[A-Za-z0-9_]{1,30})", tw_s, _re.I
+                    )
+                    h = (m.group(1) if m else "").lstrip("@")
+                if h:
+                    if not socials.get("twitter_handle"):
+                        socials["twitter_handle"] = h
+                    extras = list(socials.get("extra_twitter_handles") or [])
+                    if h not in extras and h != socials.get("twitter_handle"):
+                        extras.append(h)
+                        socials["extra_twitter_handles"] = extras
+                    soc_list = list(socials.get("socials") or [])
+                    soc_list.append(
+                        {"platform": "twitter", "handle": h, "url": tw_s}
+                    )
+                    socials["socials"] = soc_list
+            for label, raw in (
+                ("telegram", native.get("telegram") or native.get("telegram_url")),
+                ("website", native.get("website") or native.get("website_url")),
+            ):
+                u = str(raw or "").strip()
+                if not u:
+                    continue
+                if label == "telegram" and not u.startswith("http"):
+                    u = f"https://t.me/{u.lstrip('@')}"
+                if not u.startswith("http"):
+                    continue
+                if label == "website" and "pump.fun" in u.lower():
+                    continue
+                if label == "website":
+                    webs = list(socials.get("websites") or [])
+                    webs.append({"label": "Website", "url": u})
+                    socials["websites"] = webs
+                else:
+                    soc_list = list(socials.get("socials") or [])
+                    soc_list.append({"platform": label, "url": u})
+                    socials["socials"] = soc_list
+    except Exception:  # noqa: BLE001
+        pass
+
     social_url_list: list[str] = []
     for s in socials.get("socials") or []:
         if isinstance(s, dict) and s.get("url"):
@@ -501,6 +817,7 @@ def analyze_token(
                 pair_summary.get("chain_id"),
                 token_addr,
                 pair_address=pair_summary.get("pair_address"),
+                include_rugwatch=include_rugwatch,
             )
         except Exception as exc:  # noqa: BLE001
             return {
@@ -531,6 +848,9 @@ def analyze_token(
                 token_addr,
                 pair_address=pair_summary.get("pair_address"),
                 chain_id=pair_summary.get("chain_id") or "solana",
+                include_fresh=include_fresh,
+                include_multi_send=include_multi_send,
+                include_shared_sol=include_shared_sol,
             )
         except Exception as exc:  # noqa: BLE001
             return {
@@ -749,6 +1069,8 @@ def analyze_token(
                     "pair_address": pair_summary.get("pair_address"),
                 },
             },
+            socials_dexscreener=socials_dexscreener,
+            dexscreener_paid=dexscreener_paid,
         )
     except Exception as exc:  # noqa: BLE001
         alerts_data = {
@@ -770,6 +1092,12 @@ def analyze_token(
             "symbol": base.get("symbol"),
             "address": token_addr,
             "chain_id": pair_summary.get("chain_id"),
+            "image_url": (
+                pair_summary.get("image_url")
+                or (base.get("image_url") if isinstance(base, dict) else None)
+                or (pump_meta or {}).get("image_url")
+                or (pump_meta or {}).get("image_uri")
+            ),
         },
         "market": {
             "price_usd": pair_summary.get("price_usd"),
@@ -779,6 +1107,8 @@ def analyze_token(
             "volume_h24_usd": pair_summary.get("volume_h24_usd"),
             "price_change_pct": pair_summary.get("price_change_pct"),
             "txns_h24": pair_summary.get("txns_h24"),
+            "image_url": pair_summary.get("image_url")
+            or (base.get("image_url") if isinstance(base, dict) else None),
             "pair": {
                 "dex_id": pair_summary.get("dex_id"),
                 "pair_address": pair_summary.get("pair_address"),
