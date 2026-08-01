@@ -12119,8 +12119,33 @@ function renderBundlesUi(data) {
   // Launch-window removed from Bundles (Helius scan disabled).
 
   // Similar-sized wallets = near-exact bags + Rugcheck insider-flagged
-  const sims = view.similar_size_groups || [];
-  const insiders = view.insider_wallets || [];
+  const simsRaw = view.similar_size_groups || [];
+  const sims = simsRaw.slice().sort(function (a, b) {
+    const minA = a.min_pct != null ? Number(a.min_pct) : NaN;
+    const minB = b.min_pct != null ? Number(b.min_pct) : NaN;
+    const maxA = a.max_pct != null ? Number(a.max_pct) : NaN;
+    const maxB = b.max_pct != null ? Number(b.max_pct) : NaN;
+    const exactA =
+      Number.isFinite(minA) &&
+      Number.isFinite(maxA) &&
+      Math.abs(maxA - minA) <= 0.02;
+    const exactB =
+      Number.isFinite(minB) &&
+      Number.isFinite(maxB) &&
+      Math.abs(maxB - minB) <= 0.02;
+    if (exactA !== exactB) return exactA ? -1 : 1;
+    const mhA = Number.isFinite(maxA) ? maxA : -1;
+    const mhB = Number.isFinite(maxB) ? maxB : -1;
+    if (mhB !== mhA) return mhB - mhA;
+    const ta = a.total_pct != null ? Number(a.total_pct) : -1;
+    const tb = b.total_pct != null ? Number(b.total_pct) : -1;
+    return tb - ta;
+  });
+  const insiders = (view.insider_wallets || []).slice().sort(function (a, b) {
+    const pa = a.pct_supply != null ? Number(a.pct_supply) : -1;
+    const pb = b.pct_supply != null ? Number(b.pct_supply) : -1;
+    return pb - pa;
+  });
   let susTot =
     s.suspect_total_pct != null
       ? s.suspect_total_pct

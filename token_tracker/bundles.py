@@ -529,6 +529,14 @@ def format_bundles_text(data: dict[str, Any]) -> str:
     clusters = data.get("clusters") or []
     lines.append("")
     if clusters:
+        clusters = sorted(
+            [c for c in clusters if isinstance(c, dict)],
+            key=lambda c: -(
+                float(c.get("pct_supply") or c.get("combined_pct") or -1)
+                if (c.get("pct_supply") is not None or c.get("combined_pct") is not None)
+                else -1.0
+            ),
+        )
         cl_rows = [
             {
                 "wallet": c.get("wallet") or c.get("owner"),
@@ -594,6 +602,7 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             f"{in_total_note}"
         )
     if groups:
+        groups = sorted(groups, key=_similar_group_order_key)
         lines.append("  Similar-sized bags:")
         for g in groups[:6]:
             # Prefer members (wallet + pct); fall back to address-only list
@@ -603,6 +612,12 @@ def format_bundles_text(data: dict[str, Any]) -> str:
                     {"wallet": w, "pct_supply": g.get("avg_pct")}
                     for w in (g.get("wallets") or [])
                 ]
+            member_rows = _sort_similar_group_members(
+                member_rows,
+                avg_pct=g.get("avg_pct"),
+                min_pct=g.get("min_pct"),
+                max_pct=g.get("max_pct"),
+            )
             # Sum of holdings for this subgroup
             group_sum = g.get("total_pct")
             if group_sum is None:
@@ -615,21 +630,24 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             if group_sum is not None:
                 header += f"  ·  sum {_pct(group_sum)}"
             lines.append(header)
-            for m in member_rows[:6]:
+            for m in member_rows:
                 w = m.get("wallet") if isinstance(m, dict) else m
                 pct = m.get("pct_supply") if isinstance(m, dict) else None
                 if pct is None:
                     pct = g.get("avg_pct")
                 lines.append(f"         {w}  holds {_pct(pct)}")
             n_show = len(member_rows)
-            if n_show > 6:
-                lines.append(f"         … +{n_show - 6} more")
+            if n_show > 12:
+                lines.append(f"         … +{n_show - 12} more (full list in UI)")
     # Wallet → supply % map for sections that only had addresses
     pct_map = _wallet_pct_map(data)
 
     if insiders:
+        insider_rows = _sort_rows_by_pct_desc(
+            [h for h in insiders if isinstance(h, dict)]
+        )
         lines.append("  Rugcheck insider-flagged:")
-        for h in insiders[:12]:
+        for h in insider_rows[:12]:
             if not isinstance(h, dict):
                 continue
             w = (h.get("wallet") or "").strip()
@@ -639,8 +657,8 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             lines.append(
                 f"    • {w}  holds {_pct(pct)}  [insider-flagged (Rugcheck)]"
             )
-        if len(insiders) > 12:
-            lines.append(f"    … +{len(insiders) - 12} more insider(s)")
+        if len(insider_rows) > 12:
+            lines.append(f"    … +{len(insider_rows) - 12} more insider(s)")
     if not groups and not insiders:
         lines.append(
             "  (none — no similar-size bags or Rugcheck insider flags this scan)"
@@ -1051,13 +1069,14 @@ def format_bundles_text(data: dict[str, Any]) -> str:
             single_rows = _single_holders_rows(data)
         except Exception:  # noqa: BLE001
             single_rows = []
-    # Unique by wallet (max bag)
+    similar_block = _similar_sized_wallet_set(data)
+    # Unique by wallet (max bag); never list Similar-sized wallets here
     by_single: dict[str, dict[str, Any]] = {}
     for r in single_rows:
         if not isinstance(r, dict):
             continue
         w = (r.get("wallet") or "").strip()
-        if not w:
+        if not w or w in similar_block:
             continue
         try:
             p = float(r["pct_supply"]) if r.get("pct_supply") is not None else None
@@ -1378,6 +1397,12 @@ def _similar_sized_wallet_set(data: dict[str, Any] | None) -> set[str]:
     # Legacy flat suspect list (if present) = similar-sized lineage
     for s in data.get("suspect_wallets") or []:
         _add(s)
+    # Holder-row flags (insider / similar) even if lists were sparse
+    for h in data.get("holders") or []:
+        if not isinstance(h, dict):
+            continue
+        if h.get("insider") or h.get("in_similar") or h.get("in_suspect"):
+            _add(h.get("wallet") or h.get("owner"))
     return out
 
 
@@ -2331,6 +2356,98 @@ def _similar_size_total_percent(
     return round(total, 4), len(seen)
 
 
+_SIMILAR_EXACT_ABS_TOL = 0.02  # keep in sync with _similar abs_tol_pct
+
+
+def _pct_sort_key(row: dict[str, Any]) -> tuple[float, str]:
+    try:
+        p = float(row["pct_supply"]) if row.get("pct_supply") is not None else -1.0
+    except (TypeError, ValueError):
+        p = -1.0
+    return (-p, str(row.get("wallet") or ""))
+
+
+def _sort_rows_by_pct_desc(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out = list(rows)
+    out.sort(key=_pct_sort_key)
+    return out
+
+
+def _similar_member_sort_key(pct: Any, ref_pct: Any) -> tuple[int, float, float]:
+    """Exact bag matches first, then closest to ref, then largest holdings."""
+    try:
+        p = float(pct) if pct is not None else None
+    except (TypeError, ValueError):
+        p = None
+    try:
+        ref = float(ref_pct) if ref_pct is not None else None
+    except (TypeError, ValueError):
+        ref = None
+    if p is None:
+        return (2, 9999.0, 0.0)
+    if ref is None:
+        ref = p
+    gap = abs(p - ref)
+    is_exact = gap <= _SIMILAR_EXACT_ABS_TOL + 1e-9
+    return (0 if is_exact else 1, gap, -p)
+
+
+def _sort_similar_group_members(
+    members: list[dict[str, Any]],
+    *,
+    avg_pct: Any = None,
+    min_pct: Any = None,
+    max_pct: Any = None,
+) -> list[dict[str, Any]]:
+    """Order: exact-size wallets first (largest bags first), then nearest match."""
+    ref = avg_pct
+    if ref is None and max_pct is not None:
+        ref = max_pct
+    if ref is None and min_pct is not None:
+        ref = min_pct
+    if ref is None and members:
+        pcts: list[float] = []
+        for m in members:
+            try:
+                if m.get("pct_supply") is not None:
+                    pcts.append(float(m["pct_supply"]))
+            except (TypeError, ValueError):
+                pass
+        if pcts:
+            ref = max(pcts)
+    out = list(members)
+    out.sort(
+        key=lambda r: _similar_member_sort_key(r.get("pct_supply"), ref)
+    )
+    return out
+
+
+def _similar_group_order_key(g: dict[str, Any]) -> tuple[int, float, float, int]:
+    """All-exact groups first, then by largest bag / group total."""
+    min_p = g.get("min_pct")
+    max_p = g.get("max_pct")
+    all_exact = False
+    try:
+        if min_p is not None and max_p is not None:
+            all_exact = abs(float(max_p) - float(min_p)) <= _SIMILAR_EXACT_ABS_TOL + 1e-9
+    except (TypeError, ValueError):
+        all_exact = False
+    try:
+        total_f = float(g.get("total_pct")) if g.get("total_pct") is not None else -1.0
+    except (TypeError, ValueError):
+        total_f = -1.0
+    try:
+        max_f = float(max_p) if max_p is not None else -1.0
+    except (TypeError, ValueError):
+        max_f = -1.0
+    return (
+        0 if all_exact else 1,
+        -max_f,
+        -total_f,
+        -int(g.get("count") or len(g.get("wallets") or []) or 0),
+    )
+
+
 def _similar_size_groups(holders: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Group non-program top wallets with nearly equal pct_supply / balance."""
     rows: list[dict[str, Any]] = []
@@ -2392,19 +2509,28 @@ def _similar_size_groups(holders: list[dict[str, Any]]) -> list[dict[str, Any]]:
             total_pct = round(sum(pcts), 4) if pcts else None
             if total_pct is not None and total_pct > 100.0:
                 total_pct = 100.0
+            avg_v = (sum(pcts) / len(pcts)) if pcts else None
+            min_v = min(pcts) if pcts else None
+            max_v = max(pcts) if pcts else None
+            wallet_rows = _sort_similar_group_members(
+                wallet_rows,
+                avg_pct=avg_v,
+                min_pct=min_v,
+                max_pct=max_v,
+            )
             groups.append(
                 {
                     "wallets": [r["wallet"] for r in wallet_rows],
                     "members": wallet_rows,
                     "count": len(members),
-                    "avg_pct": (sum(pcts) / len(pcts)) if pcts else None,
-                    "min_pct": min(pcts) if pcts else None,
-                    "max_pct": max(pcts) if pcts else None,
+                    "avg_pct": avg_v,
+                    "min_pct": min_v,
+                    "max_pct": max_v,
                     # Sum of this group's wallet holdings (% of supply)
                     "total_pct": total_pct,
                 }
             )
-    return sorted(groups, key=lambda g: -int(g.get("count") or 0))
+    return sorted(groups, key=_similar_group_order_key)
 
 
 def _similar(
@@ -2742,10 +2868,14 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
                 "token_accounts": list(c.get("token_accounts") or [])[:6],
             }
         )
+    clusters_out = _sort_rows_by_pct_desc(clusters_out)
 
     # Similar-size groups → Similar-sized section (list all members, not top-10 only)
     similar_out: list[dict[str, Any]] = []
-    for g in list(data.get("similar_size_groups") or [])[:12]:
+    for g in sorted(
+        list(data.get("similar_size_groups") or [])[:12],
+        key=_similar_group_order_key,
+    ):
         if not isinstance(g, dict):
             continue
         members: list[dict[str, Any]] = []
@@ -2781,15 +2911,11 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
                 continue
             seen_m.add(ww)
             members.append(r)
-        members.sort(
-            key=lambda r: (
-                -(
-                    float(r["pct_supply"])
-                    if r.get("pct_supply") is not None
-                    else -1.0
-                ),
-                str(r.get("wallet") or ""),
-            )
+        members = _sort_similar_group_members(
+            members,
+            avg_pct=g.get("avg_pct"),
+            min_pct=g.get("min_pct"),
+            max_pct=g.get("max_pct"),
         )
         # Prefer unique-wallet sum for group total
         g_tot, _g_n = _sum_wallets_pct(members)
@@ -2822,6 +2948,7 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
         )
         if r:
             insiders_out.append(r)
+    insiders_out = _sort_rows_by_pct_desc(insiders_out)
 
     # Funding / shared SOL funder
     funding_out: list[dict[str, Any]] = []
@@ -2842,6 +2969,7 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
                     r = _wallet_row(c)
                 if r:
                     kids.append(r)
+        kids = _sort_rows_by_pct_desc(kids)
         funding_out.append(
             {
                 "funder": fc.get("funder") or fc.get("sender"),
@@ -2851,6 +2979,13 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
                 "children": kids,
             }
         )
+    funding_out.sort(
+        key=lambda fc: -(
+            float(fc.get("total_pct"))
+            if fc.get("total_pct") is not None
+            else -1.0
+        )
+    )
 
     # Fresh wallets
     fresh_out: list[dict[str, Any]] = []
@@ -2928,6 +3063,16 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
         for mc in list(data.get("sol_multi_send_clusters") or [])[:8]
         if isinstance(mc, dict)
     ]
+    token_ms.sort(
+        key=lambda mc: -(
+            float(mc.get("total_pct")) if mc.get("total_pct") is not None else -1.0
+        )
+    )
+    sol_ms.sort(
+        key=lambda mc: -(
+            float(mc.get("total_pct")) if mc.get("total_pct") is not None else -1.0
+        )
+    )
     # Flat unique multi-send wallets for list UI = TOKEN multi-send only.
     # Must match Multi-send total % (do NOT mix Shared SOL / sol-* wallets here —
     # those inflated Holds while Multi-send total stayed empty/0).
