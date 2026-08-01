@@ -2152,7 +2152,7 @@ code {
   font-weight: 800 !important;
 }
 
-/* About tab card UI */
+/* About tab — report text (green ── titles + mono font) or card fallback */
 .panel-about.active {
   display: flex;
   flex-direction: column;
@@ -2162,6 +2162,30 @@ code {
   overflow: auto;
   max-height: min(68vh, 880px);
   padding: 12px 14px 24px;
+}
+.about-ui .about-report.report {
+  max-height: none;
+  overflow: visible;
+  padding: 4px 2px 12px;
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  line-height: 1.55;
+}
+.about-ui .section-title-green,
+.about-ui .section-title-major,
+.about-ui .bundle-cat-name {
+  color: #7aab88;
+  font-weight: 700;
+  opacity: 0.95;
+  letter-spacing: 0.05em;
+}
+.about-ui a {
+  color: var(--accent, #4f8cff);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.about-ui a:hover {
+  color: #7aa8ff;
 }
 .about-cards {
   display: flex;
@@ -2176,11 +2200,13 @@ code {
 }
 .about-card-title {
   margin: 0 0 10px;
-  font-size: 0.72rem;
+  font-family: var(--mono);
+  font-size: 0.76rem;
   font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: #7dba8a;
+  letter-spacing: 0.05em;
+  text-transform: none;
+  color: #7aab88;
+  opacity: 0.95;
 }
 .about-headline {
   margin: 0 0 8px;

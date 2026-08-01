@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v180";
+const ADTC_CLIENT_VERSION = "v181";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 // Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
 try {
@@ -10830,8 +10830,30 @@ function aboutSentimentClass(label) {
 }
 
 /**
- * Card UI for About tab from structured about_view.
+ * About tab: classic report with green section titles + clickable links.
+ * Prefers sections.about text (── NARRATIVE ── etc.); falls back to about_view cards.
  */
+function aboutLinkifyText(text) {
+  if (!text) return "";
+  let html = linkify(String(text), true);
+  // Also link bare www. and x.com/t.me paths that lack a scheme
+  html = html.replace(
+    /(^|[\s>])((?:www\.)[^\s<>"']+)/gi,
+    function (_m, pre, host) {
+      const href = "https://" + host;
+      return (
+        pre +
+        '<a href="' +
+        href +
+        '" target="_blank" rel="noopener noreferrer">' +
+        host +
+        "</a>"
+      );
+    }
+  );
+  return colorAllSectionTitles(html);
+}
+
 function renderAboutUi(data) {
   const root = $("aboutUi");
   if (!root) return;
@@ -10844,23 +10866,47 @@ function renderAboutUi(data) {
     if (textEl && textFallback) textEl.textContent = String(textFallback);
   }
 
+  // Preferred: monospace report + green ── TITLE ── headings + clickable URLs
+  if (textFallback && String(textFallback).trim()) {
+    try {
+      root.innerHTML =
+        '<pre class="report about-report">' +
+        aboutLinkifyText(textFallback) +
+        "</pre>";
+      return;
+    } catch (err) {
+      console.warn("[renderAboutUi text]", err);
+      root.innerHTML =
+        '<pre class="report about-report">' +
+        escHtml(String(textFallback).slice(0, 12000)) +
+        "</pre>";
+      return;
+    }
+  }
+
   if (!view || view.ok === false) {
     if (view && view.error) {
       root.innerHTML =
         '<div class="about-hint"><strong>About unavailable</strong><br />' +
         escHtml(view.error) +
         "</div>";
-    } else if (textFallback) {
+    } else {
       root.innerHTML =
-        '<pre class="about-fallback">' +
-        escHtml(String(textFallback).slice(0, 12000)) +
-        "</pre>";
+        '<p class="logs-empty">Run <strong>Analyze</strong> to load coin narrative, X posts, public news, and links.</p>';
     }
     return;
   }
 
-  let html = '<div class="about-cards">';
+  // Structured fallback when text section missing
+  function withLinks(s) {
+    try {
+      return aboutLinkifyText(s);
+    } catch (_) {
+      return escHtml(s);
+    }
+  }
 
+  let html = '<div class="about-cards">';
   const paras = view.storyline_paragraphs || [];
   const hasNarr =
     paras.length ||
@@ -10869,9 +10915,10 @@ function renderAboutUi(data) {
     (view.hype && view.hype.length) ||
     view.official_description;
   if (hasNarr) {
-    html += '<section class="about-card"><h3 class="about-card-title">Narrative</h3>';
+    html +=
+      '<section class="about-card"><h3 class="about-card-title section-title-green section-title-major">── NARRATIVE ──</h3>';
     if (view.headline) {
-      html += '<p class="about-headline">' + escHtml(view.headline) + "</p>";
+      html += '<p class="about-headline">' + withLinks(view.headline) + "</p>";
     }
     if (view.theme) {
       html +=
@@ -10879,73 +10926,36 @@ function renderAboutUi(data) {
         escHtml(view.theme) +
         "</p>";
     }
-    const metaBits = [];
-    if (view.confidence) metaBits.push("confidence " + view.confidence);
-    if (view.sources_used && view.sources_used.length) {
-      metaBits.push("sources: " + view.sources_used.join(", "));
-    }
-    if (metaBits.length) {
-      html += '<p class="about-meta">' + escHtml(metaBits.join(" · ")) + "</p>";
-    }
     for (let i = 0; i < paras.length; i++) {
-      html += '<p class="about-para">' + escHtml(paras[i]) + "</p>";
+      html += '<p class="about-para">' + withLinks(paras[i]) + "</p>";
     }
     if (view.fragments && view.fragments.length) {
       html += '<p class="about-label">Description sources</p><ul class="about-list">';
       for (let i = 0; i < view.fragments.length; i++) {
-        html += "<li>" + escHtml(view.fragments[i]) + "</li>";
-      }
-      html += "</ul>";
-    }
-    if (view.listing_tags && view.listing_tags.length) {
-      html +=
-        '<p class="about-meta">Tags: ' +
-        escHtml(view.listing_tags.join(", ")) +
-        "</p>";
-    }
-    if (view.risk_notes && view.risk_notes.length) {
-      html += '<p class="about-label">Rugcheck notes</p><ul class="about-list">';
-      for (let i = 0; i < view.risk_notes.length; i++) {
-        html += "<li>" + escHtml(view.risk_notes[i]) + "</li>";
+        html += "<li>" + withLinks(view.fragments[i]) + "</li>";
       }
       html += "</ul>";
     }
     if (view.hype && view.hype.length) {
       html += '<p class="about-label">Hype</p><ul class="about-list">';
       for (let i = 0; i < view.hype.length; i++) {
-        html += "<li>" + escHtml(view.hype[i]) + "</li>";
+        html += "<li>" + withLinks(view.hype[i]) + "</li>";
       }
       html += "</ul>";
     }
     if (view.official_description) {
       html +=
         '<p class="about-label">Official description</p><p class="about-para">' +
-        escHtml(view.official_description) +
+        withLinks(view.official_description) +
         "</p>";
     }
     html += "</section>";
   }
 
   const x = view.x || {};
-  if (
-    (x.posts && x.posts.length) ||
-    x.handle ||
-    x.summary ||
-    x.notes
-  ) {
+  if ((x.posts && x.posts.length) || x.handle || x.summary || x.notes) {
     html +=
-      '<section class="about-card"><h3 class="about-card-title">X / Community</h3>';
-    if (x.label != null || x.score != null || x.posts_analyzed) {
-      html += '<p class="about-x-meta"><span class="about-chip ' + aboutSentimentClass(x.label) + '">';
-      html += escHtml(x.label || "n/a") + "</span>";
-      if (x.score != null && x.score !== "") {
-        html += " · score " + escHtml(String(x.score));
-      }
-      if (x.posts_analyzed != null && x.posts_analyzed !== "") {
-        html += " · " + escHtml(String(x.posts_analyzed)) + " posts";
-      }
-      html += "</p>";
-    }
+      '<section class="about-card"><h3 class="about-card-title section-title-green section-title-major">── X / COMMUNITY POSTS ──</h3>';
     if (x.handle) {
       const prof = x.profile_url || "https://x.com/" + x.handle;
       html +=
@@ -10955,24 +10965,20 @@ function renderAboutUi(data) {
         escHtml(x.handle) +
         "</a></p>";
     }
-    if (x.summary) {
-      html += '<p class="about-para">' + escHtml(x.summary) + "</p>";
-    }
-    if (x.notes) {
-      html += '<p class="about-meta">' + escHtml(x.notes) + "</p>";
-    }
+    if (x.summary) html += '<p class="about-para">' + withLinks(x.summary) + "</p>";
+    if (x.notes) html += '<p class="about-meta">' + withLinks(x.notes) + "</p>";
     if (x.posts && x.posts.length) {
       html += '<ul class="about-posts">';
       for (let i = 0; i < x.posts.length; i++) {
         const p = x.posts[i];
-        html += '<li class="about-post"><span class="about-post-text">';
-        html += escHtml(p.text || "");
-        html += "</span>";
+        html += '<li class="about-post">' + withLinks(p.text || "");
         if (p.url) {
           html +=
             ' <a class="about-post-link" href="' +
             escHtml(p.url) +
-            '" target="_blank" rel="noopener noreferrer">link</a>';
+            '" target="_blank" rel="noopener noreferrer">' +
+            escHtml(p.url) +
+            "</a>";
         }
         html += "</li>";
       }
@@ -10983,16 +10989,25 @@ function renderAboutUi(data) {
 
   if (view.news && view.news.length) {
     html +=
-      '<section class="about-card"><h3 class="about-card-title">Public news</h3><ul class="about-list about-news">';
+      '<section class="about-card"><h3 class="about-card-title section-title-green section-title-major">── PUBLIC NEWS ──</h3><ul class="about-list about-news">';
     for (let i = 0; i < view.news.length; i++) {
       const n = view.news[i];
-      html += "<li><span class=\"about-news-plat\">[" + escHtml(n.platform || "news") + "]</span> ";
+      html +=
+        '<li><span class="about-news-plat">[' +
+        escHtml(n.platform || "news") +
+        "]</span> ";
       if (n.url) {
         html +=
           '<a href="' +
           escHtml(n.url) +
           '" target="_blank" rel="noopener noreferrer">' +
           escHtml(n.title) +
+          "</a>";
+        html +=
+          '<br /><a href="' +
+          escHtml(n.url) +
+          '" target="_blank" rel="noopener noreferrer">' +
+          escHtml(n.url) +
           "</a>";
       } else {
         html += escHtml(n.title);
@@ -11004,33 +11019,47 @@ function renderAboutUi(data) {
 
   if (view.links && view.links.length) {
     html +=
-      '<section class="about-card about-links-card"><h3 class="about-card-title">Links</h3><div class="about-link-row">';
+      '<section class="about-card about-links-card"><h3 class="about-card-title section-title-green section-title-major">── LINKS ──</h3>';
     for (let i = 0; i < view.links.length; i++) {
       const l = view.links[i];
       html +=
-        '<a class="about-link-chip" href="' +
+        "<p>" +
+        escHtml(l.label) +
+        ':<br /><a href="' +
         escHtml(l.url) +
         '" target="_blank" rel="noopener noreferrer">' +
-        escHtml(l.label) +
-        "</a>";
+        escHtml(l.url) +
+        "</a></p>";
     }
-    html += "</div></section>";
+    html += "</section>";
   }
 
   const li = view.linkedin || [];
   const liSn = view.linkedin_snippets || [];
   if (li.length || liSn.length) {
-    html += '<section class="about-card"><h3 class="about-card-title">LinkedIn</h3>';
+    html +=
+      '<section class="about-card"><h3 class="about-card-title section-title-green section-title-major">── LINKEDIN ──</h3>';
     for (let i = 0; i < li.length; i++) {
       html +=
-        '<p><a href="' +
+        "<p>" +
+        escHtml(li[i].label) +
+        ':<br /><a href="' +
         escHtml(li[i].url) +
         '" target="_blank" rel="noopener noreferrer">' +
-        escHtml(li[i].label) +
+        escHtml(li[i].url) +
         "</a></p>";
     }
     for (let i = 0; i < liSn.length; i++) {
-      html += '<p class="about-para">' + escHtml(liSn[i].text || "") + "</p>";
+      html += '<p class="about-para">' + withLinks(liSn[i].text || "");
+      if (liSn[i].url) {
+        html +=
+          '<br /><a href="' +
+          escHtml(liSn[i].url) +
+          '" target="_blank" rel="noopener noreferrer">' +
+          escHtml(liSn[i].url) +
+          "</a>";
+      }
+      html += "</p>";
     }
     html += "</section>";
   }
