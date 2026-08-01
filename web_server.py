@@ -232,6 +232,9 @@ def _safe_links(report: dict[str, Any]) -> dict[str, str]:
     # narrative / coin fact links
     story = report.get("narrative") or {}
     cf = story.get("coin_facts") if isinstance(story.get("coin_facts"), dict) else {}
+    pf = report.get("pumpfun") or {}
+    if pf.get("pump_url"):
+        links["pumpfun"] = str(pf["pump_url"])
     for k, v in (cf.get("links") or {}).items():
         if isinstance(v, str) and v.startswith("http") and k not in links:
             if "api-key" in v.lower():
@@ -509,6 +512,8 @@ def build_public_payload(report: dict[str, Any]) -> dict[str, Any]:
         "ok": True,
         "query": report.get("query"),
         "generated_at": report.get("generated_at"),
+        "quick": bool(report.get("_phase") == "quick"),
+        "_phase": report.get("_phase") or "full",
         "token": sanitize_public(report.get("token") or {}),
         "market": _safe_market_summary(report),
         "links": _safe_links(report),
@@ -532,9 +537,12 @@ def build_public_payload(report: dict[str, Any]) -> dict[str, Any]:
             "dex_id": pair.get("dex_id") or pf.get("dex_id"),
             "pumpfun": {
                 "is_pump_mint": pf.get("is_pump_mint"),
+                "is_pump_origin": pf.get("is_pump_origin"),
+                "mint_ends_with_pump": pf.get("mint_ends_with_pump"),
                 "status": pf.get("status"),
                 "graduated": pf.get("graduated"),
                 "on_bonding_curve": pf.get("on_bonding_curve"),
+                "pump_url": pf.get("pump_url"),
             }
             if pf
             else None,
@@ -674,7 +682,10 @@ class WebHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _read_json(self) -> dict[str, Any]:
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            return {}
         if length <= 0:
             return {}
         if length > 64_000:
@@ -694,7 +705,12 @@ class WebHandler(BaseHTTPRequestHandler):
         got = (self.headers.get("X-API-Token") or "").strip()
         if got and got == required:
             return True
-        # Also allow ?site_token= for simple bookmarking (still not a provider key)
+        # Also allow ?site_token= for simple bookmarking (GET analyze only)
+        parsed = urlparse(self.path)
+        qs = parse_qs(parsed.query)
+        qtok = (qs.get("site_token") or [""])[0].strip()
+        if qtok and qtok == required:
+            return True
         return False
 
     def do_OPTIONS(self) -> None:  # noqa: N802

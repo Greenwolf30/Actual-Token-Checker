@@ -15,6 +15,67 @@ const RUGGERS_REMAIN_FRAC = 1 - RUGGERS_SOLD_FRAC;
 
 const $ = (id) => document.getElementById(id);
 
+/** Last analyzed chain — used for explorer links (Solscan vs EVM). */
+let _lastChain = "solana";
+
+const ANALYZE_TIMEOUT_MS = 120_000;
+
+function isQuickAnalyze(data) {
+  if (!data) return false;
+  if (data.quick === true) return true;
+  return data._phase === "quick";
+}
+
+function holdersScanOk(data) {
+  if (!data) return false;
+  const hm = data.history_meta || {};
+  if (typeof hm.holders_ok === "boolean") return hm.holders_ok;
+  const sections = data.sections || {};
+  const text = sections.holders || "";
+  if (!text) return false;
+  return !/unavailable|skipped|disabled|quick mode|run analyze first/i.test(text);
+}
+
+function safeHttpUrl(url) {
+  const u = String(url || "").trim();
+  if (!u) return null;
+  try {
+    const parsed = new URL(u);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return parsed.href;
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+function explorerAccountUrl(address, chain) {
+  const addr = String(address || "").trim();
+  if (!addr) return null;
+  const c = String(chain || _lastChain || "solana").toLowerCase();
+  if (addr.startsWith("0x")) {
+    if (c === "base") return "https://basescan.org/address/" + addr;
+    if (c === "bsc" || c === "bnb") return "https://bscscan.com/address/" + addr;
+    if (c === "arbitrum" || c === "arb") return "https://arbiscan.io/address/" + addr;
+    if (c === "polygon" || c === "matic") return "https://polygonscan.com/address/" + addr;
+    if (c === "optimism" || c === "op") return "https://optimistic.etherscan.io/address/" + addr;
+    if (c === "robinhood" || c === "rh" || c === "robinhood-chain") {
+      return "https://robinhoodchain.blockscout.com/address/" + addr;
+    }
+    return "https://etherscan.io/address/" + addr;
+  }
+  return "https://solscan.io/account/" + encodeURIComponent(addr);
+}
+
+function clearAllPanels(message) {
+  const msg = message || "(empty)";
+  for (const tab of TABS) {
+    if (tab === "history" || tab === "ruggers") continue;
+    setPanelText(tab, msg);
+  }
+}
+
 // ── History log (browser localStorage, max 20) ───────────────────────
 
 function loadHistoryLog() {
@@ -388,9 +449,10 @@ function refreshHistoryPanel() {
     // Subline mint clickable when present
     let subHtml = escHtml((ts || "—") + " · " + (e.chain || "—") + " · ");
     if (e.address) {
+      const ex = explorerAccountUrl(e.address, e.chain);
       subHtml +=
-        '<a class="wallet-link" href="https://solscan.io/account/' +
-        encodeURIComponent(e.address) +
+        '<a class="wallet-link" href="' +
+        escHtml(ex) +
         '" target="_blank" rel="noopener noreferrer">' +
         escHtml(e.address) +
         "</a>";
@@ -743,8 +805,17 @@ function computeSoldState(first, current) {
     remainingOfFirst = curPct / firstPct;
   } else if (firstBal != null && firstBal > 0 && curBal != null) {
     remainingOfFirst = curBal / firstBal;
-  } else if (firstPct != null && firstPct > 0 && curPct == null) {
+  } else if (firstPct != null && firstPct > 0 && curPct == null && !listed) {
     remainingOfFirst = 0;
+  } else if (firstPct != null && firstPct > 0 && curPct == null && listed) {
+    // Listed but pct missing — do not assume sold
+    return {
+      sold: false,
+      sold_pct: null,
+      remaining_pct: null,
+      remaining_of_first: null,
+      reason: "pct_missing",
+    };
   }
 
   if (remainingOfFirst == null) {
@@ -965,6 +1036,7 @@ function renderRuggersWalletRow(row) {
   const tagCls =
     row.tag === "swing" ? "rug-tag-swing" : "rug-tag-seller";
   const tagLabel = row.tag === "swing" ? "swing" : "seller";
+  const ex = explorerAccountUrl(w, _lastRuggersRec && _lastRuggersRec.chain);
   return (
     '<div class="rug-wallet-row">' +
     '<div class="rug-wallet-main">' +
@@ -973,8 +1045,8 @@ function renderRuggersWalletRow(row) {
     '">' +
     tagLabel +
     "</span> " +
-    '<a class="wallet-link" href="https://solscan.io/account/' +
-    encodeURIComponent(w) +
+    '<a class="wallet-link" href="' +
+    escHtml(ex) +
     '" target="_blank" rel="noopener noreferrer">' +
     escHtml(w) +
     "</a>" +
@@ -1292,7 +1364,9 @@ function refreshRuggersPanel(focusKey) {
 
   const sel = $("ruggersMintSelect");
   if (sel) {
-    sel.addEventListener("change", () => refreshRuggersPanel(sel.value));
+    const clone = sel.cloneNode(true);
+    sel.parentNode.replaceChild(clone, sel);
+    clone.addEventListener("change", () => refreshRuggersPanel(clone.value));
   }
   wireRuggersExportButtons();
 }
@@ -1464,40 +1538,51 @@ function stripSolscanUrlLines(text) {
 
 function linkify(text) {
   if (!text) return "";
-  // Never show Solscan URL rows; addresses stay and become clickable below
   const plain = stripSolscanUrlLines(text);
   const esc = plain
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
-  // Other http(s) URLs (not solscan account lines — already stripped)
-  let html = esc.replace(
-    /(https?:\/\/[^\s<>"']+)/g,
-    (url) => {
-      if (/solscan\.io\/(account|token)\//i.test(url)) {
-        return url; // should be rare after strip; leave plain if any leftover
+  let html = esc.replace(/(https?:\/\/[^\s<>"']+)/g, (url) => {
+    if (/solscan\.io\/(account|token)\//i.test(url)) {
+      return url;
+    }
+    const safe = safeHttpUrl(url);
+    if (!safe) return url;
+    return (
+      '<a href="' +
+      safe +
+      '" target="_blank" rel="noopener noreferrer">' +
+      url +
+      "</a>"
+    );
+  });
+  html = html.replace(/(^|>)([^<]*?)(?=<|$)/g, (full, prefix, chunk) => {
+    const linked = chunk.replace(
+      /\b([1-9A-HJ-NP-Za-km-z]{32,44})\b/g,
+      (addr) => {
+        const ex = explorerAccountUrl(addr);
+        return (
+          '<a class="wallet-link" href="' +
+          ex +
+          '" target="_blank" rel="noopener noreferrer">' +
+          addr +
+          "</a>"
+        );
       }
-      return (
-        '<a href="' +
-        url +
-        '" target="_blank" rel="noopener noreferrer">' +
-        url +
-        "</a>"
-      );
-    }
-  );
-  // Solana base58 wallets → clickable Solscan (address text stays)
-  html = html.replace(
-    /(^|>)([^<]*?)(?=<|$)/g,
-    (full, prefix, chunk) => {
-      const linked = chunk.replace(
-        /\b([1-9A-HJ-NP-Za-km-z]{32,44})\b/g,
-        (addr) =>
-          `<a class="wallet-link" href="https://solscan.io/account/${addr}" target="_blank" rel="noopener noreferrer">${addr}</a>`
-      );
-      return prefix + linked;
-    }
-  );
+    );
+    return prefix + linked;
+  });
+  html = html.replace(/\b(0x[a-fA-F0-9]{40})\b/g, (addr) => {
+    const ex = explorerAccountUrl(addr);
+    return (
+      '<a class="wallet-link" href="' +
+      ex +
+      '" target="_blank" rel="noopener noreferrer">' +
+      addr +
+      "</a>"
+    );
+  });
   return html;
 }
 
@@ -1655,6 +1740,7 @@ function renderSummary(data) {
   bar.hidden = false;
   const m = data.market || {};
   const t = data.token || {};
+  _lastChain = (t.chain_id || m.chain_id || "solana").toString();
   const name = t.name || m.name || "Token";
   const sym = t.symbol || m.symbol || "?";
   $("sumName").textContent = `${name} ($${sym}) · ${t.chain_id || m.chain_id || ""}`;
@@ -1676,6 +1762,7 @@ function renderSummary(data) {
   const order = [
     "dexscreener",
     "dexscreener_chain",
+    "pumpfun",
     "solscan",
     "explorer",
     "etherscan",
@@ -1690,9 +1777,11 @@ function renderSummary(data) {
   const seen = new Set();
   for (const k of order) {
     if (!links[k]) continue;
+    const href = safeHttpUrl(links[k]);
+    if (!href) continue;
     seen.add(k);
     const a = document.createElement("a");
-    a.href = links[k];
+    a.href = href;
     a.target = "_blank";
     a.rel = "noopener noreferrer";
     a.textContent = k;
@@ -1700,8 +1789,10 @@ function renderSummary(data) {
   }
   for (const [k, url] of Object.entries(links)) {
     if (seen.has(k) || !url) continue;
+    const href = safeHttpUrl(url);
+    if (!href) continue;
     const a = document.createElement("a");
-    a.href = url;
+    a.href = href;
     a.target = "_blank";
     a.rel = "noopener noreferrer";
     a.textContent = k;
@@ -1718,21 +1809,13 @@ function renderSections(data, query) {
     if (tab === "history" || tab === "ruggers") continue;
     if (sections[tab]) setPanelText(tab, sections[tab]);
   }
-  // Log successful Analyze into browser History (max 20)
+  // Log successful full Analyze into browser History (max 20)
   try {
-    // Prefer full analyze (not quick-only empty holders) when possible
-    const isQuick = !!(data.quick || data._phase === "quick");
-    const holdersOk = !!(
-      (data.holders && data.holders.ok) ||
-      (sections.holders && !/unavailable|skipped|quick/i.test(sections.holders || ""))
-    );
-    if (!isQuick || holdersOk || data.ok) {
+    const quickRun = isQuickAnalyze(data);
+    const holdersOk = holdersScanOk(data);
+    if (!quickRun && holdersOk) {
       const entry = buildHistoryEntry(data, query);
-      if (entry) {
-        // Skip pure quick market-only if already have empty market-only noise:
-        // still record — user searched it
-        pushHistoryLog(entry);
-      }
+      if (entry) pushHistoryLog(entry);
     }
   } catch {
     /* ignore history failures */
@@ -1742,14 +1825,10 @@ function renderSections(data, query) {
   // Ruggers: first-lookup baseline + sell/swing tracking (needs holder snapshot)
   let rugKey = null;
   try {
-    const isQuick = !!(data.quick || data._phase === "quick");
+    const quickRun = isQuickAnalyze(data);
+    const holdersOk = holdersScanOk(data);
     const track = (data.history_meta || {}).ruggers_track;
-    const holdersOk = !!(
-      (track && track.ok) ||
-      (data.holders && data.holders.ok) ||
-      (sections.holders && !/unavailable|skipped|quick/i.test(sections.holders || ""))
-    );
-    if (!isQuick && holdersOk) {
+    if (!quickRun && holdersOk && track && track.ok) {
       const result = processRuggersFromAnalyze(data);
       if (result && result.key) rugKey = result.key;
     }
@@ -1891,13 +1970,17 @@ async function analyze(ev) {
   const btn = $("analyzeBtn");
   btn.disabled = true;
   btn.textContent = quick ? "Quick…" : "Analyzing…";
-  setPanelText("overview", "Loading… this can take up to ~90s for holders/about.");
+  clearAllPanels("Loading… this can take up to ~90s for holders/about.");
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ANALYZE_TIMEOUT_MS);
 
   try {
     const r = await fetch(apiUrl("/api/analyze"), {
       method: "POST",
       headers: headers(true),
       body: JSON.stringify({ query, chain, quick }),
+      signal: ctrl.signal,
     });
     let data;
     try {
@@ -1907,24 +1990,33 @@ async function analyze(ev) {
     }
     if (r.status === 401) {
       showError(data.error || "Unauthorized — set site passcode (⚙).");
+      clearAllPanels(data.error || "Unauthorized");
       $("settingsDialog").showModal();
       return;
     }
     if (r.status === 429) {
       showError(data.error || "Rate limited — try again shortly.");
+      clearAllPanels(data.error || "Rate limited");
       return;
     }
     if (!data.ok) {
       showError(data.error || "Analyze failed");
-      setPanelText("overview", data.error || "Analyze failed");
+      clearAllPanels(data.error || "Analyze failed");
       $("summaryBar").hidden = true;
       return;
     }
     renderSummary(data);
     renderSections(data, query);
   } catch (e) {
-    showError(String(e.message || e));
+    const msg =
+      e && e.name === "AbortError"
+        ? "Analyze timed out after ~" + Math.round(ANALYZE_TIMEOUT_MS / 1000) + "s — try Quick or retry."
+        : String(e.message || e);
+    showError(msg);
+    clearAllPanels(msg);
+    $("summaryBar").hidden = true;
   } finally {
+    clearTimeout(timer);
     btn.disabled = false;
     btn.textContent = "Analyze";
   }
@@ -1969,11 +2061,14 @@ function init() {
 
   // Deep link: ?q=mint or #mint
   const params = new URLSearchParams(location.search);
-  const q = params.get("q") || params.get("query");
+  let q = params.get("q") || params.get("query");
+  if (!q && location.hash && location.hash.length > 2) {
+    q = decodeURIComponent(location.hash.slice(1).trim());
+  }
   if (q) {
     $("query").value = q;
     if (params.get("chain")) $("chain").value = params.get("chain");
-    if (params.get("auto") === "1") analyze();
+    if (params.get("auto") === "1" || location.hash.length > 2) analyze();
   }
 }
 

@@ -257,7 +257,10 @@ def analyze_token(
     ]
 
     if looks_like_address or pair_address:
-        if pump_pairs and pf.is_pump_mint(q.split(":")[-1] if ":" in q else q):
+        addr_q = q.split(":")[-1] if ":" in q else q
+        if pump_pairs and (
+            pf.is_pump_mint(addr_q) or pf._pairs_have_pump_pool(pairs)
+        ):
             primary = dx.pick_primary_pair(pump_pairs, query=query)
         else:
             primary = dx.pick_primary_pair(pairs, query=query)
@@ -352,7 +355,7 @@ def analyze_token(
             "history_note": "Skipped (unknown network mapping).",
         }
         gtok = None
-        if token_addr and pf.is_pump_mint(token_addr):
+        if token_addr:
             try:
                 pump_mcap = pf.fetch_pumpfun_mcap_metrics(token_addr)
             except Exception:  # noqa: BLE001
@@ -557,7 +560,7 @@ def analyze_token(
 
     if quick:
         # Fast path: market + pump meta only (no parallel network storm)
-        if token_addr and pf.is_pump_mint(token_addr):
+        if token_addr:
             try:
                 pump_mcap = pf.fetch_pumpfun_mcap_metrics(token_addr)
             except Exception:  # noqa: BLE001

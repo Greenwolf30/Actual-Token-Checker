@@ -17,13 +17,60 @@ from . import dexscreener as dx
 from .http_util import get_json
 
 PUMP_MINT_SUFFIX = "pump"
-DEX_PUMP = {"pumpfun", "pumpswap", "pump"}
+DEX_PUMP = {"pumpfun", "pumpswap", "pump", "pumpswap-v2", "pump-fun", "pump_swap"}
 
 
 def is_pump_mint(address: str | None) -> bool:
+    """Classic Pump.fun mint suffix (…pump)."""
     if not address:
         return False
     return address.lower().endswith(PUMP_MINT_SUFFIX)
+
+
+def _norm_dex_id(value: Any) -> str:
+    return str(value or "").strip().lower().replace(" ", "").replace("_", "").replace("-", "")
+
+
+def is_pump_pool_dex(dex_id: str | None) -> bool:
+    """True when DexScreener pool is Pump.fun bonding curve or PumpSwap."""
+    d = _norm_dex_id(dex_id)
+    if not d:
+        return False
+    if d in {_norm_dex_id(x) for x in DEX_PUMP}:
+        return True
+    return d.startswith("pumpfun") or d.startswith("pumpswap") or d == "pump"
+
+
+def _pairs_have_pump_pool(pairs: list[dict[str, Any]] | None) -> bool:
+    for p in pairs or []:
+        if is_pump_pool_dex(p.get("dexId")):
+            return True
+    return False
+
+
+def is_pump_token(
+    address: str | None,
+    *,
+    pairs: list[dict[str, Any]] | None = None,
+    primary_dex_id: str | None = None,
+    native: dict[str, Any] | None = None,
+) -> bool:
+    """
+    Pump.fun origin token — suffix mint OR pumpfun/pumpswap pool OR native API hit.
+
+    Many graduated / legacy pump tokens no longer end with 'pump' but still trade on
+    pumpfun/pumpswap or exist in the Pump.fun coin API.
+    """
+    if is_pump_mint(address):
+        return True
+    if is_pump_pool_dex(primary_dex_id):
+        return True
+    if _pairs_have_pump_pool(pairs):
+        return True
+    if native and isinstance(native, dict):
+        if native.get("mint") or native.get("bonding_curve") or native.get("raydium_pool"):
+            return True
+    return False
 
 
 def classify_graduation(
@@ -42,51 +89,71 @@ def classify_graduation(
       - pump mint with no clear DEX signal → graduated = unknown
     """
     mint = (token_address or "").strip()
-    is_mint = is_pump_mint(mint)
+    suffix_mint = is_pump_mint(mint)
     dex_primary = (primary_dex_id or "").lower()
     pair_dexes: list[str] = []
     for p in pairs or []:
         d = (p.get("dexId") or "").lower()
         if d:
             pair_dexes.append(d)
-        # only pairs for this mint if we can check base
-        base = ((p.get("baseToken") or {}).get("address") or "").lower()
-        if mint and base and base != mint.lower():
-            # keep dex anyway if caller already filtered pairs to this token
-            pass
 
     if dex_primary and dex_primary not in pair_dexes:
         pair_dexes.append(dex_primary)
 
-    on_bonding = "pumpfun" in pair_dexes or dex_primary == "pumpfun"
+    on_bonding = any(_norm_dex_id(d) == "pumpfun" for d in pair_dexes) or _norm_dex_id(
+        dex_primary
+    ) == "pumpfun"
+    on_pumpswap = any(is_pump_pool_dex(d) and _norm_dex_id(d) != "pumpfun" for d in pair_dexes)
     graduated_dexes = {"pumpswap", "raydium", "meteora", "orca", "pumpswap-v2"}
-    on_grad_dex = any(d in graduated_dexes for d in pair_dexes)
+    on_grad_dex = any(_norm_dex_id(d) in graduated_dexes for d in pair_dexes)
+
+    # Native API only when pump signals exist (avoid extra call on unrelated tokens)
+    native = None
+    if mint and (
+        suffix_mint
+        or on_bonding
+        or on_pumpswap
+        or _pairs_have_pump_pool(pairs)
+        or is_pump_pool_dex(primary_dex_id)
+    ):
+        native = try_native_coin(mint)
+    pump_origin = is_pump_token(
+        mint,
+        pairs=pairs,
+        primary_dex_id=primary_dex_id,
+        native=native,
+    )
 
     graduated: bool | None
     if on_bonding:
         graduated = False
-    elif is_mint and on_grad_dex:
+    elif pump_origin and (on_pumpswap or on_grad_dex):
         graduated = True
-    elif is_mint and not on_bonding and pair_dexes:
-        # Pump mint trading somewhere other than bonding curve
+    elif pump_origin and not on_bonding and pair_dexes:
         graduated = True
-    elif is_mint:
-        graduated = None  # unknown / no pair signal
+    elif pump_origin and native and native.get("complete") is True:
+        graduated = True
+    elif pump_origin and native and native.get("complete") is False:
+        graduated = False
+    elif pump_origin:
+        graduated = None
     else:
         graduated = None
 
-    status = "bonding"
-    if graduated is True:
-        status = "graduated"
-    elif graduated is False:
-        status = "bonding"
-    elif is_mint:
-        status = "unknown"
-    else:
-        status = "not_pump"
+    status = "not_pump"
+    if pump_origin:
+        if graduated is True:
+            status = "graduated"
+        elif graduated is False:
+            status = "bonding"
+        else:
+            status = "unknown"
 
     return {
-        "is_pump_mint": is_mint,
+        # Back-compat: treat any pump-origin token as pump for UI/alerts/history
+        "is_pump_mint": pump_origin,
+        "mint_ends_with_pump": suffix_mint,
+        "is_pump_origin": pump_origin,
         "on_bonding_curve": bool(on_bonding),
         "graduated": graduated,
         "graduated_label": (
@@ -95,13 +162,13 @@ def classify_graduation(
         "status": status,
         "dex_id": dex_primary or (pair_dexes[0] if pair_dexes else None),
         "dexes_seen": sorted(set(pair_dexes)),
-        "pump_url": f"https://pump.fun/{mint}" if is_mint else None,
+        "pump_url": f"https://pump.fun/{mint}" if pump_origin and mint else None,
+        "native_pump_api": bool(native),
     }
 
 
 def _is_pump_pair(p: dict[str, Any]) -> bool:
-    dex = (p.get("dexId") or "").lower()
-    if dex in DEX_PUMP:
+    if is_pump_pool_dex(p.get("dexId")):
         return True
     base = (p.get("baseToken") or {}).get("address") or ""
     return is_pump_mint(base)
@@ -382,7 +449,7 @@ def synthetic_pair_from_native(mint: str, native: dict[str, Any] | None = None) 
         },
         "_source": "pumpfun_native_api",
         "_fallback": True,
-        "_is_pump_mint": True,
+        "_is_pump_mint": is_pump_mint(addr) or bool(coin),
         "_graduated": complete,
     }
     return pair
@@ -419,8 +486,10 @@ def fetch_pumpfun_mcap_metrics(mint: str | None) -> dict[str, Any] | None:
       - usd_market_cap / market_cap
       - created_timestamp
       - virtual reserves for initial mcap estimate
+
+    Works for any mint the Pump.fun API recognizes — not only …pump suffix addresses.
     """
-    if not mint or not is_pump_mint(mint):
+    if not mint:
         return None
     native = try_native_coin(mint)
     if not native:
