@@ -434,7 +434,9 @@ def _from_pumpfun(mint: str) -> dict[str, Any]:
     if website_u and "pump.fun" in website_u.lower():
         website_u = ""
     if twitter_u:
-        twitter_handle = _handle_from_url(twitter_u)
+        from .dexscreener import normalize_x_handle
+
+        twitter_handle = normalize_x_handle(twitter_u)
 
     src_label = about.get("description_source") or "pumpfun_about"
     # Prefer real About prose alone (not name-only blobs)

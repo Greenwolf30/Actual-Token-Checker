@@ -568,33 +568,20 @@ def analyze_token(
                 or native.get("twitterUrl")
                 or ""
             )
-            tw_s = str(tw).strip()
-            if tw_s and not tw_s.startswith("http"):
-                tw_s = f"https://x.com/{tw_s.lstrip('@')}"
-            if tw_s.startswith("http") and (
-                "x.com/" in tw_s.lower() or "twitter.com/" in tw_s.lower()
-            ):
-                h = dx._handle_from_url(tw_s) if hasattr(dx, "_handle_from_url") else ""
-                if not h:
-                    # fallback parse
-                    import re as _re
-
-                    m = _re.search(
-                        r"(?:x|twitter)\.com/(@?[A-Za-z0-9_]{1,30})", tw_s, _re.I
-                    )
-                    h = (m.group(1) if m else "").lstrip("@")
-                if h:
-                    if not socials.get("twitter_handle"):
-                        socials["twitter_handle"] = h
-                    extras = list(socials.get("extra_twitter_handles") or [])
-                    if h not in extras and h != socials.get("twitter_handle"):
-                        extras.append(h)
-                        socials["extra_twitter_handles"] = extras
-                    soc_list = list(socials.get("socials") or [])
-                    soc_list.append(
-                        {"platform": "twitter", "handle": h, "url": tw_s}
-                    )
-                    socials["socials"] = soc_list
+            h = dx.normalize_x_handle(str(tw).strip())
+            if h:
+                tw_s = f"https://x.com/{h}"
+                if not socials.get("twitter_handle"):
+                    socials["twitter_handle"] = h
+                extras = list(socials.get("extra_twitter_handles") or [])
+                if h not in extras and h != socials.get("twitter_handle"):
+                    extras.append(h)
+                    socials["extra_twitter_handles"] = extras
+                soc_list = list(socials.get("socials") or [])
+                soc_list.append(
+                    {"platform": "twitter", "handle": h, "url": tw_s}
+                )
+                socials["socials"] = soc_list
             for label, raw in (
                 ("telegram", native.get("telegram") or native.get("telegram_url")),
                 ("website", native.get("website") or native.get("website_url")),

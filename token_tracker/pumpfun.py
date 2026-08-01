@@ -764,11 +764,9 @@ def fetch_coin_about(mint: str) -> dict[str, Any]:
         # Socials from coin row (shown on the same About/profile card)
         tw = coin.get("twitter") or coin.get("twitter_url") or coin.get("twitterUrl")
         if tw:
-            tw_s = str(tw).strip()
-            if tw_s and not tw_s.startswith("http"):
-                tw_s = f"https://x.com/{tw_s.lstrip('@')}"
-            if tw_s.startswith("http"):
-                links["twitter"] = tw_s
+            tw_h = dx.normalize_x_handle(str(tw).strip())
+            if tw_h:
+                links["twitter"] = f"https://x.com/{tw_h}"
         tg = coin.get("telegram") or coin.get("telegram_url")
         if tg:
             tg_s = str(tg).strip()

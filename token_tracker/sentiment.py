@@ -9,6 +9,7 @@ import xml.etree.ElementTree as ET
 from typing import Any
 from urllib.parse import quote
 
+from .dexscreener import normalize_x_handle
 from .http_util import get_json, get_text
 
 NITTER_HOSTS = [
@@ -141,7 +142,7 @@ def market_crowd_sentiment(
 
 
 def fetch_nitter_user_posts(handle: str, limit: int = 20) -> list[dict[str, str]]:
-    handle = handle.lstrip("@")
+    handle = normalize_x_handle(handle) or ""
     if not handle or handle.lower() in {"i", "home", "share", "intent", "search"}:
         return []
     # Try at most 2 mirrors (was all hosts × timeouts)
@@ -242,7 +243,7 @@ def community_sentiment(
     """
     posts: list[dict[str, str]] = []
     sources_used: list[str] = []
-    handle = (twitter_handle or "").lstrip("@") or None
+    handle = normalize_x_handle(twitter_handle)
 
     # 1) Official X API community search
     query_parts = []
@@ -267,9 +268,9 @@ def community_sentiment(
     if handle:
         handles.append(handle)
     for h in extra_handles or []:
-        h = (h or "").lstrip("@")
-        if h and h not in handles:
-            handles.append(h)
+        nh = normalize_x_handle(h)
+        if nh and nh not in handles:
+            handles.append(nh)
 
     seen_text = {p.get("text") for p in posts}
     for h in handles:

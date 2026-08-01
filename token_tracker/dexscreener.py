@@ -6,6 +6,7 @@ fall through to Raydium (market_failover + raydium modules).
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from . import market_failover as mfail
@@ -474,20 +475,21 @@ def extract_socials(pair: dict[str, Any]) -> dict[str, Any]:
             "url": url or _url_from_handle(platform, handle),
         }
         socials.append(entry)
-        if platform in {"twitter", "x"} and handle:
-            h = handle.lstrip("@")
-            if not twitter_handle:
-                twitter_handle = h
-            elif h.lower() != twitter_handle.lower():
-                extra_handles.append(h)
+        if platform in {"twitter", "x"}:
+            h = normalize_x_handle(handle) or normalize_x_handle(url)
+            if h:
+                if not twitter_handle:
+                    twitter_handle = h
+                elif h.lower() != twitter_handle.lower():
+                    extra_handles.append(h)
 
     # Also scan websites for x.com links sometimes mislabeled
     for w in websites:
         url = (w.get("url") or "") if isinstance(w, dict) else ""
         if "x.com/" in url.lower() or "twitter.com/" in url.lower():
-            h = _handle_from_url(url)
+            h = normalize_x_handle(url)
             if h and not twitter_handle:
-                twitter_handle = h.lstrip("@")
+                twitter_handle = h
 
     return {
         "websites": websites,
@@ -497,6 +499,35 @@ def extract_socials(pair: dict[str, Any]) -> dict[str, Any]:
         "image_url": info.get("imageUrl"),
         "header_url": info.get("header"),
     }
+
+
+_X_HANDLE_RE = re.compile(r"^[A-Za-z0-9_]{1,30}$")
+
+
+def normalize_x_handle(raw: str | None) -> str | None:
+    """Return a valid X/Twitter username, or None for URLs, labels, or junk."""
+    s = (raw or "").strip().lstrip("@")
+    if not s:
+        return None
+    if _X_HANDLE_RE.match(s):
+        return s
+    m = re.search(
+        r"(?:https?://)?(?:www\.)?(?:x|twitter)\.com/(@?[A-Za-z0-9_]{1,30})(?:[/?#]|$)",
+        s,
+        re.I,
+    )
+    if m:
+        h = m.group(1).lstrip("@")
+        if _X_HANDLE_RE.match(h):
+            return h
+    m = re.match(r"^(?:twitter|x)\s*:\s*@?([A-Za-z0-9_]{1,30})\s*$", s, re.I)
+    if m:
+        return m.group(1)
+    if s.startswith("http") or "x.com/" in s.lower() or "twitter.com/" in s.lower():
+        h = _handle_from_url(s)
+        if h and _X_HANDLE_RE.match(h.lstrip("@")):
+            return h.lstrip("@")
+    return None
 
 
 def _handle_from_url(url: str) -> str:
@@ -526,8 +557,10 @@ def _handle_from_url(url: str) -> str:
     ):
         if lower.startswith(prefix):
             rest = url[len(prefix) :]
-            handle = rest.split("?")[0].split("/")[0]
+            handle = rest.split("?")[0].split("/")[0].lstrip("@")
             if handle.lower() in {"i", "home", "share", "intent", "search"}:
+                return ""
+            if not _X_HANDLE_RE.match(handle):
                 return ""
             return handle
     return ""
