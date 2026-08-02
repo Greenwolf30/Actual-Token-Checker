@@ -20,6 +20,8 @@ load_dotenv()
 SOLSCAN_PRO = "https://pro-api.solscan.io/v2.0"
 SOLSCAN_PUBLIC = "https://api-v2.solscan.io/v2"
 BIRDEYE_BASE = "https://public-api.birdeye.so"
+# Solscan Pro token/holders only accepts these page_size values (not 1/50/100).
+_SOLSCAN_HOLDERS_PAGE_SIZES = (10, 20, 30, 40)
 
 
 def solscan_api_key() -> str | None:
@@ -39,6 +41,41 @@ def birdeye_api_key() -> str | None:
     return k or None
 
 
+def _solscan_pro_headers(key: str) -> dict[str, str]:
+    # Pro docs: header name is `token` (not Bearer).
+    return {
+        **DEFAULT_HEADERS,
+        "token": key,
+        "Accept": "application/json",
+    }
+
+
+def _solscan_holders_page_size(want: int) -> int:
+    """Clamp to Solscan Pro allowed page_size values for token/holders."""
+    n = int(want) if want else 40
+    if n <= 0:
+        return 10
+    for size in _SOLSCAN_HOLDERS_PAGE_SIZES:
+        if n <= size:
+            return size
+    return 40
+
+
+def _solscan_api_error(data: Any) -> str | None:
+    """Extract Solscan Pro error text when success is false / empty."""
+    if not isinstance(data, dict):
+        return None
+    if data.get("success") is False or data.get("ok") is False:
+        err = data.get("errors") or data.get("error") or data.get("message")
+        if isinstance(err, dict):
+            bits = [str(v) for v in err.values() if v]
+            return "; ".join(bits) if bits else "success=false"
+        if err:
+            return str(err)
+        return "success=false"
+    return None
+
+
 def fetch_solscan_holders(mint: str, *, limit: int = 40) -> dict[str, Any]:
     """
     Solscan token holders.
@@ -49,59 +86,107 @@ def fetch_solscan_holders(mint: str, *, limit: int = 40) -> dict[str, Any]:
     Used as primary holder list when Helius/RPC fails (see holders._fuse_holder_sources).
     """
     key = solscan_api_key()
-    page_size = min(max(limit, 1), 100)
-    params = urlencode(
-        {
-            "address": mint,
-            "page": 1,
-            "page_size": page_size,
-        }
-    )
+    want = min(max(int(limit or 40), 1), 100)
+    page_size = _solscan_holders_page_size(min(want, 40))
     errors: list[str] = []
 
     # Pro API (preferred — set SOLSCAN_API_KEY on server)
     if key:
         try:
-            data = get_json(
-                f"{SOLSCAN_PRO}/token/holders?{params}",
-                headers={
-                    **DEFAULT_HEADERS,
-                    "token": key,
-                    "Authorization": key,
-                    "Accept": "application/json",
-                },
-                timeout=18.0,
-                retries=2,
-            )
-            parsed = _parse_solscan_holders(data, mint)
-            if parsed.get("holders"):
-                parsed["ok"] = True
-                parsed["api"] = "solscan_pro_v2"
-                parsed["notes"] = "Solscan Pro holders"
-                return parsed
-            errors.append("pro returned no holders")
+            all_holders: list[dict[str, Any]] = []
+            total_holders = None
+            page = 1
+            max_pages = max(1, (want + page_size - 1) // page_size)
+            while len(all_holders) < want and page <= max_pages:
+                params = urlencode(
+                    {
+                        "address": mint,
+                        "page": page,
+                        "page_size": page_size,
+                    }
+                )
+                data = get_json(
+                    f"{SOLSCAN_PRO}/token/holders?{params}",
+                    headers=_solscan_pro_headers(key),
+                    timeout=18.0,
+                    retries=2,
+                )
+                api_err = _solscan_api_error(data)
+                if api_err:
+                    errors.append(f"pro page {page}: {api_err}")
+                    break
+                parsed = _parse_solscan_holders(data, mint, max_items=page_size)
+                batch = list(parsed.get("holders") or [])
+                if total_holders is None and parsed.get("total_holders") is not None:
+                    total_holders = parsed.get("total_holders")
+                if not batch:
+                    if page == 1:
+                        errors.append("pro returned no holders")
+                    break
+                all_holders.extend(batch)
+                if len(batch) < page_size:
+                    break
+                page += 1
+
+            if all_holders:
+                # Re-rank after pagination; keep unique wallets (owner)
+                seen: set[str] = set()
+                uniq: list[dict[str, Any]] = []
+                for h in all_holders:
+                    w = (h.get("wallet") or "").strip()
+                    if not w or w in seen:
+                        continue
+                    seen.add(w)
+                    h = dict(h)
+                    h["rank"] = len(uniq) + 1
+                    uniq.append(h)
+                    if len(uniq) >= want:
+                        break
+                return {
+                    "ok": True,
+                    "holders": uniq,
+                    "total_holders": total_holders,
+                    "mint": mint,
+                    "api": "solscan_pro_v2",
+                    "notes": (
+                        f"Solscan Pro holders "
+                        f"(page_size={page_size}, pages={page}, n={len(uniq)})"
+                    ),
+                }
         except Exception as exc:  # noqa: BLE001
             errors.append(f"pro: {exc}")
 
     # Public / alternate (may be rate-limited or blocked)
+    pub_page_size = _solscan_holders_page_size(min(want, 40))
+    pub_params = urlencode(
+        {
+            "address": mint,
+            "page": 1,
+            "page_size": pub_page_size,
+        }
+    )
     for base, label in (
         (f"{SOLSCAN_PUBLIC}/token/holders", "solscan_public_v2"),
         (f"https://api.solscan.io/token/holders", "solscan_legacy"),
     ):
         try:
-            q = urlencode({"token": mint, "offset": 0, "size": min(limit, 50)})
+            q = urlencode({"token": mint, "offset": 0, "size": min(want, 40)})
             # legacy uses different param names
             if "api.solscan.io" in base and "v2" not in base:
                 url = f"{base}?{q}"
             else:
-                url = f"{base}?{params}"
+                url = f"{base}?{pub_params}"
             data = get_json(
                 url,
                 headers={**DEFAULT_HEADERS, "Accept": "application/json"},
                 timeout=15.0,
                 retries=0,
             )
-            parsed = _parse_solscan_holders(data, mint)
+            api_err = _solscan_api_error(data)
+            if api_err:
+                errors.append(f"{label}: {api_err}")
+                continue
+            parsed = _parse_solscan_holders(data, mint, max_items=want)
             if parsed.get("holders"):
                 parsed["ok"] = True
                 parsed["api"] = label
@@ -294,31 +379,31 @@ def _solscan_total_holders(mint: str) -> tuple[int | None, dict[str, Any]]:
     """Total holders via Solscan Pro/public holders endpoints (total field)."""
     key = solscan_api_key()
     detail: dict[str, Any] = {"ok": False, "needs_key": not bool(key)}
-    params = urlencode({"address": mint, "page": 1, "page_size": 1})
+    # page_size=1 is rejected by Solscan Pro; 10 is the smallest allowed value.
+    params = urlencode({"address": mint, "page": 1, "page_size": 10})
     errors: list[str] = []
 
     if key:
         try:
             data = get_json(
                 f"{SOLSCAN_PRO}/token/holders?{params}",
-                headers={
-                    **DEFAULT_HEADERS,
-                    "token": key,
-                    "Authorization": key,
-                    "Accept": "application/json",
-                },
+                headers=_solscan_pro_headers(key),
                 timeout=15.0,
                 retries=1,
             )
-            n = _extract_total_holders(data)
-            if n is None:
-                # parse via holders helper structure
-                parsed = _parse_solscan_holders(data, mint)
-                n = _int_or_none(parsed.get("total_holders"))
-            if n is not None:
-                detail.update({"ok": True, "api": "solscan_pro_v2", "total": n})
-                return n, detail
-            errors.append("pro: no total")
+            api_err = _solscan_api_error(data)
+            if api_err:
+                errors.append(f"pro: {api_err}")
+            else:
+                n = _extract_total_holders(data)
+                if n is None:
+                    # parse via holders helper structure
+                    parsed = _parse_solscan_holders(data, mint, max_items=10)
+                    n = _int_or_none(parsed.get("total_holders"))
+                if n is not None:
+                    detail.update({"ok": True, "api": "solscan_pro_v2", "total": n})
+                    return n, detail
+                errors.append("pro: no total")
         except Exception as exc:  # noqa: BLE001
             errors.append(f"pro: {exc}")
 
@@ -326,12 +411,7 @@ def _solscan_total_holders(mint: str) -> tuple[int | None, dict[str, Any]]:
         try:
             meta = get_json(
                 f"{SOLSCAN_PRO}/token/meta?{urlencode({'address': mint})}",
-                headers={
-                    **DEFAULT_HEADERS,
-                    "token": key,
-                    "Authorization": key,
-                    "Accept": "application/json",
-                },
+                headers=_solscan_pro_headers(key),
                 timeout=12.0,
                 retries=0,
             )
@@ -596,10 +676,14 @@ def _int_or_none(v: Any) -> int | None:
         return None
 
 
-def _parse_solscan_holders(data: Any, mint: str) -> dict[str, Any]:
+def _parse_solscan_holders(
+    data: Any, mint: str, *, max_items: int = 50
+) -> dict[str, Any]:
     items: list[Any] = []
     total = None
     if isinstance(data, dict):
+        # Prefer top-level total when Pro wraps payload as { success, data, total? }
+        total = data.get("total") or data.get("totalCount")
         # v2 pro shapes
         d = data.get("data") if "data" in data else data
         if isinstance(d, dict):
@@ -610,7 +694,7 @@ def _parse_solscan_holders(data: Any, mint: str) -> dict[str, Any]:
                 or d.get("holders")
                 or []
             )
-            total = d.get("total") or d.get("totalCount")
+            total = d.get("total") or d.get("totalCount") or total
             # amount sometimes nested
         elif isinstance(d, list):
             items = d
@@ -620,40 +704,56 @@ def _parse_solscan_holders(data: Any, mint: str) -> dict[str, Any]:
         items = data
 
     holders = []
-    for i, row in enumerate(items[:50]):
+    cap = max(1, min(int(max_items or 50), 100))
+    for i, row in enumerate(items[:cap]):
         if not isinstance(row, dict):
             continue
+        # Pro v2: owner = wallet, address = token account (ATA)
         wallet = (
             row.get("owner")
-            or row.get("address")
             or row.get("ownerAddress")
             or row.get("wallet")
             or ""
         )
-        # Solscan often: amount, decimals, owner
-        bal = _f(row.get("amount") or row.get("uiAmount") or row.get("balance"))
+        ata = (
+            row.get("token_account")
+            or row.get("tokenAccount")
+            or row.get("address")
+            or ""
+        )
+        if not wallet:
+            # Legacy rows sometimes put wallet in address
+            wallet = ata
+            ata = ""
+        # Solscan Pro: amount is raw base units + decimals
         decimals = row.get("decimals")
-        if bal is not None and decimals is not None and bal > 1e6:
-            try:
-                bal = bal / (10 ** int(decimals))
-            except (TypeError, ValueError):
-                pass
+        bal = _f(row.get("uiAmount") or row.get("balance"))
+        if bal is None:
+            raw_amt = _f(row.get("amount"))
+            if raw_amt is not None:
+                try:
+                    dec = int(decimals) if decimals is not None else None
+                    bal = raw_amt / (10 ** dec) if dec is not None and dec >= 0 else raw_amt
+                except (TypeError, ValueError):
+                    bal = raw_amt
         pct = _f(row.get("percentage") or row.get("percent") or row.get("pct"))
         if pct is not None and pct <= 1.0:
             pct = pct * 100.0
+        rank = row.get("rank")
+        try:
+            rank_i = int(rank) if rank is not None else i + 1
+        except (TypeError, ValueError):
+            rank_i = i + 1
         holders.append(
             {
-                "rank": i + 1,
+                "rank": rank_i,
                 "wallet": wallet,
                 "pct_supply": pct,
                 "balance": bal,
                 "label": None,
                 "is_known_program": False,
                 "insider": False,
-                "token_account": row.get("token_account")
-                or row.get("tokenAccount")
-                or row.get("address")
-                or "",
+                "token_account": ata,
                 "provider": "solscan",
             }
         )
