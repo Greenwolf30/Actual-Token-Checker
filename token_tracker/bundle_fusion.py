@@ -236,17 +236,52 @@ def comprehensive_bundle_check(
         base["early_buyers"] = []
 
     # Funding hops: common SOL funder among suspects / similar-size
+    # Never seed Shared SOL from known Pump.fun / DEX LP accounts.
     seed_wallets: list[str] = []
     if base.get("ok"):
         for s in base.get("suspect_wallets") or []:
-            if s.get("wallet"):
-                seed_wallets.append(str(s["wallet"]))
+            w = str(s.get("wallet") or "").strip()
+            if w and w not in lp_wallets:
+                seed_wallets.append(w)
         for g in base.get("similar_size_groups") or []:
             for w in g.get("wallets") or []:
-                seed_wallets.append(str(w))
+                ws = str(w if not isinstance(w, dict) else w.get("wallet") or "").strip()
+                if ws and ws not in lp_wallets:
+                    seed_wallets.append(ws)
             for m in g.get("members") or []:
-                if isinstance(m, dict) and m.get("wallet"):
-                    seed_wallets.append(str(m["wallet"]))
+                if isinstance(m, dict):
+                    ws = str(m.get("wallet") or "").strip()
+                    if ws and ws not in lp_wallets:
+                        seed_wallets.append(ws)
+
+    def _funding_rows_ex_lp(clusters: list[Any]) -> list[dict[str, Any]]:
+        """Funder + children supply rows with Pump/DEX LP wallets removed."""
+        rows: list[dict[str, Any]] = []
+        for efc in clusters or []:
+            if not isinstance(efc, dict):
+                continue
+            funder = (efc.get("funder") or efc.get("sender") or "").strip()
+            if funder and funder not in lp_wallets:
+                fp = efc.get("funder_pct")
+                if fp is None:
+                    fp = efc.get("sender_pct")
+                if fp is None:
+                    fp = pct_by_w.get(funder)
+                rows.append({"wallet": funder, "pct_supply": fp})
+            for cr in list(efc.get("child_rows") or []):
+                if not isinstance(cr, dict):
+                    continue
+                w = (cr.get("wallet") or "").strip()
+                if not w or w in lp_wallets:
+                    continue
+                rows.append(cr)
+            for c in list(efc.get("children") or efc.get("receivers") or []):
+                w = c if isinstance(c, str) else (c or {}).get("wallet")
+                ws = (str(w) if w is not None else "").strip()
+                if not ws or ws in lp_wallets:
+                    continue
+                rows.append({"wallet": ws, "pct_supply": pct_by_w.get(ws)})
+        return rows
 
     shared_sol_from_cache = False
     if include_shared_sol:
@@ -295,21 +330,8 @@ def comprehensive_bundle_check(
                     s0["funding_cached_at"] = cached_ss.get("scanned_at")
                 s0.pop("funding_error", None)
                 try:
-                    fund_rows_c: list[dict[str, Any]] = []
-                    for efc in base["funding_clusters"]:
-                        if not isinstance(efc, dict):
-                            continue
-                        fund_rows_c.append(
-                            {
-                                "wallet": efc.get("funder"),
-                                "pct_supply": efc.get("funder_pct")
-                                if efc.get("funder_pct") is not None
-                                else pct_by_w.get(str(efc.get("funder") or "").strip()),
-                            }
-                        )
-                        for cr in list(efc.get("child_rows") or []):
-                            if isinstance(cr, dict):
-                                fund_rows_c.append(cr)
+                    # Drop Pump.fun / DEX LP bags from Shared SOL % (even in cache)
+                    fund_rows_c = _funding_rows_ex_lp(base["funding_clusters"])
                     ft_c, fn_c = bun._sum_wallets_pct(fund_rows_c)  # type: ignore[attr-defined]
                     s0["funding_total_pct"] = ft_c
                     s0["funding_wallet_count"] = fn_c
@@ -336,7 +358,13 @@ def comprehensive_bundle_check(
             sources_used.append(
                 "funding_1hop_cached" if shared_sol_from_cache else "funding_1hop"
             )
-        f_clusters = list(funding_report.get("clusters") or [])
+        f_clusters = [
+            fc
+            for fc in list(funding_report.get("clusters") or [])
+            if isinstance(fc, dict)
+            and (fc.get("funder") or "").strip()
+            and (fc.get("funder") or "").strip() not in lp_wallets
+        ]
         best_f = f_clusters[0] if f_clusters else {}
         # Skip re-enrich if we already injected cached enriched clusters
         already = bool(
@@ -344,7 +372,7 @@ def comprehensive_bundle_check(
             and base.get("ok")
             and list(base.get("funding_clusters") or [])
         )
-        if not already:
+        if not already and best_f:
             fusion_signals.append(
                 {
                     "id": "funding_cluster",
@@ -356,7 +384,8 @@ def comprehensive_bundle_check(
                         f"{best_f.get('child_count')} suspect wallets funded by "
                         f"{best_f.get('funder')} — classic split-wallet bundle. "
                         f"{len(f_clusters)} funder cluster(s) found "
-                        f"(scanned {funding_report.get('txs_scanned') or 0} txs)."
+                        f"(scanned {funding_report.get('txs_scanned') or 0} txs). "
+                        "Pump.fun / DEX LP wallets excluded."
                         + (
                             " Reused last Analyze (no Helius re-scan)."
                             if shared_sol_from_cache
@@ -366,40 +395,48 @@ def comprehensive_bundle_check(
                 }
             )
             if not shared_sol_from_cache:
-                fund_rows: list[dict[str, Any]] = []
-                funder = (best_f.get("funder") or "").strip()
-                for c in list(best_f.get("children") or []):
-                    w = str(c).strip() if c else ""
-                    if w:
-                        fund_rows.append({"wallet": w, "pct_supply": pct_by_w.get(w)})
-                if funder:
-                    fund_rows.append(
-                        {"wallet": funder, "pct_supply": pct_by_w.get(funder)}
-                    )
-                fund_pct, _ = bun._sum_wallets_pct(fund_rows)  # type: ignore[attr-defined]
+                fund_pct, _ = bun._sum_wallets_pct(  # type: ignore[attr-defined]
+                    _funding_rows_ex_lp([best_f])
+                )
                 extra_score += bun._pct_risk_points(  # type: ignore[attr-defined]
                     fund_pct, cap=28, full_at=15.0
                 )
             # Always attach Shared SOL clusters (even if multi-account base failed)
             # so Total can count them when Shared SOL is checked.
+            # Exclude Pump.fun bonding curve / PumpSwap / DEX LP wallets from %.
             enriched_fc = []
             for fc in f_clusters[:8]:
                 ff = dict(fc)
-                kids = list(fc.get("children") or [])
+                funder = (fc.get("funder") or "").strip()
+                if funder and funder in lp_wallets:
+                    continue  # never treat Pump LP / pool as Shared SOL funder
+                kids = [
+                    c
+                    for c in list(fc.get("children") or [])
+                    if str(c).strip()
+                    and str(c).strip() not in lp_wallets
+                    and str(c).strip() != funder
+                ]
+                if len(kids) < 2:
+                    continue
                 child_rows = [
                     {"wallet": c, "pct_supply": pct_by_w.get(c)} for c in kids
                 ]
-                funder = (fc.get("funder") or "").strip()
                 tot, n = bun._sum_wallets_pct(child_rows)  # type: ignore[attr-defined]
-                if funder and funder in pct_by_w:
+                if funder and funder not in lp_wallets and funder in pct_by_w:
                     try:
                         tot = min(
                             100.0, float(tot or 0) + float(pct_by_w[funder])
                         )
+                        n = int(n or 0) + 1
                     except (TypeError, ValueError):
                         pass
+                ff["children"] = kids
+                ff["child_count"] = len(kids)
                 ff["child_rows"] = child_rows
-                ff["funder_pct"] = pct_by_w.get(funder)
+                ff["funder_pct"] = (
+                    pct_by_w.get(funder) if funder not in lp_wallets else None
+                )
                 ff["total_pct"] = tot
                 ff["wallets_with_pct"] = n
                 enriched_fc.append(ff)
@@ -430,23 +467,13 @@ def comprehensive_bundle_check(
             ) is not None:
                 s0["suspect_total_pct"] = s0.get("similar_size_total_pct")
                 s0["suspect_wallet_count"] = s0.get("similar_size_wallet_count")
-            s0["funding_clusters"] = len(f_clusters)
+            s0["funding_clusters"] = len(enriched_fc)
             # Unique wallet total % across funders + children (for Bundles header)
+            # Pump.fun / DEX LP wallets already stripped from enriched_fc.
             try:
-                fund_rows: list[dict[str, Any]] = []
-                for efc in enriched_fc:
-                    if not isinstance(efc, dict):
-                        continue
-                    fund_rows.append(
-                        {
-                            "wallet": efc.get("funder"),
-                            "pct_supply": efc.get("funder_pct"),
-                        }
-                    )
-                    for cr in list(efc.get("child_rows") or []):
-                        if isinstance(cr, dict):
-                            fund_rows.append(cr)
-                ft_ss, fn_ss = bun._sum_wallets_pct(fund_rows)  # type: ignore[attr-defined]
+                ft_ss, fn_ss = bun._sum_wallets_pct(  # type: ignore[attr-defined]
+                    _funding_rows_ex_lp(enriched_fc)
+                )
                 s0["funding_total_pct"] = ft_ss
                 s0["funding_wallet_count"] = fn_ss
             except Exception:  # noqa: BLE001
@@ -1059,6 +1086,11 @@ def comprehensive_bundle_check(
         # Total bundle % = unique wallets across counted vectors (no double-count)
         # Also partitions similar vs suspect (no shared wallets; suspect ≠ similar).
         try:
+            # Ensure per-mint Pump.fun / DEX LP exclusion can resolve PDAs
+            if mint and not base.get("token_address"):
+                base["token_address"] = mint
+            if pair_address and not base.get("pair_address"):
+                base["pair_address"] = pair_address
             tb = bun.recompute_total_bundle_all_vectors(
                 base,
                 include_fresh=include_fresh,

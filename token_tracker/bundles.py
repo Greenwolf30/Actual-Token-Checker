@@ -1791,6 +1791,23 @@ def recompute_total_bundle_all_vectors(
     pct_map = _wallet_pct_map(data)
 
     lp_wallets: set[str] = set()
+    # Per-mint Pump.fun bonding curve / PumpSwap / Dex pairs — always exclude
+    # from Shared SOL + Total bundle % (even if holder row wasn't tagged).
+    mint = (
+        (data.get("token_address") or data.get("mint") or "").strip()
+        or ((data.get("summary") or {}).get("token_address") or "")
+    )
+    if mint:
+        try:
+            from . import holders as hold_mod
+
+            lp_wallets |= hold_mod.known_pool_addresses_for_mint(mint)
+            lp_wallets |= hold_mod.pump_lp_addresses_for_mint(mint)
+        except Exception:  # noqa: BLE001
+            pass
+    pair = (data.get("pair_address") or "").strip()
+    if pair:
+        lp_wallets.add(pair)
     for h in data.get("holders") or []:
         if not isinstance(h, dict):
             continue

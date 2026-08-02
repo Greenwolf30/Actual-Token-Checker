@@ -377,12 +377,11 @@ def apply_known_lp_tags(
         except Exception:  # noqa: BLE001
             pass
         try:
-            from .pumpfun import fetch_pump_lp_accounts, is_pump_mint
+            from .pumpfun import fetch_pump_lp_accounts
 
-            if is_pump_mint(m):
-                for addr, lab in (fetch_pump_lp_accounts(m) or {}).items():
-                    # Never overwrite a stronger Meteora/Raydium label with Pump
-                    _merge_pool_label(pool_map, addr, lab)
+            for addr, lab in (fetch_pump_lp_accounts(m) or {}).items():
+                # Never overwrite a stronger Meteora/Raydium label with Pump
+                _merge_pool_label(pool_map, addr, lab)
         except Exception:  # noqa: BLE001
             pass
         # Expand pool → token accounts for this mint (Top Holders matching)
@@ -500,15 +499,13 @@ def is_pump_or_dex_lp_text(*parts: Any) -> bool:
 
 
 def pump_lp_addresses_for_mint(mint: str | None) -> set[str]:
-    """Per-mint Pump.fun curve/pool PDAs (empty if not a pump mint / fetch fails)."""
+    """Per-mint Pump.fun curve/pool PDAs (empty if fetch fails / not on Pump)."""
     m = (mint or "").strip()
     if not m:
         return set()
     try:
-        from .pumpfun import fetch_pump_lp_accounts, is_pump_mint
+        from .pumpfun import fetch_pump_lp_accounts
 
-        if not is_pump_mint(m):
-            return set()
         return {
             (a or "").strip()
             for a in (fetch_pump_lp_accounts(m) or {})

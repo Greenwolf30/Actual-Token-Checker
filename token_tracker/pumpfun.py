@@ -80,9 +80,12 @@ def fetch_pump_lp_accounts(mint: str) -> dict[str, str]:
     Bonding curve / PumpSwap pool accounts are *per-mint PDAs*, not the global
     program IDs in holders._KNOWN_OWNERS — so large LP bags look like whales
     unless we resolve them from Pump.fun coin metadata.
+
+    Tries the Pump.fun coin API even when the mint does not end with 'pump'
+    (graduated / renounced mints still expose bonding_curve / pump_swap_pool).
     """
     m = (mint or "").strip()
-    if not m or not is_pump_mint(m):
+    if not m or len(m) < 32:
         return {}
     out: dict[str, str] = {}
     data: Any = None
@@ -96,6 +99,7 @@ def fetch_pump_lp_accounts(mint: str) -> dict[str, str]:
                 data.get("bonding_curve")
                 or data.get("associated_bonding_curve")
                 or data.get("pump_swap_pool")
+                or data.get("raydium_pool")
             ):
                 break
         except Exception:  # noqa: BLE001
