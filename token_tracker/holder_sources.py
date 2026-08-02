@@ -32,6 +32,12 @@ def solscan_api_key() -> str | None:
         or os.environ.get("SOLSCAN_TOKEN")
         or ""
     ).strip()
+    # Common paste mistakes from Solscan dashboard / curl examples
+    if k.lower().startswith("bearer "):
+        k = k[7:].strip()
+    if k.lower().startswith("token:"):
+        k = k[6:].strip()
+    k = k.strip().strip("'").strip('"')
     return k or None
 
 
@@ -41,13 +47,80 @@ def birdeye_api_key() -> str | None:
     return k or None
 
 
-def _solscan_pro_headers(key: str) -> dict[str, str]:
-    # Pro docs: header name is `token` (not Bearer).
-    return {
-        **DEFAULT_HEADERS,
-        "token": key,
-        "Accept": "application/json",
+def _solscan_pro_headers(key: str, *, style: str = "token") -> dict[str, str]:
+    """
+    Solscan Pro docs use header `token: <KEY>`.
+    Some dashboard keys / older examples also accept Bearer — try both on 401.
+    """
+    headers = {**DEFAULT_HEADERS, "Accept": "application/json"}
+    if style == "bearer":
+        headers["Authorization"] = f"Bearer {key}"
+        headers["token"] = key
+    else:
+        headers["token"] = key
+    return headers
+
+
+def probe_solscan(mint: str | None = None) -> dict[str, Any]:
+    """
+    Live Solscan Pro check for /api/health (never returns the key).
+    Uses a tiny holders page so we can see auth vs empty-data failures.
+    """
+    key = solscan_api_key()
+    out: dict[str, Any] = {
+        "configured": bool(key),
+        "ok": False,
+        "api": None,
+        "error": None,
+        "holders": 0,
+        "total_holders": None,
+        "key_len": len(key) if key else 0,
+        "key_prefix": (key[:4] + "…") if key and len(key) >= 8 else None,
     }
+    if not key:
+        out["error"] = "SOLSCAN_API_KEY not set"
+        return out
+
+    test_mint = (mint or "So11111111111111111111111111111111111111112").strip()
+    params = urlencode({"address": test_mint, "page": 1, "page_size": 10})
+    url = f"{SOLSCAN_PRO}/token/holders?{params}"
+    last_err = None
+    for style in ("token", "bearer"):
+        try:
+            data = get_json(
+                url,
+                headers=_solscan_pro_headers(key, style=style),
+                timeout=12.0,
+                retries=1,
+            )
+            api_err = _solscan_api_error(data)
+            if api_err:
+                last_err = f"{style}: {api_err}"
+                # auth-style errors → try next header style
+                if "auth" in api_err.lower() or "unauthorized" in api_err.lower():
+                    continue
+                out["error"] = last_err
+                return out
+            parsed = _parse_solscan_holders(data, test_mint, max_items=10)
+            holders = list(parsed.get("holders") or [])
+            out["ok"] = True
+            out["api"] = f"solscan_pro_v2/{style}"
+            out["holders"] = len(holders)
+            out["total_holders"] = parsed.get("total_holders")
+            out["error"] = None
+            return out
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc)
+            # Strip full URL noise for UI
+            if "HTTP Error" in msg:
+                msg = msg[msg.find("HTTP Error") :]
+            last_err = f"{style}: {msg[:220]}"
+            if "401" in msg or "403" in msg or "auth" in msg.lower():
+                continue
+            out["error"] = last_err
+            return out
+    out["error"] = last_err or "Solscan probe failed"
+    return out
 
 
 def _solscan_holders_page_size(want: int) -> int:
@@ -92,69 +165,85 @@ def fetch_solscan_holders(mint: str, *, limit: int = 40) -> dict[str, Any]:
 
     # Pro API (preferred — set SOLSCAN_API_KEY on server)
     if key:
-        try:
-            all_holders: list[dict[str, Any]] = []
-            total_holders = None
-            page = 1
-            max_pages = max(1, (want + page_size - 1) // page_size)
-            while len(all_holders) < want and page <= max_pages:
-                params = urlencode(
-                    {
-                        "address": mint,
-                        "page": page,
-                        "page_size": page_size,
-                    }
-                )
-                data = get_json(
-                    f"{SOLSCAN_PRO}/token/holders?{params}",
-                    headers=_solscan_pro_headers(key),
-                    timeout=18.0,
-                    retries=2,
-                )
-                api_err = _solscan_api_error(data)
-                if api_err:
-                    errors.append(f"pro page {page}: {api_err}")
-                    break
-                parsed = _parse_solscan_holders(data, mint, max_items=page_size)
-                batch = list(parsed.get("holders") or [])
-                if total_holders is None and parsed.get("total_holders") is not None:
-                    total_holders = parsed.get("total_holders")
-                if not batch:
-                    if page == 1:
-                        errors.append("pro returned no holders")
-                    break
-                all_holders.extend(batch)
-                if len(batch) < page_size:
-                    break
-                page += 1
-
-            if all_holders:
-                # Re-rank after pagination; keep unique wallets (owner)
-                seen: set[str] = set()
-                uniq: list[dict[str, Any]] = []
-                for h in all_holders:
-                    w = (h.get("wallet") or "").strip()
-                    if not w or w in seen:
-                        continue
-                    seen.add(w)
-                    h = dict(h)
-                    h["rank"] = len(uniq) + 1
-                    uniq.append(h)
-                    if len(uniq) >= want:
+        auth_styles = ("token", "bearer")
+        for style in auth_styles:
+            try:
+                all_holders: list[dict[str, Any]] = []
+                total_holders = None
+                page = 1
+                max_pages = max(1, (want + page_size - 1) // page_size)
+                auth_failed = False
+                while len(all_holders) < want and page <= max_pages:
+                    params = urlencode(
+                        {
+                            "address": mint,
+                            "page": page,
+                            "page_size": page_size,
+                        }
+                    )
+                    data = get_json(
+                        f"{SOLSCAN_PRO}/token/holders?{params}",
+                        headers=_solscan_pro_headers(key, style=style),
+                        timeout=18.0,
+                        retries=2,
+                    )
+                    api_err = _solscan_api_error(data)
+                    if api_err:
+                        errors.append(f"pro/{style} page {page}: {api_err}")
+                        if "auth" in api_err.lower() or "unauthorized" in api_err.lower():
+                            auth_failed = True
                         break
-                return {
-                    "ok": True,
-                    "holders": uniq,
-                    "total_holders": total_holders,
-                    "mint": mint,
-                    "api": "solscan_pro_v2",
-                    "notes": (
-                        f"Solscan Pro holders "
-                        f"(page_size={page_size}, pages={page}, n={len(uniq)})"
-                    ),
-                }
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"pro: {exc}")
+                    parsed = _parse_solscan_holders(data, mint, max_items=page_size)
+                    batch = list(parsed.get("holders") or [])
+                    if total_holders is None and parsed.get("total_holders") is not None:
+                        total_holders = parsed.get("total_holders")
+                    if not batch:
+                        if page == 1:
+                            errors.append(f"pro/{style} returned no holders")
+                        break
+                    all_holders.extend(batch)
+                    if len(batch) < page_size:
+                        break
+                    page += 1
+
+                if all_holders:
+                    # Re-rank after pagination; keep unique wallets (owner)
+                    seen: set[str] = set()
+                    uniq: list[dict[str, Any]] = []
+                    for h in all_holders:
+                        w = (h.get("wallet") or "").strip()
+                        if not w or w in seen:
+                            continue
+                        seen.add(w)
+                        h = dict(h)
+                        h["rank"] = len(uniq) + 1
+                        uniq.append(h)
+                        if len(uniq) >= want:
+                            break
+                    return {
+                        "ok": True,
+                        "holders": uniq,
+                        "total_holders": total_holders,
+                        "mint": mint,
+                        "api": f"solscan_pro_v2/{style}",
+                        "notes": (
+                            f"Solscan Pro holders "
+                            f"(page_size={page_size}, pages={page}, n={len(uniq)})"
+                        ),
+                    }
+                if auth_failed:
+                    continue
+                # Non-auth empty/error — don't bother with other auth styles
+                break
+            except Exception as exc:  # noqa: BLE001
+                msg = str(exc)
+                short = msg
+                if "HTTP Error" in msg:
+                    short = msg[msg.find("HTTP Error") :]
+                errors.append(f"pro/{style}: {short[:220]}")
+                if "401" in msg or "403" in msg:
+                    continue
+                break
 
     # Public / alternate (may be rate-limited or blocked)
     pub_page_size = _solscan_holders_page_size(min(want, 40))

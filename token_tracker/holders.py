@@ -2099,6 +2099,16 @@ def format_holders_text(data: dict[str, Any]) -> str:
             lines.append("  Birdeye: skipped (set BIRDEYE_API_KEY)")
         if ps.get("solscan_needs_key"):
             lines.append("  Solscan: set SOLSCAN_API_KEY for Pro holders")
+        elif not ps.get("solscan"):
+            # Key may be set but Pro call failed — show short reason
+            err_map = ps.get("errors") if isinstance(ps.get("errors"), dict) else {}
+            sol_err = (err_map or {}).get("solscan") or ""
+            if sol_err:
+                # Keep one short line (avoid dumping full URLs)
+                msg = str(sol_err)
+                if "HTTP Error" in msg:
+                    msg = msg[msg.find("HTTP Error") :]
+                lines.append(f"  Solscan error: {msg[:180]}")
 
     summary = data.get("summary") or {}
     totals = data.get("holder_totals") or (data.get("meta") or {}).get("holder_totals") or {}

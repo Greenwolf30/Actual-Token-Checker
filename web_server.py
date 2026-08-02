@@ -1337,6 +1337,7 @@ class WebHandler(BaseHTTPRequestHandler):
                     (
                         os.environ.get("SOLSCAN_API_KEY")
                         or os.environ.get("SOLSCAN_PRO_API_KEY")
+                        or os.environ.get("SOLSCAN_TOKEN")
                         or ""
                     ).strip()
                 ),
@@ -1356,17 +1357,28 @@ class WebHandler(BaseHTTPRequestHandler):
                 analyzes = stats.get("analyzes")
             except Exception:  # noqa: BLE001
                 pass
-            return self._json(
-                200,
-                {
-                    "ok": True,
-                    "service": "actual-data-token-checker-web",
-                    "providers_configured": providers,
-                    "profile_views": views,
-                    "analyzes": analyzes,
-                    "note": "Provider keys are server-side only and never returned.",
-                },
-            )
+            payload: dict[str, Any] = {
+                "ok": True,
+                "service": "actual-data-token-checker-web",
+                "providers_configured": providers,
+                "profile_views": views,
+                "analyzes": analyzes,
+                "note": "Provider keys are server-side only and never returned.",
+            }
+            # Live Solscan auth/data check: /api/health?probe=solscan
+            probe = (qs.get("probe") or [""])[0].strip().lower()
+            if probe in {"solscan", "1", "true", "all"}:
+                try:
+                    from token_tracker.holder_sources import probe_solscan
+
+                    payload["solscan_probe"] = probe_solscan()
+                except Exception as exc:  # noqa: BLE001
+                    payload["solscan_probe"] = {
+                        "configured": providers.get("solscan"),
+                        "ok": False,
+                        "error": str(exc)[:220],
+                    }
+            return self._json(200, payload)
 
         # Public counters (no auth — intentionally publicized)
         if path in {"/api/stats", "/stats.json"}:

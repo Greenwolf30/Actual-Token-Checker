@@ -78,6 +78,16 @@ def get_json(
                     return None
                 return json.loads(raw.decode("utf-8", errors="replace"))
         except urllib.error.HTTPError as exc:
+            body = ""
+            try:
+                body = exc.read().decode("utf-8", errors="replace")[:240].strip()
+            except Exception:  # noqa: BLE001
+                body = ""
+            # Keep body on the exception so callers / final message can show API reason
+            try:
+                exc._adtc_body = body  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                pass
             last_err = exc
             # Back off harder on rate limits (DexScreener 429 is common on shared IPs)
             if exc.code == 429 and attempt < retries:
@@ -108,6 +118,13 @@ def get_json(
             "DexScreener (or another API) rate-limited this server (HTTP 429). "
             "Wait 30–60 seconds and try Analyze again. "
             "Shared cloud IPs get throttled if many searches run close together."
+        ) from last_err
+    if isinstance(last_err, urllib.error.HTTPError):
+        body = getattr(last_err, "_adtc_body", "") or ""
+        extra = f" body={body}" if body else ""
+        raise RuntimeError(
+            f"GET JSON failed for {url}: HTTP Error {last_err.code}: "
+            f"{last_err.reason}{extra}"
         ) from last_err
     raise RuntimeError(f"GET JSON failed for {url}: {last_err}") from last_err
 
