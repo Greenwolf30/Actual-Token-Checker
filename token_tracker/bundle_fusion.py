@@ -322,7 +322,16 @@ def comprehensive_bundle_check(
             # Prefer already-enriched clusters from cache
             if base.get("ok") and cached_ss.get("funding_clusters"):
                 base = dict(base)
-                base["funding_clusters"] = list(cached_ss.get("funding_clusters") or [])
+                # Strip Pump.fun / DEX LP from Shared SOL wallet lists + %
+                if mint and not base.get("token_address"):
+                    base["token_address"] = mint
+                if pair_address and not base.get("pair_address"):
+                    base["pair_address"] = pair_address
+                base["funding_clusters"] = bun.scrub_funding_clusters_ex_lp(  # type: ignore[attr-defined]
+                    list(cached_ss.get("funding_clusters") or []),
+                    lp_wallets,
+                    data=base,
+                )
                 s0 = dict(base.get("summary") or {})
                 s0["funding_clusters"] = len(base["funding_clusters"])
                 s0["funding_from_cache"] = True
@@ -330,7 +339,6 @@ def comprehensive_bundle_check(
                     s0["funding_cached_at"] = cached_ss.get("scanned_at")
                 s0.pop("funding_error", None)
                 try:
-                    # Drop Pump.fun / DEX LP bags from Shared SOL % (even in cache)
                     fund_rows_c = _funding_rows_ex_lp(base["funding_clusters"])
                     ft_c, fn_c = bun._sum_wallets_pct(fund_rows_c)  # type: ignore[attr-defined]
                     s0["funding_total_pct"] = ft_c

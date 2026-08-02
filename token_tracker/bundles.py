@@ -81,6 +81,100 @@ def is_known_lp_label(label: Any) -> bool:
     )
 
 
+def _lp_wallet_set_for_data(data: dict[str, Any] | None) -> set[str]:
+    """Known Pump.fun / DEX LP addresses for this mint (+ tagged holder rows)."""
+    data = data if isinstance(data, dict) else {}
+    lp: set[str] = set()
+    mint = (
+        (data.get("token_address") or data.get("mint") or "").strip()
+        or str((data.get("summary") or {}).get("token_address") or "").strip()
+    )
+    if mint:
+        try:
+            from . import holders as hold_mod
+
+            lp |= hold_mod.known_pool_addresses_for_mint(mint)
+            lp |= hold_mod.pump_lp_addresses_for_mint(mint)
+        except Exception:  # noqa: BLE001
+            pass
+    pair = (data.get("pair_address") or "").strip()
+    if pair:
+        lp.add(pair)
+    for h in data.get("holders") or []:
+        if not isinstance(h, dict):
+            continue
+        w = (h.get("wallet") or "").strip()
+        if not w:
+            continue
+        if h.get("is_known_program") or is_known_lp_label(h.get("label")):
+            lp.add(w)
+    return lp
+
+
+def scrub_funding_clusters_ex_lp(
+    clusters: list[Any] | None,
+    lp_wallets: set[str] | None = None,
+    *,
+    data: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Drop known Pump.fun / DEX LP wallets from Shared SOL cluster lists
+    (funder + children + child_rows) and recompute cluster totals.
+    """
+    lp = set(lp_wallets or ())
+    if data is not None:
+        lp |= _lp_wallet_set_for_data(data)
+    out: list[dict[str, Any]] = []
+    for fc in clusters or []:
+        if not isinstance(fc, dict):
+            continue
+        funder = (fc.get("funder") or fc.get("sender") or "").strip()
+        if funder and funder in lp:
+            continue
+        kids_raw = list(fc.get("children") or [])
+        kids: list[Any] = []
+        for c in kids_raw:
+            w = c if isinstance(c, str) else (c or {}).get("wallet")
+            ws = (str(w) if w is not None else "").strip()
+            if not ws or ws in lp or ws == funder:
+                continue
+            kids.append(c if isinstance(c, str) else ws)
+        child_rows: list[dict[str, Any]] = []
+        for row in list(fc.get("child_rows") or []):
+            if not isinstance(row, dict):
+                continue
+            w = (row.get("wallet") or "").strip()
+            if not w or w in lp or w == funder:
+                continue
+            child_rows.append(row)
+        if not child_rows and kids:
+            child_rows = [
+                {
+                    "wallet": (k if isinstance(k, str) else str(k)),
+                    "pct_supply": None,
+                }
+                for k in kids
+            ]
+        # Need a real multi-wallet Shared SOL cluster (not LP-only leftovers)
+        if len(child_rows) < 2 and len(kids) < 2:
+            continue
+        ff = dict(fc)
+        ff["funder"] = funder
+        ff["children"] = kids
+        ff["child_count"] = max(len(kids), len(child_rows))
+        ff["child_rows"] = child_rows
+        if funder and funder in lp:
+            ff["funder_pct"] = None
+        tot, n = _sum_wallets_pct(
+            ([{"wallet": funder, "pct_supply": ff.get("funder_pct")}] if funder else [])
+            + child_rows
+        )
+        ff["total_pct"] = tot
+        ff["wallets_with_pct"] = n
+        out.append(ff)
+    return out
+
+
 def analyze_bundles(holders_data: dict[str, Any] | None) -> dict[str, Any]:
     """Build a structured BUNDLES section from holder scan output."""
     if not holders_data:
@@ -1790,32 +1884,17 @@ def recompute_total_bundle_all_vectors(
 
     pct_map = _wallet_pct_map(data)
 
-    lp_wallets: set[str] = set()
     # Per-mint Pump.fun bonding curve / PumpSwap / Dex pairs — always exclude
     # from Shared SOL + Total bundle % (even if holder row wasn't tagged).
-    mint = (
-        (data.get("token_address") or data.get("mint") or "").strip()
-        or ((data.get("summary") or {}).get("token_address") or "")
-    )
-    if mint:
-        try:
-            from . import holders as hold_mod
-
-            lp_wallets |= hold_mod.known_pool_addresses_for_mint(mint)
-            lp_wallets |= hold_mod.pump_lp_addresses_for_mint(mint)
-        except Exception:  # noqa: BLE001
-            pass
-    pair = (data.get("pair_address") or "").strip()
-    if pair:
-        lp_wallets.add(pair)
-    for h in data.get("holders") or []:
-        if not isinstance(h, dict):
-            continue
-        w = (h.get("wallet") or "").strip()
-        if not w:
-            continue
-        if h.get("is_known_program") or is_known_lp_label(h.get("label")):
-            lp_wallets.add(w)
+    lp_wallets = _lp_wallet_set_for_data(data)
+    # Also scrub Shared SOL lists so LP never appears in wallet tables.
+    try:
+        data["funding_clusters"] = scrub_funding_clusters_ex_lp(
+            list(data.get("funding_clusters") or []),
+            lp_wallets,
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
     def _norm(w: Any) -> str:
         return (str(w) if w is not None else "").strip()
@@ -2967,9 +3046,12 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
             insiders_out.append(r)
     insiders_out = _sort_rows_by_pct_desc(insiders_out)
 
-    # Funding / shared SOL funder
+    # Funding / shared SOL funder — never list Pump.fun / DEX LP wallets
     funding_out: list[dict[str, Any]] = []
-    for fc in list(data.get("funding_clusters") or [])[:8]:
+    scrubbed_fund = scrub_funding_clusters_ex_lp(
+        list(data.get("funding_clusters") or []), data=data
+    )
+    for fc in scrubbed_fund[:8]:
         if not isinstance(fc, dict):
             continue
         kids: list[dict[str, Any]] = []
@@ -2987,6 +3069,8 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
                 if r:
                     kids.append(r)
         kids = _sort_rows_by_pct_desc(kids)
+        if not kids:
+            continue
         funding_out.append(
             {
                 "funder": fc.get("funder") or fc.get("sender"),
