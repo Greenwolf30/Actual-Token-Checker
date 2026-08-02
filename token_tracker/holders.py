@@ -2146,14 +2146,22 @@ def format_holders_text(data: dict[str, Any]) -> str:
             else ""
         )
     )
-    lines.append(
-        f"    Solscan:      {_fmt_count(by.get('solscan'))}"
-        + (
-            "  (set SOLSCAN_API_KEY)"
-            if by.get("solscan") is None
-            else ""
-        )
-    )
+    sol_tip = ""
+    if by.get("solscan") is None:
+        if ps.get("solscan_needs_key"):
+            sol_tip = "  (set SOLSCAN_API_KEY)"
+        elif ps.get("solscan") is False:
+            err_map = ps.get("errors") if isinstance(ps.get("errors"), dict) else {}
+            sol_err = str((err_map or {}).get("solscan") or "")
+            if "upgrade your api key" in sol_err.lower():
+                sol_tip = "  (key set — upgrade Solscan Pro plan for holders)"
+            elif sol_err:
+                sol_tip = "  (key set — Pro request failed)"
+            else:
+                sol_tip = "  (key set — Pro holders unavailable)"
+        else:
+            sol_tip = "  (Solscan total unavailable)"
+    lines.append(f"    Solscan:      {_fmt_count(by.get('solscan'))}{sol_tip}")
     if by.get("helius") is not None:
         lines.append(f"    Helius DAS:   {_fmt_count(by.get('helius'))}")
     lines.append(
