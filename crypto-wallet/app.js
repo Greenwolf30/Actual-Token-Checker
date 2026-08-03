@@ -246,7 +246,7 @@ function drawFauxQr(svg, seed) {
     parts.push(
       `<rect x="${ox * cell}" y="${oy * cell}" width="${7 * cell}" height="${7 * cell}" fill="#0A1428"/>`,
       `<rect x="${(ox + 1) * cell}" y="${(oy + 1) * cell}" width="${5 * cell}" height="${5 * cell}" fill="#F4F7FC"/>`,
-      `<rect x="${(ox + 2) * cell}" y="${(oy + 2) * cell}" width="${3 * cell}" height="${3 * cell}" fill="#1F6FD6"/>`
+      `<rect x="${(ox + 2) * cell}" y="${(oy + 2) * cell}" width="${3 * cell}" height="${3 * cell}" fill="#B8A7CF"/>`
     );
   }
   finder(0, 0);
