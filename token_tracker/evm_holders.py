@@ -75,36 +75,55 @@ _EXPLORER_TOKEN: dict[str, str] = {
 }
 
 
+def _clean_env_key(raw: str | None) -> str | None:
+    """Strip quotes / Bearer prefix that break Moralis/Etherscan auth."""
+    k = (raw or "").strip()
+    if not k:
+        return None
+    if (k.startswith('"') and k.endswith('"')) or (
+        k.startswith("'") and k.endswith("'")
+    ):
+        k = k[1:-1].strip()
+    if k.lower().startswith("bearer "):
+        k = k[7:].strip()
+    return k or None
+
+
 def moralis_api_key() -> str | None:
     load_dotenv()
-    k = (os.environ.get("MORALIS_API_KEY") or "").strip()
-    return k or None
+    return _clean_env_key(os.environ.get("MORALIS_API_KEY"))
 
 
 def etherscan_api_key() -> str | None:
     load_dotenv()
-    k = (
-        os.environ.get("ETHERSCAN_API_KEY")
-        or os.environ.get("ETHERSCAN_KEY")
-        or ""
-    ).strip()
-    return k or None
+    return _clean_env_key(
+        os.environ.get("ETHERSCAN_API_KEY") or os.environ.get("ETHERSCAN_KEY")
+    )
 
 
 def blockscout_api_key() -> str | None:
     load_dotenv()
-    k = (
-        os.environ.get("BLOCKSCOUT_API_KEY")
-        or os.environ.get("BLOCKSCOUT_KEY")
-        or ""
-    ).strip()
-    return k or None
+    return _clean_env_key(
+        os.environ.get("BLOCKSCOUT_API_KEY") or os.environ.get("BLOCKSCOUT_KEY")
+    )
 
 
 def alchemy_api_key() -> str | None:
     load_dotenv()
-    k = (os.environ.get("ALCHEMY_API_KEY") or "").strip()
-    return k or None
+    return _clean_env_key(os.environ.get("ALCHEMY_API_KEY"))
+
+
+# Public Blockscout explorers (no key) — used when Moralis/Etherscan Pro fail
+_BLOCKSCOUT_PUBLIC: dict[str, str] = {
+    "ethereum": "https://eth.blockscout.com",
+    "eth": "https://eth.blockscout.com",
+    "base": "https://base.blockscout.com",
+    "optimism": "https://optimism.blockscout.com",
+    "polygon": "https://polygon.blockscout.com",
+    "arbitrum": "https://arbitrum.blockscout.com",
+    "robinhood": "https://robinhoodchain.blockscout.com",
+    "rh": "https://robinhoodchain.blockscout.com",
+}
 
 
 def normalize_evm_chain(chain_id: str | None) -> str:
@@ -126,9 +145,8 @@ def analyze_evm_holders(
     """
     Fetch top ERC-20 holders for an EVM chain.
 
-    Ethereum: Moralis → Etherscan
-    Robinhood: Blockscout (PRO + public explorer)
-    Other Moralis chains: Moralis → Etherscan (when chainid known)
+    Ethereum / Base / …: Moralis → Etherscan → public Blockscout
+    Robinhood: Blockscout (PRO + public explorer) first
     """
     chain = normalize_evm_chain(chain_id)
     addr = (token_address or "").strip()
@@ -145,23 +163,25 @@ def analyze_evm_holders(
         "alchemy_configured": bool(alchemy_api_key()),
     }
 
+    def _return_blockscout(parsed: dict[str, Any]) -> dict[str, Any]:
+        providers["blockscout"] = True
+        return _ok_result(
+            chain=chain,
+            token_address=addr,
+            pair_address=pair_address,
+            holders=parsed["holders"],
+            total_holders=parsed.get("total_holders"),
+            source=parsed.get("api") or "blockscout",
+            providers=providers,
+            notes=parsed.get("notes") or f"Holders from Blockscout ({chain}).",
+        )
+
     # Robinhood: Blockscout first (Moralis does not list this chain)
     if chain == "robinhood":
         try:
             parsed = _from_blockscout_robinhood(addr, limit=limit)
             if parsed.get("holders"):
-                providers["blockscout"] = True
-                return _ok_result(
-                    chain=chain,
-                    token_address=addr,
-                    pair_address=pair_address,
-                    holders=parsed["holders"],
-                    total_holders=parsed.get("total_holders"),
-                    source=parsed.get("api") or "blockscout",
-                    providers=providers,
-                    notes=parsed.get("notes")
-                    or "Holders from Blockscout (Robinhood Chain).",
-                )
+                return _return_blockscout(parsed)
             errors.append(parsed.get("error") or "blockscout: empty")
         except Exception as exc:  # noqa: BLE001
             errors.append(f"blockscout: {exc}")
@@ -173,11 +193,18 @@ def analyze_evm_holders(
                 parsed = _from_moralis(addr, chain_slug=m_slug, limit=limit)
                 if parsed.get("holders"):
                     providers["moralis"] = True
+                    rows = _finalize_evm_holder_rows(
+                        parsed["holders"],
+                        decimals=18,
+                        supply_raw=None,
+                    )
+                    # Prefer Moralis-provided pcts/balances already on rows
+                    use_rows = rows or parsed["holders"]
                     return _ok_result(
                         chain=chain,
                         token_address=addr,
                         pair_address=pair_address,
-                        holders=parsed["holders"],
+                        holders=use_rows,
                         total_holders=parsed.get("total_holders"),
                         source="moralis",
                         providers=providers,
@@ -189,7 +216,7 @@ def analyze_evm_holders(
         elif m_slug and not moralis_api_key():
             errors.append("moralis: set MORALIS_API_KEY")
 
-        # Etherscan V2
+        # Etherscan V2 (tokenholderlist is often Pro-only)
         es_id = _ETHERSCAN_CHAIN_ID.get(chain)
         if es_id and etherscan_api_key():
             try:
@@ -212,19 +239,31 @@ def analyze_evm_holders(
         elif es_id and not etherscan_api_key():
             errors.append("etherscan: set ETHERSCAN_API_KEY")
 
-    tip = _missing_key_tip(chain)
+        # Public Blockscout — works without Moralis/Etherscan Pro
+        if chain in _BLOCKSCOUT_PUBLIC:
+            try:
+                parsed = _from_blockscout_public(addr, chain=chain, limit=limit)
+                if parsed.get("holders"):
+                    return _return_blockscout(parsed)
+                errors.append(parsed.get("error") or "blockscout: empty")
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"blockscout: {exc}")
+
+    tip = _missing_key_tip(chain, errors)
+    has_public = chain in _BLOCKSCOUT_PUBLIC or chain == "robinhood"
     return {
         "ok": False,
         "chain_id": chain,
-        "token_address": addr,
         "error": "; ".join(errors) or f"No holders for {chain}.",
+        "token_address": addr,
         "holders": [],
         "summary": {},
         "flags": [],
         "notes": tip,
         "provider_status": providers,
         "explorer_url": (_EXPLORER_TOKEN.get(chain) or "") + addr,
-        "needs_key": not any(
+        "needs_key": not has_public
+        and not any(
             [
                 moralis_api_key() and chain != "robinhood",
                 etherscan_api_key() and chain != "robinhood",
@@ -234,11 +273,28 @@ def analyze_evm_holders(
     }
 
 
-def _missing_key_tip(chain: str) -> str:
+def _missing_key_tip(chain: str, errors: list[str] | None = None) -> str:
+    err_join = " ".join(errors or []).lower()
     if chain == "robinhood":
         return (
-            "Robinhood holders need BLOCKSCOUT_API_KEY on the server "
-            "(Alchemy alone cannot list token holders)."
+            "Robinhood holders use Blockscout "
+            "(public explorer or BLOCKSCOUT_API_KEY)."
+        )
+    if "invalid format" in err_join or "unauthorized" in err_join:
+        return (
+            "Moralis key rejected (invalid format). "
+            "Paste the raw Web3 API key on Render — no quotes, no 'Bearer '. "
+            "Falling back to public Blockscout when available."
+        )
+    if "api pro" in err_join:
+        return (
+            "Etherscan tokenholderlist needs API Pro. "
+            "Use Moralis or public Blockscout (no Pro required)."
+        )
+    if chain in _BLOCKSCOUT_PUBLIC:
+        return (
+            "Holders try Moralis → Etherscan → public Blockscout. "
+            "Check MORALIS_API_KEY format if Moralis fails."
         )
     return (
         "Set MORALIS_API_KEY and/or ETHERSCAN_API_KEY on the server for EVM holders."
@@ -345,21 +401,42 @@ def _from_moralis(token: str, *, chain_slug: str, limit: int) -> dict[str, Any]:
         f"https://deep-index.moralis.io/api/v2.2/erc20/{quote(token)}/owners?"
         + urlencode({"chain": chain_slug, "limit": str(lim), "order": "DESC"})
     )
-    data = get_json(
-        url,
-        headers={
+    data = None
+    last_err = None
+    # Prefer X-API-Key; some dashboard keys only work as Bearer
+    for headers in (
+        {**DEFAULT_HEADERS, "Accept": "application/json", "X-API-Key": key},
+        {
             **DEFAULT_HEADERS,
             "Accept": "application/json",
-            "X-API-Key": key,
+            "Authorization": f"Bearer {key}",
         },
-        timeout=20.0,
-        retries=1,
-    )
+    ):
+        try:
+            data = get_json(url, headers=headers, timeout=20.0, retries=0)
+            if isinstance(data, dict) and (
+                data.get("result") or data.get("owners") or data.get("message")
+            ):
+                # Auth errors often return message without result
+                msg = str(data.get("message") or data.get("error") or "").lower()
+                if "invalid" in msg or "unauthorized" in msg or "not allowed" in msg:
+                    last_err = data.get("message") or data.get("error")
+                    data = None
+                    continue
+                break
+        except Exception as exc:  # noqa: BLE001
+            last_err = str(exc)
+            data = None
+            continue
+
     if not isinstance(data, dict):
-        return {"holders": [], "error": "moralis: bad payload"}
+        return {
+            "holders": [],
+            "error": f"moralis: {last_err or 'bad payload'}",
+        }
     items = data.get("result") or data.get("owners") or []
     if not isinstance(items, list) or not items:
-        err = data.get("message") or data.get("error") or "no owners"
+        err = data.get("message") or data.get("error") or last_err or "no owners"
         return {"holders": [], "error": f"moralis: {err}"}
 
     holders: list[dict[str, Any]] = []
@@ -378,10 +455,17 @@ def _from_moralis(token: str, *, chain_slug: str, limit: int) -> dict[str, Any]:
         if bal is None:
             bal = _raw_to_ui(row.get("balance"), row.get("decimals"))
         pct = _f(row.get("percentage_relative_to_total_supply"))
-        if pct is not None and pct <= 1.0 and pct > 0:
-            # Moralis usually returns 0–100 already; keep as-is if > 1
-            pass
+        # Moralis sometimes returns 0–1 fraction
+        if pct is not None and 0 < pct <= 1.0:
+            pct = pct * 100.0
         label = (row.get("owner_address_label") or row.get("entity") or "").strip() or None
+        is_lp = bool(label and _looks_like_evm_lp(label))
+        if wallet.lower() in {
+            "0x000000000000000000000000000000000000dead",
+            "0x0000000000000000000000000000000000000000",
+        }:
+            label = label or "Burn / dead"
+            is_lp = True
         holders.append(
             {
                 "rank": i + 1,
@@ -389,7 +473,7 @@ def _from_moralis(token: str, *, chain_slug: str, limit: int) -> dict[str, Any]:
                 "balance": bal,
                 "pct_supply": pct,
                 "label": label,
-                "is_known_program": bool(row.get("is_contract")),
+                "is_known_program": is_lp,
                 "insider": False,
                 "token_account": "",
                 "provider": "moralis",
@@ -507,12 +591,97 @@ def _etherscan_token_decimals(token: str, *, chain_id: int, key: str) -> int | N
     return 18
 
 
+def _from_blockscout_public(
+    token: str, *, chain: str, limit: int
+) -> dict[str, Any]:
+    """Public Blockscout explorer holders (ETH / Base / …) — no API key required."""
+    base = (_BLOCKSCOUT_PUBLIC.get(chain) or "").rstrip("/")
+    if not base:
+        return {"holders": [], "error": f"no public Blockscout for {chain}"}
+    lim = max(1, min(int(limit or 50), 50))
+    meta = _blockscout_token_meta(base, token)
+    decimals = meta.get("decimals")
+    supply_raw = meta.get("total_supply_raw")
+    holders_count = meta.get("holders_count")
+    errors: list[str] = []
+
+    def _finish(parsed: dict[str, Any], notes: str, api: str) -> dict[str, Any] | None:
+        rows = _finalize_evm_holder_rows(
+            parsed.get("holders") or [],
+            decimals=decimals,
+            supply_raw=supply_raw,
+        )
+        if not rows:
+            return None
+        out = dict(parsed)
+        out["holders"] = rows
+        out["notes"] = notes
+        out["api"] = api
+        if holders_count is not None:
+            out["total_holders"] = holders_count
+        return out
+
+    try:
+        data = get_json(
+            f"{base}/api/v2/tokens/{quote(token)}/holders",
+            headers={**DEFAULT_HEADERS, "Accept": "application/json"},
+            timeout=20.0,
+            retries=1,
+        )
+        parsed = _parse_blockscout_v2_rest(data, limit=lim)
+        done = _finish(
+            parsed,
+            f"Holders from public Blockscout ({base}).",
+            f"blockscout_{chain}_rest",
+        )
+        if done:
+            return done
+        errors.append(parsed.get("error") or "blockscout_rest: empty")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"blockscout_rest: {exc}")
+
+    try:
+        params = urlencode(
+            {
+                "module": "token",
+                "action": "getTokenHolders",
+                "contractaddress": token,
+                "page": "1",
+                "offset": str(lim),
+            }
+        )
+        data = get_json(
+            f"{base}/api?{params}",
+            headers={**DEFAULT_HEADERS, "Accept": "application/json"},
+            timeout=20.0,
+            retries=1,
+        )
+        parsed = _parse_blockscout_holders(
+            data, limit=lim, api=f"blockscout_{chain}_public"
+        )
+        done = _finish(
+            parsed,
+            f"Holders from public Blockscout legacy API ({base}).",
+            f"blockscout_{chain}_public",
+        )
+        if done:
+            return done
+        errors.append(parsed.get("error") or "blockscout_public: empty")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"blockscout_public: {exc}")
+
+    return {
+        "holders": [],
+        "error": "; ".join(errors) or f"Blockscout holders unavailable ({chain})",
+    }
+
+
 def _from_blockscout_robinhood(token: str, *, limit: int) -> dict[str, Any]:
     """Robinhood Chain holders via Blockscout PRO API + public explorer."""
     lim = max(1, min(int(limit or 50), 50))
     key = blockscout_api_key()
     errors: list[str] = []
-    meta = _blockscout_rh_token_meta(token)
+    meta = _blockscout_token_meta("https://robinhoodchain.blockscout.com", token)
     decimals = meta.get("decimals")
     supply_raw = meta.get("total_supply_raw")
     holders_count = meta.get("holders_count")
@@ -644,16 +813,19 @@ def _from_blockscout_robinhood(token: str, *, limit: int) -> dict[str, Any]:
     }
 
 
-def _blockscout_rh_token_meta(token: str) -> dict[str, Any]:
-    """decimals / total_supply / holders_count from public Robinhood Blockscout."""
+def _blockscout_token_meta(explorer_base: str, token: str) -> dict[str, Any]:
+    """decimals / total_supply / holders_count from a Blockscout explorer."""
     out: dict[str, Any] = {
         "decimals": 18,
         "total_supply_raw": None,
         "holders_count": None,
     }
+    base = (explorer_base or "").rstrip("/")
+    if not base:
+        return out
     try:
         data = get_json(
-            f"https://robinhoodchain.blockscout.com/api/v2/tokens/{quote(token)}",
+            f"{base}/api/v2/tokens/{quote(token)}",
             headers={**DEFAULT_HEADERS, "Accept": "application/json"},
             timeout=12.0,
             retries=0,
@@ -700,19 +872,20 @@ def _finalize_evm_holder_rows(
             continue
         row = dict(h)
         raw = row.get("_raw_value")
-        if raw is None:
-            raw = row.get("balance")
-        bal = _raw_to_ui(raw, dec)
-        if bal is not None:
-            row["balance"] = bal
-        pct = _f(row.get("pct_supply"))
-        if pct is None and supply_raw and raw is not None:
-            try:
-                pct = float(int(str(raw).strip())) / float(supply_raw) * 100.0
-            except (TypeError, ValueError, ZeroDivisionError):
-                pct = None
-        if pct is not None:
-            row["pct_supply"] = round(pct, 6)
+        # Only convert when we still have base units (_raw_value).
+        # Moralis already provides UI balances — do not re-scale those.
+        if raw is not None:
+            bal = _raw_to_ui(raw, dec)
+            if bal is not None:
+                row["balance"] = bal
+            pct = _f(row.get("pct_supply"))
+            if pct is None and supply_raw is not None:
+                try:
+                    pct = float(int(str(raw).strip())) / float(supply_raw) * 100.0
+                except (TypeError, ValueError, ZeroDivisionError):
+                    pct = None
+            if pct is not None:
+                row["pct_supply"] = round(pct, 6)
         row.pop("_raw_value", None)
         # Contract / pool labels → treat as known program (LP-style)
         lab = (row.get("label") or "").strip()
@@ -824,7 +997,7 @@ def _parse_blockscout_v2_rest(data: Any, *, limit: int) -> dict[str, Any]:
         addr_obj = row.get("address") or {}
         if isinstance(addr_obj, dict):
             wallet = (addr_obj.get("hash") or addr_obj.get("hash_with_checksum") or "").strip()
-            label = addr_obj.get("name")
+            label = addr_obj.get("name") or _blockscout_tag_label(addr_obj)
         else:
             wallet = str(addr_obj or row.get("address_hash") or "").strip()
             label = None
@@ -855,6 +1028,23 @@ def _parse_blockscout_v2_rest(data: Any, *, limit: int) -> dict[str, Any]:
             }
         )
     return {"holders": holders, "total_holders": None}
+
+
+def _blockscout_tag_label(addr_obj: dict[str, Any]) -> str | None:
+    """Best display name from Blockscout metadata tags (exchanges, etc.)."""
+    meta = addr_obj.get("metadata") if isinstance(addr_obj, dict) else None
+    tags = (meta or {}).get("tags") if isinstance(meta, dict) else None
+    if not isinstance(tags, list):
+        return None
+    for tag in tags:
+        if not isinstance(tag, dict):
+            continue
+        if (tag.get("tagType") or "").lower() == "name" and tag.get("name"):
+            return str(tag["name"]).strip() or None
+    for tag in tags:
+        if isinstance(tag, dict) and tag.get("name"):
+            return str(tag["name"]).strip() or None
+    return None
 
 
 def _flags_from_holders(holders: list[dict[str, Any]]) -> list[str]:

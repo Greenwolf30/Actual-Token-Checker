@@ -467,9 +467,9 @@ def format_bundles_section(report: dict[str, Any]) -> str:
             f"  (formatter note: {exc})\n"
             "\n"
             "  Tips:\n"
-            "  · Use full Analyze (not Quick) on a Solana mint\n"
-            "  · Holders must succeed first\n"
-            "  · Helius needed for funding / fresh / multi-send / launch-window\n"
+            "  · Use full Analyze (not Quick)\n"
+            "  · Holders must succeed first (Solana: Helius; ETH/Robinhood: Blockscout)\n"
+            "  · Funding / Fresh / Multi-send need Helius (Solana-only)\n"
         )
 
 
