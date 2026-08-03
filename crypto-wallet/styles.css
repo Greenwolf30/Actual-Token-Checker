@@ -1,21 +1,21 @@
 :root {
-  --bg0: #060b16;
-  --bg1: #0a1428;
-  --bg2: #0f1c36;
+  --bg0: #0a162e;
+  --bg1: #0d1c3a;
+  --bg2: #12264a;
   --ink: #e8eef8;
   --ink-soft: #a7b6d0;
   --muted: #7b8ba8;
-  --line: rgba(160, 190, 255, 0.12);
-  --line-strong: rgba(160, 190, 255, 0.22);
+  --line: rgba(160, 190, 255, 0.14);
+  --line-strong: rgba(160, 190, 255, 0.26);
   --accent: #4ea1ff;
   --accent-bright: #7ec0ff;
   --accent-deep: #1f6fd6;
-  --accent-glow: rgba(78, 161, 255, 0.28);
-  --surface: rgba(14, 28, 54, 0.72);
-  --surface-2: rgba(18, 36, 68, 0.88);
+  --accent-glow: rgba(78, 161, 255, 0.32);
+  --surface: rgba(16, 36, 72, 0.78);
+  --surface-2: rgba(22, 46, 88, 0.92);
   --ok: #3dd68c;
   --danger: #ff6b6b;
-  --shadow: 0 22px 60px rgba(0, 0, 0, 0.45);
+  --shadow: 0 22px 60px rgba(4, 12, 32, 0.55);
   --radius: 14px;
   --radius-sm: 10px;
   --font-display: "Instrument Serif", Georgia, serif;
@@ -72,10 +72,10 @@ a {
   pointer-events: none;
   overflow: hidden;
   background:
-    radial-gradient(900px 560px at 8% -8%, rgba(78, 161, 255, 0.22), transparent 55%),
-    radial-gradient(780px 520px at 100% 8%, rgba(31, 111, 214, 0.18), transparent 52%),
-    radial-gradient(700px 500px at 50% 100%, rgba(20, 60, 120, 0.35), transparent 60%),
-    linear-gradient(165deg, #050910 0%, var(--bg0) 40%, #081428 100%);
+    radial-gradient(980px 620px at 10% -6%, rgba(78, 161, 255, 0.34), transparent 55%),
+    radial-gradient(860px 560px at 100% 6%, rgba(40, 100, 210, 0.28), transparent 52%),
+    radial-gradient(760px 520px at 45% 110%, rgba(30, 80, 170, 0.45), transparent 58%),
+    linear-gradient(165deg, #071227 0%, #0a162e 42%, #102448 100%);
 }
 
 .orb {
@@ -834,7 +834,7 @@ a {
   padding: 8px;
   border-radius: 18px;
   border: 1px solid var(--line-strong);
-  background: rgba(8, 16, 32, 0.78);
+  background: rgba(10, 24, 52, 0.86);
   backdrop-filter: blur(18px);
   box-shadow: var(--shadow);
   z-index: 5;
