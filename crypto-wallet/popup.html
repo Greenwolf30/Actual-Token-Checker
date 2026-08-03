@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0A162E" />
+    <title>Keel</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="is-extension">
+    <div class="atmosphere" aria-hidden="true">
+      <div class="orb orb-a"></div>
+      <div class="orb orb-b"></div>
+      <div class="grid-wash"></div>
+    </div>
+
+    <div class="shell">
+      <header class="topbar">
+        <a class="brand" href="#" aria-label="Keel home">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-name">Keel</span>
+        </a>
+        <div class="topbar-meta">
+          <span class="net-pill" title="Network">
+            <span class="net-dot" aria-hidden="true"></span>
+            Solana
+          </span>
+          <button type="button" class="icon-btn" id="copyAddrBtn" title="Copy address">
+            <span class="addr-short" id="addrShort">7xKX…9mQ2</span>
+          </button>
+        </div>
+      </header>
+
+      <main class="stage">
+        <section class="panel is-active" id="panel-home" data-panel="home">
+          <p class="eyebrow reveal">Solana wallet</p>
+          <h1 class="brand-hero reveal">Keel</h1>
+          <p class="lede reveal">
+            Extension popup demo — SOL &amp; SPL custody UI.
+          </p>
+
+          <div class="balance-block reveal">
+            <p class="balance-label">Total balance</p>
+            <p class="balance-value">
+              <span class="currency">$</span><span id="fiatBalance">0.00</span>
+            </p>
+            <p class="balance-sol">
+              <span id="solBalance">0.00</span> SOL
+              <span class="delta up" id="dayDelta">+2.4% today</span>
+            </p>
+          </div>
+
+          <div class="cta-row reveal" role="group" aria-label="Primary actions">
+            <button type="button" class="btn btn-primary" data-go="send">
+              <span class="btn-ico" aria-hidden="true">↗</span>
+              <span>Send</span>
+            </button>
+            <button type="button" class="btn btn-secondary" data-go="receive">
+              <span class="btn-ico" aria-hidden="true">↘</span>
+              <span>Receive</span>
+            </button>
+            <button type="button" class="btn btn-ghost" id="swapHintBtn">
+              <span class="btn-ico" aria-hidden="true">⇄</span>
+              <span>Swap</span>
+            </button>
+          </div>
+
+          <section class="holdings" aria-labelledby="holdingsTitle">
+            <div class="section-head">
+              <h2 id="holdingsTitle">Holdings</h2>
+              <span class="section-note" id="tokenCount">4 assets</span>
+            </div>
+            <ul class="token-list" id="tokenList"></ul>
+          </section>
+        </section>
+
+        <section class="panel" id="panel-send" data-panel="send" hidden>
+          <button type="button" class="back-link" data-go="home">← Back</button>
+          <h2 class="panel-title">Send</h2>
+          <p class="panel-sub">Transfer SOL or an SPL token on Solana.</p>
+
+          <form class="form" id="sendForm" autocomplete="off">
+            <label class="field">
+              <span>Asset</span>
+              <select id="sendAsset" name="asset"></select>
+            </label>
+            <label class="field">
+              <span>Recipient</span>
+              <input
+                id="sendTo"
+                name="to"
+                type="text"
+                spellcheck="false"
+                placeholder="Solana address or .sol domain"
+              />
+            </label>
+            <label class="field">
+              <span>Amount</span>
+              <div class="amount-row">
+                <input id="sendAmount" name="amount" inputmode="decimal" placeholder="0.00" />
+                <button type="button" class="btn-inline" id="sendMaxBtn">Max</button>
+              </div>
+            </label>
+            <p class="fee-line">Est. network fee · <span id="feeEst">~0.000005 SOL</span></p>
+            <button type="submit" class="btn btn-primary btn-block">
+              <span class="btn-ico" aria-hidden="true">▸</span>
+              <span>Review send</span>
+            </button>
+          </form>
+          <p class="form-status" id="sendStatus" role="status" aria-live="polite"></p>
+        </section>
+
+        <section class="panel" id="panel-receive" data-panel="receive" hidden>
+          <button type="button" class="back-link" data-go="home">← Back</button>
+          <h2 class="panel-title">Receive</h2>
+          <p class="panel-sub">Share this address to get SOL or SPL tokens.</p>
+
+          <div class="receive-stage">
+            <div class="qr-frame" aria-hidden="true">
+              <svg id="qrSvg" viewBox="0 0 120 120" width="160" height="160"></svg>
+            </div>
+            <p class="receive-addr" id="fullAddr"></p>
+            <button type="button" class="btn btn-secondary btn-block" id="copyFullBtn">
+              <span class="btn-ico" aria-hidden="true">⎘</span>
+              <span>Copy address</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="panel" id="panel-activity" data-panel="activity" hidden>
+          <button type="button" class="back-link" data-go="home">← Back</button>
+          <h2 class="panel-title">Activity</h2>
+          <p class="panel-sub">Recent Solana transactions from this wallet.</p>
+          <ul class="activity-list" id="activityList"></ul>
+        </section>
+      </main>
+
+      <nav class="dock" aria-label="Wallet navigation">
+        <button type="button" class="dock-item is-active" data-go="home">
+          <span class="dock-ico" aria-hidden="true">◈</span>
+          Home
+        </button>
+        <button type="button" class="dock-item" data-go="send">
+          <span class="dock-ico" aria-hidden="true">↗</span>
+          Send
+        </button>
+        <button type="button" class="dock-item" data-go="receive">
+          <span class="dock-ico" aria-hidden="true">↘</span>
+          Receive
+        </button>
+        <button type="button" class="dock-item" data-go="activity">
+          <span class="dock-ico" aria-hidden="true">≡</span>
+          Activity
+        </button>
+      </nav>
+    </div>
+
+    <div class="toast" id="toast" hidden role="status" aria-live="polite"></div>
+    <script src="./app.js"></script>
+  </body>
+</html>

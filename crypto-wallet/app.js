@@ -129,7 +129,19 @@ function showToast(msg) {
 
 async function copyText(text) {
   try {
-    await navigator.clipboard.writeText(text);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
     showToast("Address copied");
   } catch {
     showToast("Copy failed — select the address manually");
@@ -283,6 +295,8 @@ function go(panel) {
     drawFauxQr($("qrSvg"), WALLET.address);
   }
   window.scrollTo({ top: 0, behavior: "smooth" });
+  const stage = document.querySelector("body.is-extension .stage");
+  if (stage) stage.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 function wireNav() {
