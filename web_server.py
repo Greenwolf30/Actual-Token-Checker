@@ -1364,6 +1364,14 @@ class WebHandler(BaseHTTPRequestHandler):
                     ).strip()
                 ),
                 "alchemy": bool((os.environ.get("ALCHEMY_API_KEY") or "").strip()),
+                "madeonsol": bool(
+                    (
+                        os.environ.get("MADEONSOL_API_KEY")
+                        or os.environ.get("RHC_API_KEY")
+                        or os.environ.get("MADEONSOL_KEY")
+                        or ""
+                    ).strip()
+                ),
                 "site_gate": bool(_web_api_token()),
             }
             views = analyzes = None

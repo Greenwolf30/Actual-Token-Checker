@@ -25,7 +25,7 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v184";
+const ADTC_CLIENT_VERSION = "v185";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
 
 /** Active Analyze chain — drives Solscan vs Etherscan vs Blockscout wallet links. */
@@ -9431,6 +9431,7 @@ function slimBundlesViewForStorage(bv) {
     clusters: 8,
     similar_size_groups: 6,
     insider_wallets: 12,
+    launch_bundle: 1,
     funding_clusters: 6,
     fresh_wallets: 16,
     multi_send_clusters: 6,
@@ -11160,6 +11161,29 @@ function renderAboutUi(data) {
  * Opera GX freezes building full wallet tables (1000s of DOM nodes).
  * Show summary stats only; optional expand via ?full=1 or button.
  */
+/** Shared SOL (Solana) vs Shared ETH (Robinhood) label helper. */
+function sharedFundingAssetLabel(data, view, summary) {
+  const s = summary || (view && view.summary) || {};
+  if (String(s.shared_asset || "").toUpperCase() === "ETH") return "ETH";
+  const chain = String(
+    (view && view.chain_id) ||
+      (data && data.token && data.token.chain_id) ||
+      (data && data.market && data.market.chain_id) ||
+      ""
+  )
+    .trim()
+    .toLowerCase();
+  if (
+    chain === "robinhood" ||
+    chain === "rh" ||
+    chain === "robinhood-chain" ||
+    chain === "4663"
+  ) {
+    return "ETH";
+  }
+  return "SOL";
+}
+
 function renderBundlesUiOperaLite(data) {
   const root = $("bundlesUi");
   if (!root) return;
@@ -11221,7 +11245,10 @@ function renderBundlesUiOperaLite(data) {
     html += row("Similar-sized", bunPctHtml(s.similar_size_total_pct));
     html += row("Fresh", bunPctHtml(s.fresh_total_pct));
     html += row("Multi-send", bunPctHtml(s.multi_send_total_pct));
-    html += row("Shared SOL", bunPctHtml(s.funding_total_pct));
+    html += row(
+      "Shared " + sharedFundingAssetLabel(data, view, s),
+      bunPctHtml(s.funding_total_pct)
+    );
     html += row("Single holders", bunPctHtml(s.single_holders_total_pct));
     html += "</div>";
   } else if (view && view.ok === false) {
@@ -11285,7 +11312,7 @@ function renderBundlesUi(data) {
 
   if (!view) {
     root.innerHTML =
-      '<p class="logs-empty">Run a <strong>full Analyze</strong> (not Quick) on a Solana mint to load Bundles cards.</p>';
+      '<p class="logs-empty">Run a <strong>full Analyze</strong> (not Quick) to load Bundles cards (Solana or Robinhood).</p>';
     return;
   }
 
@@ -11293,11 +11320,13 @@ function renderBundlesUi(data) {
     root.innerHTML =
       '<div class="bun-hint"><strong>Bundles unavailable</strong><br />' +
       escHtml(view.error || "No data") +
-      "<br /><br />Tips: full Analyze · holders must succeed · Solana: Helius for funding/fresh/multi-send · ETH/Robinhood: Blockscout holders.</div>";
+      "<br /><br />Tips: full Analyze · holders must succeed · Solana: Helius for funding/fresh/multi-send · Robinhood: Alchemy/Blockscout Shared ETH/Fresh/Multi-send (+ MadeOnSol launch-bundle when keyed).</div>";
     return;
   }
 
   const s = view.summary || {};
+  const sharedAsset = sharedFundingAssetLabel(data, view, s);
+  const sharedLabel = "Shared " + sharedAsset;
   const riskScore =
     s.bundle_risk_score != null && Number.isFinite(Number(s.bundle_risk_score))
       ? Number(s.bundle_risk_score)
@@ -11963,7 +11992,7 @@ function renderBundlesUi(data) {
       const live = fundPct != null ? fundPct : 0;
       sharedSolVal = withDelta(bunPctHtmlBox(live), "funding_total_pct", live);
     }
-    html += stat("Shared SOL total", sharedSolVal, fundSubEsc);
+    html += stat(sharedLabel + " total", sharedSolVal, fundSubEsc);
   }
   // Single holders: non-LP bags ≥0.01% not in multi/similar/optional categories
   {
@@ -12027,7 +12056,7 @@ function renderBundlesUi(data) {
       multi_account: "multi-account",
       multi_send: "multi-send",
       fresh: "fresh",
-      shared_funder: "shared SOL",
+      shared_funder: "shared " + sharedAsset,
       suspect: "similar-sized",
       similar_size: "similar-sized",
     };
@@ -12143,15 +12172,15 @@ function renderBundlesUi(data) {
     );
   }
 
-  // Shared SOL funder
+  // Shared SOL / Shared ETH funder
   const fund = view.funding_clusters || [];
   const fundErr = String(s.funding_error || "");
-  const fundSkipped = /scan off|enable .Shared SOL|Shared SOL funder scan off/i.test(
+  const fundSkipped = /scan off|enable .Shared (SOL|ETH)|Shared (SOL|ETH) funder scan off/i.test(
     fundErr
   );
   const fundCached = !!s.funding_from_cache;
   if (fund.length) {
-    // Total % across unique wallets (funders + children) in all Shared SOL clusters
+    // Total % across unique wallets (funders + children) in all Shared funder clusters
     const fundPctByW = {};
     for (const fc of fund) {
       const funder = String((fc && fc.funder) || "").trim();
@@ -12201,7 +12230,9 @@ function renderBundlesUi(data) {
         : Object.keys(fundPctByW).length;
     html +=
       '<section class="bun-section"><div class="bun-section-head">' +
-      '<span class="bun-section-title">Shared SOL funder' +
+      '<span class="bun-section-title">' +
+      escHtml(sharedLabel) +
+      " funder" +
       (fundCached ? " (last known)" : "") +
       "</span>" +
       '<span class="bun-section-total">total ' +
@@ -12215,7 +12246,9 @@ function renderBundlesUi(data) {
       "</span></div><div class=\"bun-section-body\">";
     if (fundCached) {
       html +=
-        '<p class="bun-sub">Last known Shared SOL for this mint (checkbox off — no Helius pings). Check Shared SOL to refresh.</p>';
+        '<p class="bun-sub">Last known ' +
+        escHtml(sharedLabel) +
+        " for this token (checkbox off — no re-scan). Check Shared SOL to refresh.</p>";
     }
     for (const fc of fund) {
       html +=
@@ -12246,10 +12279,15 @@ function renderBundlesUi(data) {
     html += "</div></section>";
   } else {
     html += bunEmptySection(
-      "Shared SOL funder",
+      sharedLabel + " funder",
       fundSkipped
-        ? "Skipped — turn on “Shared SOL” above Analyze (heaviest Helius load)."
-        : "None found — needs Helius for 1-hop funding clusters."
+        ? "Skipped — turn on “Shared SOL” above Analyze" +
+            (sharedAsset === "ETH"
+              ? " (Alchemy/Blockscout Shared ETH)."
+              : " (heaviest Helius load).")
+        : sharedAsset === "ETH"
+          ? "None found — needs Alchemy or Blockscout for 1-hop Shared ETH clusters."
+          : "None found — needs Helius for 1-hop funding clusters."
     );
   }
 
@@ -12271,36 +12309,62 @@ function renderBundlesUi(data) {
       "</span></div><div class=\"bun-section-body\">";
     if (freshCached) {
       html +=
-        '<p class="bun-sub">Last known Fresh wallets for this mint (checkbox off — no Helius pings). Check Fresh to refresh.</p>';
+        '<p class="bun-sub">Last known Fresh wallets for this token (checkbox off — no re-scan). Check Fresh to refresh.</p>';
     }
-    html += bunWalletTable(fresh, [
+    const freshCols = [
       { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
       { key: "pct_supply", label: "Holds", render: (v) => bunPctHtml(v) },
-      {
+    ];
+    if (sharedAsset === "ETH") {
+      freshCols.push({
+        key: "eth",
+        label: "ETH",
+        render: (v, row) => {
+          const n =
+            v != null && Number.isFinite(Number(v))
+              ? Number(v)
+              : row && row.native != null && Number.isFinite(Number(row.native))
+                ? Number(row.native)
+                : row && row.sol != null && Number.isFinite(Number(row.sol))
+                  ? Number(row.sol)
+                  : null;
+          return n != null ? escHtml(n.toFixed(4)) : "—";
+        },
+      });
+      freshCols.push({
+        key: "other_tokens",
+        label: "Other tokens",
+        render: (v) => escHtml(v != null ? String(v) : "—"),
+      });
+    } else {
+      freshCols.push({
         key: "sol",
         label: "SOL",
         render: (v) =>
           v != null && Number.isFinite(Number(v))
             ? escHtml(Number(v).toFixed(3))
             : "—",
-      },
-      {
+      });
+      freshCols.push({
         key: "other_tokens",
         label: "Other SPL",
         render: (v) => escHtml(v != null ? String(v) : "—"),
-      },
-      {
-        key: "tag",
-        label: "Tag",
-        render: (v) => escHtml(v || "sole-token"),
-      },
-    ]);
+      });
+    }
+    freshCols.push({
+      key: "tag",
+      label: "Tag",
+      render: (v) => escHtml(v || "sole-token"),
+    });
+    html += bunWalletTable(fresh, freshCols);
     html += "</div></section>";
   } else {
     html += bunEmptySection(
       "Fresh wallets",
       useFreshEnabled()
-        ? "None found — wallets holding almost only this mint (needs Helius + full Analyze)."
+        ? sharedAsset === "ETH"
+          ? "None found — low-nonce / fresh holders (needs Alchemy or Blockscout + full Analyze)."
+          : "None found — wallets holding almost only this mint (needs Helius + full Analyze)."
         : "Skipped — turn on “Fresh” above Analyze to scan (or re-scan after a prior full Analyze with Fresh on to keep last known)."
     );
   }
@@ -12348,10 +12412,10 @@ function renderBundlesUi(data) {
       "</span></div><div class=\"bun-section-body\">";
     if (msCached) {
       html +=
-        '<p class="bun-sub">Last known Multi-send for this mint (checkbox off — no Helius pings). Check Multi-send to refresh.</p>';
+        '<p class="bun-sub">Last known Multi-send for this token (checkbox off — no re-scan). Check Multi-send to refresh.</p>';
     }
     html +=
-      '<p class="bun-sub">Token multi-send only (this mint sent one→many). ' +
+      '<p class="bun-sub">Token multi-send only (this token sent one→many). ' +
       "Total = sum of Holds below. Senders: " +
       bunPctHtml(s.multi_send_sender_total_pct) +
       " · " +
@@ -12364,7 +12428,11 @@ function renderBundlesUi(data) {
           s.multi_send_receiver_count != null ? s.multi_send_receiver_count : "—"
         )
       ) +
-      ". LP/bonding-curve excluded. Shared SOL funders are under Shared SOL only.</p>";
+      ". LP excluded. " +
+      escHtml(sharedLabel) +
+      " funders are under " +
+      escHtml(sharedLabel) +
+      " only.</p>";
     if (shapeNote) {
       html += '<p class="bun-sub">' + escHtml(shapeNote) + "</p>";
     }
@@ -12431,8 +12499,12 @@ function renderBundlesUi(data) {
     } else if (solMs.length) {
       emptyMsg =
         "No token multi-send this scan (Multi-send total 0%). " +
-        "Funded wallets that hold supply are under Shared SOL — their % is in Shared SOL total, not Multi-send.";
-    } else if (heliusRan) {
+        "Funded wallets that hold supply are under " +
+        sharedLabel +
+        " — their % is in " +
+        sharedLabel +
+        " total, not Multi-send.";
+    } else if (heliusRan || (s.sources_used || []).join(" ").toLowerCase().indexOf("token_multi_send") >= 0) {
       const txsN = s.multi_send_txs_scanned;
       const sigsN = s.multi_send_sigs_available;
       const edgeN = s.multi_send_edge_senders;
@@ -12449,19 +12521,71 @@ function renderBundlesUi(data) {
             "."
           : "";
       emptyMsg =
-        "None this scan — Helius ran token multi-send (this mint one→many)." +
+        "None this scan — token multi-send ran (this token one→many)." +
         scanBit +
-        " No fan-out with ≥2 receivers found (LP/bonding-curve senders excluded). " +
-        "Shared SOL funders are a different check.";
+        " No fan-out with ≥2 receivers found (LP senders excluded). " +
+        sharedLabel +
+        " funders are a different check.";
     } else {
       emptyMsg =
-        "None found — multi-send needs HELIUS_API_KEY on the API (Render) + full Analyze (not Quick). " +
-        "Key is server-side only; not web/config.js.";
+        sharedAsset === "ETH"
+          ? "None found — Robinhood multi-send needs Blockscout/Alchemy on the API + full Analyze (not Quick)."
+          : "None found — multi-send needs HELIUS_API_KEY on the API (Render) + full Analyze (not Quick). " +
+            "Key is server-side only; not web/config.js.";
     }
     html += bunEmptySection("Multi-send (one → many)", emptyMsg);
   }
 
-  // Launch-window removed from Bundles (Helius scan disabled).
+  // MadeOnSol launch-bundle (Robinhood same-block cohort)
+  const launch = view.launch_bundle;
+  if (launch && launch.ok) {
+    const lw = Array.isArray(launch.wallets) ? launch.wallets : [];
+    const held =
+      launch.held_pct_of_supply != null
+        ? launch.held_pct_of_supply
+        : s.launch_bundle_pct != null
+          ? s.launch_bundle_pct
+          : s.launch_bundle_held_pct;
+    html +=
+      '<section class="bun-section"><div class="bun-section-head">' +
+      '<span class="bun-section-title">Launch bundle (MadeOnSol)</span>' +
+      '<span class="bun-section-total">' +
+      bunPctHtml(held) +
+      " held · " +
+      escHtml(
+        String(
+          launch.wallet_count != null
+            ? launch.wallet_count
+            : lw.length || s.launch_bundle_wallets || 0
+        )
+      ) +
+      " wallet(s) · " +
+      escHtml(String(launch.bundle_kind || "same_block")) +
+      "</span></div><div class=\"bun-section-body\">";
+    html +=
+      '<p class="bun-sub">Same-block early buyers still holding (Robinhood substitute for Solana launch-window / Jito bundles).</p>';
+    if (lw.length) {
+      html += bunWalletTable(lw, [
+        { key: "wallet", label: "Wallet", render: (v) => bunWalletLink(v) },
+        {
+          key: "pct_of_supply",
+          label: "Holds",
+          render: (v) => bunPctHtml(v),
+        },
+        {
+          key: "still_holding",
+          label: "Holding",
+          render: (v) => escHtml(v ? "yes" : "no"),
+        },
+        {
+          key: "buyer_quality",
+          label: "Quality",
+          render: (v) => escHtml(v != null ? String(v) : "—"),
+        },
+      ]);
+    }
+    html += "</div></section>";
+  }
 
   // Similar-sized wallets = near-exact bags + Rugcheck insider-flagged
   const simsRaw = view.similar_size_groups || [];

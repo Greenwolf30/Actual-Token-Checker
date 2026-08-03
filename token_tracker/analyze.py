@@ -894,7 +894,11 @@ def analyze_token(
             }
 
     def _evm_bundles_from_holders(hdata: dict[str, Any]) -> dict[str, Any]:
-        """Concentration / similar-size bundles from EVM holder rows (no Helius)."""
+        """
+        EVM bundles from holder rows.
+        Robinhood: Shared ETH + Fresh + Multi-send + MadeOnSol launch-bundle.
+        Other EVM: concentration / similar-size heuristics only.
+        """
         if not hdata.get("ok"):
             return {
                 "ok": False,
@@ -907,6 +911,28 @@ def analyze_token(
                 "signals": [],
                 "notes": "EVM bundles need a successful Holders scan (Blockscout / Moralis).",
             }
+        chain = _chain_norm()
+        if chain in {"robinhood", "rh", "robinhood-chain", "robinhoodchain", "4663"}:
+            try:
+                from . import evm_bundle_fusion as ebf
+
+                return ebf.comprehensive_evm_bundle_check(
+                    token_addr or "",
+                    hdata,
+                    chain_id="robinhood",
+                    pair_address=pair_summary.get("pair_address"),
+                    include_fresh=include_fresh,
+                    include_multi_send=include_multi_send,
+                    include_shared_sol=include_shared_sol,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return {
+                    "ok": False,
+                    "error": str(exc),
+                    "summary": {},
+                    "signals": [],
+                    "notes": f"Robinhood EVM bundle analysis failed: {exc}",
+                }
         try:
             out = bun.analyze_bundles(hdata)
         except Exception as exc:  # noqa: BLE001
@@ -923,7 +949,7 @@ def analyze_token(
         out["holders"] = list(hdata.get("holders") or [])
         tip = (
             "EVM bundles: concentration + similar-size from holders. "
-            "Funding / Fresh / Multi-send / launch-window stay Solana-only."
+            "Shared ETH / Fresh / Multi-send full scans are Robinhood-first for now."
         )
         out["notes"] = (tip + " " + (out.get("notes") or "")).strip()
         return out

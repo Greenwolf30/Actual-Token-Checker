@@ -3414,7 +3414,7 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
         "jito_engine": reports.get("jito_engine_ok"),
     }
 
-    return {
+    out = {
         "ok": True,
         "method": data.get("method"),
         "source": data.get("source"),
@@ -3511,6 +3511,13 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
             if s.get("single_holders_wallet_count") is not None
             else (single_n if single_n else len(single_out)),
             "sources_used": list(s.get("sources_used") or [])[:16],
+            "shared_asset": s.get("shared_asset"),
+            "launch_bundle_kind": s.get("launch_bundle_kind"),
+            "launch_bundle_held_pct": s.get("launch_bundle_held_pct"),
+            "launch_bundle_pct": s.get("launch_bundle_pct")
+            if s.get("launch_bundle_pct") is not None
+            else s.get("launch_bundle_held_pct"),
+            "launch_bundle_wallets": s.get("launch_bundle_wallets"),
         },
         "providers": providers,
         "signals": signals_out,
@@ -3525,4 +3532,52 @@ def build_bundles_ui_payload(data: dict[str, Any] | None) -> dict[str, Any]:
         "same_slot_groups": [],  # launch-window disabled
         "suspect_wallets": suspects_out,
         "single_holders": single_out,
+        "launch_bundle": None,
+        "notes": data.get("notes"),
+        "token_address": data.get("token_address") or data.get("mint"),
+        "chain_id": data.get("chain_id"),
     }
+
+    # MadeOnSol / EVM launch-bundle intel (optional; Robinhood)
+    launch_raw = data.get("launch_bundle") if isinstance(data.get("launch_bundle"), dict) else {}
+    if isinstance(launch_raw, dict) and launch_raw.get("ok") and (
+        launch_raw.get("wallets") or launch_raw.get("held_pct_of_supply") is not None
+    ):
+        lw: list[dict[str, Any]] = []
+        for w in (launch_raw.get("wallets") or [])[:40]:
+            if not isinstance(w, dict):
+                continue
+            lw.append(
+                {
+                    "wallet": str(w.get("wallet") or ""),
+                    "buy_tx": str(w.get("buy_tx") or ""),
+                    "amount": float(w.get("amount") or 0),
+                    "pct_of_supply": float(w.get("pct_of_supply") or 0),
+                    "still_holding": bool(w.get("still_holding")),
+                    "buyer_quality": w.get("buyer_quality"),
+                }
+            )
+        launch_out = {
+            "ok": True,
+            "source": str(launch_raw.get("source") or "madeonsol"),
+            "bundle_kind": str(launch_raw.get("bundle_kind") or "same_block"),
+            "held_pct_of_supply": float(launch_raw.get("held_pct_of_supply") or 0),
+            "wallet_count": int(launch_raw.get("wallet_count") or len(lw) or 0),
+            "wallets": lw,
+            "notes": [
+                str(x) for x in (launch_raw.get("notes") or [])[:8] if str(x).strip()
+            ],
+        }
+        out["launch_bundle"] = launch_out
+        if out["summary"].get("launch_bundle_pct") is None:
+            out["summary"]["launch_bundle_pct"] = float(
+                launch_out["held_pct_of_supply"] or 0
+            )
+        if out["summary"].get("launch_bundle_wallets") is None:
+            out["summary"]["launch_bundle_wallets"] = int(
+                launch_out.get("wallet_count") or 0
+            )
+        if out["summary"].get("launch_bundle_kind") is None:
+            out["summary"]["launch_bundle_kind"] = launch_out.get("bundle_kind")
+
+    return out
