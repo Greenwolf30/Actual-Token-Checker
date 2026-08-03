@@ -1,3 +1,13 @@
+@font-face {
+  font-family: "OCR-A";
+  src:
+    url("./fonts/ocr-a.woff2") format("woff2"),
+    url("./fonts/ocr-a.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   --bg0: #0a162e;
   --bg1: #0d1c3a;
@@ -18,9 +28,9 @@
   --shadow: 0 22px 60px rgba(4, 12, 32, 0.55);
   --radius: 14px;
   --radius-sm: 10px;
-  --font-display: "Mulish", "Segoe UI", sans-serif;
-  --font-ui: "Mulish", "Segoe UI", sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --font-display: "OCR-A", "Courier New", monospace;
+  --font-ui: "OCR-A", "Courier New", monospace;
+  --font-mono: "OCR-A", "Courier New", monospace;
   --shell-max: 440px;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -173,7 +183,7 @@ a {
 .brand-name {
   font-family: var(--font-display);
   font-size: 1.35rem;
-  font-weight: 800;
+  font-weight: 400;
   letter-spacing: -0.03em;
   line-height: 1;
   color: #b8a7cf;
@@ -191,7 +201,7 @@ a {
   gap: 7px;
   padding: 7px 11px;
   font-size: 0.74rem;
-  font-weight: 650;
+  font-weight: 400;
   letter-spacing: 0.01em;
   color: var(--ink-soft);
   border: 1px solid var(--line);
@@ -245,7 +255,7 @@ a {
 .addr-short {
   font-family: var(--font-mono);
   font-size: 0.76rem;
-  font-weight: 500;
+  font-weight: 400;
   color: var(--ink-soft);
 }
 
@@ -296,7 +306,7 @@ a {
 .eyebrow {
   margin: 0 0 6px;
   font-size: 0.74rem;
-  font-weight: 700;
+  font-weight: 400;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--accent-bright);
@@ -305,9 +315,10 @@ a {
 .brand-hero {
   margin: 0;
   font-family: var(--font-display);
-  font-size: clamp(3.2rem, 11vw, 4.2rem);
-  font-weight: 800;
-  letter-spacing: -0.04em;
+  font-size: clamp(2.6rem, 9vw, 3.4rem);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
   line-height: 0.95;
   background: linear-gradient(180deg, #ffffff 10%, #b8a7cf 100%);
   -webkit-background-clip: text;
@@ -331,7 +342,7 @@ a {
 .balance-label {
   margin: 0;
   font-size: 0.8rem;
-  font-weight: 650;
+  font-weight: 400;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--muted);
@@ -340,9 +351,9 @@ a {
 .balance-value {
   margin: 8px 0 0;
   font-family: var(--font-display);
-  font-size: clamp(2.8rem, 10vw, 3.5rem);
-  font-weight: 800;
-  letter-spacing: -0.04em;
+  font-size: clamp(2.4rem, 9vw, 3.1rem);
+  font-weight: 400;
+  letter-spacing: 0.01em;
   line-height: 1;
   font-variant-numeric: tabular-nums;
   color: #b8a7cf;
@@ -368,7 +379,7 @@ a {
 .delta {
   font-family: var(--font-ui);
   font-size: 0.74rem;
-  font-weight: 700;
+  font-weight: 400;
   padding: 3px 8px;
   border-radius: 999px;
   background: rgba(61, 214, 140, 0.12);
@@ -398,7 +409,7 @@ a {
   padding: 0 16px;
   border-radius: 12px;
   font-size: 0.92rem;
-  font-weight: 700;
+  font-weight: 400;
   letter-spacing: -0.015em;
   isolation: isolate;
   overflow: hidden;
@@ -501,7 +512,7 @@ a {
   padding: 0 14px;
   border-radius: 10px;
   font-size: 0.8rem;
-  font-weight: 750;
+  font-weight: 400;
   letter-spacing: 0.02em;
   text-transform: uppercase;
   color: var(--accent-bright);
@@ -543,14 +554,14 @@ a {
 .section-head h2 {
   margin: 0;
   font-size: 0.95rem;
-  font-weight: 700;
+  font-weight: 400;
   letter-spacing: -0.01em;
 }
 
 .section-note {
   font-size: 0.78rem;
   color: var(--muted);
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .token-list,
@@ -596,7 +607,7 @@ a {
   border-radius: 50%;
   display: grid;
   place-items: center;
-  font-weight: 800;
+  font-weight: 400;
   font-size: 0.74rem;
   letter-spacing: -0.02em;
   color: #eaf2ff;
@@ -632,7 +643,7 @@ a {
 .activity-meta strong {
   display: block;
   font-size: 0.94rem;
-  font-weight: 700;
+  font-weight: 400;
   letter-spacing: -0.01em;
 }
 
@@ -642,7 +653,7 @@ a {
   margin-top: 2px;
   font-size: 0.76rem;
   color: var(--muted);
-  font-weight: 500;
+  font-weight: 400;
 }
 
 .token-vals,
@@ -670,7 +681,7 @@ a {
 .back-link {
   margin: 0 0 18px;
   padding: 0;
-  font-weight: 700;
+  font-weight: 400;
   color: var(--accent-bright);
   transition: opacity 0.15s ease;
 }
@@ -683,7 +694,7 @@ a {
   margin: 0;
   font-family: var(--font-display);
   font-size: 2.2rem;
-  font-weight: 800;
+  font-weight: 400;
   letter-spacing: -0.03em;
   line-height: 1;
   color: var(--ink);
@@ -707,7 +718,7 @@ a {
 
 .field > span {
   font-size: 0.76rem;
-  font-weight: 700;
+  font-weight: 400;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--muted);
@@ -767,7 +778,7 @@ a {
   min-height: 1.4em;
   margin: 12px 0 0;
   font-size: 0.88rem;
-  font-weight: 600;
+  font-weight: 400;
   color: var(--accent-bright);
 }
 
@@ -806,7 +817,7 @@ a {
   border-radius: 50%;
   display: grid;
   place-items: center;
-  font-weight: 700;
+  font-weight: 400;
   background: rgba(18, 36, 68, 0.9);
   border: 1px solid var(--line);
   color: var(--ink-soft);
@@ -850,7 +861,7 @@ a {
   padding: 10px 4px;
   border-radius: 12px;
   font-size: 0.7rem;
-  font-weight: 700;
+  font-weight: 400;
   letter-spacing: 0.01em;
   color: var(--muted);
   transition: background 0.18s ease, color 0.18s ease, transform 0.16s var(--ease);
@@ -887,7 +898,7 @@ a {
   color: var(--ink);
   border: 1px solid var(--line-strong);
   font-size: 0.86rem;
-  font-weight: 650;
+  font-weight: 400;
   opacity: 0;
   pointer-events: none;
   box-shadow: var(--shadow);
