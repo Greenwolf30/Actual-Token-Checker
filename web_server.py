@@ -1348,6 +1348,22 @@ class WebHandler(BaseHTTPRequestHandler):
                         or ""
                     ).strip()
                 ),
+                "moralis": bool((os.environ.get("MORALIS_API_KEY") or "").strip()),
+                "etherscan": bool(
+                    (
+                        os.environ.get("ETHERSCAN_API_KEY")
+                        or os.environ.get("ETHERSCAN_KEY")
+                        or ""
+                    ).strip()
+                ),
+                "blockscout": bool(
+                    (
+                        os.environ.get("BLOCKSCOUT_API_KEY")
+                        or os.environ.get("BLOCKSCOUT_KEY")
+                        or ""
+                    ).strip()
+                ),
+                "alchemy": bool((os.environ.get("ALCHEMY_API_KEY") or "").strip()),
                 "site_gate": bool(_web_api_token()),
             }
             views = analyzes = None

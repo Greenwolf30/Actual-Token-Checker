@@ -697,46 +697,14 @@ def analyze_holders(
         "robinhood",  # Robinhood Chain (Arbitrum L2, chain id 4663)
         "rh",
     }:
-        explorer = (
-            "https://robinhoodchain.blockscout.com/token/"
-            if chain in {"robinhood", "rh"}
-            else "https://etherscan.io/token/"
-            if chain in {"ethereum", "eth"}
-            else "https://basescan.org/token/"
-            if chain == "base"
-            else "https://arbiscan.io/token/"
-            if chain in {"arbitrum"}
-            else None
+        from . import evm_holders as evm
+
+        return evm.analyze_evm_holders(
+            chain,
+            token_address,
+            pair_address=pair_address,
+            limit=100,
         )
-        note_bits = [
-            "Market / Overview / About work via DexScreener for this chain.",
-            "Top-holder fusion (Helius/Rugcheck) is Solana-only right now.",
-        ]
-        if chain in {"robinhood", "rh"}:
-            note_bits.append(
-                "Robinhood Chain explorer: https://robinhoodchain.blockscout.com"
-            )
-        return {
-            "ok": False,
-            "chain_id": chain,
-            "token_address": token_address,
-            "error": (
-                f"Holder lists for '{chain}' are not wired to an explorer API yet. "
-                "Use Overview for market data. "
-                + (
-                    f"Token page: {explorer}{token_address}"
-                    if explorer and token_address
-                    else ""
-                )
-            ),
-            "holders": [],
-            "summary": {},
-            "flags": [],
-            "notes": " ".join(note_bits),
-            "explorer_url": (
-                f"{explorer}{token_address}" if explorer and token_address else None
-            ),
-        }
 
     return _empty(f"Holder analysis not implemented for chain '{chain}'.")
 
@@ -2086,26 +2054,49 @@ def format_holders_text(data: dict[str, Any]) -> str:
         f"  Source: {data.get('source')}",
     ]
     ps = data.get("provider_status") or {}
+    meta = data.get("meta") or {}
+    is_evm = bool(meta.get("evm") or (data.get("chain_id") or "").lower() in {
+        "ethereum",
+        "eth",
+        "base",
+        "bsc",
+        "arbitrum",
+        "polygon",
+        "optimism",
+        "avalanche",
+        "robinhood",
+        "rh",
+    })
     if ps:
-        lines.append(
-            "  Providers: "
-            f"Helius/RPC={ps.get('helius_rpc')}  Rugcheck={ps.get('rugcheck')}  "
-            f"Solscan={ps.get('solscan')}  Birdeye={ps.get('birdeye')}"
-        )
-        if ps.get("birdeye_skipped"):
-            lines.append("  Birdeye: skipped (set BIRDEYE_API_KEY)")
-        if ps.get("solscan_needs_key"):
-            lines.append("  Solscan: set SOLSCAN_API_KEY for Pro holders")
-        elif not ps.get("solscan"):
-            # Key may be set but Pro call failed — show short reason
-            err_map = ps.get("errors") if isinstance(ps.get("errors"), dict) else {}
-            sol_err = (err_map or {}).get("solscan") or ""
-            if sol_err:
-                # Keep one short line (avoid dumping full URLs)
-                msg = str(sol_err)
-                if "HTTP Error" in msg:
-                    msg = msg[msg.find("HTTP Error") :]
-                lines.append(f"  Solscan error: {msg[:180]}")
+        if is_evm:
+            lines.append(
+                "  Providers: "
+                f"Moralis={ps.get('moralis')}  Etherscan={ps.get('etherscan')}  "
+                f"Blockscout={ps.get('blockscout')}  "
+                f"Alchemy key={ps.get('alchemy_configured')}"
+            )
+            if ps.get("primary"):
+                lines.append(f"  Primary holder source: {ps.get('primary')}")
+        else:
+            lines.append(
+                "  Providers: "
+                f"Helius/RPC={ps.get('helius_rpc')}  Rugcheck={ps.get('rugcheck')}  "
+                f"Solscan={ps.get('solscan')}  Birdeye={ps.get('birdeye')}"
+            )
+            if ps.get("birdeye_skipped"):
+                lines.append("  Birdeye: skipped (set BIRDEYE_API_KEY)")
+            if ps.get("solscan_needs_key"):
+                lines.append("  Solscan: set SOLSCAN_API_KEY for Pro holders")
+            elif not ps.get("solscan"):
+                # Key may be set but Pro call failed — show short reason
+                err_map = ps.get("errors") if isinstance(ps.get("errors"), dict) else {}
+                sol_err = (err_map or {}).get("solscan") or ""
+                if sol_err:
+                    # Keep one short line (avoid dumping full URLs)
+                    msg = str(sol_err)
+                    if "HTTP Error" in msg:
+                        msg = msg[msg.find("HTTP Error") :]
+                    lines.append(f"  Solscan error: {msg[:180]}")
 
     summary = data.get("summary") or {}
     totals = data.get("holder_totals") or (data.get("meta") or {}).get("holder_totals") or {}
@@ -2245,8 +2236,19 @@ def format_holders_text(data: dict[str, Any]) -> str:
             if total_w is not None
             else " (top snapshot)"
         )
-        + " · click wallet → Solscan:"
+        + (
+            " · click wallet → explorer:"
+            if is_evm
+            else " · click wallet → Solscan:"
+        )
     )
+    acct_base = (meta.get("explorer_account_base") or "").strip()
+    if not acct_base and is_evm:
+        ch = (data.get("chain_id") or "").lower()
+        if ch in {"robinhood", "rh"}:
+            acct_base = "https://robinhoodchain.blockscout.com/address/"
+        else:
+            acct_base = "https://etherscan.io/address/"
     for h in listed:
         lab = (h.get("label") or "").strip()
         # Same style as Pump.fun liquidity lines: [Pump…] / [Meteora pool (liquidity)]
@@ -2275,7 +2277,10 @@ def format_holders_text(data: dict[str, Any]) -> str:
             # Second line echo — same pattern as Pump liquidity clarity
             lines.append(f"         [{lab}]")
         if w:
-            lines.append(f"         https://solscan.io/account/{w}")
+            if is_evm and acct_base:
+                lines.append(f"         {acct_base}{w}")
+            else:
+                lines.append(f"         https://solscan.io/account/{w}")
 
     clusters = data.get("owner_clusters") or []
     lines.append("")
