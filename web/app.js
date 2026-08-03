@@ -11293,7 +11293,7 @@ function renderBundlesUi(data) {
     root.innerHTML =
       '<div class="bun-hint"><strong>Bundles unavailable</strong><br />' +
       escHtml(view.error || "No data") +
-      "<br /><br />Tips: full Analyze · Solana mint · holders must succeed · Helius for funding / fresh / multi-send.</div>";
+      "<br /><br />Tips: full Analyze · holders must succeed · Solana: Helius for funding/fresh/multi-send · ETH/Robinhood: Blockscout holders.</div>";
     return;
   }
 
