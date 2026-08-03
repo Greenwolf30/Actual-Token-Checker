@@ -240,13 +240,13 @@ function drawFauxQr(svg, seed) {
     return (n >>> 0) % 3 !== 0;
   }
   const parts = [
-    `<rect width="${size}" height="${size}" fill="#fff"/>`,
+    `<rect width="${size}" height="${size}" fill="#F4F7FC"/>`,
   ];
   function finder(ox, oy) {
     parts.push(
-      `<rect x="${ox * cell}" y="${oy * cell}" width="${7 * cell}" height="${7 * cell}" fill="#0E1512"/>`,
-      `<rect x="${(ox + 1) * cell}" y="${(oy + 1) * cell}" width="${5 * cell}" height="${5 * cell}" fill="#fff"/>`,
-      `<rect x="${(ox + 2) * cell}" y="${(oy + 2) * cell}" width="${3 * cell}" height="${3 * cell}" fill="#0F9F6E"/>`
+      `<rect x="${ox * cell}" y="${oy * cell}" width="${7 * cell}" height="${7 * cell}" fill="#0A1428"/>`,
+      `<rect x="${(ox + 1) * cell}" y="${(oy + 1) * cell}" width="${5 * cell}" height="${5 * cell}" fill="#F4F7FC"/>`,
+      `<rect x="${(ox + 2) * cell}" y="${(oy + 2) * cell}" width="${3 * cell}" height="${3 * cell}" fill="#1F6FD6"/>`
     );
   }
   finder(0, 0);
@@ -261,7 +261,7 @@ function drawFauxQr(svg, seed) {
       if (inFinder) continue;
       if (bit(x, y)) {
         parts.push(
-          `<rect x="${x * cell}" y="${y * cell}" width="${cell}" height="${cell}" fill="#0E1512"/>`
+          `<rect x="${x * cell}" y="${y * cell}" width="${cell}" height="${cell}" fill="#0A1428"/>`
         );
       }
     }

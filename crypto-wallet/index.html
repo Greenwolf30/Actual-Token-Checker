@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#E8F0EC" />
+    <meta name="theme-color" content="#060B16" />
     <title>Keel — Solana Wallet</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -43,7 +43,7 @@
           <p class="eyebrow reveal">Solana wallet</p>
           <h1 class="brand-hero reveal">Keel</h1>
           <p class="lede reveal">
-            A quiet place to hold SOL, SPL tokens, and move value without the noise.
+            Institutional-grade Solana custody UI — SOL, SPL, and precision transfers.
           </p>
 
           <div class="balance-block reveal">
@@ -58,9 +58,18 @@
           </div>
 
           <div class="cta-row reveal" role="group" aria-label="Primary actions">
-            <button type="button" class="btn btn-primary" data-go="send">Send</button>
-            <button type="button" class="btn btn-secondary" data-go="receive">Receive</button>
-            <button type="button" class="btn btn-ghost" id="swapHintBtn">Swap</button>
+            <button type="button" class="btn btn-primary" data-go="send">
+              <span class="btn-ico" aria-hidden="true">↗</span>
+              <span>Send</span>
+            </button>
+            <button type="button" class="btn btn-secondary" data-go="receive">
+              <span class="btn-ico" aria-hidden="true">↘</span>
+              <span>Receive</span>
+            </button>
+            <button type="button" class="btn btn-ghost" id="swapHintBtn">
+              <span class="btn-ico" aria-hidden="true">⇄</span>
+              <span>Swap</span>
+            </button>
           </div>
 
           <section class="holdings" aria-labelledby="holdingsTitle">
@@ -101,7 +110,10 @@
               </div>
             </label>
             <p class="fee-line">Est. network fee · <span id="feeEst">~0.000005 SOL</span></p>
-            <button type="submit" class="btn btn-primary btn-block">Review send</button>
+            <button type="submit" class="btn btn-primary btn-block">
+              <span class="btn-ico" aria-hidden="true">▸</span>
+              <span>Review send</span>
+            </button>
           </form>
           <p class="form-status" id="sendStatus" role="status" aria-live="polite"></p>
         </section>
@@ -118,7 +130,8 @@
             </div>
             <p class="receive-addr" id="fullAddr"></p>
             <button type="button" class="btn btn-secondary btn-block" id="copyFullBtn">
-              Copy address
+              <span class="btn-ico" aria-hidden="true">⎘</span>
+              <span>Copy address</span>
             </button>
           </div>
         </section>
