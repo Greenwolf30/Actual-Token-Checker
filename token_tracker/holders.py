@@ -678,6 +678,43 @@ def analyze_holders(
         return _empty("Missing chain or token address.")
 
     chain = chain_id.lower().strip()
+    addr = (token_address or "").strip()
+    # Hard guard: 0x… never uses Solscan/Helius (wrong chain dropdown / Pump spoof)
+    if addr.startswith("0x") and len(addr) == 42:
+        from . import evm_holders as evm
+
+        if chain in {"solana", "sol", ""}:
+            # Probe common EVM explorers when UI left chain on solana/auto-wrong
+            last: dict[str, Any] | None = None
+            for probe in (
+                "robinhood",
+                "ethereum",
+                "base",
+                "bsc",
+                "arbitrum",
+                "polygon",
+                "optimism",
+                "avalanche",
+            ):
+                last = evm.analyze_evm_holders(
+                    probe,
+                    addr,
+                    pair_address=pair_address,
+                    limit=100,
+                )
+                if last.get("ok") and last.get("holders"):
+                    return last
+            return last or _empty(
+                "EVM token (0x…) but chain looks like Solana. "
+                "Select robinhood / ethereum / … in the chain menu."
+            )
+        return evm.analyze_evm_holders(
+            chain,
+            addr,
+            pair_address=pair_address,
+            limit=100,
+        )
+
     if chain in {"solana", "sol"}:
         return _solana_holders(
             token_address,

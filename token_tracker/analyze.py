@@ -218,15 +218,23 @@ def resolve_pairs(query: str, chain: str | None = None) -> list[dict[str, Any]]:
     )
     if looks_like_addr:
         mint = q.split(":")[-1] if ":" in q else q
-        solish = (not chain) or chain in {"solana", "sol"} or pf.is_pump_mint(mint)
+        evm_addr = pf.is_evm_address(mint)
+        # 0x… tokens are never Solana — don't prefer solana / Pump fallbacks
+        solish = (not evm_addr) and (
+            (not chain) or chain in {"solana", "sol"} or pf.is_pump_mint(mint)
+        )
 
         # 1) Pre-bond *pump → Pump.fun native only
-        pre = _pump_prebond_first(mint)
-        if pre:
-            return pre
+        if not evm_addr:
+            pre = _pump_prebond_first(mint)
+            if pre:
+                return pre
 
         # 2) DexScreener targeted pairs (uses Raydium on DX cooldown inside client)
-        direct = _direct_token_pairs(mint, chain or ("solana" if solish else chain))
+        preferred = chain
+        if not preferred:
+            preferred = None if evm_addr else "solana"
+        direct = _direct_token_pairs(mint, preferred)
         if direct:
             exact = [
                 p
@@ -273,15 +281,16 @@ def resolve_pairs(query: str, chain: str | None = None) -> list[dict[str, Any]]:
                     return _prefer_pumpfun_pairs(msrc.merge_pair_lists(got, alts), mint)
             return got
 
-        # 4) Full alt stack: Raydium + Birdeye + Rugcheck + Pump
-        if solish:
+        # 4) Full alt stack: Raydium + Birdeye + Rugcheck + Pump (Solana only)
+        if solish and not evm_addr:
             alts = _alt_sol_market(mint)
             if alts:
                 return _prefer_pumpfun_pairs(alts, mint)
 
-        fb = _pump_fallback(mint)
-        if fb:
-            return fb
+        if not evm_addr:
+            fb = _pump_fallback(mint)
+            if fb:
+                return fb
         if last_err and not pairs_addr:
             raise last_err
         return pairs_addr
@@ -409,16 +418,19 @@ def analyze_token(
     q = query.strip()
     looks_like_address = bool(ADDRESS_RE.match(q)) or (":" in q and len(q.split(":", 1)[-1]) >= 32)
 
+    addr_q = q.split(":")[-1] if ":" in q else q
     # Prefer Pump.fun pairs when mint ends with "pump" or query is pump-focused
-    pump_pairs = [
-        p
-        for p in pairs
-        if (p.get("dexId") or "").lower() in {"pumpfun", "pumpswap", "pump"}
-        or pf.is_pump_mint(((p.get("baseToken") or {}).get("address") or ""))
-    ]
+    # Never for EVM 0x addresses (Pump fallback used to spoof Solana + steal primary)
+    pump_pairs = []
+    if not pf.is_evm_address(addr_q):
+        pump_pairs = [
+            p
+            for p in pairs
+            if (p.get("dexId") or "").lower() in {"pumpfun", "pumpswap", "pump"}
+            or pf.is_pump_mint(((p.get("baseToken") or {}).get("address") or ""))
+        ]
 
     if looks_like_address or pair_address:
-        addr_q = q.split(":")[-1] if ":" in q else q
         if pump_pairs and (
             pf.is_pump_mint(addr_q) or pf._pairs_have_pump_pool(pairs)
         ):

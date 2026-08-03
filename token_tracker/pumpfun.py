@@ -20,9 +20,15 @@ PUMP_MINT_SUFFIX = "pump"
 DEX_PUMP = {"pumpfun", "pumpswap", "pump", "pumpswap-v2", "pump-fun", "pump_swap"}
 
 
+def is_evm_address(address: str | None) -> bool:
+    """True for 0x…40-hex EVM addresses (never Solana / Pump.fun mints)."""
+    a = (address or "").strip()
+    return bool(a.startswith("0x") and len(a) == 42)
+
+
 def is_pump_mint(address: str | None) -> bool:
     """Classic Pump.fun mint suffix (…pump)."""
-    if not address:
+    if not address or is_evm_address(address):
         return False
     return address.lower().endswith(PUMP_MINT_SUFFIX)
 
@@ -471,7 +477,7 @@ def pair_to_pump_record(pair: dict[str, Any]) -> dict[str, Any]:
 def try_native_coin(mint: str) -> dict[str, Any] | None:
     """Fetch Pump.fun coin JSON (cached briefly)."""
     m = (mint or "").strip()
-    if not m:
+    if not m or is_evm_address(m):
         return None
     try:
         from .api_cache import TTL_PAIRS, cache_get, cache_set
@@ -865,10 +871,14 @@ def synthetic_pair_from_native(mint: str, native: dict[str, Any] | None = None) 
     Build a DexScreener-shaped pair dict from Pump.fun coin JSON so Analyze
     can continue when DexScreener is rate-limited (429).
     """
+    if is_evm_address(mint):
+        return None
     coin = native if isinstance(native, dict) else try_native_coin(mint)
     if not coin:
         return None
     addr = str(coin.get("mint") or mint or "").strip()
+    if is_evm_address(addr):
+        return None
     if not addr:
         return None
 
@@ -954,6 +964,9 @@ def pairs_from_pump_fallback(query: str) -> list[dict[str, Any]]:
     if ":" in q and not q.startswith("http"):
         q = q.split(":", 1)[-1].strip()
     if not q or len(q) < 32:
+        return []
+    # Never invent Solana/Pump pairs for Ethereum / Robinhood 0x addresses
+    if is_evm_address(q):
         return []
     # Prefer pump-suffix mints; still try any solana-looking address
     if not (is_pump_mint(q) or (len(q) >= 32 and " " not in q)):
