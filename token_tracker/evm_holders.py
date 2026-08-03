@@ -279,13 +279,17 @@ def _ok_result(
     top1 = _sum_pct(rows, 1)
     top5 = _sum_pct(rows, 5)
     top10 = _sum_pct(rows, 10)
+    non_lp = [h for h in rows if not h.get("is_known_program")]
+    top1_ex = _sum_pct(non_lp, 1)
+    top10_ex = _sum_pct(non_lp, 10)
     risk = "unknown"
-    if top10 is not None:
-        if top10 >= 85:
+    risk_basis = top10_ex if top10_ex is not None else top10
+    if risk_basis is not None:
+        if risk_basis >= 85:
             risk = "very_high"
-        elif top10 >= 70:
+        elif risk_basis >= 70:
             risk = "high"
-        elif top10 >= 50:
+        elif risk_basis >= 50:
             risk = "elevated"
         else:
             risk = "moderate"
@@ -294,6 +298,7 @@ def _ok_result(
     if total_n is None:
         total_n = len(rows)
 
+    src_key = "blockscout" if "blockscout" in source else source
     return {
         "ok": True,
         "chain_id": chain,
@@ -309,11 +314,11 @@ def _ok_result(
             "top1_pct": top1,
             "top5_pct": top5,
             "top10_pct": top10,
-            "top1_pct_excluding_known_programs": top1,
-            "top10_pct_excluding_known_programs": top10,
+            "top1_pct_excluding_known_programs": top1_ex,
+            "top10_pct_excluding_known_programs": top10_ex,
             "concentration_risk": risk,
             "holder_source": source,
-            "total_wallets_by_source": {source: total_n},
+            "total_wallets_by_source": {src_key: total_n},
         },
         "flags": _flags_from_holders(rows),
         "meta": {
@@ -507,6 +512,25 @@ def _from_blockscout_robinhood(token: str, *, limit: int) -> dict[str, Any]:
     lim = max(1, min(int(limit or 50), 50))
     key = blockscout_api_key()
     errors: list[str] = []
+    meta = _blockscout_rh_token_meta(token)
+    decimals = meta.get("decimals")
+    supply_raw = meta.get("total_supply_raw")
+    holders_count = meta.get("holders_count")
+
+    def _finish(parsed: dict[str, Any], notes: str) -> dict[str, Any] | None:
+        rows = _finalize_evm_holder_rows(
+            parsed.get("holders") or [],
+            decimals=decimals,
+            supply_raw=supply_raw,
+        )
+        if not rows:
+            return None
+        out = dict(parsed)
+        out["holders"] = rows
+        out["notes"] = notes
+        if holders_count is not None:
+            out["total_holders"] = holders_count
+        return out
 
     # 1) Blockscout PRO multi-chain API (chain_id=4663)
     if key:
@@ -529,9 +553,12 @@ def _from_blockscout_robinhood(token: str, *, limit: int) -> dict[str, Any]:
                 retries=1,
             )
             parsed = _parse_blockscout_holders(data, limit=lim, api="blockscout_pro")
-            if parsed.get("holders"):
-                parsed["notes"] = "Holders from Blockscout PRO (Robinhood chain_id=4663)."
-                return parsed
+            done = _finish(
+                parsed,
+                "Holders from Blockscout PRO (Robinhood chain_id=4663).",
+            )
+            if done:
+                return done
             errors.append(parsed.get("error") or "blockscout_pro: empty")
         except Exception as exc:  # noqa: BLE001
             errors.append(f"blockscout_pro: {exc}")
@@ -551,15 +578,38 @@ def _from_blockscout_robinhood(token: str, *, limit: int) -> dict[str, Any]:
                 retries=1,
             )
             parsed = _parse_blockscout_v2_rest(data, limit=lim)
-            if parsed.get("holders"):
-                parsed["notes"] = "Holders from Blockscout PRO REST (Robinhood)."
-                parsed["api"] = "blockscout_pro_rest"
-                return parsed
+            done = _finish(
+                parsed,
+                "Holders from Blockscout PRO REST (Robinhood).",
+            )
+            if done:
+                done["api"] = "blockscout_pro_rest"
+                return done
             errors.append(parsed.get("error") or "blockscout_pro_rest: empty")
         except Exception as exc:  # noqa: BLE001
             errors.append(f"blockscout_pro_rest: {exc}")
 
-    # 2) Public Robinhood Blockscout (may work without key)
+    # 2) Public Robinhood Blockscout — prefer v2 REST (contract names + cleaner rows)
+    try:
+        url = (
+            f"https://robinhoodchain.blockscout.com/api/v2/tokens/"
+            f"{quote(token)}/holders"
+        )
+        data = get_json(
+            url,
+            headers={**DEFAULT_HEADERS, "Accept": "application/json"},
+            timeout=20.0,
+            retries=1,
+        )
+        parsed = _parse_blockscout_v2_rest(data, limit=lim)
+        done = _finish(parsed, "Holders from Robinhood Blockscout REST.")
+        if done:
+            done["api"] = "blockscout_robinhood_rest"
+            return done
+        errors.append(parsed.get("error") or "blockscout_rest: empty")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"blockscout_rest: {exc}")
+
     try:
         params = urlencode(
             {
@@ -581,37 +631,117 @@ def _from_blockscout_robinhood(token: str, *, limit: int) -> dict[str, Any]:
         parsed = _parse_blockscout_holders(
             data, limit=lim, api="blockscout_robinhood_public"
         )
-        if parsed.get("holders"):
-            parsed["notes"] = "Holders from robinhoodchain.blockscout.com."
-            return parsed
+        done = _finish(parsed, "Holders from robinhoodchain.blockscout.com.")
+        if done:
+            return done
         errors.append(parsed.get("error") or "blockscout_public: empty")
     except Exception as exc:  # noqa: BLE001
         errors.append(f"blockscout_public: {exc}")
-
-    try:
-        url = (
-            f"https://robinhoodchain.blockscout.com/api/v2/tokens/"
-            f"{quote(token)}/holders"
-        )
-        data = get_json(
-            url,
-            headers={**DEFAULT_HEADERS, "Accept": "application/json"},
-            timeout=20.0,
-            retries=0,
-        )
-        parsed = _parse_blockscout_v2_rest(data, limit=lim)
-        if parsed.get("holders"):
-            parsed["notes"] = "Holders from Robinhood Blockscout REST."
-            parsed["api"] = "blockscout_robinhood_rest"
-            return parsed
-        errors.append(parsed.get("error") or "blockscout_rest: empty")
-    except Exception as exc:  # noqa: BLE001
-        errors.append(f"blockscout_rest: {exc}")
 
     return {
         "holders": [],
         "error": "; ".join(errors) or "Blockscout holders unavailable",
     }
+
+
+def _blockscout_rh_token_meta(token: str) -> dict[str, Any]:
+    """decimals / total_supply / holders_count from public Robinhood Blockscout."""
+    out: dict[str, Any] = {
+        "decimals": 18,
+        "total_supply_raw": None,
+        "holders_count": None,
+    }
+    try:
+        data = get_json(
+            f"https://robinhoodchain.blockscout.com/api/v2/tokens/{quote(token)}",
+            headers={**DEFAULT_HEADERS, "Accept": "application/json"},
+            timeout=12.0,
+            retries=0,
+        )
+        if not isinstance(data, dict):
+            return out
+        if data.get("decimals") is not None:
+            try:
+                out["decimals"] = int(data["decimals"])
+            except (TypeError, ValueError):
+                pass
+        raw = data.get("total_supply")
+        if raw is not None and str(raw).strip() != "":
+            try:
+                out["total_supply_raw"] = int(str(raw).strip())
+            except (TypeError, ValueError):
+                pass
+        if data.get("holders_count") is not None:
+            try:
+                out["holders_count"] = int(data["holders_count"])
+            except (TypeError, ValueError):
+                pass
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _finalize_evm_holder_rows(
+    rows: list[dict[str, Any]],
+    *,
+    decimals: Any,
+    supply_raw: int | None,
+) -> list[dict[str, Any]]:
+    """Normalize balances from base units and fill pct_supply when possible."""
+    dec = 18
+    try:
+        if decimals is not None:
+            dec = int(decimals)
+    except (TypeError, ValueError):
+        dec = 18
+    out: list[dict[str, Any]] = []
+    for i, h in enumerate(rows):
+        if not isinstance(h, dict):
+            continue
+        row = dict(h)
+        raw = row.get("_raw_value")
+        if raw is None:
+            raw = row.get("balance")
+        bal = _raw_to_ui(raw, dec)
+        if bal is not None:
+            row["balance"] = bal
+        pct = _f(row.get("pct_supply"))
+        if pct is None and supply_raw and raw is not None:
+            try:
+                pct = float(int(str(raw).strip())) / float(supply_raw) * 100.0
+            except (TypeError, ValueError, ZeroDivisionError):
+                pct = None
+        if pct is not None:
+            row["pct_supply"] = round(pct, 6)
+        row.pop("_raw_value", None)
+        # Contract / pool labels → treat as known program (LP-style)
+        lab = (row.get("label") or "").strip()
+        if lab and _looks_like_evm_lp(lab):
+            row["is_known_program"] = True
+            if "liquidity" not in lab.lower() and "pool" not in lab.lower():
+                row["label"] = f"{lab} (contract)"
+        row["rank"] = i + 1
+        out.append(row)
+    return out
+
+
+def _looks_like_evm_lp(label: str) -> bool:
+    t = (label or "").lower()
+    return any(
+        k in t
+        for k in (
+            "uniswap",
+            "pool",
+            "router",
+            "liquidity",
+            "pair",
+            "vault",
+            "aerodrome",
+            "pancake",
+            "sushiswap",
+            "camelot",
+        )
+    )
 
 
 def _parse_blockscout_holders(
@@ -641,12 +771,16 @@ def _parse_blockscout_holders(
         if not isinstance(row, dict):
             continue
         addr_field = row.get("address")
+        label = None
+        is_contract = False
         if isinstance(addr_field, dict):
             wallet = (
                 addr_field.get("hash")
                 or addr_field.get("hash_with_checksum")
                 or ""
             ).strip()
+            label = addr_field.get("name")
+            is_contract = bool(addr_field.get("is_contract"))
         else:
             wallet = (
                 str(addr_field or "")
@@ -655,18 +789,17 @@ def _parse_blockscout_holders(
             ).strip()
         if not wallet:
             continue
-        bal = _f(row.get("value"))
-        if bal is None:
-            bal = _raw_to_ui(row.get("value"), row.get("decimals") or 18)
+        raw_val = row.get("value")
         pct = _f(row.get("percentage") or row.get("percent"))
         holders.append(
             {
                 "rank": i + 1,
                 "wallet": wallet,
-                "balance": bal,
+                "balance": None,
+                "_raw_value": raw_val,
                 "pct_supply": pct,
-                "label": None,
-                "is_known_program": False,
+                "label": label,
+                "is_known_program": is_contract,
                 "insider": False,
                 "token_account": "",
                 "provider": "blockscout",
@@ -691,24 +824,31 @@ def _parse_blockscout_v2_rest(data: Any, *, limit: int) -> dict[str, Any]:
         addr_obj = row.get("address") or {}
         if isinstance(addr_obj, dict):
             wallet = (addr_obj.get("hash") or addr_obj.get("hash_with_checksum") or "").strip()
+            label = addr_obj.get("name")
         else:
             wallet = str(addr_obj or row.get("address_hash") or "").strip()
+            label = None
         if not wallet:
             continue
-        bal = _f(row.get("value"))
-        if bal is None:
-            bal = _raw_to_ui(row.get("value"), 18)
+        # Only LP/pool-named contracts count as known programs (not every contract)
+        is_lp = bool(label and _looks_like_evm_lp(str(label)))
+        if wallet.lower() in {
+            "0x000000000000000000000000000000000000dead",
+            "0x0000000000000000000000000000000000000000",
+        }:
+            label = label or "Burn / dead"
+            is_lp = True
+        raw_val = row.get("value")
         pct = _f(row.get("percentage") or row.get("token_share"))
         holders.append(
             {
                 "rank": i + 1,
                 "wallet": wallet,
-                "balance": bal,
+                "balance": None,
+                "_raw_value": raw_val,
                 "pct_supply": pct,
-                "label": (addr_obj.get("name") if isinstance(addr_obj, dict) else None),
-                "is_known_program": bool(
-                    isinstance(addr_obj, dict) and addr_obj.get("is_contract")
-                ),
+                "label": label,
+                "is_known_program": is_lp,
                 "insider": False,
                 "token_account": "",
                 "provider": "blockscout",
@@ -747,17 +887,23 @@ def _sum_pct(holders: list[dict[str, Any]], n: int) -> float | None:
 
 def _raw_to_ui(raw: Any, decimals: Any) -> float | None:
     try:
-        if raw is None:
+        if raw is None or raw == "":
             return None
-        amt = float(raw)
         dec = int(decimals) if decimals is not None else 18
         if dec < 0:
             dec = 18
-        # Heuristic: huge integers are base units
-        if amt > 1e12 or (isinstance(raw, str) and raw.isdigit() and len(raw) > 12):
+        s = str(raw).strip().replace(",", "")
+        # Integer base-units (Blockscout / Etherscan quantity strings)
+        if s.lstrip("-").isdigit():
+            from decimal import Decimal
+
+            return float(Decimal(s) / (Decimal(10) ** dec))
+        amt = float(s)
+        # Huge floats are almost always still base units
+        if abs(amt) > 1e15:
             return amt / (10**dec)
         return amt
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, ArithmeticError):
         return None
 
 

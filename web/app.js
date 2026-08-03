@@ -25,8 +25,70 @@ const BUNDLE_STATS_BAR_SNAP_KEY = "adtc_bundle_stats_bar_snap";
 /** Last live scan time for Fresh / Multi-send / Shared SOL (browser). */
 const OPTIONAL_LAST_KNOWN_KEY = "adtc_optional_last_known";
 /** Bump when shipping UI delta/persist fixes (shown in Bundles). */
-const ADTC_CLIENT_VERSION = "v182";
+const ADTC_CLIENT_VERSION = "v183";
 try { window.__ADTC_CLIENT__ = ADTC_CLIENT_VERSION; } catch (_) {}
+
+/** Active Analyze chain — drives Solscan vs Etherscan vs Blockscout wallet links. */
+let _activeExplorerChain = "solana";
+
+function setActiveExplorerChain(chain) {
+  _activeExplorerChain = String(chain || "solana")
+    .trim()
+    .toLowerCase() || "solana";
+}
+
+function explorerAccountBase(chain) {
+  const c = String(chain || _activeExplorerChain || "solana")
+    .trim()
+    .toLowerCase();
+  if (c === "robinhood" || c === "rh" || c === "robinhood-chain" || c === "4663") {
+    return "https://robinhoodchain.blockscout.com/address/";
+  }
+  if (c === "ethereum" || c === "eth") return "https://etherscan.io/address/";
+  if (c === "base") return "https://basescan.org/address/";
+  if (c === "bsc") return "https://bscscan.com/address/";
+  if (c === "arbitrum" || c === "arb") return "https://arbiscan.io/address/";
+  if (c === "polygon" || c === "matic") return "https://polygonscan.com/address/";
+  if (c === "optimism" || c === "op") {
+    return "https://optimistic.etherscan.io/address/";
+  }
+  if (c === "avalanche" || c === "avax") return "https://snowtrace.io/address/";
+  return "https://solscan.io/account/";
+}
+
+function explorerTokenBase(chain) {
+  const c = String(chain || _activeExplorerChain || "solana")
+    .trim()
+    .toLowerCase();
+  if (c === "robinhood" || c === "rh" || c === "robinhood-chain" || c === "4663") {
+    return "https://robinhoodchain.blockscout.com/token/";
+  }
+  if (c === "ethereum" || c === "eth") return "https://etherscan.io/token/";
+  if (c === "base") return "https://basescan.org/token/";
+  if (c === "bsc") return "https://bscscan.com/token/";
+  if (c === "arbitrum" || c === "arb") return "https://arbiscan.io/token/";
+  if (c === "polygon" || c === "matic") return "https://polygonscan.com/token/";
+  if (c === "optimism" || c === "op") {
+    return "https://optimistic.etherscan.io/token/";
+  }
+  if (c === "avalanche" || c === "avax") return "https://snowtrace.io/token/";
+  return "https://solscan.io/token/";
+}
+
+function explorerAccountUrl(addr, chain) {
+  const w = String(addr || "").trim();
+  if (!w) return "#";
+  // 0x wallets always use an EVM explorer even if chain was left on solana
+  if (/^0x[a-fA-F0-9]{40}$/i.test(w)) {
+    const c = String(chain || _activeExplorerChain || "").toLowerCase();
+    const evm =
+      c && c !== "solana" && c !== "sol"
+        ? c
+        : "ethereum";
+    return explorerAccountBase(evm) + encodeURIComponent(w);
+  }
+  return explorerAccountBase(chain) + encodeURIComponent(w);
+}
 // Hide boot banner ASAP so Opera never sticks on "Loading…" during restore
 try {
   if (window.__adtcBootReady) window.__adtcBootReady();
@@ -5692,8 +5754,11 @@ function renderRuggersWalletRow(row) {
     '">' +
     escHtml(tagLabel) +
     "</span> " +
-    '<a class="wallet-link" href="https://solscan.io/account/' +
-    encodeURIComponent(w) +
+    '<a class="wallet-link" href="' +
+    explorerAccountUrl(
+      w,
+      (_lastRuggersRec && _lastRuggersRec.chain) || _activeExplorerChain
+    ) +
     '" target="_blank" rel="noopener noreferrer">' +
     escHtml(w) +
     "</a>" +
@@ -8035,11 +8100,12 @@ function walletLinkHtml(addr, holdClass, holdColor) {
       holdColor +
       ' !important;font-weight:600"'
     : "";
+  const href = explorerAccountUrl(addr);
   return (
     '<a class="' +
     cls +
-    '" href="https://solscan.io/account/' +
-    addr +
+    '" href="' +
+    href +
     '" target="_blank" rel="noopener noreferrer"' +
     style +
     ">" +
@@ -8084,29 +8150,35 @@ function linkify(text, colorHold) {
 
     const linePct = linePcts ? linePcts[idx] : null;
 
-    // Solana base58 wallets → clickable Solscan (address text stays)
+    // Wallets → clickable explorer (Solana base58 or EVM 0x…; chain-aware)
     html = html.replace(
       /(^|>)([^<]*?)(?=<|$)/g,
       (full, prefix, chunk) => {
-        const linked = chunk.replace(
-          /\b([1-9A-HJ-NP-Za-km-z]{32,44})\b/g,
-          (addr) => {
-            let holdClass = null;
-            let holdColor = null;
-            if (colorHold) {
-              // Known LP / liquidity pair → white (not bag-risk colors)
-              if (isKnownLpContext(addr, plainLines, idx)) {
-                holdClass = LP_HOLD_COLOR.cls;
-                holdColor = LP_HOLD_COLOR.color;
-              } else if (linePct != null) {
-                const hc = holdColorForPct(linePct);
-                if (hc) {
-                  holdClass = hc.cls;
-                  holdColor = hc.color;
-                }
+        const linkAddr = (addr) => {
+          let holdClass = null;
+          let holdColor = null;
+          if (colorHold) {
+            // Known LP / liquidity pair → white (not bag-risk colors)
+            if (isKnownLpContext(addr, plainLines, idx)) {
+              holdClass = LP_HOLD_COLOR.cls;
+              holdColor = LP_HOLD_COLOR.color;
+            } else if (linePct != null) {
+              const hc = holdColorForPct(linePct);
+              if (hc) {
+                holdClass = hc.cls;
+                holdColor = hc.color;
               }
             }
-            return walletLinkHtml(addr, holdClass, holdColor);
+          }
+          return walletLinkHtml(addr, holdClass, holdColor);
+        };
+        let linked = chunk.replace(/\b(0x[a-fA-F0-9]{40})\b/g, linkAddr);
+        linked = linked.replace(
+          /\b([1-9A-HJ-NP-Za-km-z]{32,44})\b/g,
+          (addr) => {
+            // Avoid re-linking inside already-linked HTML or 0x mishits
+            if (/^0x/i.test(addr)) return addr;
+            return linkAddr(addr);
           }
         );
         return prefix + linked;
@@ -8672,6 +8744,7 @@ function renderSummary(data) {
   const name = t.name || m.name || "Token";
   const sym = t.symbol || m.symbol || "?";
   const chain = t.chain_id || m.chain_id || "";
+  setActiveExplorerChain(chain);
   $("sumName").textContent = `${name} ($${sym}) · ${chain}`;
   // Token logo next to ticker / name
   const logoEl = $("sumLogo");
@@ -8699,7 +8772,7 @@ function renderSummary(data) {
   const mint = (t.address || m.address || "").trim();
   const sumAddr = $("sumAddr");
   if (sumAddr) {
-    // Top summary mint — yellow text link to Solscan (no raw URL shown)
+    // Top summary mint — yellow text link to chain explorer (no raw URL shown)
     sumAddr.textContent = "";
     sumAddr.classList.remove("copy-mint");
     sumAddr.removeAttribute("data-copy");
@@ -8707,11 +8780,11 @@ function renderSummary(data) {
     if (mint) {
       const a = document.createElement("a");
       a.className = "sum-mint-link mono";
-      a.href = "https://solscan.io/token/" + encodeURIComponent(mint);
+      a.href = explorerTokenBase(chain) + encodeURIComponent(mint);
       a.target = "_blank";
       a.rel = "noopener noreferrer";
       a.textContent = mint;
-      a.title = "Open on Solscan";
+      a.title = "Open on explorer";
       sumAddr.appendChild(a);
     }
   }
@@ -8974,8 +9047,8 @@ function bunWalletLink(addr) {
   const w = String(addr || "").trim();
   if (!w) return "—";
   return (
-    '<a class="wallet-link bun-wallet" href="https://solscan.io/account/' +
-    encodeURIComponent(w) +
+    '<a class="wallet-link bun-wallet" href="' +
+    explorerAccountUrl(w) +
     '" target="_blank" rel="noopener noreferrer" title="' +
     escHtml(w) +
     '">' +
@@ -13075,6 +13148,13 @@ function renderBundlesUi(data) {
 /** Fast paint only: summary tabs + bundles. No Ruggers/history (those freeze Opera). */
 function renderSectionsLight(data, query) {
   const sections = (data && data.sections) || {};
+  try {
+    const ch =
+      (data && data.token && data.token.chain_id) ||
+      (data && data.market && data.market.chain_id) ||
+      "";
+    if (ch) setActiveExplorerChain(ch);
+  } catch (_) {}
   for (const tab of TABS) {
     if (tab === "history" || tab === "ruggers" || tab === "bundles" || tab === "about") continue;
     if (sections[tab]) setPanelText(tab, sections[tab]);

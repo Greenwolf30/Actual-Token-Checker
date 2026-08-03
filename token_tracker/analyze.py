@@ -38,6 +38,22 @@ _CHAIN_ALIASES: dict[str, str] = {
     "op": "optimism",
 }
 
+# EVM chains with holder support (Blockscout / Moralis / Etherscan)
+_EVM_HOLDER_CHAINS = frozenset(
+    {
+        "ethereum",
+        "eth",
+        "base",
+        "bsc",
+        "arbitrum",
+        "robinhood",
+        "rh",
+        "polygon",
+        "optimism",
+        "avalanche",
+    }
+)
+
 # EVM chains to probe when user pastes 0x… without selecting a chain
 _EVM_PROBE_CHAINS = (
     "ethereum",
@@ -638,7 +654,7 @@ def analyze_token(
         "ok": False,
         "summary": {},
         "signals": [],
-        "error": "Bundles skipped (quick mode or non-Solana).",
+        "error": "Bundles skipped (quick mode).",
     }
     helius_holders: dict[str, Any] = {"ok": False, "holders": [], "summary": {}}
     maps_data: dict[str, Any]
@@ -816,15 +832,32 @@ def analyze_token(
                 "notes": f"Holder scan failed: {exc}",
             }
 
+    def _chain_norm() -> str:
+        return (pair_summary.get("chain_id") or "").strip().lower()
+
     def _fetch_bundles() -> dict[str, Any]:
-        if not token_addr or (pair_summary.get("chain_id") or "").lower() not in {
-            "solana",
-            "sol",
-            "",
-        }:
+        """Solana: full Helius fusion. EVM: filled after holders (heuristic)."""
+        chain = _chain_norm()
+        if not token_addr:
             return {
                 "ok": False,
-                "error": "Comprehensive bundles require Solana mint + APIs (Helius recommended).",
+                "error": "Missing token address for bundles.",
+                "summary": {},
+                "signals": [],
+            }
+        if chain in _EVM_HOLDER_CHAINS:
+            # Built after holders succeed (avoids a second Blockscout/Moralis hit).
+            return {
+                "ok": False,
+                "pending_evm": True,
+                "summary": {},
+                "signals": [],
+                "error": "EVM bundles pending holders.",
+            }
+        if chain not in {"solana", "sol", ""}:
+            return {
+                "ok": False,
+                "error": f"Bundles not implemented for chain '{chain}'.",
                 "summary": {},
                 "signals": [],
             }
@@ -847,6 +880,41 @@ def analyze_token(
                 "signals": [],
                 "notes": f"Comprehensive bundle analysis failed: {exc}",
             }
+
+    def _evm_bundles_from_holders(hdata: dict[str, Any]) -> dict[str, Any]:
+        """Concentration / similar-size bundles from EVM holder rows (no Helius)."""
+        if not hdata.get("ok"):
+            return {
+                "ok": False,
+                "error": (
+                    hdata.get("error")
+                    or hdata.get("notes")
+                    or "Holders required for EVM bundles."
+                ),
+                "summary": {},
+                "signals": [],
+                "notes": "EVM bundles need a successful Holders scan (Blockscout / Moralis).",
+            }
+        try:
+            out = bun.analyze_bundles(hdata)
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "ok": False,
+                "error": str(exc),
+                "summary": {},
+                "signals": [],
+                "notes": f"EVM bundle analysis failed: {exc}",
+            }
+        if not out.get("ok"):
+            return out
+        out = dict(out)
+        out["holders"] = list(hdata.get("holders") or [])
+        tip = (
+            "EVM bundles: concentration + similar-size from holders. "
+            "Funding / Fresh / Multi-send / launch-window stay Solana-only."
+        )
+        out["notes"] = (tip + " " + (out.get("notes") or "")).strip()
+        return out
 
     def _fetch_maps() -> dict[str, Any]:
         try:
@@ -934,7 +1002,9 @@ def analyze_token(
             )
             f_bund = (
                 pool.submit(_fetch_bundles)
-                if include_holders and token_addr
+                if include_holders
+                and token_addr
+                and _chain_norm() not in _EVM_HOLDER_CHAINS
                 else None
             )
 
@@ -947,6 +1017,14 @@ def analyze_token(
                 holders_data = f_hold.result()
             if f_bund is not None:
                 bundles_data = f_bund.result()
+
+        # Robinhood / ETH / … — heuristic bundles from holder rows (not Solscan/Helius)
+        if (
+            include_holders
+            and token_addr
+            and _chain_norm() in _EVM_HOLDER_CHAINS
+        ):
+            bundles_data = _evm_bundles_from_holders(holders_data)
 
         # Prefer Helius snapshot already inside bundles (skip extra Helius RPC)
         try:

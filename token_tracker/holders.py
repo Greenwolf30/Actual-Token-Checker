@@ -677,7 +677,7 @@ def analyze_holders(
     if not chain_id or not token_address:
         return _empty("Missing chain or token address.")
 
-    chain = chain_id.lower()
+    chain = chain_id.lower().strip()
     if chain in {"solana", "sol"}:
         return _solana_holders(
             token_address,
@@ -696,6 +696,9 @@ def analyze_holders(
         "avalanche",
         "robinhood",  # Robinhood Chain (Arbitrum L2, chain id 4663)
         "rh",
+        "robinhood-chain",
+        "robinhoodchain",
+        "4663",
     }:
         from . import evm_holders as evm
 
@@ -2124,37 +2127,51 @@ def format_holders_text(data: dict[str, Any]) -> str:
     lines.append("")
     lines.append("── TOTAL WALLETS (by source) ──")
     lines.append(f"  Total wallets (holders): {_fmt_count(total_w)}")
-    lines.append(f"    Pump.fun:     {_fmt_count(by.get('pumpfun'))}")
-    lines.append(f"    Birdeye:      {_fmt_count(by.get('birdeye'))}")
-    lines.append(
-        f"    DexScreener:  {_fmt_count(by.get('dexscreener'))}"
-        + (
-            "  (no holder field on pairs)"
-            if by.get("dexscreener") is None
-            else ""
+    if is_evm:
+        lines.append(f"    Blockscout:   {_fmt_count(by.get('blockscout'))}")
+        lines.append(f"    Moralis:      {_fmt_count(by.get('moralis'))}")
+        lines.append(f"    Etherscan:    {_fmt_count(by.get('etherscan'))}")
+        # Named source key from primary (e.g. blockscout_robinhood_rest)
+        for k, v in (by or {}).items():
+            if k in {"blockscout", "moralis", "etherscan"}:
+                continue
+            if v is not None:
+                lines.append(f"    {k}: {_fmt_count(v)}")
+        lines.append(
+            "  (EVM totals from Blockscout / Moralis / Etherscan — not Solscan)"
         )
-    )
-    sol_tip = ""
-    if by.get("solscan") is None:
-        if ps.get("solscan_needs_key"):
-            sol_tip = "  (set SOLSCAN_API_KEY)"
-        elif ps.get("solscan") is False:
-            err_map = ps.get("errors") if isinstance(ps.get("errors"), dict) else {}
-            sol_err = str((err_map or {}).get("solscan") or "")
-            if "upgrade your api key" in sol_err.lower():
-                sol_tip = "  (key set — upgrade Solscan Pro plan for holders)"
-            elif sol_err:
-                sol_tip = "  (key set — Pro request failed)"
+    else:
+        lines.append(f"    Pump.fun:     {_fmt_count(by.get('pumpfun'))}")
+        lines.append(f"    Birdeye:      {_fmt_count(by.get('birdeye'))}")
+        lines.append(
+            f"    DexScreener:  {_fmt_count(by.get('dexscreener'))}"
+            + (
+                "  (no holder field on pairs)"
+                if by.get("dexscreener") is None
+                else ""
+            )
+        )
+        sol_tip = ""
+        if by.get("solscan") is None:
+            if ps.get("solscan_needs_key"):
+                sol_tip = "  (set SOLSCAN_API_KEY)"
+            elif ps.get("solscan") is False:
+                err_map = ps.get("errors") if isinstance(ps.get("errors"), dict) else {}
+                sol_err = str((err_map or {}).get("solscan") or "")
+                if "upgrade your api key" in sol_err.lower():
+                    sol_tip = "  (key set — upgrade Solscan Pro plan for holders)"
+                elif sol_err:
+                    sol_tip = "  (key set — Pro request failed)"
+                else:
+                    sol_tip = "  (key set — Pro holders unavailable)"
             else:
-                sol_tip = "  (key set — Pro holders unavailable)"
-        else:
-            sol_tip = "  (Solscan total unavailable)"
-    lines.append(f"    Solscan:      {_fmt_count(by.get('solscan'))}{sol_tip}")
-    if by.get("helius") is not None:
-        lines.append(f"    Helius DAS:   {_fmt_count(by.get('helius'))}")
-    lines.append(
-        "  (Best total = highest reported source · top list below is not the full mint)"
-    )
+                sol_tip = "  (Solscan total unavailable)"
+        lines.append(f"    Solscan:      {_fmt_count(by.get('solscan'))}{sol_tip}")
+        if by.get("helius") is not None:
+            lines.append(f"    Helius DAS:   {_fmt_count(by.get('helius'))}")
+        lines.append(
+            "  (Best total = highest reported source · top list below is not the full mint)"
+        )
 
     lines.append("")
     lines.append("── CONCENTRATION ──")
