@@ -1903,17 +1903,44 @@ async function ensureWalletConnect() {
         return { signature: typeof sig === "string" ? sig : String(sig) };
       },
       onProposal: async (proposal) => {
-        openWcProposalModal(proposal);
+        // User already pasted the wc: URI — approve the session immediately.
+        try {
+          setWcStatus("Approving session…");
+          await GladiatorWC.approveProposal(proposal);
+          WC_PENDING_PROPOSAL = null;
+          hideWcApproveBar();
+          if ($("wcUri")) $("wcUri").value = "";
+          setWcStatus("Session linked — waiting for pump.fun sign request…");
+          showToast("Linked — keep popup open");
+          paintWcSettings();
+        } catch (err) {
+          // Fallback: show manual approve if auto fails
+          openWcProposalModal(proposal);
+          setWcStatus(
+            "Auto-approve failed: " + String(err && err.message ? err.message : err)
+          );
+        }
       },
       onRequest: async (event) => {
+        // pump.fun "writes" sign requests to the wallet over WC relay.
+        // Handle them here — do not wait on a custom UI button.
         const method =
-          event && event.params && event.params.request && event.params.request.method;
-        // Account reads can answer immediately; signatures need the Approve tap.
-        if (method === "solana_getAccounts" || method === "solana_requestAccounts") {
+          (event && event.params && event.params.request && event.params.request.method) ||
+          "request";
+        try {
+          setWcStatus("pump.fun request: " + method + " — signing…");
+          showToast("Signing " + method.replace(/^solana_/, "") + "…");
           await GladiatorWC.handleRequest(event);
-          return;
+          setWcStatus("Signed " + method.replace(/^solana_/, "") + " — check pump.fun");
+          showToast("Signed — check pump.fun");
+          paintWcSettings();
+        } catch (err) {
+          const msg = String(err && err.message ? err.message : err);
+          setWcStatus("Sign failed: " + msg);
+          showToast(msg);
+          // Offer manual retry
+          openWcSignRequest(event);
         }
-        openWcSignRequest(event);
       },
       onSessionDelete: () => {
         WC_PENDING_REQUEST = null;
