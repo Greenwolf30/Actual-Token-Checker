@@ -935,7 +935,7 @@ async function connectLedgerAccount(opts) {
   accountIndex = Math.floor(accountIndex);
   showToast("Connect Ledger · open Solana app…");
   setStatus(
-    "Unlock Ledger, open the Solana app, then approve the browser HID prompt."
+    "Unlock Ledger, open the Solana app, close Ledger Live, then pick your Nano in the Chrome prompt."
   );
   let got;
   try {
@@ -943,14 +943,27 @@ async function connectLedgerAccount(opts) {
     got = await api.getAddress(accountIndex, false);
   } catch (err) {
     const msg = String(err && err.message ? err.message : err);
-    if (/denied|cancel|No device selected/i.test(msg)) {
-      throw new Error("Ledger connection cancelled — try Connect Ledger again");
+    console.warn("[ledger-getAddress]", msg, err);
+    if (/denied|cancel|No device selected|Access denied to use Ledger/i.test(msg)) {
+      throw new Error(
+        "No Ledger selected — close Ledger Live, unlock Nano, open Solana app, tap Connect Ledger, then choose your device in the Chrome prompt (don’t Cancel)."
+      );
     }
-    if (/busy|locked|blind|CLA_NOT_SUPPORTED|0x6e00|0x6511|INS_NOT_SUPPORTED/i.test(msg)) {
+    if (/already open|Failed to open|Unable to claim|transfer|NetworkError|DOMException/i.test(msg)) {
+      throw new Error(
+        "Ledger is busy — fully quit Ledger Live / other wallet apps, unplug & replug the Nano, then try Connect Ledger again."
+      );
+    }
+    if (/busy|locked|blind|CLA_NOT_SUPPORTED|0x6e00|0x6511|INS_NOT_SUPPORTED|0x6d00/i.test(msg)) {
       throw new Error("Unlock Ledger and open the Solana app, then retry");
     }
     if (/gesture|activation|NotAllowedError|user gesture/i.test(msg)) {
       throw new Error("Click Connect Ledger again (browser needs a fresh click for USB)");
+    }
+    if (/NoDeviceFound|ListenTimeout|not supported/i.test(msg)) {
+      throw new Error(
+        "No Ledger found — plug in via USB, unlock it, open the Solana app, then tap Connect Ledger."
+      );
     }
     throw err;
   }

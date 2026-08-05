@@ -7,7 +7,8 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
-v0.5.97:
-- Fix Ledger connect from the toolbar popup (opens wallet window for HID)
+v0.5.98:
+- Clearer Ledger connect errors + more reliable HID device open
+- Close Ledger Live before connecting; pick Nano in the Chrome prompt
 
 Version: see manifest.json
