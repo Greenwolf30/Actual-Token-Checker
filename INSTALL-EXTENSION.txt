@@ -1,19 +1,21 @@
 Gladiator Wallet — load as unpacked Chrome/Opera extension
 
-1. chrome://extensions → REMOVE old Gladiator → Load unpacked → THIS folder
-2. Click Reload
-3. Click the Gladiator TOOLBAR ICON once
-4. Wait for toast: “Jupiter signing ready”
-5. Hard-refresh jup.ag → Connect → swap
+1. Unzip → open the Gladiator-Wallet-0.5.57 folder
+2. chrome://extensions → REMOVE old Gladiator → Load unpacked → that folder
+3. Click Reload
+4. Click the Gladiator TOOLBAR ICON once
+5. Wait for toast: “Jupiter signing ready”
+6. Hard-refresh jup.ag → Connect → swap
+
+v0.5.57:
+- Packaging fix — full extension folder (lib/fonts/config) so wallet boots again
 
 v0.5.56:
-- Connections now lists in-page dApps (Jupiter / pump.fun), not only WalletConnect
-- History shows swap pairs (e.g. 1000 USDC → TOKEN) instead of a single −1000 amount
+- Connections lists in-page dApps (Jupiter / pump.fun), not only WalletConnect
+- History shows swap pairs (e.g. 1000 USDC → TOKEN)
 
 v0.5.55:
 - Fixes “No wallet” on sign by caching keys in the extension service worker
-  when the toolbar popup opens, then passing them to the invisible signer
-- No side window required
 
 If toast does NOT say “Jupiter signing ready”:
 - Enter old password if prompted, or import seed/secret key, then reopen popup

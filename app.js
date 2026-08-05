@@ -5318,7 +5318,11 @@ async function boot() {
         ? "Paste wc: URI → Connect (opens Gladiator wallet window)"
         : "Add a WalletConnect Project ID, then paste a wc: URI"
     );
-    await refreshWcConnections({ ensure: false });
+    try {
+      await refreshWcConnections({ ensure: false });
+    } catch (err) {
+      console.warn("[connections-boot]", err);
+    }
   } else {
     try {
       if (STATE.wcProjectId && window.GladiatorWC) {
