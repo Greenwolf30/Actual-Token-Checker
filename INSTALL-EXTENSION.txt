@@ -1,14 +1,18 @@
 Gladiator Wallet — load as unpacked Chrome/Opera extension
 
 1. chrome://extensions → Developer mode ON
-2. Load unpacked → select THIS folder
-3. Click Reload on Gladiator
-4. Click the Gladiator toolbar icon once (popup) so keys sync
-5. Use Jupiter — no side window needed
+2. Remove any OLD Gladiator entry, then Load unpacked → THIS folder
+3. Click Reload
+4. Click the Gladiator toolbar icon once (popup must open)
+5. If asked for old password, enter it — or import seed/secret key
+6. Hard-refresh jup.ag → Connect Gladiator → swap
 
-v0.5.53:
-- Jupiter connect + swap signing stays inside the extension (invisible offscreen)
-- No Gladiator side/wallet window required for swaps
-- If keys were locked/missing: open the toolbar popup once, enter old password or import
+v0.5.54:
+- Fix “No wallet” on Jupiter sign (popup localStorage was not synced to
+  chrome.storage that the invisible signer reads)
+- Stop wiping encrypted vault before keys are restored
+- Auto-retry sign after toolbar popup syncs
+
+No side window required for Jupiter swaps.
 
 Version: see manifest.json

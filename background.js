@@ -189,16 +189,20 @@ async function trustOrigin(origin) {
   await storageSet({ [TRUSTED_KEY]: list.slice(-100) });
 }
 
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 async function getActiveSolanaAccount() {
   const bag = await storageGet([STORE_KEY]);
   const state = bag[STORE_KEY];
   if (!state || !state.accounts || !state.accounts.length) {
-    throw new Error("No wallet — open the Gladiator extension and create/import one");
+    return null;
   }
   const acc =
     state.accounts.find((a) => a.id === state.activeAccountId) || state.accounts[0];
   const pk = acc && acc.solana && acc.solana.publicKey;
-  if (!pk) throw new Error("No Solana address on active wallet");
+  if (!pk) return null;
   const secretKey = acc && acc.solana && acc.solana.secretKey;
   const mnemonic = acc && acc.mnemonic;
   const needsMigrate = !!(state.vault && state.vault.data && !secretKey && !mnemonic);
@@ -212,20 +216,40 @@ async function getActiveSolanaAccount() {
   };
 }
 
-/** Open the toolbar popup (not a side window) so the user can unlock/import once. */
+/** Open the toolbar popup (not a side window) so the user can unlock/import/sync once. */
 async function nudgeWalletPopup() {
   try {
     if (chrome.action && typeof chrome.action.openPopup === "function") {
       await chrome.action.openPopup();
-      return;
     }
   } catch (_) {}
 }
 
+async function waitForSigner(timeoutMs) {
+  const start = Date.now();
+  let last = null;
+  while (Date.now() - start < timeoutMs) {
+    last = await getActiveSolanaAccount();
+    if (last && last.hasSigner) return last;
+    await sleep(300);
+  }
+  return last;
+}
+
 async function requireSignerReady() {
-  const acc = await getActiveSolanaAccount();
-  if (acc.hasSigner) return acc;
+  let acc = await getActiveSolanaAccount();
+  if (acc && acc.hasSigner) return acc;
+
+  // Popup may still be syncing localStorage → chrome.storage.
   await nudgeWalletPopup();
+  acc = await waitForSigner(8000);
+  if (acc && acc.hasSigner) return acc;
+
+  if (!acc) {
+    throw new Error(
+      "No wallet in extension storage — click the Gladiator toolbar icon once to sync, then retry"
+    );
+  }
   if (acc.needsMigrate) {
     throw new Error(
       "Keys still locked — open the Gladiator extension icon and enter your old password once"
@@ -254,7 +278,6 @@ async function handleProviderRequest(msg, sender) {
     }
     const publicKey = await getActivePublicKey();
     if (origin) await trustOrigin(origin);
-    // Warm invisible offscreen signer — no side window.
     callOffscreen("getPubkey", {}).catch(() => {});
     return { publicKey };
   }
@@ -270,7 +293,18 @@ async function handleProviderRequest(msg, sender) {
     method === "signMessage"
   ) {
     await requireSignerReady();
-    return await callOffscreen(method, params);
+    try {
+      return await callOffscreen(method, params);
+    } catch (err) {
+      const msgText = String(err && err.message ? err.message : err);
+      // If offscreen still can't see the wallet, nudge popup sync and retry once.
+      if (/No wallet|No Solana key|locked/i.test(msgText)) {
+        await nudgeWalletPopup();
+        await waitForSigner(8000);
+        return await callOffscreen(method, params);
+      }
+      throw err;
+    }
   }
 
   throw new Error("Unsupported provider method: " + method);
@@ -384,6 +418,33 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg) return;
   // Offscreen document handles these — do not claim the message here.
   if (msg.type === "gladiator-offscreen") return;
+
+  if (msg.type === "gladiator-persist-wallet") {
+    const state = msg.state;
+    if (!state || !Array.isArray(state.accounts)) {
+      sendResponse({ ok: false, error: "Invalid wallet state" });
+      return true;
+    }
+    const toStore = { ...state };
+    delete toStore._needsVaultMigrate;
+    const hasSecrets = (toStore.accounts || []).some((a) => {
+      if (!a) return false;
+      if (a.mnemonic) return true;
+      if (a.solana && a.solana.secretKey) return true;
+      if (a.evm && a.evm.privateKey) return true;
+      return false;
+    });
+    if (hasSecrets) {
+      delete toStore.vault;
+      delete toStore.vaultEnabled;
+    }
+    storageSet({ [STORE_KEY]: toStore })
+      .then(() => sendResponse({ ok: true, accounts: toStore.accounts.length }))
+      .catch((err) =>
+        sendResponse({ ok: false, error: String(err && err.message ? err.message : err) })
+      );
+    return true;
+  }
 
   if (msg.type === "gladiator-set-inject") {
     const enabled = !!msg.enabled;

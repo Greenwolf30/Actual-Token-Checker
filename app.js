@@ -394,11 +394,16 @@ async function storageGet() {
 }
 
 async function storageSet(data) {
-  // Encryption paused — always persist plaintext wallet state.
-  const toStore = data;
+  // Never mutate caller's object. Only drop vault after plaintext secrets exist.
+  const toStore = data && typeof data === "object" ? { ...data } : data;
   if (toStore && typeof toStore === "object") {
-    delete toStore.vault;
-    delete toStore.vaultEnabled;
+    const hasSecrets = stateHasPlainSecrets(toStore);
+    delete toStore._needsVaultMigrate;
+    if (hasSecrets) {
+      delete toStore.vault;
+      delete toStore.vaultEnabled;
+    }
+    // If secrets are still locked in vault, keep vault blob intact.
   }
   const raw = JSON.stringify(toStore);
   let localOk = false;
@@ -421,9 +426,17 @@ async function storageSet(data) {
           reject(e);
         }
       });
+      // Confirm background/offscreen can see the same wallet.
+      try {
+        chrome.runtime.sendMessage({
+          type: "gladiator-persist-wallet",
+          state: toStore,
+        });
+      } catch (_) {}
     } catch (err) {
       console.warn("[storage chrome]", err);
       if (!localOk) throw err;
+      showToast("Warning: wallet not synced for Jupiter signing");
     }
   } else if (!localOk) {
     throw new Error("Could not save wallet");
@@ -5021,22 +5034,23 @@ async function boot() {
   }
   STATE = await ensureState();
   wireProviderSignBridge();
-  if (!isVaultLocked() && (await repairAllExtraKeys(STATE))) {
-    try {
-      await storageSet(STATE);
-      showToast("Signing keys ready for Jupiter");
-    } catch (err) {
-      console.warn("[boot-persist]", err);
-      showToast("Could not save keys — storage full?");
+  // Always push wallet into chrome.storage so invisible offscreen signing can see it.
+  try {
+    if (!isVaultLocked()) {
+      await repairAllExtraKeys(STATE);
     }
-  } else if (!isVaultLocked()) {
-    // Always re-write so offscreen signer sees the same secrets as this popup.
-    try {
-      const acc = activeAccount(STATE);
-      if (acc && ((acc.solana && acc.solana.secretKey) || acc.mnemonic)) {
-        await storageSet(STATE);
-      }
-    } catch (_) {}
+    await storageSet(STATE);
+    const acc = activeAccount(STATE);
+    if (acc && acc.solana && (acc.solana.secretKey || acc.mnemonic)) {
+      console.info("[Gladiator] wallet synced for in-page signing");
+    } else if (isVaultLocked()) {
+      showToast("Enter old password once — then Jupiter swaps work");
+    } else {
+      showToast("Import a wallet to enable Jupiter swaps");
+    }
+  } catch (err) {
+    console.warn("[boot-persist]", err);
+    showToast("Could not sync wallet for signing");
   }
   wire();
   paintSwitchers();
@@ -5045,7 +5059,6 @@ async function boot() {
   go("home");
   if (isVaultLocked()) {
     openVaultModal("migrate");
-    showToast("Enter old password once — then Jupiter swaps work in-wallet");
   }
   const bootAcc = activeAccount(STATE);
   if (bootAcc && bootAcc.mnemonic && window.MultiHD) {
