@@ -689,15 +689,20 @@ async function signViaWalletWindow(method, params, acc) {
     },
     [LEDGER_RES]: null,
   });
+  // Prefer the normal wallet popup UI (no separate tab/window).
+  let openedPopup = false;
   try {
-    // Full tab + click-to-sign modal (WebHID needs a real user gesture).
-    await focusOrOpenWcWallet({
-      focus: true,
-      settings: false,
-      ledgerSign: true,
-    });
+    if (chrome.action && typeof chrome.action.openPopup === "function") {
+      await chrome.action.openPopup();
+      openedPopup = true;
+    }
   } catch (_) {
-    await nudgeWalletPopup();
+    openedPopup = false;
+  }
+  if (!openedPopup) {
+    try {
+      await nudgeWalletPopup();
+    } catch (_) {}
   }
   for (let i = 0; i < 240; i++) {
     await sleep(500);
@@ -710,7 +715,7 @@ async function signViaWalletWindow(method, params, acc) {
   }
   await storageSet({ [LEDGER_REQ]: null, [LEDGER_RES]: null });
   throw new Error(
-    "Ledger sign timed out — keep the Gladiator tab open, tap Sign on Ledger, then approve on the device"
+    "Ledger sign timed out — click the Gladiator icon, tap Sign on Ledger, then approve on the device"
   );
 }
 

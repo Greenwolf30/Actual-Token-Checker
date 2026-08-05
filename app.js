@@ -8293,16 +8293,16 @@ function openLedgerSignModal(req) {
   if (body) {
     const method = (req && req.method) || "signTransaction";
     body.textContent =
-      "Jupiter / dApp needs a Ledger " +
+      "A dApp needs a Ledger " +
       (method === "signMessage" ? "message" : "transaction") +
-      " signature. Unlock the Nano, open the Solana app, then tap Sign on Ledger.";
+      " signature. Unlock the Nano, open the Solana app, tap Sign on Ledger, then approve on the device — keep this wallet popup open.";
   }
   pendingLedgerSignReq = req || null;
   if (modal) modal.hidden = false;
   try {
     if (typeof go === "function") go("home", { skipScroll: true });
   } catch (_) {}
-  showToast("Tap Sign on Ledger");
+  showToast("Tap Sign on Ledger in Gladiator");
 }
 
 function closeLedgerSignModal() {
@@ -8371,7 +8371,7 @@ async function confirmPendingLedgerSign() {
     });
     pendingLedgerSignReq = null;
     closeLedgerSignModal();
-    showToast("Ledger signed — return to Jupiter");
+    showToast("Ledger signed — back to the dApp");
   } catch (err) {
     const msg = String(err && err.message ? err.message : err);
     try {

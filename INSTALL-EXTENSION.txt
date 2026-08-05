@@ -7,9 +7,8 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
-v0.6.0:
-- Ledger + Jupiter: sign opens a tab with “Sign on Ledger” click (fixes HID)
-- Green Ledger tag next to Total balance for Ledger wallets
-- Selecting a Ledger wallet switches to Solana automatically
+v0.6.1:
+- Ledger dApp signing stays in the wallet popup (no separate tab)
+- Tap Sign on Ledger in the popup, then approve on the Nano
 
 Version: see manifest.json
