@@ -7,8 +7,8 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
-v0.5.98:
-- Clearer Ledger connect errors + more reliable HID device open
-- Close Ledger Live before connecting; pick Nano in the Chrome prompt
+v0.5.99:
+- Ledger connect opens a normal browser tab (fixes HID “No Ledger selected”)
+- USB only — quit Ledger Live, pick Nano in the Chrome list
 
 Version: see manifest.json

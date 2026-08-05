@@ -350,7 +350,37 @@ async function focusOrOpenWcWallet(opts) {
   else if (restore) url = base + "?restore=1";
   else if (openSettings) url = base + "?wc=1";
 
-  const shouldNavigate = openSettings || restore || ledger;
+  // Ledger WebHID chooser is unreliable in extension popup windows — use a
+  // normal browser tab (same approach as Sui / other wallets).
+  if (ledger) {
+    try {
+      const existing = await chrome.tabs.query({
+        url: [base, base + "?*"],
+      });
+      const ledgerTab =
+        (existing || []).find(
+          (t) => t.url && /[?&]ledger=1(?:&|$)/.test(String(t.url))
+        ) || null;
+      if (ledgerTab && ledgerTab.id != null) {
+        await chrome.tabs.update(ledgerTab.id, { url, active: focus });
+        if (ledgerTab.windowId != null && focus) {
+          try {
+            await chrome.windows.update(ledgerTab.windowId, { focused: true });
+          } catch (_) {}
+        }
+        return { ok: true, reused: true, tabId: ledgerTab.id, ledgerTab: true };
+      }
+    } catch (_) {}
+    const tab = await chrome.tabs.create({ url, active: focus !== false });
+    return {
+      ok: true,
+      reused: false,
+      tabId: tab && tab.id,
+      ledgerTab: true,
+    };
+  }
+
+  const shouldNavigate = openSettings || restore;
 
   if (walletWindowId != null) {
     try {

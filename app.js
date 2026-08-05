@@ -946,7 +946,7 @@ async function connectLedgerAccount(opts) {
     console.warn("[ledger-getAddress]", msg, err);
     if (/denied|cancel|No device selected|Access denied to use Ledger/i.test(msg)) {
       throw new Error(
-        "No Ledger selected — close Ledger Live, unlock Nano, open Solana app, tap Connect Ledger, then choose your device in the Chrome prompt (don’t Cancel)."
+        "No Ledger selected — use USB (not Bluetooth), quit Ledger Live, unlock Nano + open Solana app, tap Connect Ledger, then click your Ledger in the Chrome list and Allow."
       );
     }
     if (/already open|Failed to open|Unable to claim|transfer|NetworkError|DOMException/i.test(msg)) {
@@ -1051,26 +1051,26 @@ async function startLedgerConnectFlow() {
       settings: false,
       ledger: true,
     });
-    showToast("In Gladiator window → tap Connect Ledger");
+    showToast("Ledger tab opened → tap Connect Ledger");
     if (ledgerStatus) {
       ledgerStatus.textContent =
-        "Opened wallet window — unlock Ledger, open Solana app, then tap Connect Ledger there.";
+        "Opened Gladiator tab — unlock Ledger (USB), open Solana app, then tap Connect Ledger there and pick your device.";
     }
     return;
   }
 
-  // Full wallet page / window: WebHID must run from this click.
+  // Full wallet page / tab: WebHID must run from this click.
   try {
     await connectLedgerAccount({ accountIndex });
   } catch (err) {
     const msg = String(err && err.message ? err.message : err);
     console.warn("[ledger-connect]", err);
-    const needsWindow =
+    const needsTab =
       IS_EXTENSION &&
       /gesture|activation|NotAllowedError|must be handling a user gesture/i.test(
         msg
       );
-    if (needsWindow) {
+    if (needsTab) {
       try {
         await chromeLocalSet({
           gladiator_ledger_connect: {
@@ -1085,10 +1085,10 @@ async function startLedgerConnectFlow() {
         settings: false,
         ledger: true,
       });
-      showToast("In Gladiator window → tap Connect Ledger");
+      showToast("Ledger tab opened → tap Connect Ledger");
       if (ledgerStatus) {
         ledgerStatus.textContent =
-          "Opened wallet window — unlock Ledger, open Solana app, then tap Connect Ledger there.";
+          "Opened Gladiator tab — unlock Ledger (USB), open Solana app, then tap Connect Ledger there and pick your device.";
       }
       return;
     }
@@ -8889,12 +8889,15 @@ async function boot() {
             ledgerStatus.textContent =
               "Ready — unlock Ledger, open the Solana app, then tap Connect Ledger.";
           }
-          showToast("Tap Connect Ledger");
+          showToast("Tap Connect Ledger (USB)");
           try {
             const btn = $("connectLedgerBtn");
             if (btn && btn.scrollIntoView) {
               btn.scrollIntoView({ behavior: "smooth", block: "center" });
             }
+            // Ensure the Ledger section is expanded.
+            const details = btn && btn.closest("details");
+            if (details) details.open = true;
           } catch (_) {}
         }
       } catch (_) {}
