@@ -4072,6 +4072,22 @@ function paintSwitchers() {
   paintSendContacts();
 }
 
+function toggleChainPicker() {
+  const menu = $("chainPickerMenu");
+  const btn = $("chainPickerBtn");
+  const bar = document.querySelector(".chain-bar, .switcher-bar");
+  const top = document.querySelector(".topbar");
+  const center = document.querySelector(".topbar-center");
+  if (!menu || !btn) return;
+  const open = menu.hidden;
+  if (open) paintChainPicker();
+  menu.hidden = !open;
+  btn.setAttribute("aria-expanded", open ? "true" : "false");
+  if (bar) bar.classList.toggle("is-chain-open", open);
+  if (top) top.classList.toggle("is-chain-open", open);
+  if (center) center.classList.toggle("is-chain-open", open);
+}
+
 function closeChainPicker() {
   const menu = $("chainPickerMenu");
   const btn = $("chainPickerBtn");
@@ -4080,20 +4096,7 @@ function closeChainPicker() {
   if (btn) btn.setAttribute("aria-expanded", "false");
   if (bar) bar.classList.remove("is-chain-open");
   document.querySelector(".topbar")?.classList.remove("is-chain-open");
-}
-
-function toggleChainPicker() {
-  const menu = $("chainPickerMenu");
-  const btn = $("chainPickerBtn");
-  const bar = document.querySelector(".chain-bar, .switcher-bar");
-  const top = document.querySelector(".topbar");
-  if (!menu || !btn) return;
-  const open = menu.hidden;
-  if (open) paintChainPicker();
-  menu.hidden = !open;
-  btn.setAttribute("aria-expanded", open ? "true" : "false");
-  if (bar) bar.classList.toggle("is-chain-open", open);
-  if (top) top.classList.toggle("is-chain-open", open);
+  document.querySelector(".topbar-center")?.classList.remove("is-chain-open");
 }
 
 function paintChainPicker() {

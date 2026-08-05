@@ -2023,7 +2023,8 @@ body.is-extension .topbar-main {
   column-gap: 6px;
   min-width: 0;
   width: 100%;
-  overflow: hidden;
+  /* Must stay visible so the chain dropdown can open/receive clicks */
+  overflow: visible;
 }
 
 body.is-extension .topbar-main > .brand-chip {
@@ -2031,6 +2032,8 @@ body.is-extension .topbar-main > .brand-chip {
   flex: 0 1 auto;
   max-width: 108px;
   min-width: 0;
+  position: relative;
+  z-index: 1;
 }
 
 body.is-extension .brand-chip-sm {
@@ -2065,31 +2068,44 @@ body.is-extension .brand-chip-sm .brand-chevron {
 
 body.is-extension .topbar-center {
   position: relative;
-  z-index: 2;
+  z-index: 5;
   justify-self: auto;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
-  max-width: 118px;
+  max-width: 130px;
   display: flex;
   justify-content: flex-start;
   margin-left: 0;
-  overflow: hidden;
+  overflow: visible;
+}
+
+body.is-extension .topbar.is-chain-open,
+body.is-extension .topbar-center.is-chain-open,
+body.is-extension .chain-bar.is-chain-open {
+  z-index: 120;
 }
 
 body.is-extension .chain-picker {
   min-width: 0;
-  max-width: 118px;
+  max-width: 130px;
   width: 100%;
+  position: relative;
+  z-index: 6;
+  pointer-events: auto;
 }
 
 body.is-extension .chain-picker-btn {
   width: 100%;
-  min-width: 0;
+  min-width: 96px;
   min-height: 32px;
   height: 32px;
   padding: 0 8px;
   gap: 5px;
   border-radius: 9px;
+  cursor: pointer;
+  pointer-events: auto;
+  position: relative;
+  z-index: 7;
 }
 
 body.is-extension .chain-picker-logo,
@@ -2116,11 +2132,26 @@ body.is-extension .topbar-meta {
   padding-right: 0;
   flex: 1 1 0;
   min-width: 0;
-  max-width: 42%;
+  max-width: 38%;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   overflow: hidden;
+  position: relative;
+  z-index: 1;
+}
+
+body.is-extension .chain-picker-menu {
+  position: fixed;
+  left: 10px;
+  right: 10px;
+  width: auto;
+  max-width: none;
+  transform: none;
+  top: 52px;
+  z-index: 200;
+  max-height: min(280px, calc(100vh - 70px));
+  pointer-events: auto;
 }
 
 body.is-extension .addr-plain,
