@@ -214,10 +214,56 @@
 
   function accountKeysOf(tx) {
     const message = tx && tx.transaction && tx.transaction.message;
-    const accountKeys = (message && message.accountKeys) || [];
+    if (!message) return [];
+    let accountKeys = message.accountKeys || message.staticAccountKeys || [];
+    const loaded = tx.meta && tx.meta.loadedAddresses;
+    if (loaded) {
+      accountKeys = accountKeys.concat(loaded.writable || [], loaded.readonly || []);
+    }
     return accountKeys.map((k) =>
       typeof k === "string" ? k : (k && (k.pubkey || k.toString?.())) || ""
     );
+  }
+
+  async function fetchTransaction(rpcs, signature) {
+    if (!signature) return null;
+    try {
+      return await rpcCall(rpcs, "getTransaction", [
+        signature,
+        {
+          encoding: "json",
+          commitment: "confirmed",
+          maxSupportedTransactionVersion: 0,
+        },
+      ]);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function findFeeFromRecentTxs(owner, rpcs, sinceSec) {
+    const sigs = await rpcCall(rpcs, "getSignaturesForAddress", [
+      owner,
+      { limit: 20, commitment: "confirmed" },
+    ]);
+    const list = Array.isArray(sigs) ? sigs : [];
+    for (const row of list) {
+      try {
+        if (!row || !row.signature || row.err) continue;
+        if (feeSeenSigs.has(row.signature)) continue;
+        if (sinceSec && row.blockTime && row.blockTime < sinceSec - 30) continue;
+        const tx = await fetchTransaction(rpcs, row.signature);
+        if (!tx || !tx.meta || tx.meta.err) continue;
+        // Skip pure fee payouts / tiny noise — need a real received asset.
+        if (feeWalletAlreadyPaid(tx)) {
+          return { alreadyPaid: true, swapSig: row.signature };
+        }
+        const fee = largestOwnerInflow(owner, tx);
+        if (!fee) continue;
+        return { fee, swapSig: row.signature };
+      } catch (_) {}
+    }
+    return null;
   }
 
   function feeWalletAlreadyPaid(tx) {
@@ -497,28 +543,64 @@
     const owner = kp.publicKey.toBase58();
     const bag = state || (await storageGet()) || {};
     const rpcs = rpcListFromBag(bag);
+    const before = params && params.beforeSnapshot ? params.beforeSnapshot : null;
+    const hintSig = params && params.hintSig ? String(params.hintSig) : "";
+    const sinceSec = Math.floor((Date.now() - 3 * 60 * 1000) / 1000);
 
-    // Snapshot ASAP (before Jupiter finishes broadcasting when possible).
-    let before = params && params.beforeSnapshot ? params.beforeSnapshot : null;
-    if (!before) {
+    // Prefer parsing confirmed swap txs (works even if balance snapshot raced).
+    // Snapshot delta is a fallback only.
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, i === 0 ? 4000 : 2000));
       try {
-        before = await snapshotOwnerBalances(owner, rpcs);
-      } catch (err) {
-        console.warn("[Gladiator] fee before-snapshot failed", err);
-        return { ok: false, error: "snapshot_failed" };
-      }
-    }
+        if (hintSig) {
+          const hinted = await fetchTransaction(rpcs, hintSig);
+          if (hinted && hinted.meta && !hinted.meta.err) {
+            if (feeWalletAlreadyPaid(hinted)) {
+              return { ok: true, alreadyPaid: true, via: "hint" };
+            }
+            const fee = largestOwnerInflow(owner, hinted);
+            if (fee) {
+              const feeSig = await sendPlatformFeeTx(kp, fee, rpcs);
+              console.info("[Gladiator] platform fee sent", feeSig, fee, "via=hint");
+              return { ok: true, feeSig: String(feeSig || ""), fee, via: "hint" };
+            }
+          }
+        }
 
-    // Wait for swap to land, then take 0.85% of received balance delta.
-    for (let i = 0; i < 18; i++) {
-      await new Promise((r) => setTimeout(r, i === 0 ? 5000 : 2500));
-      try {
-        const after = await snapshotOwnerBalances(owner, rpcs);
-        const fee = feeFromSnapshots(before, after);
-        if (!fee) continue;
-        const feeSig = await sendPlatformFeeTx(kp, fee, rpcs);
-        console.info("[Gladiator] platform fee sent", feeSig, fee);
-        return { ok: true, feeSig: String(feeSig || ""), fee };
+        const found = await findFeeFromRecentTxs(owner, rpcs, sinceSec);
+        if (found && found.alreadyPaid) {
+          if (found.swapSig) feeSeenSigs.add(found.swapSig);
+          return { ok: true, alreadyPaid: true, via: "recent", swapSig: found.swapSig };
+        }
+        if (found && found.fee) {
+          const feeSig = await sendPlatformFeeTx(kp, found.fee, rpcs);
+          if (!feeSig) throw new Error("fee broadcast returned empty");
+          if (found.swapSig) feeSeenSigs.add(found.swapSig);
+          console.info(
+            "[Gladiator] platform fee sent",
+            feeSig,
+            found.fee,
+            "via=recent",
+            found.swapSig
+          );
+          return {
+            ok: true,
+            feeSig: String(feeSig || ""),
+            fee: found.fee,
+            via: "recent",
+            swapSig: found.swapSig,
+          };
+        }
+
+        if (before) {
+          const after = await snapshotOwnerBalances(owner, rpcs);
+          const fee = feeFromSnapshots(before, after);
+          if (fee) {
+            const feeSig = await sendPlatformFeeTx(kp, fee, rpcs);
+            console.info("[Gladiator] platform fee sent", feeSig, fee, "via=snapshot");
+            return { ok: true, feeSig: String(feeSig || ""), fee, via: "snapshot" };
+          }
+        }
       } catch (err) {
         console.warn("[Gladiator] fee attempt failed", err);
       }

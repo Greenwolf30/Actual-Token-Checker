@@ -3172,18 +3172,26 @@ async function sendSolNative(acc, toAddr, amountSol) {
   const sig = await broadcastSolTx(tx, from, rpcs);
   // Separate fee tx so treasury always gets a clear transfer
   if (platformLamports > 0) {
-    try {
-      const feeTx = new Transaction().add(
-        SystemProgram.transfer({
-          fromPubkey: from.publicKey,
-          toPubkey: feeTo,
-          lamports: platformLamports,
-        })
-      );
-      await broadcastSolTx(feeTx, from, rpcs);
-    } catch (err) {
-      console.warn("[platform-fee sol]", err);
+    let feeErr = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        if (attempt) await new Promise((r) => setTimeout(r, 600 * attempt));
+        const feeTx = new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: from.publicKey,
+            toPubkey: feeTo,
+            lamports: platformLamports,
+          })
+        );
+        await broadcastSolTx(feeTx, from, rpcs);
+        feeErr = null;
+        break;
+      } catch (err) {
+        feeErr = err;
+        console.warn("[platform-fee sol]", attempt + 1, err);
+      }
     }
+    if (feeErr) console.warn("[platform-fee sol] gave up", feeErr);
   }
   return sig;
 }
@@ -3295,34 +3303,42 @@ async function sendSplToken(acc, holding, toAddr, amountUi) {
   }
   const sig = await broadcastSolTx(tx, from, rpcs);
   if (feeRaw > 0n) {
-    try {
-      const feeTx = new Transaction();
-      feeTx.add(
-        createAssociatedTokenAccountIdempotentInstruction(
-          from.publicKey,
-          feeAta,
-          feeOwner,
-          mintPk,
-          programId,
-          ASSOCIATED_TOKEN_PROGRAM_ID
-        )
-      );
-      feeTx.add(
-        createTransferCheckedInstruction(
-          srcAta,
-          mintPk,
-          feeAta,
-          from.publicKey,
-          feeRaw <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(feeRaw) : feeRaw,
-          decimals,
-          [],
-          programId
-        )
-      );
-      await broadcastSolTx(feeTx, from, rpcs);
-    } catch (err) {
-      console.warn("[platform-fee spl]", err);
+    let feeErr = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        if (attempt) await new Promise((r) => setTimeout(r, 600 * attempt));
+        const feeTx = new Transaction();
+        feeTx.add(
+          createAssociatedTokenAccountIdempotentInstruction(
+            from.publicKey,
+            feeAta,
+            feeOwner,
+            mintPk,
+            programId,
+            ASSOCIATED_TOKEN_PROGRAM_ID
+          )
+        );
+        feeTx.add(
+          createTransferCheckedInstruction(
+            srcAta,
+            mintPk,
+            feeAta,
+            from.publicKey,
+            feeRaw <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(feeRaw) : feeRaw,
+            decimals,
+            [],
+            programId
+          )
+        );
+        await broadcastSolTx(feeTx, from, rpcs);
+        feeErr = null;
+        break;
+      } catch (err) {
+        feeErr = err;
+        console.warn("[platform-fee spl]", attempt + 1, err);
+      }
     }
+    if (feeErr) console.warn("[platform-fee spl] gave up", feeErr);
   }
   return sig;
 }

@@ -7,9 +7,8 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. Click the toolbar icon once → wait for “Jupiter signing ready”
 5. Hard-refresh jup.ag (Ctrl+Shift+R) if you use Jupiter
 
-v0.5.67:
-- Restored custom chain picker (logos + addresses)
-- Fixed clickability (menu opens above the page; address chip no longer blocks clicks)
-- Removed native select / white system arrow
+v0.5.68:
+- Fix 0.85% Jupiter fee again (read confirmed swap txs; snapshot race was missing fees)
+- Retry in-wallet Send fee txs
 
 Version: see manifest.json

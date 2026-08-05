@@ -384,8 +384,9 @@ async function resetOffscreen() {
 }
 
 const FEE_JOB_KEY = "gladiator_fee_job";
+let feeJobRunning = false;
 
-async function scheduleFeeJob(acc, hintSig, beforeSnapshot) {
+async function scheduleFeeJob(acc, hintSig, beforeSnapshotOrPromise) {
   if (!acc || !acc.publicKey) return;
   if (acc.secretKey || acc.mnemonic) {
     cachedSigner = {
@@ -399,13 +400,12 @@ async function scheduleFeeJob(acc, hintSig, beforeSnapshot) {
       at: Date.now(),
       publicKey: acc.publicKey,
       hintSig: hintSig || "",
-      beforeSnapshot: beforeSnapshot || null,
+      beforeSnapshot: null,
       tries: 0,
     },
   });
 
-  // Capture balances immediately after sign returns (before Jupiter broadcasts).
-  // Must not block signing — runs in background.
+  // Resolve optional pre-sign snapshot without blocking the page response.
   void (async () => {
     const keep = setInterval(() => {
       try {
@@ -413,12 +413,23 @@ async function scheduleFeeJob(acc, hintSig, beforeSnapshot) {
       } catch (_) {}
     }, 2000);
     try {
-      await ensureOffscreen();
-      const snap = await callOffscreen("snapshotBalances", {
-        _publicKey: acc.publicKey,
-        _secretKey: acc.secretKey || "",
-        _mnemonic: acc.mnemonic || "",
-      });
+      let snap = null;
+      if (
+        beforeSnapshotOrPromise &&
+        typeof beforeSnapshotOrPromise.then === "function"
+      ) {
+        snap = await beforeSnapshotOrPromise;
+      } else if (beforeSnapshotOrPromise) {
+        snap = beforeSnapshotOrPromise;
+      }
+      if (!snap) {
+        await ensureOffscreen();
+        snap = await callOffscreen("snapshotBalances", {
+          _publicKey: acc.publicKey,
+          _secretKey: acc.secretKey || "",
+          _mnemonic: acc.mnemonic || "",
+        });
+      }
       const bag = await storageGet([FEE_JOB_KEY]);
       const job = bag[FEE_JOB_KEY];
       if (job && snap) {
@@ -432,10 +443,12 @@ async function scheduleFeeJob(acc, hintSig, beforeSnapshot) {
     }
   })();
 
-  // Collect fee after the swap has time to land.
+  // Collect after the swap has time to land (tx-history path is primary).
   try {
-    chrome.alarms.create("gladiator-collect-fee", { when: Date.now() + 10000 });
+    chrome.alarms.create("gladiator-collect-fee", { when: Date.now() + 8000 });
   } catch (_) {}
+  // Kick once now too — collectPlatformFee waits internally for confirmation.
+  void runFeeJob();
 }
 
 async function runFeeJob() {
@@ -552,19 +565,27 @@ async function handleProviderRequest(msg, sender) {
       _secretKey: acc.secretKey || "",
       _mnemonic: acc.mnemonic || "",
     };
-    const raw = await callOffscreen(method, enriched);
-    const result = raw && typeof raw === "object" ? { ...raw } : raw;
-    if (result && result.beforeSnapshot) delete result.beforeSnapshot;
-
+    // Start balance snapshot in parallel with signing (does not delay Jupiter).
     const needFee =
       method === "signTransaction" ||
       method === "signAllTransactions" ||
       method === "signAndSendTransaction";
+    const snapPromise = needFee
+      ? callOffscreen("snapshotBalances", {
+          _publicKey: acc.publicKey,
+          _secretKey: acc.secretKey || "",
+          _mnemonic: acc.mnemonic || "",
+        }).catch(() => null)
+      : null;
+    const raw = await callOffscreen(method, enriched);
+    const result = raw && typeof raw === "object" ? { ...raw } : raw;
+    if (result && result.beforeSnapshot) delete result.beforeSnapshot;
+
     return {
       result,
       feeAcc: needFee ? acc : null,
       hintSig: result && result.signature ? String(result.signature) : "",
-      beforeSnapshot: null,
+      snapPromise,
     };
   }
 
@@ -852,7 +873,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           : { result: out };
         sendResponse(payload);
         if (out && out.feeAcc) {
-          scheduleFeeJob(out.feeAcc, out.hintSig || "", out.beforeSnapshot || null).catch(
+          scheduleFeeJob(out.feeAcc, out.hintSig || "", out.snapPromise || null).catch(
             (err) => console.warn("[Gladiator] schedule fee", err)
           );
         }
