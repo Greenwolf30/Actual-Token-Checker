@@ -4072,6 +4072,23 @@ function paintSwitchers() {
   paintSendContacts();
 }
 
+function positionChainPickerMenu() {
+  const menu = $("chainPickerMenu");
+  const btn = $("chainPickerBtn");
+  if (!menu || !btn || menu.hidden) return;
+  const rect = btn.getBoundingClientRect();
+  const top = Math.max(8, Math.round(rect.bottom + 6));
+  menu.style.position = "fixed";
+  menu.style.left = "10px";
+  menu.style.right = "10px";
+  menu.style.width = "auto";
+  menu.style.maxWidth = "none";
+  menu.style.transform = "none";
+  menu.style.top = top + "px";
+  menu.style.zIndex = "400";
+  menu.classList.add("is-open");
+}
+
 function toggleChainPicker() {
   const menu = $("chainPickerMenu");
   const btn = $("chainPickerBtn");
@@ -4086,13 +4103,31 @@ function toggleChainPicker() {
   if (bar) bar.classList.toggle("is-chain-open", open);
   if (top) top.classList.toggle("is-chain-open", open);
   if (center) center.classList.toggle("is-chain-open", open);
+  if (open) {
+    // Keep menu under <body> so shell overflow can't clip/block it in the popup.
+    if (menu.parentElement !== document.body) {
+      document.body.appendChild(menu);
+    }
+    positionChainPickerMenu();
+  } else {
+    menu.classList.remove("is-open");
+    menu.removeAttribute("style");
+    const picker = $("chainPicker");
+    if (picker && menu.parentElement !== picker) picker.appendChild(menu);
+  }
 }
 
 function closeChainPicker() {
   const menu = $("chainPickerMenu");
   const btn = $("chainPickerBtn");
-  const bar = document.querySelector(".chain-bar, .switcher-bar, .topbar");
-  if (menu) menu.hidden = true;
+  const bar = document.querySelector(".chain-bar, .switcher-bar");
+  if (menu) {
+    menu.hidden = true;
+    menu.classList.remove("is-open");
+    menu.removeAttribute("style");
+    const picker = $("chainPicker");
+    if (picker && menu.parentElement !== picker) picker.appendChild(menu);
+  }
   if (btn) btn.setAttribute("aria-expanded", "false");
   if (bar) bar.classList.remove("is-chain-open");
   document.querySelector(".topbar")?.classList.remove("is-chain-open");
@@ -5153,15 +5188,22 @@ function wire() {
     await selectChain(e.target.value);
   });
 
-  $("chainPickerBtn")?.addEventListener("click", (e) => {
+  // pointerdown is more reliable than click in the narrow extension popup
+  $("chainPickerBtn")?.addEventListener("pointerdown", (e) => {
     e.preventDefault();
     e.stopPropagation();
     toggleChainPicker();
   });
-  // pointerdown selects reliably even when a later click would hit content underneath
-  $("chainPickerMenu")?.addEventListener("pointerdown", (e) => {
+  $("chainPickerBtn")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  });
+  // Menu may be reparented to <body> while open — bind on document.
+  document.addEventListener("pointerdown", (e) => {
+    const menu = $("chainPickerMenu");
+    if (!menu || menu.hidden) return;
     const copyBtn = e.target.closest("[data-copy-addr]");
-    if (copyBtn) {
+    if (copyBtn && menu.contains(copyBtn)) {
       e.preventDefault();
       e.stopPropagation();
       const addr = copyBtn.getAttribute("data-copy-addr") || "";
@@ -5171,23 +5213,22 @@ function wire() {
       return;
     }
     const item = e.target.closest("[data-chain-id]");
-    if (!item) return;
-    e.preventDefault();
-    e.stopPropagation();
-    selectChain(item.getAttribute("data-chain-id"));
-  });
-  $("chainPickerMenu")?.addEventListener("click", (e) => {
-    if (e.target.closest("[data-chain-id], [data-copy-addr]")) {
+    if (item && menu.contains(item)) {
       e.preventDefault();
       e.stopPropagation();
+      selectChain(item.getAttribute("data-chain-id"));
     }
   });
   document.addEventListener("click", (e) => {
     const picker = $("chainPicker");
-    if (!picker) return;
-    if (picker.contains(e.target)) return;
+    const menu = $("chainPickerMenu");
+    const btn = $("chainPickerBtn");
+    if (!picker || !menu || menu.hidden) return;
+    if (btn && btn.contains(e.target)) return;
+    if (picker.contains(e.target) || menu.contains(e.target)) return;
     closeChainPicker();
   });
+  window.addEventListener("resize", () => positionChainPickerMenu());
   $("sendContactSelect")?.addEventListener("change", (e) => {
     const id = e.target.value;
     if (!id) return;

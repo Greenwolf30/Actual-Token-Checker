@@ -2079,22 +2079,68 @@ body.is-extension .topbar-center {
   overflow: visible;
 }
 
+body.is-extension .topbar {
+  position: relative;
+  z-index: 60;
+  overflow: visible;
+  flex: 0 0 auto;
+}
+
 body.is-extension .topbar.is-chain-open,
 body.is-extension .topbar-center.is-chain-open,
 body.is-extension .chain-bar.is-chain-open {
-  z-index: 120;
-}
-
-body.is-extension .chain-picker {
-  display: none !important;
+  z-index: 220;
 }
 
 body.is-extension .topbar-center {
   overflow: visible;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
-  max-width: 150px;
-  z-index: 40;
+  max-width: 138px;
+  z-index: 70;
+  pointer-events: auto;
+}
+
+body.is-extension .chain-bar,
+body.is-extension .switcher-bar {
+  position: relative;
+  z-index: 70;
+  overflow: visible;
+  pointer-events: auto;
+  width: 100%;
+  justify-content: flex-start;
+}
+
+body.is-extension .chain-picker {
+  display: block !important;
+  min-width: 0;
+  max-width: 138px;
+  width: 100%;
+  position: relative;
+  z-index: 80;
+  pointer-events: auto;
+}
+
+body.is-extension .chain-picker-btn {
+  display: inline-flex !important;
+  width: 100%;
+  min-width: 96px;
+  min-height: 32px;
+  height: 32px;
+  padding: 0 8px;
+  gap: 5px;
+  border-radius: 9px;
+  cursor: pointer;
+  pointer-events: auto !important;
+  position: relative;
+  z-index: 81;
+}
+
+body.is-extension .chain-picker-caret {
+  color: rgba(154, 163, 181, 0.9);
+  font-size: 0.7rem;
+  line-height: 1;
+  transform: none;
 }
 
 body.is-extension .chain-picker-logo,
@@ -2127,20 +2173,28 @@ body.is-extension .topbar-meta {
   justify-content: flex-end;
   overflow: hidden;
   position: relative;
+  /* Keep address chip from covering the chain button */
   z-index: 1;
+  pointer-events: none;
 }
 
-body.is-extension .chain-picker-menu {
-  position: fixed;
-  left: 10px;
-  right: 10px;
-  width: auto;
-  max-width: none;
-  transform: none;
-  top: 52px;
-  z-index: 200;
-  max-height: min(280px, calc(100vh - 70px));
+body.is-extension .topbar-meta .addr-plain,
+body.is-extension .topbar-meta .addr-chip {
   pointer-events: auto;
+}
+
+body.is-extension .chain-picker-menu,
+body.is-extension .chain-picker-menu.is-open {
+  position: fixed !important;
+  left: 10px !important;
+  right: 10px !important;
+  width: auto !important;
+  max-width: none !important;
+  transform: none !important;
+  top: 52px;
+  z-index: 300 !important;
+  max-height: min(300px, calc(100vh - 70px));
+  pointer-events: auto !important;
 }
 
 body.is-extension .addr-plain,
@@ -2551,55 +2605,19 @@ body.is-local .dock {
 
 
 /* Custom chain picker with logos + clickable addresses */
-.chain-select-fallback {
-  display: none !important;
-}
-
-/* Extension popup: use the native <select> (custom picker was unclickable when clipped).
-   Must come AFTER the global hide rule so !important can win. */
-body.is-extension select#chainSelect.chain-select-fallback,
+.chain-select-fallback,
+body.is-extension .chain-select-fallback,
 body.is-extension #chainSelect {
-  display: block !important;
-  visibility: visible !important;
-  opacity: 1 !important;
-  width: 100%;
-  min-width: 108px;
-  max-width: 140px;
-  min-height: 32px;
-  height: 32px;
-  margin: 0;
-  padding: 0 8px;
-  border-radius: 9px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(10, 20, 40, 0.85);
-  color: var(--ink);
-  font-family: var(--font-ui);
-  font-size: 0.78rem;
-  font-weight: 600;
-  line-height: 1.2;
-  appearance: auto;
-  -webkit-appearance: menulist;
-  -moz-appearance: menulist;
-  cursor: pointer;
-  position: relative;
-  z-index: 50;
-  pointer-events: auto !important;
-}
-
-body.is-extension #chainSelect:focus {
-  outline: none;
-  border-color: rgba(184, 167, 207, 0.55);
-  box-shadow: 0 0 0 3px rgba(184, 167, 207, 0.16);
-}
-
-body.is-extension .chain-bar,
-body.is-extension .switcher-bar {
-  position: relative;
-  z-index: 50;
-  pointer-events: auto;
-  overflow: visible;
-  width: 100%;
-  justify-content: flex-start;
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
 }
 
 .chain-picker {
@@ -2651,10 +2669,13 @@ body.is-extension .switcher-bar {
 }
 
 .chain-picker-caret {
-  color: var(--muted);
-  font-size: 0.72rem;
+  color: rgba(154, 163, 181, 0.85);
+  font-size: 0.85rem;
   flex: 0 0 auto;
-  margin-left: -1px;
+  margin-left: 0;
+  line-height: 1;
+  transform: rotate(90deg);
+  display: inline-block;
 }
 
 .chain-picker-menu {
