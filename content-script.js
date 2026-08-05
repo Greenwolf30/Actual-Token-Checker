@@ -62,13 +62,11 @@
     } catch (_) {}
   }
 
-  // Always attempt inject first — even when bridge already installed (SW re-injects).
+  // Up to 3 inject tries per page load/refresh (guards SPA/wallet-scan races).
   injectPageProvider();
   try {
-    setTimeout(injectPageProvider, 0);
     setTimeout(injectPageProvider, 250);
     setTimeout(injectPageProvider, 1000);
-    setTimeout(injectPageProvider, 3000);
   } catch (_) {}
 
   if (window.__GLADIATOR_BRIDGE_INSTALLED__) return;

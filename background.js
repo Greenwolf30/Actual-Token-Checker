@@ -1011,9 +1011,13 @@ chrome.windows.onRemoved.addListener((id) => {
 
 /**
  * Backup inject for allowlisted Solana dApps (manifest also injects at document_start).
+ * Hard cap: 3 programmatic inject tries per tab refresh / navigation.
  */
 const INJECT_FLAG = "gladiator_page_inject";
+const INJECT_MAX_TRIES = 3;
 const injectedTabs = new Set();
+/** tabId -> { url, count } — resets on each load/refresh. */
+const injectTryBudget = new Map();
 
 function shouldInjectProvider(url) {
   if (!url || !/^https?:/i.test(url)) return false;
@@ -1049,9 +1053,35 @@ async function isPageInjectEnabled() {
   return true;
 }
 
+function resetInjectBudget(tabId, url) {
+  injectTryBudget.set(tabId, { url: String(url || ""), count: 0 });
+}
+
+function takeInjectTry(tabId, url) {
+  const u = String(url || "");
+  let row = injectTryBudget.get(tabId);
+  if (!row || row.url !== u) {
+    row = { url: u, count: 0 };
+  }
+  if (row.count >= INJECT_MAX_TRIES) {
+    injectTryBudget.set(tabId, row);
+    return false;
+  }
+  row.count += 1;
+  injectTryBudget.set(tabId, row);
+  return true;
+}
+
 async function injectProviderIntoTab(tabId, url) {
   if (!(await isPageInjectEnabled())) return;
   if (!chrome.scripting || !chrome.scripting.executeScript) return;
+  if (!takeInjectTry(tabId, url)) {
+    console.info(
+      "[Gladiator] inject skip — " + INJECT_MAX_TRIES + " tries used this refresh",
+      url || tabId
+    );
+    return;
+  }
   try {
     // MAIN first so Wallet Standard registers before dApp wallet scan.
     await chrome.scripting.executeScript({
@@ -1073,13 +1103,21 @@ async function injectProviderIntoTab(tabId, url) {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   injectedTabs.delete(tabId);
+  injectTryBudget.delete(tabId);
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   const url = (tab && tab.url) || changeInfo.url || "";
-  if (changeInfo.url) injectedTabs.delete(tabId);
+  if (changeInfo.url) {
+    injectedTabs.delete(tabId);
+    resetInjectBudget(tabId, url);
+  }
+  // New document load / refresh — reset the 3-try budget.
+  if (changeInfo.status === "loading") {
+    resetInjectBudget(tabId, url);
+  }
   if (!shouldInjectProvider(url)) return;
-  // Inject early on loading, then again on complete for SPA shells.
+  // Inject early on loading, then again on complete for SPA shells (≤3 total).
   if (changeInfo.status === "loading") {
     injectProviderIntoTab(tabId, url).catch(() => {});
     return;
