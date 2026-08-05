@@ -1,5 +1,12 @@
 /**
- * Page MAIN-world provider. Injected AFTER page load (never at document_start).
+ * Gladiator Wallet Standard provider (page MAIN world).
+ *
+ * Crash-safety rules:
+ * - Inject only AFTER page load (background handles timing).
+ * - Never touch window.solana.
+ * - Register once via official wallet-standard events (no spam).
+ * - silent connect never throws and never calls the extension.
+ * - Include supportedTransactionVersions (adapters read this).
  */
 (function () {
   try {
@@ -8,6 +15,14 @@
 
     const SOURCE = "gladiator-wallet-page";
     const REPLY = "gladiator-wallet-page-reply";
+    const CHAINS = Object.freeze(["solana:mainnet", "solana:devnet", "solana:testnet"]);
+    const TX_VERSIONS = Object.freeze(["legacy", 0]);
+    const ACCOUNT_FEATURES = Object.freeze([
+      "solana:signAndSendTransaction",
+      "solana:signTransaction",
+      "solana:signMessage",
+    ]);
+    // Valid Wallet Standard icon: data:image/*;base64,...
     const ICON =
       "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMjggMTI4Ij48cmVjdCB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCIgcng9IjI4IiBmaWxsPSIjMGIxMjIwIi8+PHRleHQgeD0iNjQiIHk9Ijg0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjMTRmMTk1IiBmb250LXNpemU9IjY0IiBmb250LWZhbWlseT0iQXJpYWwsc2Fucy1zZXJpZiIgZm9udC13ZWlnaHQ9IjcwMCI+RzwvdGV4dD48L3N2Zz4=";
 
@@ -84,7 +99,9 @@
     function emitStandard(event, detail) {
       for (const l of [...standardListeners]) {
         try {
-          if (l && l.event === event && typeof l.callback === "function") l.callback(detail);
+          if (l && l.event === event && typeof l.callback === "function") {
+            l.callback(detail);
+          }
         } catch (_) {}
       }
     }
@@ -180,21 +197,18 @@
     function getAccounts() {
       if (!publicKey) return [];
       return [
-        {
+        Object.freeze({
           address: publicKey.toBase58(),
           publicKey: publicKey.toBytes(),
-          chains: ["solana:mainnet", "solana:devnet", "solana:testnet"],
-          features: [
-            "solana:signTransaction",
-            "solana:signAllTransactions",
-            "solana:signMessage",
-            "solana:signAndSendTransaction",
-          ],
-        },
+          chains: CHAINS.slice(),
+          features: ACCOUNT_FEATURES.slice(),
+          label: "Gladiator",
+          icon: ICON,
+        }),
       ];
     }
 
-    async function connect(opts) {
+    async function connectLegacy(opts) {
       const onlyIfTrusted = !!(opts && opts.onlyIfTrusted);
       const result = await request("connect", {
         onlyIfTrusted,
@@ -223,7 +237,7 @@
     }
 
     async function signTransaction(transaction) {
-      if (!isConnected) await connect();
+      if (!isConnected) await connectLegacy();
       const ser = serializeTx(transaction);
       const result = await request("signTransaction", {
         ...ser,
@@ -234,7 +248,7 @@
     }
 
     async function signAllTransactions(transactions) {
-      if (!isConnected) await connect();
+      if (!isConnected) await connectLegacy();
       const list = Array.isArray(transactions) ? transactions : [];
       const payload = list.map((tx) => serializeTx(tx));
       const result = await request("signAllTransactions", {
@@ -246,7 +260,7 @@
     }
 
     async function signAndSendTransaction(transaction, options) {
-      if (!isConnected) await connect();
+      if (!isConnected) await connectLegacy();
       const ser = serializeTx(transaction);
       const result = await request("signAndSendTransaction", {
         ...ser,
@@ -258,7 +272,7 @@
     }
 
     async function signMessage(message, display) {
-      if (!isConnected) await connect();
+      if (!isConnected) await connectLegacy();
       const bytes =
         message instanceof Uint8Array
           ? message
@@ -272,6 +286,125 @@
       return { signature: bytesFromB64(result.signature), publicKey };
     }
 
+    function toTxBytes(input) {
+      if (!input) throw new Error("Missing transaction");
+      if (input instanceof Uint8Array) return input;
+      return new Uint8Array(input);
+    }
+
+    const features = Object.freeze({
+      "standard:connect": Object.freeze({
+        version: "1.0.0",
+        connect: async (input) => {
+          const silent = !!(input && input.silent);
+          // Critical: silent must never throw and must not talk to the extension
+          // during dApp boot (Jupiter autoConnect scans every wallet).
+          if (silent) {
+            return { accounts: getAccounts() };
+          }
+          await connectLegacy({ onlyIfTrusted: false });
+          return { accounts: getAccounts() };
+        },
+      }),
+      "standard:disconnect": Object.freeze({
+        version: "1.0.0",
+        disconnect: async () => {
+          await disconnect();
+        },
+      }),
+      "standard:events": Object.freeze({
+        version: "1.0.0",
+        on: (event, callback) => {
+          if (typeof callback !== "function") return () => {};
+          const entry = { event, callback };
+          standardListeners.add(entry);
+          return () => {
+            standardListeners.delete(entry);
+          };
+        },
+      }),
+      "solana:signAndSendTransaction": Object.freeze({
+        version: "1.0.0",
+        supportedTransactionVersions: TX_VERSIONS,
+        signAndSendTransaction: async (...inputs) => {
+          if (!isConnected) await connectLegacy();
+          const out = [];
+          for (const input of inputs) {
+            const bytes = toTxBytes(input && input.transaction);
+            const result = await request("signAndSendTransaction", {
+              transaction: b64FromBytes(bytes),
+              versioned: true,
+              options: (input && input.options) || {},
+              origin: location.origin,
+            });
+            out.push({ signature: result.signature });
+          }
+          return out;
+        },
+      }),
+      "solana:signTransaction": Object.freeze({
+        version: "1.0.0",
+        supportedTransactionVersions: TX_VERSIONS,
+        signTransaction: async (...inputs) => {
+          if (!isConnected) await connectLegacy();
+          const out = [];
+          for (const input of inputs) {
+            const bytes = toTxBytes(input && input.transaction);
+            const result = await request("signTransaction", {
+              transaction: b64FromBytes(bytes),
+              versioned: true,
+              origin: location.origin,
+            });
+            out.push({
+              signedTransaction: bytesFromB64(result.signedTransaction),
+            });
+          }
+          return out;
+        },
+      }),
+      "solana:signMessage": Object.freeze({
+        version: "1.0.0",
+        signMessage: async (...inputs) => {
+          if (!isConnected) await connectLegacy();
+          const out = [];
+          for (const input of inputs) {
+            const msg = toTxBytes(input && input.message);
+            const result = await request("signMessage", {
+              message: b64FromBytes(msg),
+              display: "utf8",
+              origin: location.origin,
+            });
+            out.push({
+              signedMessage: msg,
+              signature: bytesFromB64(result.signature),
+            });
+          }
+          return out;
+        },
+      }),
+    });
+
+    const wallet = {
+      get version() {
+        return "1.0.0";
+      },
+      get name() {
+        return "Gladiator";
+      },
+      get icon() {
+        return ICON;
+      },
+      get chains() {
+        return CHAINS.slice();
+      },
+      get features() {
+        return features;
+      },
+      get accounts() {
+        return getAccounts();
+      },
+    };
+
     const provider = {
       isGladiator: true,
       isPhantom: false,
@@ -281,7 +414,7 @@
       get isConnected() {
         return isConnected;
       },
-      connect,
+      connect: connectLegacy,
       disconnect,
       signTransaction,
       signAllTransactions,
@@ -289,13 +422,16 @@
       signMessage,
       request: async ({ method, params }) => {
         const m = String(method || "");
-        if (m === "connect") return connect(params);
+        if (m === "connect") return connectLegacy(params);
         if (m === "disconnect") return disconnect();
         if (m === "signTransaction") return signTransaction(params && params.transaction);
         if (m === "signAllTransactions")
           return signAllTransactions(params && params.transactions);
         if (m === "signAndSendTransaction")
-          return signAndSendTransaction(params && params.transaction, params && params.options);
+          return signAndSendTransaction(
+            params && params.transaction,
+            params && params.options
+          );
         if (m === "signMessage")
           return signMessage(params && params.message, params && params.display);
         throw new Error("Unsupported method: " + m);
@@ -312,190 +448,68 @@
       },
     };
 
-    const wallet = {
-      version: "1.0.0",
-      name: "Gladiator",
-      icon: ICON,
-      chains: ["solana:mainnet", "solana:devnet", "solana:testnet"],
-      features: {
-        "standard:connect": {
-          version: "1.0.0",
-          connect: async (input) => {
-            const silent = !!(input && input.silent);
-            try {
-              const res = await connect({ onlyIfTrusted: silent });
-              if (silent && !(res && res.publicKey)) return { accounts: [] };
-              return { accounts: getAccounts() };
-            } catch (err) {
-              if (silent) return { accounts: [] };
-              throw err;
-            }
-          },
-        },
-        "standard:disconnect": {
-          version: "1.0.0",
-          disconnect: async () => {
-            await disconnect();
-          },
-        },
-        "standard:events": {
-          version: "1.0.0",
-          on: (event, callback) => {
-            const entry = { event, callback };
-            standardListeners.add(entry);
-            return () => standardListeners.delete(entry);
-          },
-        },
-        "solana:signTransaction": {
-          version: "1.0.0",
-          signTransaction: async (...inputs) => {
-            if (!isConnected) await connect();
-            const out = [];
-            for (const input of inputs) {
-              const bytes =
-                input.transaction instanceof Uint8Array
-                  ? input.transaction
-                  : new Uint8Array(input.transaction);
-              const result = await request("signTransaction", {
-                transaction: b64FromBytes(bytes),
-                versioned: true,
-                origin: location.origin,
-              });
-              out.push({ signedTransaction: bytesFromB64(result.signedTransaction) });
-            }
-            return out;
-          },
-        },
-        "solana:signAllTransactions": {
-          version: "1.0.0",
-          signAllTransactions: async (...inputs) => {
-            if (!isConnected) await connect();
-            const out = [];
-            for (const input of inputs) {
-              const txs = (input && input.transactions) || [];
-              const payload = txs.map((t) => ({
-                transaction: b64FromBytes(t instanceof Uint8Array ? t : new Uint8Array(t)),
-                versioned: true,
-              }));
-              const result = await request("signAllTransactions", {
-                transactions: payload,
-                origin: location.origin,
-              });
-              out.push({
-                signedTransactions: ((result && result.signedTransactions) || []).map((s) =>
-                  bytesFromB64(s)
-                ),
-              });
-            }
-            return out;
-          },
-        },
-        "solana:signAndSendTransaction": {
-          version: "1.0.0",
-          signAndSendTransaction: async (...inputs) => {
-            if (!isConnected) await connect();
-            const out = [];
-            for (const input of inputs) {
-              const bytes =
-                input.transaction instanceof Uint8Array
-                  ? input.transaction
-                  : new Uint8Array(input.transaction);
-              const result = await request("signAndSendTransaction", {
-                transaction: b64FromBytes(bytes),
-                versioned: true,
-                options: input.options || {},
-                origin: location.origin,
-              });
-              out.push({ signature: result.signature });
-            }
-            return out;
-          },
-        },
-        "solana:signMessage": {
-          version: "1.0.0",
-          signMessage: async (...inputs) => {
-            if (!isConnected) await connect();
-            const out = [];
-            for (const input of inputs) {
-              const msg =
-                input.message instanceof Uint8Array
-                  ? input.message
-                  : new Uint8Array(input.message);
-              const result = await request("signMessage", {
-                message: b64FromBytes(msg),
-                display: "utf8",
-                origin: location.origin,
-              });
-              out.push({
-                signedMessage: msg,
-                signature: bytesFromB64(result.signature),
-              });
-            }
-            return out;
-          },
-        },
-      },
-      get accounts() {
-        return getAccounts();
-      },
-    };
+    // Official registerWallet pattern (throws on preventDefault like the reference impl).
+    class RegisterWalletEvent extends Event {
+      constructor(callback) {
+        super("wallet-standard:register-wallet", {
+          bubbles: false,
+          cancelable: false,
+          detail: callback,
+        });
+        this._detail = callback;
+      }
+      get detail() {
+        return this._detail;
+      }
+      preventDefault() {
+        throw new Error("preventDefault is not supported");
+      }
+      stopPropagation() {
+        throw new Error("stopPropagation is not supported");
+      }
+      stopImmediatePropagation() {
+        throw new Error("stopImmediatePropagation is not supported");
+      }
+    }
+
+    function registerCallback(api) {
+      try {
+        if (registered) return;
+        if (!api || typeof api.register !== "function") return;
+        api.register(wallet);
+        registered = true;
+      } catch (_) {}
+    }
 
     function registerWalletStandard() {
-      const callback = (api) => {
-        try {
-          if (!api || typeof api.register !== "function") return;
-          if (registered) return;
-          api.register(wallet);
-          registered = true;
-          try {
-            console.info("[Gladiator] Wallet Standard: registered");
-          } catch (_) {}
-        } catch (_) {}
-      };
       try {
         window.dispatchEvent(
-          new CustomEvent("wallet-standard:register-wallet", { detail: callback })
+          new RegisterWalletEvent(function ({ register }) {
+            registerCallback({ register });
+          })
         );
       } catch (_) {}
       try {
-        window.addEventListener("wallet-standard:app-ready", (event) => {
+        window.addEventListener("wallet-standard:app-ready", function (event) {
           try {
-            callback(event && event.detail);
+            registerCallback(event && event.detail);
           } catch (_) {}
         });
       } catch (_) {}
-      // Late inject: re-announce a couple times so Jupiter's picker picks us up
-      [800, 2000, 4000].forEach((ms) => {
-        setTimeout(() => {
-          if (registered) {
-            // Still announce — some apps only listen for the event, not a one-time list
-            try {
-              window.dispatchEvent(
-                new CustomEvent("wallet-standard:register-wallet", {
-                  detail: (api) => {
-                    try {
-                      if (api && typeof api.register === "function") api.register(wallet);
-                    } catch (_) {}
-                  },
-                })
-              );
-            } catch (_) {}
-            return;
-          }
-          try {
-            window.dispatchEvent(
-              new CustomEvent("wallet-standard:register-wallet", { detail: callback })
-            );
-          } catch (_) {}
-        }, ms);
-      });
     }
 
-    // Never touch window.solana — that fights Phantom/Jupiter and can blank the page.
+    // Never overwrite window.solana — fights Phantom/Jupiter and can blank pages.
     try {
-      window.gladiator = provider;
-      window.gladiatorSolana = provider;
-    } catch (_) {}
+      Object.defineProperty(window, "gladiator", {
+        value: provider,
+        writable: false,
+        configurable: true,
+      });
+    } catch (_) {
+      try {
+        window.gladiator = provider;
+      } catch (_) {}
+    }
 
     registerWalletStandard();
   } catch (_) {}

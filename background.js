@@ -211,8 +211,8 @@ chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === "install") {
     console.info("[Gladiator] installed — open the toolbar icon.");
   }
-  // Keep page inject OFF — it crashes Jupiter.
-  storageSet({ gladiator_page_inject: false }).catch(() => {});
+  // Crash-safe Wallet Standard inject is ON by default (allowlisted Solana dApps).
+  storageSet({ gladiator_page_inject: true }).catch(() => {});
   ensureOffscreen().catch(() => {});
 });
 
@@ -224,18 +224,90 @@ chrome.windows.onRemoved.addListener((id) => {
   if (id === walletWindowId) walletWindowId = null;
 });
 
-/** In-page dApp inject — DISABLED.
- *  Post-load MAIN-world inject still blanked Jupiter. Keep off until a proven-safe path.
+/**
+ * Inject AFTER page load on allowlisted Solana dApps only.
+ * Never document_start. Bridge (isolated) then provider (MAIN).
  */
 const INJECT_FLAG = "gladiator_page_inject";
+const injectedTabs = new Set();
+
+function shouldInjectProvider(url) {
+  if (!url || !/^https?:/i.test(url)) return false;
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+    if (host === "chrome.google.com" || host.endsWith("chromewebstore.google.com")) {
+      return false;
+    }
+    const allow = [
+      "jup.ag",
+      "pump.fun",
+      "raydium.io",
+      "tensor.trade",
+      "orca.so",
+      "drift.trade",
+      "mango.markets",
+      "kamino.finance",
+      "sanctum.so",
+      "localhost",
+      "127.0.0.1",
+    ];
+    return allow.some((d) => host === d || host.endsWith("." + d));
+  } catch (_) {
+    return false;
+  }
+}
+
+async function isPageInjectEnabled() {
+  const bag = await storageGet([INJECT_FLAG]);
+  // Default ON. Set gladiator_page_inject=false to disable.
+  if (bag[INJECT_FLAG] === false) return false;
+  return true;
+}
+
+async function injectProviderIntoTab(tabId, url) {
+  if (injectedTabs.has(tabId)) return;
+  if (!(await isPageInjectEnabled())) return;
+  if (!chrome.scripting || !chrome.scripting.executeScript) return;
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["content-script.js"],
+      world: "ISOLATED",
+    });
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["injected.js"],
+      world: "MAIN",
+    });
+    injectedTabs.add(tabId);
+    console.info("[Gladiator] Wallet Standard injected into", url || tabId);
+  } catch (err) {
+    console.warn("[Gladiator] inject failed", err);
+  }
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  injectedTabs.delete(tabId);
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== "complete") return;
+  const url = tab && tab.url;
+  if (!shouldInjectProvider(url)) return;
+  // Wait for React hydration on Jupiter before registering.
+  const delay = /jup\.ag/i.test(String(url || "")) ? 4500 : 2500;
+  setTimeout(() => {
+    injectProviderIntoTab(tabId, url).catch(() => {});
+  }, delay);
+});
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg) return;
 
   if (msg.type === "gladiator-set-inject") {
-    // Force-disable for now regardless of requested value.
-    storageSet({ [INJECT_FLAG]: false })
-      .then(() => sendResponse({ ok: true, enabled: false }))
+    const enabled = !!msg.enabled;
+    storageSet({ [INJECT_FLAG]: enabled })
+      .then(() => sendResponse({ ok: true, enabled }))
       .catch((err) =>
         sendResponse({ ok: false, error: String(err && err.message ? err.message : err) })
       );
@@ -243,7 +315,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === "gladiator-get-inject") {
-    sendResponse({ ok: true, enabled: false });
+    isPageInjectEnabled()
+      .then((enabled) => sendResponse({ ok: true, enabled }))
+      .catch(() => sendResponse({ ok: true, enabled: true }));
     return true;
   }
 
