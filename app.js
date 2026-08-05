@@ -2209,14 +2209,12 @@ async function ensureWalletConnect() {
         }
       },
       onSessionDelete: async () => {
-        // Duplicate prune disconnects also emit session_delete — do NOT wipe the
-        // remaining live session / UI when that happens.
-        if (GladiatorWC.isPruningDuplicates && GladiatorWC.isPruningDuplicates()) {
-          await persistWcSessions();
-          return;
-        }
+        // A duplicate prune also emits session_delete. Always resync from live
+        // sessions — never wipe the remaining connection.
         WC_PENDING_REQUEST = null;
         hideWcApproveBar();
+        // Tiny delay so WalletKit finishes removing the closed topic.
+        await new Promise((r) => setTimeout(r, 50));
         const live = collectLiveWcSessions();
         await persistWcSessions(live);
         if (live.length) {
@@ -2226,11 +2224,11 @@ async function ensureWalletConnect() {
               (live.length > 1 ? " (+" + (live.length - 1) + ")" : "")
           );
           paintWcConnectionsList(live);
-        } else {
-          setWcStatus("Disconnected");
-          showToast("WalletConnect disconnected");
-          paintWcConnectionsList([]);
+          return;
         }
+        setWcStatus("Disconnected");
+        showToast("WalletConnect disconnected");
+        paintWcConnectionsList([]);
       },
       onStatus: (msg) => {
         if (msg) setWcStatus(msg);
