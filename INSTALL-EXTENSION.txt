@@ -1,21 +1,27 @@
-Gladiator Wallet — Chrome / Opera extension (v0.5.25)
+Gladiator Wallet — Chrome / Opera extension
 
-IMPORTANT — __pycache__ error:
-Opera/Chrome cannot load a folder that contains __pycache__.
-If you unzip over your old Desktop\Gladiator-Wallet (the one used with serve.py),
-that old __pycache__ folder stays and Load unpacked fails.
+CRITICAL — do NOT load your old Desktop\Gladiator-Wallet folder if it has
+Python files (__pycache__). Chrome/Opera will refuse it:
 
-Fix (pick one):
-A) Delete the whole Desktop\Gladiator-Wallet folder, then unzip this zip fresh.
-B) Or double-click DELETE-PYCACHE.bat inside Gladiator-Wallet, then Reload.
+  "Cannot load extension with file or directory name __pycache__"
 
-Load:
-1. Unzip → you should get a Gladiator-Wallet folder with manifest.json inside it.
-2. opera://extensions (or chrome://extensions) → Developer mode → Remove old Gladiator.
-3. Load unpacked → select that Gladiator-Wallet folder (the one that contains manifest.json).
+Use the folder named:  Gladiator-Wallet-Extension
+(that folder has manifest.json and NO serve.py / NO __pycache__)
+
+If you must reuse Desktop\Gladiator-Wallet:
+1. Double-click DELETE-PYCACHE.bat inside it
+2. Or delete the __pycache__ folder manually
+3. Then Reload the extension
+
+Load steps:
+1. Unzip this download
+2. opera://extensions (or chrome://extensions) → Developer mode ON
+3. Remove any old Gladiator extension
+4. Load unpacked → select Gladiator-Wallet-Extension
+   (the folder that contains manifest.json)
 
 WalletConnect (pump.fun):
-1. Free Project ID: https://cloud.reown.com
+1. Free Project ID: https://dashboard.walletconnect.com
 2. Gladiator → ⋮ → WalletConnect
-3. Paste Project ID + a fresh wc: URI from pump.fun
-4. Keep the popup open while connecting / signing
+3. Paste Project ID + a fresh wc: URI from pump.fun → Connect
+4. Active sessions appear under Connections (Disconnect anytime)

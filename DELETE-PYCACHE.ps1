@@ -1,5 +1,7 @@
-$ErrorActionPreference = 'SilentlyContinue'
-Set-Location -LiteralPath $PSScriptRoot
-Get-ChildItem -LiteralPath $PSScriptRoot -Recurse -Directory -Filter '__pycache__' | Remove-Item -Recurse -Force
-Get-ChildItem -LiteralPath $PSScriptRoot -Recurse -Filter '*.pyc' | Remove-Item -Force
-Write-Host "Cleaned. Load unpacked this folder:" $PSScriptRoot
+$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+Get-ChildItem -Path $root -Recurse -Directory -Filter '__pycache__' -ErrorAction SilentlyContinue |
+  Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+Get-ChildItem -Path $root -Recurse -Filter '*.pyc' -ErrorAction SilentlyContinue |
+  Remove-Item -Force -ErrorAction SilentlyContinue
+Write-Host "Removed __pycache__ / *.pyc under $root"
+Write-Host "Reload at opera://extensions or chrome://extensions (Load unpacked this folder)."
