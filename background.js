@@ -14,17 +14,14 @@ async function focusOrOpenWcBridge() {
     }
   }
 
-  // Reuse an existing bridge tab/window if present
+  // Reuse an existing bridge tab/window if present.
+  // Do NOT reload — a reload kills the in-memory WalletConnect relay session
+  // right when pump.fun is waiting for the ownership signature.
   try {
     const tabs = await chrome.tabs.query({ url });
     if (tabs && tabs[0] && tabs[0].windowId != null) {
       bridgeWindowId = tabs[0].windowId;
       await chrome.windows.update(bridgeWindowId, { focused: true });
-      if (tabs[0].id != null) {
-        try {
-          await chrome.tabs.reload(tabs[0].id);
-        } catch (_) {}
-      }
       return { ok: true, reused: true, windowId: bridgeWindowId };
     }
   } catch (_) {}

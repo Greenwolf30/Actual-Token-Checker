@@ -4168,8 +4168,16 @@ async function boot() {
   await fetchPrices();
   updateSendUsdEstimate();
   await refreshBalance();
-  // Warm WalletConnect if a Project ID is already saved (sessions may restore).
-  if (STATE.wcProjectId && window.GladiatorWC) {
+  // Extension: do NOT init WalletConnect in the toolbar popup — it fights the
+  // persistent wc-bridge window for the same relay session. Bridge owns WC.
+  if (IS_EXTENSION) {
+    paintWcSettings();
+    setWcStatus(
+      STATE.wcProjectId
+        ? "Paste wc: URI → Connect (opens WalletConnect window)"
+        : "Add a WalletConnect Project ID, then paste a wc: URI"
+    );
+  } else if (STATE.wcProjectId && window.GladiatorWC) {
     try {
       await ensureWalletConnect();
     } catch (err) {

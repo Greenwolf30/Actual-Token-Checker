@@ -68,11 +68,38 @@
     if (raw instanceof Uint8Array) return raw;
     if (typeof raw !== "string") throw new Error("Bad message type");
     const s = raw.trim();
+    // Cleartext (newlines / URI) cannot be WalletConnect base58 — sign UTF-8.
+    if (s.includes("\n") || /\s/.test(s) || s.includes("URI:")) {
+      return new TextEncoder().encode(s);
+    }
+    // WalletConnect Solana standard: message is base58(bytes to sign).
     try {
       return Base58.decode(s);
     } catch (_) {
       return new TextEncoder().encode(s);
     }
+  }
+
+  function signUtf8(message, kp) {
+    const bytes =
+      message instanceof Uint8Array
+        ? message
+        : new TextEncoder().encode(String(message));
+    const sig = nacl.sign.detached(bytes, kp.secretKey);
+    return Base58.encode(sig);
+  }
+
+  function startOwnershipWatch() {
+    // After session link, pump.fun often sends solana_signMessage within a few seconds.
+    let n = 0;
+    const id = setInterval(() => {
+      n += 1;
+      if (n > 60 || !window.GladiatorWC || !GladiatorWC.isReady()) {
+        clearInterval(id);
+        return;
+      }
+      GladiatorWC.processPendings().catch(() => {});
+    }, 500);
   }
 
   function decodeBytes(raw) {
@@ -142,6 +169,11 @@
         if (!pk) throw new Error("No Solana address on active wallet");
         return pk;
       },
+      signUtf8Message: async (message) => {
+        const { state } = await loadState();
+        const kp = solanaKeypair(activeAccount(state));
+        return signUtf8(message, kp);
+      },
       signSolanaMessage: async (params) => {
         const p = normalizeParams(params);
         const { state } = await loadState();
@@ -150,7 +182,10 @@
         if (!raw) throw new Error("No message from dApp");
         const msg = decodeMessage(raw);
         const sig = nacl.sign.detached(msg, kp.secretKey);
-        setStatus("Signed ownership message — check pump.fun", "ok");
+        setStatus(
+          "Signed ownership proof (solana_signMessage).\nCheck pump.fun — it should finish connecting.",
+          "ok"
+        );
         return { signature: Base58.encode(sig) };
       },
       signSolanaTransaction: async (params) => {
@@ -239,7 +274,24 @@
       onProposal: async (proposal) => {
         setStatus("pump.fun session — approving…");
         await GladiatorWC.approveProposal(proposal);
-        setStatus("Session linked. Waiting for pump.fun to request signature…", "ok");
+        setStatus(
+          "Session linked.\nWaiting for ownership signature from pump.fun…\n(Keep this window open — do not close)",
+          "ok"
+        );
+        startOwnershipWatch();
+      },
+      onAuthenticate: async (payload) => {
+        setStatus("pump.fun ownership auth — signing…");
+        try {
+          await GladiatorWC.approveAuthenticate(payload);
+          setStatus(
+            "Ownership auth signed.\nCheck pump.fun — “Click confirm” should finish.",
+            "ok"
+          );
+        } catch (err) {
+          setStatus("Auth sign failed: " + (err && err.message ? err.message : err), "bad");
+          throw err;
+        }
       },
       onRequest: async (event) => {
         const method =
@@ -248,7 +300,12 @@
         setStatus("pump.fun asked for: " + method + "\nSigning now…");
         try {
           await GladiatorWC.handleRequest(event);
-          setStatus("Signed " + method.replace(/^solana_/, "") + " — look at pump.fun", "ok");
+          setStatus(
+            "Signed " +
+              method.replace(/^solana_/, "") +
+              " — look at pump.fun (ownership step should clear)",
+            "ok"
+          );
         } catch (err) {
           setStatus("Sign failed: " + (err && err.message ? err.message : err), "bad");
         }
@@ -267,12 +324,29 @@
       throw new Error("Missing Project ID — paste it in Gladiator → WalletConnect first");
     }
     await wireHandlers();
-    await GladiatorWC.init(String(projectId).trim(), {
-      name: "Gladiator Wallet",
-      description: "Gladiator WalletConnect bridge",
-      url: "https://gladiator.wallet",
-      icons: [chrome.runtime.getURL("icons/icon128.png")],
-    });
+    await GladiatorWC.init(
+      String(projectId).trim(),
+      {
+        name: "Gladiator Wallet",
+        description: "Gladiator WalletConnect bridge",
+        url: "https://gladiator.wallet",
+        icons: [chrome.runtime.getURL("icons/icon128.png")],
+      },
+      { storagePrefix: "gladiator-wc-bridge" }
+    );
+    try {
+      const pend = await GladiatorWC.processPendings();
+      if (pend && (pend.proposals || pend.requests)) {
+        setStatus(
+          "Processed pending WC items: " +
+            (pend.proposals || 0) +
+            " proposal(s), " +
+            (pend.requests || 0) +
+            " request(s)",
+          "ok"
+        );
+      }
+    } catch (_) {}
   }
 
   async function connectPending() {
@@ -307,9 +381,10 @@
       // clear pending uri so retries need a fresh paste (pairing consumes it)
       await storageSet({ [PENDING_KEY]: { projectId, uri: "", at: Date.now(), paired: true } });
       setStatus(
-        "Paired. pump.fun will send the approve/sign request here automatically.\nKeep this window open.",
+        "Paired. Approving session + ownership signature automatically.\nKeep this window open — pump.fun’s “Click confirm” waits on this.",
         "ok"
       );
+      startOwnershipWatch();
     } catch (err) {
       setStatus("Connect failed: " + (err && err.message ? err.message : err), "bad");
     } finally {
@@ -354,6 +429,12 @@
     }
   });
 
+  // Catch late ownership / sign requests while user is on pump.fun
+  setInterval(() => {
+    if (!window.GladiatorWC || !GladiatorWC.isReady()) return;
+    GladiatorWC.processPendings().catch(() => {});
+  }, 2500);
+
   // Boot
   (async () => {
     try {
@@ -373,7 +454,12 @@
         const sessions = GladiatorWC.getActiveSessions() || {};
         const n = Object.keys(sessions).length;
         if (n) {
-          setStatus("Restored " + n + " session(s). Keep this window open.", "ok");
+          setStatus(
+            "Restored " +
+              n +
+              " session(s). Keep this window open.\nIf pump.fun still asks to approve, click Connect pending link with a fresh wc: URI.",
+            "ok"
+          );
         }
       }
     } catch (err) {

@@ -4,6 +4,11 @@
  */
 import { Core } from "@walletconnect/core";
 import { WalletKit } from "@reown/walletkit";
+import {
+  buildAuthObject,
+  populateAuthPayload,
+  getSdkError,
+} from "@walletconnect/utils";
 
 const SOLANA_MAINNET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
 const SOLANA_MAINNET_LEGACY = "solana:4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZ";
@@ -31,8 +36,13 @@ let handlers = {
   signAndSendSolanaTransaction: async () => {
     throw new Error("signAndSendSolanaTransaction not wired");
   },
+  /** Sign raw UTF-8 string (for One-Click Auth / SIWX message text). */
+  signUtf8Message: async () => {
+    throw new Error("signUtf8Message not wired");
+  },
   onProposal: null,
   onRequest: null,
+  onAuthenticate: null,
   onSessionDelete: null,
   onStatus: null,
 };
@@ -74,41 +84,126 @@ function buildSolanaNamespace(pubkey, required) {
   };
 }
 
-async function init(projectId, metadata) {
+async function approveAuthenticate(payload) {
+  const pubkey = await handlers.getSolanaPublicKey();
+  if (!pubkey) throw new Error("No Solana address");
+
+  let authPayload;
+  try {
+    authPayload = populateAuthPayload({
+      authPayload: payload.params.authPayload,
+      chains: [SOLANA_MAINNET, SOLANA_MAINNET_LEGACY],
+      methods: SOLANA_METHODS,
+    });
+  } catch (err) {
+    // Some dApps mix EVM+Solana auth; if populate fails, fall back to raw payload.
+    status("Auth populate fallback: " + (err && err.message ? err.message : err));
+    authPayload = payload.params.authPayload;
+  }
+
+  // Prefer a solana chain from the populated payload
+  const chain =
+    (authPayload.chains || []).find((c) => String(c).startsWith("solana:")) ||
+    SOLANA_MAINNET;
+  // buildAuthObject prefixes did:pkh: when missing
+  const iss = `${chain}:${pubkey}`;
+  const message = walletKit.formatAuthMessage({
+    request: authPayload,
+    iss,
+  });
+
+  status("Ownership auth message — signing…");
+  const signature = await handlers.signUtf8Message(message);
+  // CACAO types signatures as eip191/eip1271; Solana ed25519 sig is carried in `s` (base58).
+  const auth = buildAuthObject(
+    authPayload,
+    {
+      t: "eip191",
+      s: signature,
+    },
+    iss
+  );
+
+  const result = await walletKit.approveSessionAuthenticate({
+    id: payload.id,
+    auths: [auth],
+  });
+  status("Ownership proof sent — check pump.fun");
+  return result;
+}
+
+async function init(projectId, metadata, opts) {
   if (!projectId || String(projectId).trim().length < 8) {
     throw new Error(
-      "WalletConnect Project ID required — get a free one at https://cloud.reown.com"
+      "WalletConnect Project ID required — get a free one at https://dashboard.walletconnect.com"
     );
   }
   if (walletKit) return walletKit;
 
-  const core = new Core({ projectId: String(projectId).trim() });
+  const core = new Core({
+    projectId: String(projectId).trim(),
+    // Keep bridge storage separate from any popup instance.
+    customStoragePrefix: (opts && opts.storagePrefix) || "gladiator-wc",
+  });
   walletKit = await WalletKit.init({
     core,
     metadata: metadata || {
       name: "Gladiator Wallet",
       description: "Gladiator local multi-chain wallet",
-      url: "https://gladiator.local",
+      url: "https://gladiator.wallet",
       icons: [],
     },
   });
 
   walletKit.on("session_proposal", async (proposal) => {
-    status("Session proposal from " + ((proposal.params && proposal.params.proposer && proposal.params.proposer.metadata && proposal.params.proposer.metadata.name) || "dApp"));
-    if (typeof handlers.onProposal === "function") {
-      await handlers.onProposal(proposal);
-      return;
+    status(
+      "Session proposal from " +
+        ((proposal.params &&
+          proposal.params.proposer &&
+          proposal.params.proposer.metadata &&
+          proposal.params.proposer.metadata.name) ||
+          "dApp")
+    );
+    try {
+      if (typeof handlers.onProposal === "function") {
+        await handlers.onProposal(proposal);
+        return;
+      }
+      await approveProposal(proposal);
+    } catch (err) {
+      status("Proposal failed: " + (err && err.message ? err.message : err));
     }
-    // Auto-approve Solana if no UI handler (fallback)
-    await approveProposal(proposal);
+  });
+
+  walletKit.on("session_authenticate", async (payload) => {
+    status("pump.fun ownership auth request…");
+    try {
+      if (typeof handlers.onAuthenticate === "function") {
+        await handlers.onAuthenticate(payload);
+        return;
+      }
+      await approveAuthenticate(payload);
+    } catch (err) {
+      try {
+        await walletKit.rejectSessionAuthenticate({
+          id: payload.id,
+          reason: getSdkError("USER_REJECTED"),
+        });
+      } catch (_) {}
+      status("Auth failed: " + (err && err.message ? err.message : err));
+    }
   });
 
   walletKit.on("session_request", async (event) => {
-    if (typeof handlers.onRequest === "function") {
-      await handlers.onRequest(event);
-      return;
+    try {
+      if (typeof handlers.onRequest === "function") {
+        await handlers.onRequest(event);
+        return;
+      }
+      await handleRequest(event);
+    } catch (err) {
+      status("Request failed: " + (err && err.message ? err.message : err));
     }
-    await handleRequest(event);
   });
 
   walletKit.on("session_delete", (event) => {
@@ -125,7 +220,6 @@ async function approveProposal(proposal) {
   if (!pubkey) throw new Error("No Solana address — open/import a wallet first");
   const required = (proposal.params && proposal.params.requiredNamespaces) || {};
   const optional = (proposal.params && proposal.params.optionalNamespaces) || {};
-  // Prefer requested namespaces; always offer Solana mainnet account.
   const namespaces = buildSolanaNamespace(pubkey, {
     solana: {
       ...(optional.solana || {}),
@@ -134,6 +228,7 @@ async function approveProposal(proposal) {
         ...((required.solana && required.solana.chains) || []),
         ...((optional.solana && optional.solana.chains) || []),
         SOLANA_MAINNET,
+        SOLANA_MAINNET_LEGACY,
       ],
       methods: [
         ...((required.solana && required.solana.methods) || []),
@@ -144,8 +239,7 @@ async function approveProposal(proposal) {
   });
 
   const wantsSolana =
-    !!(required.solana || optional.solana) ||
-    Object.keys(required).length === 0;
+    !!(required.solana || optional.solana) || Object.keys(required).length === 0;
   if (!wantsSolana) {
     await walletKit.rejectSession({
       id: proposal.id,
@@ -156,7 +250,6 @@ async function approveProposal(proposal) {
     });
     throw new Error("This dApp did not request Solana — use Solana connect on pump.fun");
   }
-  // Cannot satisfy required EIP-155 without EVM WC support.
   if (required.eip155 && !required.solana) {
     await walletKit.rejectSession({
       id: proposal.id,
@@ -172,7 +265,12 @@ async function approveProposal(proposal) {
     id: proposal.id,
     namespaces,
   });
-  status("Connected to " + ((session && session.peer && session.peer.metadata && session.peer.metadata.name) || "dApp"));
+  status(
+    "Connected to " +
+      ((session && session.peer && session.peer.metadata && session.peer.metadata.name) ||
+        "dApp") +
+      " — waiting for ownership signature…"
+  );
   return session;
 }
 
@@ -194,7 +292,6 @@ function normalizeRequestParams(raw) {
       if (only && typeof only === "object" && !Array.isArray(only)) return only;
       if (typeof only === "string") return { message: only, transaction: only };
     }
-    // Some clients send [message, pubkey]
     if (typeof raw[0] === "string") {
       return { message: raw[0], pubkey: typeof raw[1] === "string" ? raw[1] : undefined };
     }
@@ -213,9 +310,7 @@ async function handleRequest(event) {
     let result;
     if (method === "solana_getAccounts" || method === "solana_requestAccounts") {
       const pubkey = await handlers.getSolanaPublicKey();
-      result = { pubkey };
-      // Also support array form some dApps expect
-      if (method === "solana_getAccounts") result = [{ pubkey }];
+      result = method === "solana_getAccounts" ? [{ pubkey }] : { pubkey };
     } else if (method === "solana_signMessage") {
       result = await handlers.signSolanaMessage(reqParams);
     } else if (method === "solana_signTransaction") {
@@ -255,7 +350,7 @@ async function pair(uri) {
   if (!u.startsWith("wc:")) throw new Error("Paste a WalletConnect URI starting with wc:");
   status("Pairing…");
   await walletKit.pair({ uri: u });
-  status("Paired — approve the session if prompted");
+  status("Paired — waiting for pump.fun session / signature…");
 }
 
 function getActiveSessions() {
@@ -265,12 +360,10 @@ function getActiveSessions() {
 
 async function rejectRequest(event, message) {
   if (!walletKit || !event) return;
-  const topic = event.topic;
-  const id = event.id;
   await walletKit.respondSessionRequest({
-    topic,
+    topic: event.topic,
     response: {
-      id,
+      id: event.id,
       jsonrpc: "2.0",
       error: { code: 5000, message: message || "User rejected" },
     },
@@ -292,6 +385,32 @@ async function disconnectAll() {
   status("Disconnected");
 }
 
+async function processPendings() {
+  if (!walletKit) return { proposals: 0, requests: 0, auths: 0 };
+  let proposals = 0;
+  let requests = 0;
+  try {
+    const pendingProps = walletKit.getPendingSessionProposals() || {};
+    const list = Array.isArray(pendingProps)
+      ? pendingProps
+      : Object.values(pendingProps);
+    for (const proposal of list) {
+      proposals++;
+      if (typeof handlers.onProposal === "function") await handlers.onProposal(proposal);
+      else await approveProposal(proposal);
+    }
+  } catch (_) {}
+  try {
+    const pendingReqs = walletKit.getPendingSessionRequests() || [];
+    for (const event of pendingReqs) {
+      requests++;
+      if (typeof handlers.onRequest === "function") await handlers.onRequest(event);
+      else await handleRequest(event);
+    }
+  } catch (_) {}
+  return { proposals, requests };
+}
+
 function setHandlers(next) {
   handlers = { ...handlers, ...(next || {}) };
 }
@@ -301,13 +420,16 @@ const api = {
   pair,
   approveProposal,
   rejectProposal,
+  approveAuthenticate,
   handleRequest,
   rejectRequest,
   getActiveSessions,
   disconnectAll,
+  processPendings,
   setHandlers,
   SOLANA_MAINNET,
   isReady: () => !!walletKit,
+  getKit: () => walletKit,
 };
 
 if (typeof window !== "undefined") {
