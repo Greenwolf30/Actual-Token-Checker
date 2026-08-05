@@ -3652,6 +3652,7 @@ async function executeSend() {
       amount: Number(amountRaw) || 0,
       when: Date.now(),
       accountId: acc && acc.id,
+      chainId: chain && chain.id,
       counterparty: to,
     });
     if ($("sendAmount")) $("sendAmount").value = "";
@@ -4007,14 +4008,42 @@ async function fetchHistoryForOwner(owner, rpcs) {
   return out;
 }
 
+function historyExplorerTxUrl(sig, chain) {
+  if (!sig) return "#";
+  const c = chain || activeChain(STATE);
+  if (!c || c.kind === "solana") return "https://solscan.io/tx/" + sig;
+  if (c.id === "ethereum") return "https://etherscan.io/tx/" + sig;
+  if (c.id === "polygon") return "https://polygonscan.com/tx/" + sig;
+  if (c.id === "base") return "https://basescan.org/tx/" + sig;
+  if (c.id === "robinhood") return "https://robinhoodchain.blockscout.com/tx/" + sig;
+  if (c.kind === "bitcoin") return "https://mempool.space/tx/" + sig;
+  if (c.kind === "sui") return "https://suiscan.xyz/mainnet/tx/" + sig;
+  return "#";
+}
+
+function clearHistoryForSwitch(msg) {
+  historySeq += 1;
+  TX_HISTORY = [];
+  paintHistory();
+  const status = $("historyStatus");
+  if (status) status.textContent = msg || "Loading history…";
+}
+
 function paintHistory() {
   const list = $("historyList");
   const status = $("historyStatus");
+  const chain = activeChain(STATE);
   if (!list) return;
   list.innerHTML = "";
   if (!TX_HISTORY.length) {
-    list.innerHTML = '<li class="history-empty">No transactions yet for this wallet.</li>';
-    if (status) status.textContent = "No activity yet — sends & receives will show here.";
+    list.innerHTML =
+      '<li class="history-empty">No transactions yet for this wallet on ' +
+      ((chain && chain.name) || "this chain") +
+      ".</li>";
+    if (status) {
+      status.textContent =
+        "No activity yet for this wallet · " + ((chain && chain.name) || "chain") + ".";
+    }
     return;
   }
   TX_HISTORY.forEach((tx) => {
@@ -4058,7 +4087,7 @@ function paintHistory() {
           : "—";
     }
     const when = formatHistoryTime(tx.when);
-    const href = tx.sig ? "https://solscan.io/tx/" + tx.sig : "#";
+    const href = historyExplorerTxUrl(tx.sig, chain);
     li.innerHTML =
       '<a class="history-row ' +
       dirClass +
@@ -4085,40 +4114,77 @@ function paintHistory() {
   });
   if (status) {
     status.textContent =
-      TX_HISTORY.length + " recent transaction" + (TX_HISTORY.length === 1 ? "" : "s");
+      TX_HISTORY.length +
+      " recent · " +
+      ((chain && chain.name) || "chain") +
+      (TX_HISTORY.length === 1 ? " transaction" : " transactions");
   }
 }
 
 async function refreshHistory() {
   const status = $("historyStatus");
   const acc = activeAccount(STATE);
-  const owner = acc && acc.solana && acc.solana.publicKey;
-  if (!owner) {
+  const chain = activeChain(STATE);
+  if (!acc || !chain) {
     TX_HISTORY = [];
     paintHistory();
     if (status) status.textContent = "No active wallet.";
+    return;
+  }
+
+  const seq = ++historySeq;
+  TX_HISTORY = [];
+  paintHistory();
+  if (status) {
+    status.textContent =
+      "Loading " + (chain.name || "chain") + " history…";
+  }
+
+  const local = loadLocalTxs()
+    .filter((t) => {
+      if (t.accountId && t.accountId !== acc.id) return false;
+      // Prefer explicit chainId; legacy local Solana sends (no chainId) only on Solana.
+      if (t.chainId) return t.chainId === chain.id;
+      return chain.kind === "solana";
+    })
+    .map((t) => ({
+      sig: t.sig,
+      type: t.type || "send",
+      direction: t.direction || "out",
+      amount: Number(t.amount) || 0,
+      symbol: t.symbol || chain.symbol || "",
+      when: t.when ? Math.floor(Number(t.when) / (Number(t.when) > 1e12 ? 1000 : 1)) : 0,
+      status: "local",
+      chainId: t.chainId || chain.id,
+    }));
+
+  // Non-Solana: show only this wallet+chain local history (no cross-chain bleed).
+  if (chain.kind !== "solana") {
+    if (seq !== historySeq) return;
+    TX_HISTORY = local.sort((a, b) => (b.when || 0) - (a.when || 0));
+    paintHistory();
+    if (status && !TX_HISTORY.length) {
+      status.textContent =
+        "No " + chain.name + " activity stored for this wallet yet.";
+    }
+    return;
+  }
+
+  const owner = acc.solana && acc.solana.publicKey;
+  if (!owner) {
+    if (seq !== historySeq) return;
+    TX_HISTORY = local;
+    paintHistory();
+    if (status) status.textContent = "No Solana address on this wallet.";
     return;
   }
   if (!isValidSolanaAddress(owner)) {
     if (status) status.textContent = "Invalid wallet address — cannot load history.";
     return;
   }
-  const seq = ++historySeq;
-  if (status) status.textContent = "Loading history…";
-  const local = loadLocalTxs()
-    .filter((t) => !t.accountId || t.accountId === acc.id)
-    .map((t) => ({
-      sig: t.sig,
-      type: t.type || "send",
-      direction: t.direction || "out",
-      amount: Number(t.amount) || 0,
-      symbol: t.symbol || "SOL",
-      when: t.when ? Math.floor(Number(t.when) / (Number(t.when) > 1e12 ? 1000 : 1)) : 0,
-      status: "local",
-    }));
 
   try {
-    const solChain = CHAINS.find((c) => c.id === "solana") || activeChain(STATE);
+    const solChain = CHAINS.find((c) => c.id === "solana") || chain;
     const rpcs = solRpcList(solChain);
     const remote = await fetchHistoryForOwner(owner, rpcs);
     if (seq !== historySeq) return;
@@ -4220,6 +4286,7 @@ function renderAcctDrawerList() {
     btn.addEventListener("click", async () => {
       if (a.id !== STATE.activeAccountId) {
         STATE.activeAccountId = a.id;
+        clearHistoryForSwitch("Loading history for " + (a.name || "wallet") + "…");
         await storageSet(STATE);
         await refreshAll();
         showToast("Active · " + (a.name || "Wallet"));
@@ -4430,6 +4497,11 @@ async function selectChain(chainId) {
   STATE.activeChainId = chainId;
   const sel = $("chainSelect");
   if (sel) sel.value = chainId;
+  // Drop prior chain/wallet history immediately so it cannot bleed across.
+  const nextChain = CHAINS.find((c) => c.id === chainId);
+  clearHistoryForSwitch(
+    "Loading " + ((nextChain && nextChain.name) || "chain") + " history…"
+  );
   // Swap top-bar address immediately for the selected chain (before RPC).
   paintActiveChainAddress();
   paintChainPicker();
@@ -4695,6 +4767,7 @@ function renderAccountsPanel() {
       }
       if (a.id === STATE.activeAccountId) return;
       STATE.activeAccountId = a.id;
+      clearHistoryForSwitch("Loading history for " + (a.name || "wallet") + "…");
       await storageSet(STATE);
       await refreshAll();
       showToast("Active · " + a.name);
@@ -5427,7 +5500,11 @@ async function refreshAll() {
   hideBackup();
   closeAddrMenu();
   closeChainPicker();
-  await Promise.all([refreshBalance(), refreshAccountBalances()]);
+  await Promise.all([
+    refreshBalance(),
+    refreshAccountBalances(),
+    refreshHistory().catch((err) => console.warn("[history refreshAll]", err)),
+  ]);
 }
 
 function wire() {

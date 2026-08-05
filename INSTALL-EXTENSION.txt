@@ -7,12 +7,21 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.5.75:
+- Uniswap inject: Gladiator appears via EIP-6963 / window.ethereum (connect on app.uniswap.org)
+- History clears when you switch wallet or chain; only shows that wallet+chain
+
 v0.5.74:
 - Dim total USD balance yellow (muted gold, less bright)
 
 v0.5.73:
 - Gladiator titles back to original lavender (not red/orange)
 - Ledger connects in-place from Wallets → Connect Ledger (no relay/wallet window)
+
+Uniswap:
+1. Use a seed wallet (needs EVM key — Ledger-only accounts have no EVM key yet)
+2. Open app.uniswap.org → Connect → choose Gladiator
+3. Approve eth_requestAccounts; switch Ethereum/Base/Polygon in Uniswap as needed
 
 Ledger:
 1. Unlock Nano → open Solana app

@@ -576,5 +576,209 @@
     }
 
     registerWalletStandard();
+
+    // --- EIP-1193 + EIP-6963 ethereum provider (Uniswap, etc.) ---
+    const ethListeners = {
+      accountsChanged: new Set(),
+      chainChanged: new Set(),
+      connect: new Set(),
+      disconnect: new Set(),
+      message: new Set(),
+    };
+    let ethSelectedAddress = null;
+    let ethChainId = "0x1";
+    let ethConnected = false;
+
+    function ethEmit(event, payload) {
+      const set = ethListeners[event];
+      if (!set) return;
+      set.forEach((fn) => {
+        try {
+          fn(payload);
+        } catch (_) {}
+      });
+    }
+
+    async function ethRequest(args) {
+      const method = String((args && args.method) || "");
+      const params = (args && args.params) || [];
+      if (!method) throw new Error("method required");
+
+      if (method === "eth_chainId") {
+        const r = await request("eth_chainId", { args: [] });
+        ethChainId = String((r && r.chainId) || ethChainId || "0x1");
+        return ethChainId;
+      }
+      if (method === "net_version") {
+        const r = await request("net_version", { args: [] });
+        return String((r && r.netVersion) || parseInt(ethChainId, 16) || "1");
+      }
+      if (method === "eth_accounts") {
+        const r = await request("eth_accounts", { args: [] });
+        const accounts = (r && r.accounts) || [];
+        ethSelectedAddress = accounts[0] || null;
+        ethConnected = !!ethSelectedAddress;
+        return accounts;
+      }
+      if (method === "eth_requestAccounts") {
+        const r = await request("eth_requestAccounts", { args: [] });
+        const accounts = (r && r.accounts) || [];
+        ethSelectedAddress = accounts[0] || null;
+        ethConnected = !!ethSelectedAddress;
+        if (r && r.chainId) ethChainId = String(r.chainId);
+        try {
+          ethEmit("connect", { chainId: ethChainId });
+        } catch (_) {}
+        try {
+          ethEmit("accountsChanged", accounts.slice());
+        } catch (_) {}
+        return accounts;
+      }
+      if (method === "wallet_switchEthereumChain") {
+        const r = await request("wallet_switchEthereumChain", { args: params });
+        if (r && r.chainId) {
+          const prev = ethChainId;
+          ethChainId = String(r.chainId);
+          if (prev !== ethChainId) ethEmit("chainChanged", ethChainId);
+        }
+        return null;
+      }
+      if (method === "wallet_addEthereumChain") {
+        await request("wallet_addEthereumChain", { args: params });
+        return null;
+      }
+      if (method === "wallet_revokePermissions" || method === "wallet_requestPermissions") {
+        if (method === "wallet_requestPermissions") {
+          const accounts = await ethRequest({ method: "eth_requestAccounts", params: [] });
+          return [{ parentCapability: "eth_accounts", date: Date.now() }];
+        }
+        ethSelectedAddress = null;
+        ethConnected = false;
+        ethEmit("accountsChanged", []);
+        return null;
+      }
+      if (method === "wallet_getPermissions") {
+        return ethConnected
+          ? [{ parentCapability: "eth_accounts", date: Date.now() }]
+          : [];
+      }
+
+      const r = await request(method, { args: Array.isArray(params) ? params : [] });
+      if (r && Object.prototype.hasOwnProperty.call(r, "result")) return r.result;
+      if (r && Object.prototype.hasOwnProperty.call(r, "signature")) return r.signature;
+      if (r && Object.prototype.hasOwnProperty.call(r, "hash")) return r.hash;
+      return r;
+    }
+
+    const ethereum = {
+      isGladiator: true,
+      isMetaMask: false,
+      get chainId() {
+        return ethChainId;
+      },
+      get networkVersion() {
+        return String(parseInt(ethChainId, 16) || 1);
+      },
+      get selectedAddress() {
+        return ethSelectedAddress;
+      },
+      isConnected() {
+        return !!ethConnected;
+      },
+      request: ethRequest,
+      enable: async () => ethRequest({ method: "eth_requestAccounts", params: [] }),
+      send(payload, callback) {
+        if (typeof payload === "string") {
+          return ethRequest({ method: payload, params: callback || [] });
+        }
+        const p = ethRequest({
+          method: payload && payload.method,
+          params: (payload && payload.params) || [],
+        });
+        if (typeof callback === "function") {
+          p.then(
+            (result) => callback(null, { id: payload.id, jsonrpc: "2.0", result }),
+            (err) => callback(err, null)
+          );
+          return;
+        }
+        return p.then((result) => ({ id: payload && payload.id, jsonrpc: "2.0", result }));
+      },
+      sendAsync(payload, callback) {
+        ethereum.send(payload, callback);
+      },
+      on(event, fn) {
+        if (ethListeners[event] && typeof fn === "function") ethListeners[event].add(fn);
+        return ethereum;
+      },
+      addListener(event, fn) {
+        return ethereum.on(event, fn);
+      },
+      removeListener(event, fn) {
+        if (ethListeners[event] && fn) ethListeners[event].delete(fn);
+        return ethereum;
+      },
+      off(event, fn) {
+        return ethereum.removeListener(event, fn);
+      },
+      removeAllListeners(event) {
+        if (event && ethListeners[event]) ethListeners[event].clear();
+        else Object.keys(ethListeners).forEach((k) => ethListeners[k].clear());
+      },
+      _metamask: {
+        isUnlocked: async () => true,
+      },
+    };
+
+    const eip6963Info = Object.freeze({
+      uuid: "a8f0e3c2-6b41-4d9e-9c7a-11f0a1b2c3d4",
+      name: "Gladiator",
+      icon: ICON,
+      rdns: "wallet.gladiator",
+    });
+
+    function announceEip6963() {
+      try {
+        window.dispatchEvent(
+          new CustomEvent("eip6963:announceProvider", {
+            detail: Object.freeze({ info: eip6963Info, provider: ethereum }),
+          })
+        );
+      } catch (_) {}
+    }
+
+    try {
+      if (!window.ethereum) {
+        Object.defineProperty(window, "ethereum", {
+          value: ethereum,
+          writable: false,
+          configurable: true,
+        });
+      } else {
+        const existing = window.ethereum;
+        try {
+          if (Array.isArray(existing.providers)) {
+            if (!existing.providers.includes(ethereum)) existing.providers.push(ethereum);
+          } else {
+            existing.providers = [existing, ethereum];
+          }
+        } catch (_) {}
+      }
+    } catch (_) {
+      try {
+        if (!window.ethereum) window.ethereum = ethereum;
+      } catch (_) {}
+    }
+
+    try {
+      window.gladiatorEthereum = ethereum;
+    } catch (_) {}
+
+    announceEip6963();
+    try {
+      window.addEventListener("eip6963:requestProvider", function () {
+        announceEip6963();
+      });
+    } catch (_) {}
   } catch (_) {}
 })();

@@ -779,6 +779,111 @@
     return { signature: bytesToBase64(sig) };
   }
 
+  function requireEthers() {
+    if (!window.ethers) throw new Error("ethers missing in offscreen");
+    return window.ethers;
+  }
+
+  function evmWalletFromParams(params) {
+    const ethers = requireEthers();
+    const pk = String((params && params._evmPrivateKey) || "").trim();
+    if (!pk) throw new Error("Missing EVM private key");
+    return new ethers.Wallet(pk);
+  }
+
+  async function ethPersonalSign(params) {
+    const ethers = requireEthers();
+    const wallet = evmWalletFromParams(params);
+    const args = (params && params.args) || [];
+    // personal_sign: [message, address]  |  eth_sign: [address, message]
+    let message = args[0];
+    if (params.method === "eth_sign") {
+      message = args[1];
+    } else if (
+      typeof args[0] === "string" &&
+      args[0].startsWith("0x") &&
+      args[0].length === 42 &&
+      typeof args[1] === "string"
+    ) {
+      // Flipped personal_sign order used by some dApps.
+      message = args[1];
+    }
+    const msg = message;
+    if (typeof msg === "string" && /^0x[0-9a-fA-F]+$/.test(msg)) {
+      return { signature: await wallet.signMessage(ethers.getBytes(msg)) };
+    }
+    return { signature: await wallet.signMessage(String(msg || "")) };
+  }
+
+  async function ethSignTypedData(params) {
+    const ethers = requireEthers();
+    const wallet = evmWalletFromParams(params);
+    const args = (params && params.args) || [];
+    let address = args[0];
+    let typed = args[1];
+    if (typed == null && address && typeof address === "object") {
+      typed = address;
+      address = args[1];
+    }
+    if (typeof typed === "string") {
+      try {
+        typed = JSON.parse(typed);
+      } catch (_) {
+        throw new Error("Invalid typed data JSON");
+      }
+    }
+    if (!typed || typeof typed !== "object") throw new Error("Missing typed data");
+    if (address && wallet.address.toLowerCase() !== String(address).toLowerCase()) {
+      // ignore mismatch from flipped params
+    }
+    const domain = typed.domain || {};
+    const types = { ...(typed.types || {}) };
+    delete types.EIP712Domain;
+    const value = typed.message || typed.value || {};
+    const signature = await wallet.signTypedData(domain, types, value);
+    return { signature };
+  }
+
+  async function ethSendTransaction(params) {
+    const ethers = requireEthers();
+    const wallet = evmWalletFromParams(params);
+    const args = (params && params.args) || [];
+    const txReq = args[0] || {};
+    const rpcs = Array.isArray(params.rpcs) && params.rpcs.length
+      ? params.rpcs
+      : params.rpcUrl
+        ? [params.rpcUrl]
+        : [];
+    if (!rpcs.length) throw new Error("No EVM RPC for send");
+    let lastErr = null;
+    for (const rpc of rpcs) {
+      try {
+        const provider = new ethers.JsonRpcProvider(rpc, params.chainId || undefined);
+        const connected = wallet.connect(provider);
+        const tx = {
+          to: txReq.to,
+          data: txReq.data || "0x",
+          value: txReq.value != null ? txReq.value : 0,
+        };
+        if (txReq.gas != null) tx.gasLimit = txReq.gas;
+        if (txReq.gasLimit != null) tx.gasLimit = txReq.gasLimit;
+        if (txReq.gasPrice != null) tx.gasPrice = txReq.gasPrice;
+        if (txReq.maxFeePerGas != null) tx.maxFeePerGas = txReq.maxFeePerGas;
+        if (txReq.maxPriorityFeePerGas != null) {
+          tx.maxPriorityFeePerGas = txReq.maxPriorityFeePerGas;
+        }
+        if (txReq.nonce != null) tx.nonce = txReq.nonce;
+        if (txReq.chainId != null) tx.chainId = Number(txReq.chainId);
+        else if (params.chainId != null) tx.chainId = Number(params.chainId);
+        const sent = await connected.sendTransaction(tx);
+        return { hash: sent.hash };
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw lastErr || new Error("eth_sendTransaction failed");
+  }
+
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!msg || msg.type !== "gladiator-offscreen") return;
     (async () => {
@@ -793,6 +898,12 @@
           return await signAndSendTransaction(msg.params || {});
         case "signMessage":
           return await signMessage(msg.params || {});
+        case "ethPersonalSign":
+          return await ethPersonalSign(msg.params || {});
+        case "ethSignTypedData":
+          return await ethSignTypedData(msg.params || {});
+        case "ethSendTransaction":
+          return await ethSendTransaction(msg.params || {});
         case "collectPlatformFee":
           return await collectPlatformFee(msg.params || {});
         case "snapshotBalances":
@@ -804,6 +915,7 @@
             Base58: !!(getBase58() && getBase58().decode),
             nacl: !!(getNacl() && getNacl().sign),
             Buffer: typeof Buffer !== "undefined",
+            ethers: !!window.ethers,
           };
         default:
           throw new Error("Unknown offscreen method: " + msg.method);

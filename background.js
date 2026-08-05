@@ -1,4 +1,4 @@
-/** Gladiator service worker — WalletConnect window + in-page Solana provider */
+/** Gladiator service worker — WalletConnect window + in-page Solana/EVM provider */
 const WC_WALLET_PATH = "index.html";
 const STORE_KEY = "gladiator_wallet_v1";
 const TRUSTED_KEY = "gladiator_trusted_origins";
@@ -7,7 +7,50 @@ const OFFSCREEN_URL = "offscreen.html";
 let walletWindowId = null;
 let offscreenCreating = null;
 /** In-memory signer so Jupiter can sign even if chrome.storage lags. */
-let cachedSigner = null; // { publicKey, secretKey, mnemonic }
+let cachedSigner = null; // { publicKey, secretKey, mnemonic, evmAddress, evmPrivateKey }
+/** Active EVM chain for dApp provider (Uniswap). */
+let dappEvmChainId = 1;
+
+const EVM_NETWORKS = {
+  1: {
+    chainId: 1,
+    name: "Ethereum",
+    rpcs: [
+      "https://eth.llamarpc.com",
+      "https://cloudflare-eth.com",
+      "https://ethereum.publicnode.com",
+      "https://rpc.ankr.com/eth",
+      "https://1rpc.io/eth",
+    ],
+  },
+  137: {
+    chainId: 137,
+    name: "Polygon",
+    rpcs: [
+      "https://polygon-rpc.com",
+      "https://polygon-bor.publicnode.com",
+      "https://1rpc.io/matic",
+    ],
+  },
+  8453: {
+    chainId: 8453,
+    name: "Base",
+    rpcs: [
+      "https://mainnet.base.org",
+      "https://base.publicnode.com",
+      "https://1rpc.io/base",
+    ],
+  },
+  4663: {
+    chainId: 4663,
+    name: "Robinhood Ethereum",
+    rpcs: ["https://rpc.mainnet.chain.robinhood.com"],
+  },
+};
+
+function toHexChainId(id) {
+  return "0x" + Number(id || 1).toString(16);
+}
 let persistWaiters = [];
 
 function notifyPersistWaiters() {
@@ -44,13 +87,24 @@ function cacheSignerFromState(state) {
   }
   const acc =
     state.accounts.find((a) => a.id === state.activeAccountId) || state.accounts[0];
-  if (!acc || !acc.solana) return null;
-  const publicKey = acc.solana.publicKey || "";
-  const secretKey = acc.solana.secretKey || "";
+  if (!acc) return null;
+  const publicKey = (acc.solana && acc.solana.publicKey) || "";
+  const secretKey = (acc.solana && acc.solana.secretKey) || "";
   const mnemonic = acc.mnemonic || "";
-  if (!publicKey) return null;
+  const evmAddress = (acc.evm && acc.evm.address) || "";
+  const evmPrivateKey = (acc.evm && acc.evm.privateKey) || "";
   const ledger = isLedgerAccount(acc);
-  if (!secretKey && !mnemonic && !ledger) return null;
+  // Need at least Solana signer or EVM key for dApp use.
+  if (!publicKey && !evmAddress) return null;
+  if (!secretKey && !mnemonic && !ledger && !evmPrivateKey) return null;
+  // Sync dApp EVM chain with wallet selection when on an EVM network.
+  try {
+    const active = String(state.activeChainId || "");
+    if (active === "ethereum") dappEvmChainId = 1;
+    else if (active === "polygon") dappEvmChainId = 137;
+    else if (active === "base") dappEvmChainId = 8453;
+    else if (active === "robinhood") dappEvmChainId = 4663;
+  } catch (_) {}
   cachedSigner = {
     publicKey,
     secretKey,
@@ -61,8 +115,183 @@ function cacheSignerFromState(state) {
         ? Number(acc.ledger.accountIndex) || 0
         : 0,
     accountId: acc.id || null,
+    evmAddress,
+    evmPrivateKey,
   };
   return cachedSigner;
+}
+
+async function getActiveEvmAccount() {
+  const bag = await storageGet([STORE_KEY]);
+  const state = bag[STORE_KEY];
+  cacheSignerFromState(state);
+  if (cachedSigner && cachedSigner.evmAddress) {
+    return {
+      address: cachedSigner.evmAddress,
+      privateKey: cachedSigner.evmPrivateKey || "",
+      accountId: cachedSigner.accountId || null,
+      hasSigner: !!cachedSigner.evmPrivateKey,
+    };
+  }
+  if (!state || !state.accounts || !state.accounts.length) return null;
+  const acc =
+    state.accounts.find((a) => a.id === state.activeAccountId) || state.accounts[0];
+  const address = acc && acc.evm && acc.evm.address;
+  if (!address) return null;
+  return {
+    address,
+    privateKey: (acc.evm && acc.evm.privateKey) || "",
+    accountId: acc.id || null,
+    hasSigner: !!(acc.evm && acc.evm.privateKey),
+  };
+}
+
+async function evmJsonRpc(method, params) {
+  const net = EVM_NETWORKS[dappEvmChainId] || EVM_NETWORKS[1];
+  const list = (net && net.rpcs) || [];
+  let lastErr = null;
+  for (const rpc of list) {
+    try {
+      const res = await fetch(rpc, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method,
+          params: params || [],
+        }),
+      });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const j = await res.json();
+      if (j.error) throw new Error(j.error.message || method + " failed");
+      return j.result;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr || new Error("All EVM RPCs failed");
+}
+
+async function handleEvmProviderRequest(method, params, origin) {
+  const args = Array.isArray(params && params.args)
+    ? params.args
+    : Array.isArray(params)
+      ? params
+      : [];
+
+  if (method === "eth_chainId") {
+    return { result: { chainId: toHexChainId(dappEvmChainId) } };
+  }
+  if (method === "net_version") {
+    return { result: { netVersion: String(dappEvmChainId) } };
+  }
+  if (method === "eth_accounts") {
+    const trusted = await readTrustedOrigins();
+    if (origin && !trusted.includes(origin)) return { result: { accounts: [] } };
+    const acc = await getActiveEvmAccount();
+    return { result: { accounts: acc && acc.address ? [acc.address] : [] } };
+  }
+  if (method === "eth_requestAccounts") {
+    const acc = await getActiveEvmAccount();
+    if (!acc || !acc.address) {
+      throw new Error("No EVM address — open Gladiator and use a seed wallet (not Ledger-only)");
+    }
+    if (origin) await trustOrigin(origin);
+    return {
+      result: {
+        accounts: [acc.address],
+        chainId: toHexChainId(dappEvmChainId),
+      },
+    };
+  }
+  if (method === "wallet_switchEthereumChain") {
+    const req = args[0] || {};
+    const hex = String(req.chainId || "").toLowerCase();
+    const id = parseInt(hex, 16);
+    if (!EVM_NETWORKS[id]) {
+      const err = new Error("Unrecognized chain ID " + hex);
+      err.code = 4902;
+      throw err;
+    }
+    dappEvmChainId = id;
+    return { result: { chainId: toHexChainId(id) } };
+  }
+  if (method === "wallet_addEthereumChain") {
+    const req = args[0] || {};
+    const hex = String(req.chainId || "").toLowerCase();
+    const id = parseInt(hex, 16);
+    if (EVM_NETWORKS[id]) {
+      dappEvmChainId = id;
+      return { result: null };
+    }
+    throw new Error("Gladiator does not support chain " + hex);
+  }
+  if (method === "personal_sign" || method === "eth_sign") {
+    const acc = await getActiveEvmAccount();
+    if (!acc || !acc.privateKey) throw new Error("No EVM key to sign with");
+    const raw = await callOffscreen("ethPersonalSign", {
+      _evmPrivateKey: acc.privateKey,
+      _evmAddress: acc.address,
+      method,
+      args,
+    });
+    return { result: { signature: raw && raw.signature ? raw.signature : raw } };
+  }
+  if (
+    method === "eth_signTypedData" ||
+    method === "eth_signTypedData_v3" ||
+    method === "eth_signTypedData_v4"
+  ) {
+    const acc = await getActiveEvmAccount();
+    if (!acc || !acc.privateKey) throw new Error("No EVM key to sign with");
+    const raw = await callOffscreen("ethSignTypedData", {
+      _evmPrivateKey: acc.privateKey,
+      _evmAddress: acc.address,
+      method,
+      args,
+    });
+    return { result: { signature: raw && raw.signature ? raw.signature : raw } };
+  }
+  if (method === "eth_sendTransaction") {
+    const acc = await getActiveEvmAccount();
+    if (!acc || !acc.privateKey) throw new Error("No EVM key to send with");
+    const net = EVM_NETWORKS[dappEvmChainId] || EVM_NETWORKS[1];
+    const raw = await callOffscreen("ethSendTransaction", {
+      _evmPrivateKey: acc.privateKey,
+      _evmAddress: acc.address,
+      rpcUrl: (net.rpcs && net.rpcs[0]) || "",
+      rpcs: net.rpcs || [],
+      chainId: dappEvmChainId,
+      args,
+    });
+    return { result: { hash: raw && raw.hash ? raw.hash : raw } };
+  }
+
+  // Read-only RPC passthrough used by Uniswap / ethers.
+  const passthrough = [
+    "eth_blockNumber",
+    "eth_getBalance",
+    "eth_getCode",
+    "eth_call",
+    "eth_estimateGas",
+    "eth_gasPrice",
+    "eth_maxPriorityFeePerGas",
+    "eth_feeHistory",
+    "eth_getTransactionCount",
+    "eth_getTransactionByHash",
+    "eth_getTransactionReceipt",
+    "eth_getBlockByNumber",
+    "eth_getBlockByHash",
+    "eth_getLogs",
+    "eth_getStorageAt",
+  ];
+  if (passthrough.includes(method)) {
+    const result = await evmJsonRpc(method, args);
+    return { result: { result } };
+  }
+
+  throw new Error("Unsupported ethereum method: " + method);
 }
 
 async function focusOrOpenWcWallet(opts) {
@@ -607,6 +836,25 @@ async function handleProviderRequest(msg, sender) {
   const params = msg.params || {};
   const origin = params.origin || (sender && sender.origin) || msg.origin || "";
 
+  // EIP-1193 ethereum methods (Uniswap, etc.)
+  if (
+    method === "eth_requestAccounts" ||
+    method === "eth_accounts" ||
+    method === "eth_chainId" ||
+    method === "net_version" ||
+    method === "wallet_switchEthereumChain" ||
+    method === "wallet_addEthereumChain" ||
+    method === "personal_sign" ||
+    method === "eth_sign" ||
+    method === "eth_signTypedData" ||
+    method === "eth_signTypedData_v3" ||
+    method === "eth_signTypedData_v4" ||
+    method === "eth_sendTransaction" ||
+    String(method || "").startsWith("eth_")
+  ) {
+    return await handleEvmProviderRequest(method, params, origin);
+  }
+
   if (method === "connect") {
     const onlyIfTrusted = !!params.onlyIfTrusted;
     const trusted = await readTrustedOrigins();
@@ -722,6 +970,8 @@ async function injectAllMatchingTabs() {
         "https://*.kamino.finance/*",
         "https://sanctum.so/*",
         "https://*.sanctum.so/*",
+        "https://uniswap.org/*",
+        "https://*.uniswap.org/*",
         "http://localhost/*",
         "http://127.0.0.1/*",
       ],
@@ -782,6 +1032,7 @@ function shouldInjectProvider(url) {
       "mango.markets",
       "kamino.finance",
       "sanctum.so",
+      "uniswap.org",
       "localhost",
       "127.0.0.1",
     ];
