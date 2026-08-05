@@ -968,74 +968,34 @@ body.is-extension .acct-drawer {
 }
 
 .balance-receive-note {
-  margin: 10px 0 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  margin: 6px 0 0;
+  display: block;
   max-width: 100%;
-  padding: 8px 10px;
-  border-radius: 10px;
-  border: 1px solid rgba(61, 214, 140, 0.35);
-  background: linear-gradient(
-    105deg,
-    rgba(61, 214, 140, 0.16),
-    rgba(184, 167, 207, 0.1)
-  );
-  color: #b8e7c8;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #9fd9b0;
   font-size: 0.78rem;
   font-weight: 600;
   letter-spacing: 0.01em;
-  animation: receiveNoteIn 0.35s ease-out;
+  line-height: 1.3;
+  animation: receiveNoteIn 0.25s ease-out;
 }
 
 .balance-receive-note[hidden] {
   display: none !important;
 }
 
-.balance-receive-ico {
-  flex: 0 0 auto;
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: rgba(61, 214, 140, 0.22);
-  color: #7dffb2;
-  font-size: 0.85rem;
-}
-
 #balanceReceiveText {
-  flex: 1 1 auto;
-  min-width: 0;
-  line-height: 1.25;
-}
-
-.balance-receive-dismiss {
-  flex: 0 0 auto;
-  width: 26px;
-  height: 26px;
-  border: 0;
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.22);
-  color: var(--ink-soft);
-  font-size: 1rem;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.balance-receive-dismiss:hover {
-  color: var(--ink);
-  background: rgba(0, 0, 0, 0.35);
+  display: inline;
 }
 
 @keyframes receiveNoteIn {
   from {
     opacity: 0;
-    transform: translateY(-4px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 
@@ -3237,8 +3197,8 @@ body.is-extension #chainSelect {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 0.7rem;
+  gap: 8px;
+  font-size: 0.68rem;
   font-weight: 700;
   letter-spacing: 0.03em;
   text-transform: uppercase;
@@ -3248,10 +3208,47 @@ body.is-extension #chainSelect {
 }
 
 .token-toggle input {
-  width: 16px;
-  height: 16px;
-  accent-color: #b8a7cf;
-  cursor: pointer;
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.token-switch-track {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.token-switch-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #d7d0e4;
+  transition: transform 0.18s ease, background 0.18s ease;
+}
+
+.token-toggle input:checked + .token-switch-track {
+  background: rgba(184, 167, 207, 0.45);
+  border-color: rgba(184, 167, 207, 0.55);
+}
+
+.token-toggle input:checked + .token-switch-track::after {
+  transform: translateX(16px);
+  background: #f2ebff;
+}
+
+.token-toggle input:focus-visible + .token-switch-track {
+  box-shadow: 0 0 0 2px rgba(184, 167, 207, 0.35);
 }
 
 .settings-contact,

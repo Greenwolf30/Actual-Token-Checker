@@ -12,7 +12,7 @@
       href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=0.5.78" />
+    <link rel="stylesheet" href="./styles.css?v=0.5.79" />
   </head>
   <body class="is-local">
     <div class="atmosphere" aria-hidden="true">
@@ -98,6 +98,9 @@
                   <button type="button" class="addr-menu-item" role="menuitem" data-menu="connect">
                     WalletConnect
                   </button>
+                  <button type="button" class="addr-menu-item" role="menuitem" data-menu="manage-tokens">
+                    Manage tokens
+                  </button>
                   <button type="button" class="addr-menu-item" role="menuitem" data-menu="settings">
                     Settings
                   </button>
@@ -108,11 +111,7 @@
               <span class="currency">$</span><span id="fiatBalance">0.00</span>
             </p>
             <p class="balance-receive-note" id="balanceReceiveNote" hidden>
-              <span class="balance-receive-ico" aria-hidden="true">↘</span>
               <span id="balanceReceiveText">Received tokens</span>
-              <button type="button" class="balance-receive-dismiss" id="balanceReceiveDismiss" aria-label="Dismiss">
-                ×
-              </button>
             </p>
             <p class="balance-sol">
               <img
@@ -411,7 +410,7 @@
             <ul class="settings-wallets" id="walletRenameList"></ul>
           </div>
 
-          <div class="settings-block">
+          <div class="settings-block" id="manageTokensBlock">
             <h3 class="settings-block-title">Manage tokens</h3>
             <p class="photon-sub">
               Toggle tokens on or off for the Home list. Everything stays shown until you hide it.
@@ -585,13 +584,13 @@
     <script src="./lib/ethers.umd.min.js"></script>
     <script src="./lib/solana-hd.js"></script>
     <script src="./lib/multi-hd.js"></script>
-    <script src="./lib/btc-send.bundle.js?v=0.5.78"></script>
+    <script src="./lib/btc-send.bundle.js?v=0.5.79"></script>
     <script src="./lib/buffer.min.js"></script>
-    <script src="./lib/solana-tx.bundle.js?v=0.5.78"></script>
+    <script src="./lib/solana-tx.bundle.js?v=0.5.79"></script>
     <script src="./lib/qrcode.min.js"></script>
-    <script src="./lib/walletconnect.bundle.js?v=0.5.78"></script>
-    <script src="./lib/ledger-solana.bundle.js?v=0.5.78"></script>
+    <script src="./lib/walletconnect.bundle.js?v=0.5.79"></script>
+    <script src="./lib/ledger-solana.bundle.js?v=0.5.79"></script>
     <script src="./config.js"></script>
-    <script src="./app.js?v=0.5.78"></script>
+    <script src="./app.js?v=0.5.79"></script>
   </body>
 </html>

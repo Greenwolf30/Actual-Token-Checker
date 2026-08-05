@@ -1184,8 +1184,10 @@ let balanceSeq = 0;
 /** Recent txs for History tab */
 let TX_HISTORY = [];
 let historySeq = 0;
-/** Active “you received tokens” banner under total balance */
+/** Active “you received tokens” notice under total balance */
 let RECEIVE_ALERT = null; // { text, symbols:[], at, accountId, chainId }
+let receiveAlertTimer = null;
+const RECEIVE_ALERT_MS = 3500;
 const LOCAL_TX_KEY = "gladiator_local_txs_v1";
 const HOLDINGS_SNAP_KEY = "gladiator_holdings_snap_v1";
 const SWAP_PROGRAMS = new Set([
@@ -2078,8 +2080,23 @@ function receiveAlertText(items) {
 }
 
 function dismissReceiveAlert() {
+  if (receiveAlertTimer) {
+    clearTimeout(receiveAlertTimer);
+    receiveAlertTimer = null;
+  }
   RECEIVE_ALERT = null;
   paintReceiveAlert();
+  paintBalances();
+}
+
+function scheduleReceiveAlertDismiss() {
+  if (receiveAlertTimer) clearTimeout(receiveAlertTimer);
+  receiveAlertTimer = setTimeout(() => {
+    receiveAlertTimer = null;
+    RECEIVE_ALERT = null;
+    paintReceiveAlert();
+    paintBalances();
+  }, RECEIVE_ALERT_MS);
 }
 
 function paintReceiveAlert() {
@@ -2093,7 +2110,8 @@ function paintReceiveAlert() {
     acc &&
     chain &&
     RECEIVE_ALERT.accountId === acc.id &&
-    RECEIVE_ALERT.chainId === chain.id;
+    RECEIVE_ALERT.chainId === chain.id &&
+    Date.now() - (RECEIVE_ALERT.at || 0) < RECEIVE_ALERT_MS + 250;
   if (!stillRelevant || !RECEIVE_ALERT.text) {
     note.hidden = true;
     if (text) text.textContent = "";
@@ -2122,6 +2140,7 @@ function maybeNotifyReceives(accountId, chainId, holdings) {
     chainId,
   };
   paintReceiveAlert();
+  scheduleReceiveAlertDismiss();
   showToast(text);
   const delta = $("dayDelta");
   if (delta) {
@@ -2162,7 +2181,7 @@ function paintBalances() {
     chain &&
     RECEIVE_ALERT.accountId === acc.id &&
     RECEIVE_ALERT.chainId === chain.id &&
-    Date.now() - (RECEIVE_ALERT.at || 0) < 10 * 60 * 1000;
+    Date.now() - (RECEIVE_ALERT.at || 0) < RECEIVE_ALERT_MS;
   if (delta) {
     if (alertActive && RECEIVE_ALERT.symbols && RECEIVE_ALERT.symbols.length) {
       delta.textContent =
@@ -6132,6 +6151,7 @@ function paintManageTokens() {
       '"' +
       (shown ? " checked" : "") +
       " />" +
+      '<span class="token-switch-track" aria-hidden="true"></span>' +
       "<span>" +
       (shown ? "Shown" : "Hidden") +
       "</span></label>";
@@ -6149,7 +6169,7 @@ function paintSettings() {
 function openSettings(opts) {
   closeAddrMenu();
   go("settings");
-  paintWcSettings();
+  paintSettings();
   if (opts && opts.focusWc) {
     requestAnimationFrame(() => {
       const block = $("wcSettingsBlock");
@@ -6158,6 +6178,13 @@ function openSettings(opts) {
       }
       const uri = $("wcUri");
       if (uri) uri.focus();
+    });
+  } else if (opts && opts.focusManageTokens) {
+    requestAnimationFrame(() => {
+      const block = $("manageTokensBlock");
+      if (block && typeof block.scrollIntoView === "function") {
+        block.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
     });
   }
 }
