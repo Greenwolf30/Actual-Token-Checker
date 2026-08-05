@@ -7,6 +7,9 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.12:
+- Holdings rows slightly larger (padding, icons, type)
+
 v0.6.11:
 - Ledger + Uniswap/EVM dApps: sign personal_sign / EIP-712 / sendTx via Ethereum app (Link EVM first)
 

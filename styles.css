@@ -1346,12 +1346,12 @@ body.is-extension .acct-drawer {
   border-top: 0;
 }
 
-/* Compact holdings so many tokens fit under SOL without endless scroll. */
+/* Holdings list — slightly roomier rows under the balance. */
 .token-list {
   gap: 0;
-  max-height: min(48vh, 380px);
+  max-height: min(52vh, 420px);
   overflow-y: auto;
-  padding: 2px 0;
+  padding: 4px 0;
   border-radius: 14px;
   border: 1px solid var(--holdings-edge);
   background: rgba(10, 14, 22, 0.55);
@@ -1393,9 +1393,9 @@ body.is-extension .acct-drawer {
 }
 
 .token-list .token-row {
-  grid-template-columns: 30px 1fr auto;
-  gap: 10px;
-  padding: 10px 12px;
+  grid-template-columns: 36px 1fr auto;
+  gap: 12px;
+  padding: 13px 14px;
   border: 0;
   border-radius: 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
@@ -1487,8 +1487,8 @@ body.is-extension .acct-drawer {
 }
 
 .token-list .token-logo {
-  width: 30px;
-  height: 30px;
+  width: 36px;
+  height: 36px;
 }
 
 .token-logo-img {
@@ -1505,13 +1505,13 @@ body.is-extension .acct-drawer {
 
 .token-list .token-logo-img,
 .token-list .token-icon {
-  width: 30px;
-  height: 30px;
+  width: 36px;
+  height: 36px;
   box-shadow: none;
 }
 
 .token-list .token-icon {
-  font-size: 0.6rem;
+  font-size: 0.66rem;
 }
 
 .token-meta strong,
@@ -1528,13 +1528,13 @@ body.is-extension .acct-drawer {
 }
 
 .token-list .token-meta strong {
-  font-size: 0.86rem;
+  font-size: 0.92rem;
   font-weight: 600;
   letter-spacing: -0.01em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 160px;
+  max-width: 180px;
 }
 
 .token-meta span,
@@ -1561,7 +1561,7 @@ body.is-extension .acct-drawer {
 }
 
 .token-list .token-vals strong {
-  font-size: 0.82rem;
+  font-size: 0.88rem;
   font-weight: 600;
   white-space: nowrap;
 }
@@ -1576,8 +1576,8 @@ body.is-extension .acct-drawer {
 }
 
 .token-list .token-vals span {
-  margin-top: 1px;
-  font-size: 0.66rem;
+  margin-top: 2px;
+  font-size: 0.7rem;
 }
 
 /* Token detail (Phantom / Solflare-style asset page) */
