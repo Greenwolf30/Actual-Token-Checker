@@ -7,13 +7,13 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
-v0.5.72:
-- Both Gladiator titles are solid red
-- Fix Ledger connect: WebHID must run from a real button click (no auto-connect delay)
+v0.5.73:
+- Gladiator titles back to original lavender (not red/orange)
+- Ledger connects in-place from Wallets → Connect Ledger (no relay/wallet window)
 
 Ledger:
 1. Unlock Nano → open Solana app
-2. Wallets → Ledger → Connect Ledger
-3. Pick the device in the browser prompt and approve
+2. Open Gladiator (side panel or popup) → Wallets → Ledger → Connect Ledger
+3. Pick the device in the browser HID prompt and approve
 
 Version: see manifest.json

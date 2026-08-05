@@ -763,54 +763,9 @@ async function startLedgerConnectFlow() {
     0,
     Math.floor(Number((idxEl && idxEl.value) || 0) || 0)
   );
-  const ledgerStatus = $("ledgerConnectStatus");
-
-  // WebHID requestDevice MUST run from this click (user gesture).
-  // Do not defer with setTimeout / window navigation first.
-  try {
-    await connectLedgerAccount({ accountIndex });
-    return;
-  } catch (err) {
-    const msg = String(err && err.message ? err.message : err);
-    console.warn("[ledger-connect]", err);
-
-    // If popup/HID chooser failed, open the wallet window so the user can
-    // click Connect Ledger there (fresh gesture). Never auto-connect after delay.
-    const needsWindow =
-      IS_EXTENSION_POPUP ||
-      /gesture|activation|NotAllowedError|must be handling a user gesture|No device selected|cancelled/i.test(
-        msg
-      );
-
-    if (IS_EXTENSION && needsWindow) {
-      try {
-        await new Promise((resolve) => {
-          chrome.storage.local.set(
-            {
-              gladiator_ledger_connect: {
-                at: Date.now(),
-                accountIndex,
-                needsClick: true,
-              },
-            },
-            () => resolve()
-          );
-        });
-      } catch (_) {}
-      await openWalletWindowForWc({
-        focus: true,
-        settings: false,
-        ledger: true,
-      });
-      showToast("In Gladiator window → tap Connect Ledger");
-      if (ledgerStatus) {
-        ledgerStatus.textContent =
-          "Opened wallet window — unlock Ledger, open Solana app, then tap Connect Ledger there.";
-      }
-      return;
-    }
-    throw err;
-  }
+  // Connect in-place from this click — no separate wallet/relay window.
+  // WebHID needs this user gesture; do not defer or navigate away first.
+  await connectLedgerAccount({ accountIndex });
 }
 
 async function ensureState() {
@@ -5977,31 +5932,21 @@ async function boot() {
         }
         if (q.get("ledger") === "1") {
           go("activity");
-          let accountIndex = 0;
           try {
             const bag = await chromeLocalGet(["gladiator_ledger_connect"]);
             const pending = bag && bag.gladiator_ledger_connect;
-            if (pending && pending.accountIndex != null) {
-              accountIndex = Math.max(0, Math.floor(Number(pending.accountIndex) || 0));
-            }
-            if ($("ledgerAccountIndex")) {
-              $("ledgerAccountIndex").value = String(accountIndex);
+            if (pending && pending.accountIndex != null && $("ledgerAccountIndex")) {
+              $("ledgerAccountIndex").value = String(
+                Math.max(0, Math.floor(Number(pending.accountIndex) || 0))
+              );
             }
             await chromeLocalSet({ gladiator_ledger_connect: null });
           } catch (_) {}
-          // Do NOT auto-call WebHID here — requestDevice requires a real click.
           const ledgerStatus = $("ledgerConnectStatus");
           if (ledgerStatus) {
             ledgerStatus.textContent =
-              "Ready — unlock Ledger, open the Solana app, then tap Connect Ledger.";
+              "Unlock Ledger, open the Solana app, then tap Connect Ledger.";
           }
-          showToast("Tap Connect Ledger");
-          try {
-            const btn = $("connectLedgerBtn");
-            if (btn && btn.scrollIntoView) {
-              btn.scrollIntoView({ behavior: "smooth", block: "center" });
-            }
-          } catch (_) {}
         }
       } catch (_) {}
       const paired = await consumePendingWcUri();
