@@ -7,6 +7,9 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.13:
+- Fix ETH/Ledger send errors (no more fake “need SOL”); EVM 0.85% fee → 0xf7d7…1939B2
+
 v0.6.12:
 - Holdings rows slightly larger (padding, icons, type)
 

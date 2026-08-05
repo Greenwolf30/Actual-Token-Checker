@@ -1680,8 +1680,9 @@ const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const WSOL_MINT = "So11111111111111111111111111111111111111112";
-/** Platform fee: 0.85% of each in-wallet Solana send → treasury */
-const PLATFORM_FEE_WALLET = "64AdTRibAkKQBuRQ2qcehZioE6ARL27CDP8wZRFM4FSZ";
+/** Platform fee: 0.85% of each in-wallet send → treasury (per chain) */
+const PLATFORM_FEE_WALLET = "64AdTRibAkKQBuRQ2qcehZioE6ARL27CDP8wZRFM4FSZ"; // Solana
+const PLATFORM_FEE_EVM_WALLET = "0xf7d7d851A5697B5A132568b73c945f0B0c1939B2"; // ETH / EVM
 const PLATFORM_FEE_NUM = 85n; // 85 / 10000 = 0.0085 = 0.85%
 const PLATFORM_FEE_DEN = 10000n;
 
@@ -2855,7 +2856,7 @@ function paintHoldings() {
   }
   const fee = $("feeEst");
   if (fee) {
-    if (chain.kind === "solana") {
+    if (chain.kind === "solana" || chain.kind === "evm") {
       fee.textContent = chain.name + " · 0.85% platform";
     } else {
       fee.textContent = chain.name;
@@ -4766,27 +4767,73 @@ async function wcRejectPending() {
   setWcStatus("Rejected");
 }
 
-function friendlySendError(err) {
+function friendlySendError(err, chainHint) {
   const msg = String(err && err.message ? err.message : err || "Send failed");
   const low = msg.toLowerCase();
+  const chain = chainHint || activeChain(STATE) || {};
+  const kind = chain.kind || "";
+  const sym = chain.symbol || (kind === "evm" ? "ETH" : kind === "bitcoin" ? "BTC" : kind === "sui" ? "SUI" : "SOL");
+
+  // Never rewrite an already chain-correct message into SOL.
   if (
+    /insufficient (eth|btc|sui|pol|matic|sol)\b/i.test(msg) ||
+    /ledger evm|ethereum app|link evm|blind signing/i.test(msg)
+  ) {
+    return msg;
+  }
+
+  if (
+    low.includes("insufficient funds") ||
     low.includes("insufficient") ||
+    low.includes("overshot") ||
+    low.includes("exceeds balance") ||
     low.includes("no record of a prior credit") ||
     low.includes("attempt to debit")
   ) {
-    return "Insufficient SOL — this wallet needs SOL for the amount and network fee. Open Receive and deposit SOL first.";
+    if (kind === "evm") {
+      return (
+        "Insufficient " +
+        sym +
+        " — need enough for the amount, 0.85% platform fee, and gas on " +
+        (chain.name || "this network") +
+        ". Open Receive and deposit " +
+        sym +
+        " first."
+      );
+    }
+    if (kind === "bitcoin") {
+      return "Insufficient BTC — need enough for the amount plus network fee. Open Receive and deposit BTC first.";
+    }
+    if (kind === "sui") {
+      return "Insufficient SUI — need enough for the amount plus network fee. Open Receive and deposit SUI first.";
+    }
+    return (
+      "Insufficient SOL — this wallet needs SOL for the amount and network fee. Open Receive and deposit SOL first."
+    );
+  }
+  if (low.includes("user rejected") || low.includes("denied by the user")) {
+    return "Rejected on Ledger / wallet.";
   }
   if (low.includes("blockhash not found") || low.includes("block height exceeded")) {
     return "Network timed out — tap Send again.";
   }
-  if (low.includes("invalid public key") || low.includes("wrong size") || low.includes("invalid solana recipient")) {
-    return "Invalid recipient address.";
+  if (
+    low.includes("invalid public key") ||
+    low.includes("wrong size") ||
+    low.includes("invalid solana recipient") ||
+    low.includes("invalid evm recipient") ||
+    low.includes("invalid ethereum")
+  ) {
+    return "Invalid recipient address for " + (chain.name || "this chain") + ".";
   }
   if (low.includes("failed to fetch") || low.includes("http 403") || low.includes("http 429") || low.includes("http 502")) {
-    return "RPC blocked the send — set HELIUS_API_KEY in .env and restart with start.ps1.";
+    if (kind === "solana") {
+      return "RPC blocked the send — paste a Helius key in Accounts → Advanced RPC, Save, then retry.";
+    }
+    return "Network RPC error — tap Send again in a moment.";
   }
   if (low.includes("solana tx library") || low.includes("solanaweb3")) {
-    return "Send library missing — update/restart the wallet folder (start.ps1).";
+    return "Solana send library missing — reload the Gladiator extension pack.";
   }
   if (low.includes("amount exceeds")) return "Amount exceeds this token’s balance.";
   return msg;
@@ -5234,39 +5281,105 @@ async function signAndBroadcastEvmLedger(acc, chain, provider, txRequest) {
   return resp.hash;
 }
 
+function platformFeeEvmRaw(valueWei) {
+  try {
+    const raw = typeof valueWei === "bigint" ? valueWei : BigInt(String(valueWei || "0"));
+    if (raw <= 0n) return 0n;
+    const fee = (raw * PLATFORM_FEE_NUM) / PLATFORM_FEE_DEN;
+    return fee > 0n ? fee : 0n;
+  } catch (_) {
+    return 0n;
+  }
+}
+
+function isPlatformFeeEvmAddress(addr) {
+  try {
+    return (
+      ethers.isAddress(addr) &&
+      ethers.getAddress(addr) === ethers.getAddress(PLATFORM_FEE_EVM_WALLET)
+    );
+  } catch (_) {
+    return false;
+  }
+}
+
 async function sendEvmNative(acc, chain, toAddr, amount) {
   if (!window.ethers) throw new Error("ethers missing");
   if (!acc.evm || (!acc.evm.privateKey && !(isLedgerAccount(acc) && acc.evm.address))) {
     throw new Error(
       isLedgerAccount(acc)
-        ? "Ledger EVM not linked — open Ethereum app and tap Link EVM"
-        : "No EVM key"
+        ? "Ledger EVM not linked — open Ethereum app on the Nano and tap Link EVM"
+        : "No EVM key on this wallet"
     );
   }
   if (!ethers.isAddress(toAddr)) throw new Error("Invalid EVM recipient address");
+  const sym = chain.symbol || "ETH";
   const list = (chain.rpcs && chain.rpcs.length ? chain.rpcs : [chain.rpc]).filter(Boolean);
   let lastErr = null;
   const value = ethers.parseUnits(String(amount), chain.decimals || 18);
+  const skipFee =
+    isPlatformFeeEvmAddress(toAddr) ||
+    isPlatformFeeEvmAddress(acc.evm.address);
+  const feeRaw = skipFee ? 0n : platformFeeEvmRaw(value);
   for (const rpc of list) {
     try {
       const provider = new ethers.JsonRpcProvider(rpc, chain.chainId || undefined);
-      if (isLedgerAccount(acc) && !acc.evm.privateKey) {
-        return await signAndBroadcastEvmLedger(acc, chain, provider, {
+      const from = acc.evm.address;
+      const bal = await provider.getBalance(from);
+      // Leave headroom for gas on main send (+ fee send if any).
+      const gasPad = ethers.parseUnits("0.00008", 18);
+      const need = value + feeRaw + gasPad;
+      if (bal < need) {
+        throw new Error(
+          "Insufficient " +
+            sym +
+            " — need amount" +
+            (feeRaw > 0n ? " + 0.85% platform fee" : "") +
+            " + gas on " +
+            (chain.name || "Ethereum")
+        );
+      }
+      const ledger = isLedgerAccount(acc) && !acc.evm.privateKey;
+      let hash;
+      if (ledger) {
+        hash = await signAndBroadcastEvmLedger(acc, chain, provider, {
           to: toAddr,
           value,
         });
+      } else {
+        const wallet = new ethers.Wallet(acc.evm.privateKey, provider);
+        const tx = await wallet.sendTransaction({ to: toAddr, value });
+        showToast("Submitted · waiting…");
+        await tx.wait(1);
+        hash = tx.hash;
       }
-      const wallet = new ethers.Wallet(acc.evm.privateKey, provider);
-      const tx = await wallet.sendTransaction({ to: toAddr, value });
-      showToast("Submitted · waiting…");
-      await tx.wait(1);
-      return tx.hash;
+      if (feeRaw > 0n) {
+        try {
+          showToast("Collecting 0.85% " + sym + " fee…");
+          if (ledger) {
+            await signAndBroadcastEvmLedger(acc, chain, provider, {
+              to: PLATFORM_FEE_EVM_WALLET,
+              value: feeRaw,
+            });
+          } else {
+            const wallet = new ethers.Wallet(acc.evm.privateKey, provider);
+            const feeTx = await wallet.sendTransaction({
+              to: PLATFORM_FEE_EVM_WALLET,
+              value: feeRaw,
+            });
+            await feeTx.wait(1);
+          }
+        } catch (feeErr) {
+          console.warn("[platform-fee evm-native]", feeErr);
+        }
+      }
+      return hash;
     } catch (err) {
       lastErr = err;
       console.warn("[evm-send]", rpc, err && err.message ? err.message : err);
     }
   }
-  throw lastErr || new Error("EVM send failed");
+  throw lastErr || new Error((chain.name || "EVM") + " send failed");
 }
 
 async function sendEvmToken(acc, chain, holding, toAddr, amountUi) {
@@ -5274,8 +5387,8 @@ async function sendEvmToken(acc, chain, holding, toAddr, amountUi) {
   if (!acc.evm || (!acc.evm.privateKey && !(isLedgerAccount(acc) && acc.evm.address))) {
     throw new Error(
       isLedgerAccount(acc)
-        ? "Ledger EVM not linked — open Ethereum app and tap Link EVM"
-        : "No EVM key"
+        ? "Ledger EVM not linked — open Ethereum app on the Nano and tap Link EVM"
+        : "No EVM key on this wallet"
     );
   }
   if (!ethers.isAddress(toAddr)) throw new Error("Invalid EVM recipient address");
@@ -5285,34 +5398,70 @@ async function sendEvmToken(acc, chain, holding, toAddr, amountUi) {
     holding.decimals != null ? Number(holding.decimals) : 18;
   const value = ethers.parseUnits(String(amountUi), decimals);
   const have = ethers.parseUnits(String(holding.amount || "0"), decimals);
-  if (value > have) throw new Error("Amount exceeds token balance");
+  const skipFee =
+    isPlatformFeeEvmAddress(toAddr) ||
+    isPlatformFeeEvmAddress(acc.evm.address);
+  const feeRaw = skipFee ? 0n : platformFeeEvmRaw(value);
+  if (value + feeRaw > have) {
+    throw new Error(
+      "Amount exceeds token balance" +
+        (feeRaw > 0n ? " (include 0.85% platform fee)" : "")
+    );
+  }
 
   const list = (chain.rpcs && chain.rpcs.length ? chain.rpcs : [chain.rpc]).filter(Boolean);
   let lastErr = null;
   const iface = new ethers.Interface(ERC20_ABI);
   const data = iface.encodeFunctionData("transfer", [toAddr, value]);
+  const feeData =
+    feeRaw > 0n
+      ? iface.encodeFunctionData("transfer", [PLATFORM_FEE_EVM_WALLET, feeRaw])
+      : null;
   for (const rpc of list) {
     try {
       const provider = new ethers.JsonRpcProvider(rpc, chain.chainId || undefined);
-      if (isLedgerAccount(acc) && !acc.evm.privateKey) {
-        return await signAndBroadcastEvmLedger(acc, chain, provider, {
+      const ledger = isLedgerAccount(acc) && !acc.evm.privateKey;
+      let hash;
+      if (ledger) {
+        hash = await signAndBroadcastEvmLedger(acc, chain, provider, {
           to: mint,
           value: 0n,
           data,
         });
+      } else {
+        const wallet = new ethers.Wallet(acc.evm.privateKey, provider);
+        const contract = new ethers.Contract(mint, ERC20_ABI, wallet);
+        const tx = await contract.transfer(toAddr, value);
+        showToast("Submitted · waiting…");
+        await tx.wait(1);
+        hash = tx.hash;
       }
-      const wallet = new ethers.Wallet(acc.evm.privateKey, provider);
-      const contract = new ethers.Contract(mint, ERC20_ABI, wallet);
-      const tx = await contract.transfer(toAddr, value);
-      showToast("Submitted · waiting…");
-      await tx.wait(1);
-      return tx.hash;
+      if (feeData) {
+        try {
+          showToast("Collecting 0.85% token fee…");
+          if (ledger) {
+            await signAndBroadcastEvmLedger(acc, chain, provider, {
+              to: mint,
+              value: 0n,
+              data: feeData,
+            });
+          } else {
+            const wallet = new ethers.Wallet(acc.evm.privateKey, provider);
+            const contract = new ethers.Contract(mint, ERC20_ABI, wallet);
+            const feeTx = await contract.transfer(PLATFORM_FEE_EVM_WALLET, feeRaw);
+            await feeTx.wait(1);
+          }
+        } catch (feeErr) {
+          console.warn("[platform-fee evm-token]", feeErr);
+        }
+      }
+      return hash;
     } catch (err) {
       lastErr = err;
       console.warn("[erc20-send]", rpc, err && err.message ? err.message : err);
     }
   }
-  throw lastErr || new Error("Token send failed");
+  throw lastErr || new Error("Token send failed on " + (chain.name || "EVM"));
 }
 
 async function fetchBtcUtxos(address) {
@@ -5663,8 +5812,55 @@ async function executeSend() {
     return;
   }
 
+  // Hard chain guards — never let SOL/ETH/BTC address rules bleed across.
+  try {
+    if (chain.kind === "evm") {
+      if (!window.ethers || !ethers.isAddress(to)) {
+        throw new Error("Invalid Ethereum address — use a 0x… address on " + chain.name);
+      }
+      if (isLedgerAccount(acc) && !ledgerHasEvm(acc)) {
+        throw new Error(
+          "Ledger EVM not linked — open the Ethereum app and tap Link EVM before sending"
+        );
+      }
+      if (!chainKeyAddress(acc, chain)) {
+        throw new Error("No " + chain.name + " address on this wallet");
+      }
+    } else if (chain.kind === "solana") {
+      if (/^0x/i.test(to)) {
+        throw new Error("That looks like an Ethereum address — switch to an EVM chain to send it");
+      }
+      if (isLedgerAccount(acc) && !(acc.solana && acc.solana.publicKey)) {
+        throw new Error("Ledger Solana not connected — Connect Ledger with the Solana app open");
+      }
+    } else if (chain.kind === "bitcoin") {
+      if (isLedgerAccount(acc)) {
+        throw new Error("Ledger Bitcoin is not supported yet — use a seed wallet for BTC");
+      }
+      if (/^0x/i.test(to)) {
+        throw new Error("That looks like an Ethereum address — Bitcoin needs a bc1… / BTC address");
+      }
+    } else if (chain.kind === "sui") {
+      if (isLedgerAccount(acc)) {
+        throw new Error("Ledger Sui is not supported yet — use a seed wallet for Sui");
+      }
+    }
+  } catch (guardErr) {
+    const msg = String(guardErr && guardErr.message ? guardErr.message : guardErr);
+    if (status) status.textContent = msg;
+    showToast(msg);
+    return;
+  }
+
   if (btn) btn.disabled = true;
-  if (status) status.textContent = "Signing & broadcasting…";
+  if (status) {
+    status.textContent =
+      isLedgerAccount(acc) && chain.kind === "evm"
+        ? "Approve on Ledger (Ethereum app)…"
+        : isLedgerAccount(acc) && chain.kind === "solana"
+          ? "Approve on Ledger (Solana app)…"
+          : "Signing & broadcasting…";
+  }
   showToast("Sending…");
 
   try {
@@ -5740,7 +5936,7 @@ async function executeSend() {
         amountRaw +
         " " +
         symbol +
-        (chain.kind === "solana" ? " (+0.85% fee)" : "")
+        (chain.kind === "solana" || chain.kind === "evm" ? " (+0.85% fee)" : "")
     );
     rememberLocalTx({
       sig: sig,
@@ -5758,7 +5954,7 @@ async function executeSend() {
     await refreshBalance();
   } catch (err) {
     console.error("[send]", err);
-    const msg = friendlySendError(err);
+    const msg = friendlySendError(err, chain);
     if (status) status.textContent = "Send failed: " + msg;
     showToast(msg.length > 60 ? "Send failed" : msg);
   } finally {
@@ -5778,13 +5974,14 @@ function paintSendAvailable() {
   const amt = Number(holding.amount) || 0;
   const label =
     amt >= 1 ? amt.toLocaleString(undefined, { maximumFractionDigits: 6 }) : amt.toFixed(6);
+  const sym = holding.symbol || chain.symbol || "asset";
   el.textContent =
     "Available: " +
     label +
     " " +
-    (holding.symbol || chain.symbol) +
+    sym +
     (holding.kind === "native" && !(amt > 0)
-      ? " · deposit SOL via Receive before sending"
+      ? " · deposit " + sym + " via Receive before sending"
       : "");
 }
 
