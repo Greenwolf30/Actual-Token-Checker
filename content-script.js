@@ -76,6 +76,81 @@
   if (window.__GLADIATOR_BRIDGE_INSTALLED__) return;
   window.__GLADIATOR_BRIDGE_INSTALLED__ = true;
 
+  const REFRESH_MSG =
+    "Gladiator was updated or reloaded — refresh this page, reconnect Gladiator, then try again";
+
+  function isDeadExtensionContext(msg) {
+    const s = String(msg || "").toLowerCase();
+    return (
+      s.includes("extension context invalidated") ||
+      s.includes("receiving end does not exist") ||
+      s.includes("could not establish connection") ||
+      s.includes("message port closed")
+    );
+  }
+
+  function friendlyBridgeError(msg) {
+    if (isDeadExtensionContext(msg)) return REFRESH_MSG;
+    return String(msg || "Gladiator extension unavailable");
+  }
+
+  function extensionAlive() {
+    try {
+      return !!(chrome && chrome.runtime && chrome.runtime.id);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  let refreshBannerShown = false;
+  function showRefreshBanner() {
+    if (refreshBannerShown || !allowHost(location.hostname)) return;
+    refreshBannerShown = true;
+    try {
+      const host = document.createElement("div");
+      host.id = "gladiator-refresh-banner";
+      host.style.cssText =
+        "all:initial;position:fixed;left:16px;right:16px;bottom:16px;z-index:2147483647;pointer-events:auto;font-family:system-ui,sans-serif;";
+      const box = document.createElement("div");
+      box.style.cssText =
+        "background:#1a1520;color:#f4eef8;border:1px solid #7c6b8a;border-radius:12px;padding:14px 16px;box-shadow:0 10px 30px rgba(0,0,0,.35);display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;";
+      const text = document.createElement("div");
+      text.style.cssText = "font-size:13px;line-height:1.35;max-width:520px;";
+      text.textContent =
+        "Gladiator Wallet was reloaded. Refresh this page, then reconnect Gladiator before swapping.";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = "Refresh page";
+      btn.style.cssText =
+        "cursor:pointer;border:0;border-radius:8px;padding:8px 12px;background:#c4a0d8;color:#1a1520;font-weight:700;font-size:13px;";
+      btn.onclick = () => {
+        try {
+          location.reload();
+        } catch (_) {}
+      };
+      box.appendChild(text);
+      box.appendChild(btn);
+      host.appendChild(box);
+      (document.documentElement || document.body).appendChild(host);
+    } catch (_) {}
+  }
+
+  function replyToPage(id, result, error) {
+    try {
+      const err = error ? friendlyBridgeError(error) : undefined;
+      if (err && isDeadExtensionContext(error)) showRefreshBanner();
+      window.postMessage(
+        {
+          source: REPLY,
+          id,
+          result,
+          error: err,
+        },
+        "*"
+      );
+    } catch (_) {}
+  }
+
   window.addEventListener("message", (event) => {
     try {
       if (event.source !== window) return;
@@ -87,6 +162,13 @@
       try {
         delete params.origin;
       } catch (_) {}
+
+      if (!extensionAlive()) {
+        showRefreshBanner();
+        replyToPage(data.id, undefined, REFRESH_MSG);
+        return;
+      }
+
       chrome.runtime.sendMessage(
         {
           type: "gladiator-provider",
@@ -97,34 +179,25 @@
         },
         (response) => {
           const err = chrome.runtime.lastError;
-          try {
-            window.postMessage(
-              {
-                source: REPLY,
-                id: data.id,
-                result: response && response.result,
-                error:
-                  (response && response.error) ||
-                  (err && err.message) ||
-                  (!response ? "Gladiator extension unavailable" : undefined),
-              },
-              "*"
-            );
-          } catch (_) {}
+          const errMsg =
+            (response && response.error) ||
+            (err && err.message) ||
+            (!response ? "Gladiator extension unavailable" : "");
+          if (errMsg && isDeadExtensionContext(errMsg)) showRefreshBanner();
+          replyToPage(
+            data.id,
+            response && response.result,
+            errMsg || undefined
+          );
         }
       );
     } catch (err) {
       try {
         const data = event && event.data;
         if (!data || data.id == null) return;
-        window.postMessage(
-          {
-            source: REPLY,
-            id: data.id,
-            error: String(err && err.message ? err.message : err),
-          },
-          "*"
-        );
+        const msg = String(err && err.message ? err.message : err);
+        if (isDeadExtensionContext(msg)) showRefreshBanner();
+        replyToPage(data.id, undefined, msg);
       } catch (_) {}
     }
   });

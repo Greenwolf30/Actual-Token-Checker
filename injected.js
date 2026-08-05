@@ -55,6 +55,24 @@
       return out;
     }
 
+    const REFRESH_MSG =
+      "Gladiator was updated or reloaded — refresh this page, reconnect Gladiator, then try again";
+
+    function friendlyRequestError(msg) {
+      const s = String(msg || "");
+      const lower = s.toLowerCase();
+      if (
+        lower.includes("extension context invalidated") ||
+        lower.includes("receiving end does not exist") ||
+        lower.includes("could not establish connection") ||
+        lower.includes("message port closed") ||
+        lower.includes("gladiator extension unavailable")
+      ) {
+        return REFRESH_MSG;
+      }
+      return s;
+    }
+
     function request(method, params, timeoutMs) {
       const id = reqId++;
       const ms = timeoutMs == null ? 120000 : timeoutMs;
@@ -64,13 +82,13 @@
           window.postMessage({ source: SOURCE, id, method, params: params || {} }, "*");
         } catch (err) {
           pending.delete(id);
-          reject(err);
+          reject(new Error(friendlyRequestError(err && err.message ? err.message : err)));
           return;
         }
         setTimeout(() => {
           if (!pending.has(id)) return;
           pending.delete(id);
-          reject(new Error("Gladiator request timed out"));
+          reject(new Error("Gladiator request timed out — refresh this page and try again"));
         }, ms);
       });
     }
@@ -94,7 +112,7 @@
         const wait = pending.get(data.id);
         if (!wait) return;
         pending.delete(data.id);
-        if (data.error) wait.reject(new Error(String(data.error)));
+        if (data.error) wait.reject(new Error(friendlyRequestError(data.error)));
         else wait.resolve(data.result);
       } catch (_) {}
     });

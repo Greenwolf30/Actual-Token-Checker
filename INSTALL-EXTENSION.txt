@@ -7,6 +7,11 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.2:
+- Clearer error + on-page banner when Gladiator was Reloaded while a dApp tab stayed open
+- After any Reload of the extension: refresh jup.ag (or other dApp), reconnect Gladiator, then swap again
+- Note: LavaMoat "opr" console errors come from MetaMask/other wallets on Opera — not Gladiator
+
 v0.6.1:
 - Ledger dApp signing stays in the wallet popup (no separate tab)
 - Tap Sign on Ledger in the popup, then approve on the Nano
