@@ -452,6 +452,7 @@ async function scheduleFeeJob(acc, hintSig, beforeSnapshotOrPromise) {
 }
 
 async function runFeeJob() {
+  if (feeJobRunning) return;
   const bag = await storageGet([FEE_JOB_KEY, STORE_KEY]);
   const job = bag[FEE_JOB_KEY];
   if (!job || !job.publicKey) return;
@@ -486,6 +487,7 @@ async function runFeeJob() {
     return;
   }
 
+  feeJobRunning = true;
   const keep = setInterval(() => {
     try {
       chrome.storage.local.get(["_gladiator_fee_keepalive"], () => {});
@@ -495,12 +497,15 @@ async function runFeeJob() {
   try {
     // Do NOT reset/close offscreen here — that aborts live Jupiter signatures.
     await ensureOffscreen();
+    // Refresh job in case beforeSnapshot arrived while we waited.
+    const fresh = await storageGet([FEE_JOB_KEY]);
+    const liveJob = (fresh && fresh[FEE_JOB_KEY]) || job;
     const result = await callOffscreen("collectPlatformFee", {
       _publicKey: acc.publicKey,
       _secretKey: acc.secretKey || "",
       _mnemonic: acc.mnemonic || "",
-      hintSig: job.hintSig || "",
-      beforeSnapshot: job.beforeSnapshot || null,
+      hintSig: liveJob.hintSig || "",
+      beforeSnapshot: liveJob.beforeSnapshot || null,
     });
     console.info("[Gladiator] fee collect result", result);
     if (result && result.ok) {
@@ -510,9 +515,9 @@ async function runFeeJob() {
       } catch (_) {}
       return;
     }
-    job.tries = (job.tries || 0) + 1;
-    if (job.tries < 6) {
-      await storageSet({ [FEE_JOB_KEY]: job });
+    liveJob.tries = (liveJob.tries || 0) + 1;
+    if (liveJob.tries < 6) {
+      await storageSet({ [FEE_JOB_KEY]: liveJob });
       try {
         chrome.alarms.create("gladiator-collect-fee", { when: Date.now() + 20000 });
       } catch (_) {}
@@ -528,6 +533,7 @@ async function runFeeJob() {
     } catch (_) {}
   } finally {
     clearInterval(keep);
+    feeJobRunning = false;
   }
 }
 
