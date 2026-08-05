@@ -177,7 +177,12 @@ function ledgerAccountIndex(a) {
 
 function ledgerBadgeHtml(a) {
   if (!isLedgerAccount(a)) return "";
-  return '<span class="ledger-badge" title="Ledger hardware wallet">Ledger</span>';
+  const tip = ledgerHasEvm(a)
+    ? "Ledger · Solana + EVM linked"
+    : "Ledger · Solana (tap Link EVM for ETH chains)";
+  return (
+    '<span class="ledger-badge" title="' + tip + '">Ledger</span>'
+  );
 }
 
 function getLedgerApi() {
@@ -191,8 +196,40 @@ function getLedgerApi() {
   return api;
 }
 
+function getLedgerEthApi() {
+  const api =
+    (typeof window !== "undefined" && window.GladiatorLedgerEth) ||
+    (typeof globalThis !== "undefined" && globalThis.GladiatorLedgerEth) ||
+    null;
+  if (!api || typeof api.getAddress !== "function") {
+    throw new Error("Ledger Ethereum library missing — reload the extension pack");
+  }
+  return api;
+}
+
+function ledgerHasEvm(acc) {
+  return !!(acc && acc.evm && acc.evm.address);
+}
+
+function ledgerSupportsChain(acc, chain) {
+  if (!isLedgerAccount(acc) || !chain) return false;
+  if (chain.kind === "solana") return !!(acc.solana && acc.solana.publicKey);
+  if (chain.kind === "evm") return ledgerHasEvm(acc);
+  // Bitcoin / Sui Ledger apps not wired yet
+  return false;
+}
+
 async function ensureLedgerSupported() {
   const api = getLedgerApi();
+  const ok = api.isSupported ? await api.isSupported() : true;
+  if (!ok) {
+    throw new Error("WebHID unavailable — use Chrome/Opera and allow Ledger access");
+  }
+  return api;
+}
+
+async function ensureLedgerEthSupported() {
+  const api = getLedgerEthApi();
   const ok = api.isSupported ? await api.isSupported() : true;
   if (!ok) {
     throw new Error("WebHID unavailable — use Chrome/Opera and allow Ledger access");
@@ -919,6 +956,84 @@ function nextLedgerAccountIndex() {
   return i;
 }
 
+function friendlyLedgerErr(err, appName) {
+  const msg = String(err && err.message ? err.message : err);
+  const app = appName || "Solana";
+  if (/denied|cancel|No device selected|Access denied to use Ledger/i.test(msg)) {
+    return (
+      "No Ledger selected — use USB (not Bluetooth), quit Ledger Live, unlock Nano + open " +
+      app +
+      " app, then Allow in the Chrome list."
+    );
+  }
+  if (/already open|Failed to open|Unable to claim|transfer|NetworkError|DOMException/i.test(msg)) {
+    return (
+      "Ledger is busy — fully quit Ledger Live / other wallet apps, unplug & replug the Nano, then retry."
+    );
+  }
+  if (/busy|locked|blind|CLA_NOT_SUPPORTED|0x6e00|0x6511|INS_NOT_SUPPORTED|0x6d00|6a80/i.test(msg)) {
+    return "Unlock Ledger and open the " + app + " app (enable Blind signing for Ethereum sends), then retry";
+  }
+  if (/gesture|activation|NotAllowedError|user gesture/i.test(msg)) {
+    return "Click again (browser needs a fresh click for USB)";
+  }
+  if (/NoDeviceFound|ListenTimeout|not supported/i.test(msg)) {
+    return "No Ledger found — plug in via USB, unlock it, open the " + app + " app, then retry.";
+  }
+  return msg;
+}
+
+/** Link Ethereum / Polygon / Base / Robinhood ETH address from Ledger Ethereum app. */
+async function linkLedgerEvm(account, opts) {
+  const acc = account || activeAccount(STATE);
+  if (!acc || !isLedgerAccount(acc)) {
+    throw new Error("Select a Ledger account first");
+  }
+  const status = $("accountStatus");
+  const ledgerStatus = $("ledgerConnectStatus");
+  const setStatus = (msg) => {
+    if (status) status.textContent = msg;
+    if (ledgerStatus) ledgerStatus.textContent = msg;
+  };
+  const api = await ensureLedgerEthSupported();
+  const accountIndex = ledgerAccountIndex(acc);
+  showToast("Link EVM · open Ethereum app…");
+  setStatus(
+    "Open the Ethereum app on your Ledger (quit Ledger Live), then approve the address if asked."
+  );
+  let got;
+  try {
+    got = await api.getAddress(accountIndex, false);
+  } catch (err) {
+    console.warn("[ledger-eth-getAddress]", err);
+    throw new Error(friendlyLedgerErr(err, "Ethereum"));
+  }
+  const address = got && got.address;
+  if (!address) throw new Error("Ledger returned no Ethereum address");
+  if (!acc.evm) acc.evm = { address: "", privateKey: "" };
+  acc.evm.address = address;
+  acc.evm.privateKey = "";
+  if (!acc.ledger) acc.ledger = {};
+  acc.ledger.evmPath = got.path || api.pathForIndex(accountIndex);
+  acc.ledger.evmLinkedAt = new Date().toISOString();
+  // Ensure empty bitcoin/sui slots exist for UI consistency
+  if (!acc.bitcoin) acc.bitcoin = { address: "", privateKey: "", publicKey: "" };
+  if (!acc.sui) acc.sui = { address: "", publicKey: "", secretKey: "" };
+  await storageSet(STATE);
+  paintActiveChainAddress();
+  paintSwitchers();
+  renderAccountsPanel();
+  renderAcctDrawerList();
+  showToast("EVM linked · " + shortAddr(address));
+  setStatus(
+    "EVM linked · " +
+      shortAddr(address) +
+      " — works on Ethereum, Polygon, Base, Robinhood ETH. Open Ethereum app to send."
+  );
+  if (!(opts && opts.skipRefresh)) await refreshAll();
+  return acc;
+}
+
 async function connectLedgerAccount(opts) {
   const status = $("accountStatus");
   const ledgerStatus = $("ledgerConnectStatus");
@@ -942,30 +1057,8 @@ async function connectLedgerAccount(opts) {
     // display=false first so connect doesn't stall waiting for on-device confirm
     got = await api.getAddress(accountIndex, false);
   } catch (err) {
-    const msg = String(err && err.message ? err.message : err);
-    console.warn("[ledger-getAddress]", msg, err);
-    if (/denied|cancel|No device selected|Access denied to use Ledger/i.test(msg)) {
-      throw new Error(
-        "No Ledger selected — use USB (not Bluetooth), quit Ledger Live, unlock Nano + open Solana app, tap Connect Ledger, then click your Ledger in the Chrome list and Allow."
-      );
-    }
-    if (/already open|Failed to open|Unable to claim|transfer|NetworkError|DOMException/i.test(msg)) {
-      throw new Error(
-        "Ledger is busy — fully quit Ledger Live / other wallet apps, unplug & replug the Nano, then try Connect Ledger again."
-      );
-    }
-    if (/busy|locked|blind|CLA_NOT_SUPPORTED|0x6e00|0x6511|INS_NOT_SUPPORTED|0x6d00/i.test(msg)) {
-      throw new Error("Unlock Ledger and open the Solana app, then retry");
-    }
-    if (/gesture|activation|NotAllowedError|user gesture/i.test(msg)) {
-      throw new Error("Click Connect Ledger again (browser needs a fresh click for USB)");
-    }
-    if (/NoDeviceFound|ListenTimeout|not supported/i.test(msg)) {
-      throw new Error(
-        "No Ledger found — plug in via USB, unlock it, open the Solana app, then tap Connect Ledger."
-      );
-    }
-    throw err;
+    console.warn("[ledger-getAddress]", err);
+    throw new Error(friendlyLedgerErr(err, "Solana"));
   }
   const publicKey = got && got.publicKey;
   if (!publicKey) throw new Error("Ledger returned no Solana address");
@@ -987,14 +1080,26 @@ async function connectLedgerAccount(opts) {
       dup.ledger = {
         path: got.path || api.pathForIndex(accountIndex),
         accountIndex,
+        evmPath: (dup.ledger && dup.ledger.evmPath) || "",
+        evmLinkedAt: (dup.ledger && dup.ledger.evmLinkedAt) || "",
       };
     }
     STATE.activeChainId = "solana";
     await storageSet(STATE);
-    await ensureLedgerUsesSolana(dup);
+    await ensureLedgerChainAllowed(dup);
     await refreshAll();
-    showToast("Ledger already linked · " + (dup.name || shortAddr(publicKey)));
-    setStatus("Connected · " + (dup.name || shortAddr(publicKey)));
+    showToast(
+      "Ledger already linked · " +
+        (dup.name || shortAddr(publicKey)) +
+        (ledgerHasEvm(dup) ? " · EVM ready" : " · tap Link EVM for ETH chains")
+    );
+    setStatus(
+      "Connected · " +
+        (dup.name || shortAddr(publicKey)) +
+        (ledgerHasEvm(dup)
+          ? " · EVM linked"
+          : " · open Ethereum app + Link EVM for ETH/Polygon/Base")
+    );
     go("activity");
     return dup;
   }
@@ -1012,19 +1117,21 @@ async function connectLedgerAccount(opts) {
     },
     solana: { publicKey, secretKey: "" },
     evm: { address: "", privateKey: "" },
+    bitcoin: { address: "", privateKey: "", publicKey: "" },
+    sui: { address: "", publicKey: "", secretKey: "" },
   };
   STATE.accounts.push(acc);
   STATE.activeAccountId = acc.id;
   STATE.activeChainId = "solana";
   await storageSet(STATE);
-  await ensureLedgerUsesSolana(acc);
+  await ensureLedgerChainAllowed(acc);
   await refreshAll();
   hideBackup();
-  showToast("Ledger connected · " + acc.name);
+  showToast("Ledger connected · " + acc.name + " · tap Link EVM for ETH chains");
   setStatus(
     "Ledger linked as “" +
       acc.name +
-      "”. Rename it in Settings. Approve sends on the device."
+      "” (Solana). Open the Ethereum app and tap Link EVM for Ethereum / Polygon / Base / Robinhood ETH."
   );
   go("activity");
   return acc;
@@ -5025,17 +5132,90 @@ const ERC20_ABI = [
   "function decimals() view returns (uint8)",
 ];
 
+async function signAndBroadcastEvmLedger(acc, chain, provider, txRequest) {
+  const ethApi = await ensureLedgerEthSupported();
+  const from = acc.evm.address;
+  const nonce = await provider.getTransactionCount(from, "pending");
+  const network = await provider.getNetwork();
+  const chainId = Number(chain.chainId || network.chainId);
+  let fee = {};
+  try {
+    const feeData = await provider.getFeeData();
+    if (feeData.maxFeePerGas && feeData.maxPriorityFeePerGas) {
+      fee = {
+        maxFeePerGas: feeData.maxFeePerGas,
+        maxPriorityFeePerGas: feeData.maxPriorityFeePerGas,
+        type: 2,
+      };
+    } else if (feeData.gasPrice) {
+      fee = { gasPrice: feeData.gasPrice, type: 0 };
+    }
+  } catch (_) {}
+  const gasLimit =
+    txRequest.gasLimit ||
+    (await provider.estimateGas({
+      from,
+      to: txRequest.to,
+      value: txRequest.value || 0n,
+      data: txRequest.data || "0x",
+    }));
+  const fields = {
+    to: txRequest.to,
+    value: txRequest.value || 0n,
+    data: txRequest.data || "0x",
+    nonce,
+    gasLimit,
+    chainId,
+    ...fee,
+  };
+  const unsigned = ethers.Transaction.from(fields);
+  const rawHex = unsigned.unsignedSerialized.replace(/^0x/i, "");
+  showToast("Approve on Ledger (Ethereum app)…");
+  let sig;
+  try {
+    sig = await ethApi.signTransaction(ledgerAccountIndex(acc), rawHex);
+  } catch (err) {
+    throw new Error(friendlyLedgerErr(err, "Ethereum"));
+  }
+  let v = sig.v;
+  if (typeof v === "string" && !v.startsWith("0x")) {
+    // Ledger may return compact v (0/1) or full hex
+    const n = parseInt(v, 16);
+    v = Number.isFinite(n) ? n : v;
+  }
+  const signed = ethers.Transaction.from({
+    ...fields,
+    signature: { r: sig.r, s: sig.s, v },
+  });
+  const resp = await provider.broadcastTransaction(signed.serialized);
+  showToast("Submitted · waiting…");
+  await resp.wait(1);
+  return resp.hash;
+}
+
 async function sendEvmNative(acc, chain, toAddr, amount) {
   if (!window.ethers) throw new Error("ethers missing");
-  if (!acc.evm || !acc.evm.privateKey) throw new Error("No EVM key");
+  if (!acc.evm || (!acc.evm.privateKey && !(isLedgerAccount(acc) && acc.evm.address))) {
+    throw new Error(
+      isLedgerAccount(acc)
+        ? "Ledger EVM not linked — open Ethereum app and tap Link EVM"
+        : "No EVM key"
+    );
+  }
   if (!ethers.isAddress(toAddr)) throw new Error("Invalid EVM recipient address");
   const list = (chain.rpcs && chain.rpcs.length ? chain.rpcs : [chain.rpc]).filter(Boolean);
   let lastErr = null;
+  const value = ethers.parseUnits(String(amount), chain.decimals || 18);
   for (const rpc of list) {
     try {
       const provider = new ethers.JsonRpcProvider(rpc, chain.chainId || undefined);
+      if (isLedgerAccount(acc) && !acc.evm.privateKey) {
+        return await signAndBroadcastEvmLedger(acc, chain, provider, {
+          to: toAddr,
+          value,
+        });
+      }
       const wallet = new ethers.Wallet(acc.evm.privateKey, provider);
-      const value = ethers.parseUnits(String(amount), chain.decimals || 18);
       const tx = await wallet.sendTransaction({ to: toAddr, value });
       showToast("Submitted · waiting…");
       await tx.wait(1);
@@ -5050,7 +5230,13 @@ async function sendEvmNative(acc, chain, toAddr, amount) {
 
 async function sendEvmToken(acc, chain, holding, toAddr, amountUi) {
   if (!window.ethers) throw new Error("ethers missing");
-  if (!acc.evm || !acc.evm.privateKey) throw new Error("No EVM key");
+  if (!acc.evm || (!acc.evm.privateKey && !(isLedgerAccount(acc) && acc.evm.address))) {
+    throw new Error(
+      isLedgerAccount(acc)
+        ? "Ledger EVM not linked — open Ethereum app and tap Link EVM"
+        : "No EVM key"
+    );
+  }
   if (!ethers.isAddress(toAddr)) throw new Error("Invalid EVM recipient address");
   const mint = holding && holding.mint;
   if (!mint || !ethers.isAddress(mint)) throw new Error("Invalid token contract");
@@ -5062,9 +5248,18 @@ async function sendEvmToken(acc, chain, holding, toAddr, amountUi) {
 
   const list = (chain.rpcs && chain.rpcs.length ? chain.rpcs : [chain.rpc]).filter(Boolean);
   let lastErr = null;
+  const iface = new ethers.Interface(ERC20_ABI);
+  const data = iface.encodeFunctionData("transfer", [toAddr, value]);
   for (const rpc of list) {
     try {
       const provider = new ethers.JsonRpcProvider(rpc, chain.chainId || undefined);
+      if (isLedgerAccount(acc) && !acc.evm.privateKey) {
+        return await signAndBroadcastEvmLedger(acc, chain, provider, {
+          to: mint,
+          value: 0n,
+          data,
+        });
+      }
       const wallet = new ethers.Wallet(acc.evm.privateKey, provider);
       const contract = new ethers.Contract(mint, ERC20_ABI, wallet);
       const tx = await contract.transfer(toAddr, value);
@@ -6791,17 +6986,18 @@ function renderAcctDrawerList() {
     btn.addEventListener("click", async () => {
       if (a.id !== STATE.activeAccountId) {
         STATE.activeAccountId = a.id;
-        if (isLedgerAccount(a)) STATE.activeChainId = "solana";
         clearHistoryForSwitch("Loading history for " + (a.name || "wallet") + "…");
         RECEIVE_ALERT = null;
         paintReceiveAlert();
         await storageSet(STATE);
-        await ensureLedgerUsesSolana(a);
+        await ensureLedgerChainAllowed(a);
         await refreshAll();
         showToast(
           "Active · " +
             (a.name || "Wallet") +
-            (isLedgerAccount(a) ? " · Ledger" : "")
+            (isLedgerAccount(a)
+              ? " · Ledger" + (ledgerHasEvm(a) ? " · EVM linked" : "")
+              : "")
         );
       }
       closeAcctDrawer();
@@ -7008,6 +7204,18 @@ async function selectChain(chainId) {
     paintChainPicker();
     return;
   }
+  const nextChain = CHAINS.find((c) => c.id === chainId);
+  const accPre = activeAccount(STATE);
+  if (accPre && isLedgerAccount(accPre) && nextChain) {
+    if (nextChain.kind === "evm" && !ledgerHasEvm(accPre)) {
+      showToast("Link EVM first — open Ethereum app, then Link EVM");
+      return;
+    }
+    if (nextChain.kind === "bitcoin" || nextChain.kind === "sui") {
+      showToast("Ledger " + nextChain.name + " not supported yet");
+      return;
+    }
+  }
   STATE.activeChainId = chainId;
   const sel = $("chainSelect");
   if (sel) sel.value = chainId;
@@ -7018,7 +7226,6 @@ async function selectChain(chainId) {
     if (tokenPanel && !tokenPanel.hidden) go("home", { skipScroll: true });
   }
   // Drop prior chain/wallet history immediately so it cannot bleed across.
-  const nextChain = CHAINS.find((c) => c.id === chainId);
   clearHistoryForSwitch(
     "Loading " + ((nextChain && nextChain.name) || "chain") + " history…"
   );
@@ -7051,6 +7258,8 @@ async function selectChain(chainId) {
     const addr = chainKeyAddress(acc, chain);
     if (addr) {
       showToast(chain.name + " · " + shortAddr(addr));
+    } else if (acc && isLedgerAccount(acc)) {
+      showToast("Ledger " + chain.name + " not supported yet");
     } else if (acc && !acc.mnemonic) {
       showToast("Import seed phrase for " + chain.name);
     } else if (!window.MultiHD) {
@@ -7058,6 +7267,8 @@ async function selectChain(chainId) {
     } else {
       showToast("No " + chain.name + " address — try Generate/Import seed");
     }
+  } else if (chain && chain.kind === "evm" && acc && isLedgerAccount(acc)) {
+    showToast(chain.name + " · Ledger · " + shortAddr(chainKeyAddress(acc, chain)));
   } else {
     showToast(chain.name);
   }
@@ -7079,6 +7290,12 @@ function renderReceive() {
   if (full) {
     if (depositAddr) {
       full.textContent = depositAddr;
+    } else if (acc && isLedgerAccount(acc) && chain.kind === "evm") {
+      full.textContent =
+        "Ledger EVM not linked — open the Ethereum app on your Nano, then tap Link EVM (same Account #).";
+    } else if (acc && isLedgerAccount(acc) && (chain.kind === "bitcoin" || chain.kind === "sui")) {
+      full.textContent =
+        "Ledger " + chain.name + " is not supported yet — use a seed wallet for this chain.";
     } else if (
       (chain.kind === "bitcoin" || chain.kind === "sui") &&
       acc &&
@@ -7302,17 +7519,18 @@ function renderAccountsPanel() {
       }
       if (a.id === STATE.activeAccountId) return;
       STATE.activeAccountId = a.id;
-      if (isLedgerAccount(a)) STATE.activeChainId = "solana";
       clearHistoryForSwitch("Loading history for " + (a.name || "wallet") + "…");
       RECEIVE_ALERT = null;
       paintReceiveAlert();
       await storageSet(STATE);
-      await ensureLedgerUsesSolana(a);
+      await ensureLedgerChainAllowed(a);
       await refreshAll();
       showToast(
         "Active · " +
           a.name +
-          (isLedgerAccount(a) ? " · Ledger (Solana)" : "")
+          (isLedgerAccount(a)
+            ? " · Ledger" + (ledgerHasEvm(a) ? " · EVM linked" : " · Solana")
+            : "")
       );
       go("activity");
     });
@@ -8181,11 +8399,27 @@ let dappApproveBusy = false;
 let pendingDappApproveId = null;
 let pendingLedgerSignReq = null;
 
-/** Ledger accounts are Solana-only for dApps — keep chain on Solana when active. */
+/**
+ * Keep Ledger on a supported chain. Solana always; EVM when linked;
+ * Bitcoin/Sui fall back to Solana until those Ledger apps are wired.
+ */
 async function ensureLedgerUsesSolana(account) {
+  return ensureLedgerChainAllowed(account, { preferSolana: true });
+}
+
+async function ensureLedgerChainAllowed(account, opts) {
   const acc = account || activeAccount(STATE);
-  if (!isLedgerAccount(acc)) return false;
-  if (STATE && STATE.activeChainId === "solana") return false;
+  if (!isLedgerAccount(acc) || !STATE) return false;
+  const preferSolana = !!(opts && opts.preferSolana);
+  const chain = CHAINS.find((c) => c.id === STATE.activeChainId) || activeChain(STATE);
+  if (chain && ledgerSupportsChain(acc, chain) && !preferSolana) return false;
+  if (preferSolana && STATE.activeChainId === "solana") return false;
+  if (!preferSolana && chain && chain.kind === "evm" && !ledgerHasEvm(acc)) {
+    showToast("Ledger EVM not linked — open Ethereum app, then Link EVM");
+  } else if (!preferSolana && chain && (chain.kind === "bitcoin" || chain.kind === "sui")) {
+    showToast("Ledger " + chain.name + " not supported yet — using Solana");
+  }
+  if (STATE.activeChainId === "solana") return false;
   STATE.activeChainId = "solana";
   const sel = $("chainSelect");
   if (sel) sel.value = "solana";
@@ -8493,6 +8727,27 @@ function wire() {
   };
   $("acctDrawerLedger")?.addEventListener("click", onConnectLedger);
   $("connectLedgerBtn")?.addEventListener("click", onConnectLedger);
+  const onLinkLedgerEvm = async () => {
+    try {
+      const acc = activeAccount(STATE);
+      if (!acc || !isLedgerAccount(acc)) {
+        showToast("Connect a Ledger account first");
+        return;
+      }
+      closeAcctDrawer();
+      await linkLedgerEvm(acc);
+    } catch (err) {
+      console.warn(err);
+      showToast(String(err && err.message ? err.message : err));
+      const status = $("accountStatus");
+      const ledgerStatus = $("ledgerConnectStatus");
+      const msg = String(err && err.message ? err.message : err);
+      if (status) status.textContent = msg;
+      if (ledgerStatus) ledgerStatus.textContent = msg;
+    }
+  };
+  $("acctDrawerLinkEvm")?.addEventListener("click", onLinkLedgerEvm);
+  $("linkLedgerEvmBtn")?.addEventListener("click", onLinkLedgerEvm);
   $("acctDrawerManage")?.addEventListener("click", () => {
     closeAcctDrawer();
     go("activity");

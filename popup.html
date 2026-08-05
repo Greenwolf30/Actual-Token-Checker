@@ -12,7 +12,7 @@
       href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=0.6.6" />
+    <link rel="stylesheet" href="./styles.css?v=0.6.7" />
   </head>
   <body class="is-extension">
     <div class="atmosphere" aria-hidden="true">
@@ -372,7 +372,13 @@
                   <button type="button" class="photon-gen" id="connectLedgerBtn" title="Connect Ledger Nano (Solana app)">
                     Connect Ledger
                   </button>
+                  <button type="button" class="photon-chip" id="linkLedgerEvmBtn" title="Open Ethereum app on Ledger, then link ETH/Polygon/Base">
+                    Link EVM
+                  </button>
                 </div>
+                <p class="photon-sub" style="margin-top: 8px">
+                  Solana app → Connect Ledger. Ethereum app → Link EVM (same Account #) for ETH / Polygon / Base / Robinhood ETH. Bitcoin &amp; Sui Ledger not yet.
+                </p>
                 <p class="photon-sub" id="ledgerConnectStatus" style="margin-top: 8px"></p>
               </div>
             </div>
@@ -607,6 +613,9 @@
           <button type="button" class="photon-chip photon-gen-block" id="acctDrawerLedger">
             Connect Ledger
           </button>
+          <button type="button" class="photon-chip photon-gen-block" id="acctDrawerLinkEvm" title="Open Ethereum app on Ledger first">
+            Link EVM chains
+          </button>
           <button type="button" class="photon-chip acct-drawer-manage" id="acctDrawerManage">
             Manage accounts
           </button>
@@ -698,8 +707,9 @@
     <script src="./lib/solana-tx.bundle.js?v=0.6.1"></script>
     <script src="./lib/qrcode.min.js"></script>
     <script src="./lib/walletconnect.bundle.js?v=0.6.1"></script>
-    <script src="./lib/ledger-solana.bundle.js?v=0.6.1"></script>
+    <script src="./lib/ledger-solana.bundle.js?v=0.6.6"></script>
+    <script src="./lib/ledger-eth.bundle.js?v=0.6.7"></script>
     <script src="./config.js"></script>
-    <script src="./app.js?v=0.6.1"></script>
+    <script src="./app.js?v=0.6.7"></script>
   </body>
 </html>
