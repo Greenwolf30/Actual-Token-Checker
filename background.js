@@ -647,6 +647,12 @@ function niceDappName(origin) {
     if (host === "mango.markets" || host.endsWith(".mango.markets")) return "Mango";
     if (host === "kamino.finance" || host.endsWith(".kamino.finance")) return "Kamino";
     if (host === "sanctum.so" || host.endsWith(".sanctum.so")) return "Sanctum";
+    if (
+      host === "sol-incinerator.com" ||
+      host.endsWith(".sol-incinerator.com")
+    ) {
+      return "Sol Incinerator";
+    }
     return host;
   } catch (_) {
     return origin || "dApp";
