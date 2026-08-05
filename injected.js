@@ -15,6 +15,7 @@
 
     const SOURCE = "gladiator-wallet-page";
     const REPLY = "gladiator-wallet-page-reply";
+    const FORCE = "gladiator-wallet-force-disconnect";
     const CHAINS = Object.freeze(["solana:mainnet", "solana:devnet", "solana:testnet"]);
     const TX_VERSIONS = Object.freeze(["legacy", 0]);
     const ACCOUNT_FEATURES = Object.freeze([
@@ -78,6 +79,17 @@
       try {
         if (event.source !== window) return;
         const data = event.data;
+        if (data && data.source === FORCE) {
+          publicKey = null;
+          isConnected = false;
+          try {
+            emit("disconnect");
+          } catch (_) {}
+          try {
+            emitStandard("change", { accounts: [] });
+          } catch (_) {}
+          return;
+        }
         if (!data || data.source !== REPLY || data.id == null) return;
         const wait = pending.get(data.id);
         if (!wait) return;

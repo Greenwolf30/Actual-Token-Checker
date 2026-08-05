@@ -1850,6 +1850,21 @@ body.is-extension .acct-drawer {
   color: #ff8b98;
 }
 
+.history-row.is-swap .history-vals strong,
+.history-vals strong.history-pair {
+  color: #e8eefc;
+  font-size: 0.72rem;
+  font-weight: 600;
+  max-width: 168px;
+  white-space: normal;
+  line-height: 1.25;
+  text-align: right;
+}
+
+.history-row.is-swap .history-ico {
+  color: #7dd3fc;
+}
+
 .history-vals span {
   font-size: 0.68rem;
   color: rgba(232, 238, 252, 0.55);

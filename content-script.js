@@ -8,6 +8,7 @@
 
   const PAGE = "gladiator-wallet-page";
   const REPLY = "gladiator-wallet-page-reply";
+  const FORCE = "gladiator-wallet-force-disconnect";
 
   window.addEventListener("message", (event) => {
     try {
@@ -56,4 +57,13 @@
       } catch (_) {}
     }
   });
+
+  try {
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (!msg || msg.type !== "gladiator-force-disconnect") return;
+      try {
+        window.postMessage({ source: FORCE }, "*");
+      } catch (_) {}
+    });
+  } catch (_) {}
 })();

@@ -1027,8 +1027,10 @@ const SWAP_PROGRAMS = new Set([
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const WSOL_MINT = "So11111111111111111111111111111111111111112";
 
 MINT_META[USDC_MINT] = { symbol: "USDC", name: "USD Coin" };
+MINT_META[WSOL_MINT] = { symbol: "SOL", name: "Wrapped SOL" };
 
 async function solRpc(method, params, rpcs) {
   // Prefer local proxy first (local serve.py only). Extension uses public HTTPS RPCs.
@@ -2171,14 +2173,94 @@ async function refreshWcConnections(opts) {
   } else {
     items = await readPersistedWcSessions();
   }
-  paintWcConnectionsList(items);
-  if (items.length) {
-    const name = items[0].name || "dApp";
+
+  // Merge in-page Wallet Standard connections (Jupiter / pump.fun inject).
+  const injectItems = await loadInjectConnections();
+  const merged = mergeConnectionLists(injectItems, items);
+  paintWcConnectionsList(merged);
+  if (merged.length) {
+    const name = merged[0].name || "dApp";
     setWcStatus(
-      "Connected to " + name + (items.length > 1 ? " (+" + (items.length - 1) + ")" : "")
+      "Connected to " + name + (merged.length > 1 ? " (+" + (merged.length - 1) + ")" : "")
     );
   }
-  return items;
+  return merged;
+}
+
+async function loadInjectConnections() {
+  if (!(typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage)) {
+    return [];
+  }
+  try {
+    const res = await new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ type: "gladiator-list-dapp-connections" }, (r) => {
+          void chrome.runtime.lastError;
+          resolve(r || null);
+        });
+      } catch (_) {
+        resolve(null);
+      }
+    });
+    return res && Array.isArray(res.items) ? res.items : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function mergeConnectionLists(injectItems, wcItems) {
+  const out = [];
+  const seenHosts = new Set();
+  const hostOf = (item) => {
+    try {
+      const raw = item && (item.origin || item.url || "");
+      if (!raw) return "";
+      return new URL(raw).hostname.toLowerCase().replace(/^www\./, "");
+    } catch (_) {
+      return String((item && (item.origin || item.url)) || "")
+        .toLowerCase()
+        .replace(/^https?:\/\//, "")
+        .replace(/^www\./, "")
+        .split("/")[0];
+    }
+  };
+  (injectItems || []).forEach((item) => {
+    if (!item) return;
+    const row = { ...item, kind: item.kind || "inject" };
+    out.push(row);
+    const h = hostOf(row);
+    if (h) seenHosts.add(h);
+  });
+  (wcItems || []).forEach((item) => {
+    if (!item) return;
+    const h = hostOf(item);
+    // Prefer in-page inject row when both exist for the same dApp.
+    if (h && seenHosts.has(h)) return;
+    out.push({ ...item, kind: item.kind || "wc" });
+    if (h) seenHosts.add(h);
+  });
+  return out;
+}
+
+async function disconnectInjectOrigin(origin) {
+  const o = String(origin || "").trim();
+  if (!o) return;
+  if (!(typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage)) {
+    return;
+  }
+  await new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage(
+        { type: "gladiator-disconnect-dapp", origin: o },
+        () => {
+          void chrome.runtime.lastError;
+          resolve();
+        }
+      );
+    } catch (_) {
+      resolve();
+    }
+  });
 }
 
 function paintWcConnectionsList(items) {
@@ -2194,9 +2276,12 @@ function paintWcConnectionsList(items) {
   if (empty) empty.hidden = true;
   for (const item of rows) {
     if (!item) continue;
+    const kind = item.kind === "inject" ? "inject" : "wc";
     const li = document.createElement("li");
     li.className = "wc-conn-item";
     li.dataset.topic = item.topic || "";
+    li.dataset.kind = kind;
+    if (item.origin) li.dataset.origin = item.origin;
 
     const iconUrl = item.icon || "";
     let iconHtml;
@@ -2206,19 +2291,22 @@ function paintWcConnectionsList(items) {
         iconUrl.replace(/"/g, "") +
         '" onerror="this.classList.add(\'fallback\');this.removeAttribute(\'src\');this.textContent=\'WC\';" />';
     } else {
-      const initials = String(item.name || "WC")
+      const initials = String(item.name || (kind === "inject" ? "GL" : "WC"))
         .replace(/[^A-Za-z0-9]/g, "")
         .slice(0, 2)
-        .toUpperCase() || "WC";
+        .toUpperCase() || (kind === "inject" ? "GL" : "WC");
       iconHtml = '<div class="wc-conn-icon fallback">' + initials + "</div>";
     }
 
     const status = item.status === "pending" ? "pending" : "active";
-    const sub =
+    const subParts =
       status === "pending"
-        ? item.uri || "Waiting for pair / approve…"
-        : [shortHost(item.url), accountHint(item.accounts)].filter(Boolean).join(" · ") ||
-          "Solana session";
+        ? [item.uri || "Waiting for pair / approve…"]
+        : [
+            shortHost(item.url || item.origin),
+            kind === "inject" ? "in-page" : accountHint(item.accounts) || "WalletConnect",
+          ];
+    const sub = subParts.filter(Boolean).join(" · ") || "Solana connection";
 
     li.innerHTML =
       iconHtml +
@@ -2231,11 +2319,13 @@ function paintWcConnectionsList(items) {
       status +
       "</em>" +
       "</div>" +
-      '<button type="button" class="wc-conn-disconnect" data-topic="">Disconnect</button>';
+      '<button type="button" class="wc-conn-disconnect" data-topic="" data-kind="" data-origin="">Disconnect</button>';
     li.querySelector("strong").textContent = item.name || "dApp";
     li.querySelector("span").textContent = sub;
     const btn = li.querySelector(".wc-conn-disconnect");
     btn.dataset.topic = item.topic || "";
+    btn.dataset.kind = kind;
+    btn.dataset.origin = item.origin || "";
     btn.textContent = status === "pending" ? "Cancel" : "Disconnect";
     list.appendChild(li);
   }
@@ -3299,9 +3389,25 @@ function formatHistoryAmount(amount, symbol) {
   const body =
     abs >= 1
       ? abs.toLocaleString(undefined, { maximumFractionDigits: 4 })
-      : abs.toFixed(6);
+      : abs >= 0.0001
+        ? abs.toFixed(6).replace(/\.?0+$/, "")
+        : abs.toFixed(8).replace(/\.?0+$/, "");
   const sign = n > 0 ? "+" : n < 0 ? "−" : "";
   return sign + body + (symbol ? " " + symbol : "");
+}
+
+function formatHistoryQty(amount) {
+  const abs = Math.abs(Number(amount) || 0);
+  if (abs >= 1) return abs.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  if (abs >= 0.0001) return abs.toFixed(6).replace(/\.?0+$/, "");
+  return abs.toFixed(8).replace(/\.?0+$/, "");
+}
+
+function mintHistorySymbol(mint) {
+  if (!mint) return "SOL";
+  if (mint === USDC_MINT) return "USDC";
+  if (mint === WSOL_MINT) return "SOL";
+  return (MINT_META[mint] && MINT_META[mint].symbol) || shortAddr(mint);
 }
 
 function formatHistoryTime(ts) {
@@ -3341,19 +3447,30 @@ function classifySolanaTx(owner, tx) {
   preTok.forEach((t) => {
     if (t.owner !== owner) return;
     const mint = t.mint;
-    const amt = Number(t.uiTokenAmount && t.uiTokenAmount.uiAmountString != null
-      ? t.uiTokenAmount.uiAmountString
-      : t.uiTokenAmount && t.uiTokenAmount.uiAmount) || 0;
+    const amt =
+      Number(
+        t.uiTokenAmount && t.uiTokenAmount.uiAmountString != null
+          ? t.uiTokenAmount.uiAmountString
+          : t.uiTokenAmount && t.uiTokenAmount.uiAmount
+      ) || 0;
     tokenMap[mint] = (tokenMap[mint] || 0) - amt;
   });
   postTok.forEach((t) => {
     if (t.owner !== owner) return;
     const mint = t.mint;
-    const amt = Number(t.uiTokenAmount && t.uiTokenAmount.uiAmountString != null
-      ? t.uiTokenAmount.uiAmountString
-      : t.uiTokenAmount && t.uiTokenAmount.uiAmount) || 0;
+    const amt =
+      Number(
+        t.uiTokenAmount && t.uiTokenAmount.uiAmountString != null
+          ? t.uiTokenAmount.uiAmountString
+          : t.uiTokenAmount && t.uiTokenAmount.uiAmount
+      ) || 0;
     tokenMap[mint] = (tokenMap[mint] || 0) + amt;
   });
+  // Collapse WSOL into native SOL for cleaner swap pairs.
+  if (tokenMap[WSOL_MINT]) {
+    solDelta += tokenMap[WSOL_MINT];
+    delete tokenMap[WSOL_MINT];
+  }
   const tokenDeltas = Object.keys(tokenMap)
     .map((mint) => ({ mint, delta: tokenMap[mint] }))
     .filter((t) => Math.abs(t.delta) > 1e-12);
@@ -3374,45 +3491,84 @@ function classifySolanaTx(owner, tx) {
   });
   const isSwap = [...programIds].some((p) => SWAP_PROGRAMS.has(p));
 
+  const outs = tokenDeltas
+    .filter((t) => t.delta < 0)
+    .sort((a, b) => a.delta - b.delta);
+  const ins = tokenDeltas
+    .filter((t) => t.delta > 0)
+    .sort((a, b) => b.delta - a.delta);
+
+  // Native SOL moves larger than rent/fee noise count as a swap leg.
+  const SOL_LEG_EPS = 0.0005;
+  const hasSolOut = solDelta < -SOL_LEG_EPS;
+  const hasSolIn = solDelta > SOL_LEG_EPS;
+  const looksLikeSwap =
+    isSwap || (outs.length && ins.length) || (outs.length && hasSolIn) || (ins.length && hasSolOut);
+
   let type = "transfer";
   let direction = "out";
   let amount = 0;
   let symbol = "SOL";
   let mint = null;
+  let fromAmount = null;
+  let fromSymbol = null;
+  let fromMint = null;
+  let toAmount = null;
+  let toSymbol = null;
+  let toMint = null;
 
-  if (isSwap) {
-    if (solDelta < -1e-9 && tokenDeltas.some((t) => t.delta > 0)) {
+  if (looksLikeSwap) {
+    let sold = outs[0] || null;
+    let bought = ins[0] || null;
+    if (!sold && hasSolOut) {
+      sold = { mint: null, delta: solDelta, isSol: true };
+    }
+    if (!bought && hasSolIn) {
+      bought = { mint: null, delta: solDelta, isSol: true };
+    }
+    // Token↔token swaps still spend a little SOL on fees — don't treat fee as a leg
+    // when both token sides already exist.
+    if (sold && bought && sold.mint && bought.mint) {
+      // keep token legs
+    } else if (sold && !bought && hasSolIn) {
+      bought = { mint: null, delta: solDelta, isSol: true };
+    } else if (bought && !sold && hasSolOut) {
+      sold = { mint: null, delta: solDelta, isSol: true };
+    }
+
+    if (sold) {
+      fromAmount = Math.abs(sold.delta);
+      fromMint = sold.isSol ? null : sold.mint;
+      fromSymbol = sold.isSol ? "SOL" : mintHistorySymbol(sold.mint);
+    }
+    if (bought) {
+      toAmount = Math.abs(bought.delta);
+      toMint = bought.isSol ? null : bought.mint;
+      toSymbol = bought.isSol ? "SOL" : mintHistorySymbol(bought.mint);
+    }
+
+    if (fromSymbol === "SOL" && toSymbol && toSymbol !== "SOL") {
       type = "buy";
       direction = "in";
-      const gained = tokenDeltas.filter((t) => t.delta > 0).sort((a, b) => b.delta - a.delta)[0];
-      amount = gained ? gained.delta : Math.abs(solDelta);
-      mint = gained ? gained.mint : null;
-      symbol = (mint && MINT_META[mint] && MINT_META[mint].symbol) || (mint ? shortAddr(mint) : "TOKEN");
-    } else if (solDelta > 1e-9 && tokenDeltas.some((t) => t.delta < 0)) {
+    } else if (toSymbol === "SOL" && fromSymbol && fromSymbol !== "SOL") {
       type = "sell";
       direction = "out";
-      const sold = tokenDeltas.filter((t) => t.delta < 0).sort((a, b) => a.delta - b.delta)[0];
-      amount = sold ? Math.abs(sold.delta) : Math.abs(solDelta);
-      mint = sold ? sold.mint : null;
-      symbol = (mint && MINT_META[mint] && MINT_META[mint].symbol) || (mint ? shortAddr(mint) : "TOKEN");
     } else {
       type = "swap";
-      direction = solDelta >= 0 ? "in" : "out";
-      amount = Math.abs(solDelta);
-      symbol = "SOL";
+      direction = "out";
     }
+
+    amount = fromAmount != null ? fromAmount : toAmount != null ? toAmount : Math.abs(solDelta);
+    symbol = fromSymbol || toSymbol || "TOKEN";
+    mint = fromMint || toMint;
   } else if (tokenDeltas.length) {
     const primary = tokenDeltas.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))[0];
     direction = primary.delta >= 0 ? "in" : "out";
     type = direction === "in" ? "receive" : "send";
     amount = Math.abs(primary.delta);
     mint = primary.mint;
-    symbol =
-      mint === USDC_MINT
-        ? "USDC"
-        : (MINT_META[mint] && MINT_META[mint].symbol) || shortAddr(mint);
+    symbol = mintHistorySymbol(mint);
   } else if (Math.abs(solDelta) > 1e-9) {
-    // fee-only changes are tiny; treat meaningful SOL moves
     direction = solDelta >= 0 ? "in" : "out";
     type = direction === "in" ? "receive" : "send";
     amount = Math.abs(solDelta);
@@ -3428,6 +3584,12 @@ function classifySolanaTx(owner, tx) {
     symbol,
     mint,
     solDelta,
+    fromAmount,
+    fromSymbol,
+    fromMint,
+    toAmount,
+    toSymbol,
+    toMint,
   };
 }
 
@@ -3511,12 +3673,44 @@ function paintHistory() {
   }
   TX_HISTORY.forEach((tx) => {
     const li = document.createElement("li");
-    const dirClass = tx.direction === "in" ? "is-in" : "is-out";
-    const title = tx.type || "transfer";
-    const amt =
-      tx.amount > 0
-        ? formatHistoryAmount(tx.direction === "in" ? tx.amount : -tx.amount, tx.symbol)
-        : "—";
+    const isPair =
+      (tx.type === "swap" || tx.type === "buy" || tx.type === "sell") &&
+      (tx.fromSymbol || tx.toSymbol);
+    const dirClass = isPair ? "is-swap" : tx.direction === "in" ? "is-in" : "is-out";
+    const title =
+      tx.type === "buy" || tx.type === "sell" || tx.type === "swap"
+        ? "swap"
+        : tx.type || "transfer";
+    let amt;
+    let amtClass = "";
+    if (isPair) {
+      const left =
+        tx.fromAmount != null && tx.fromSymbol
+          ? formatHistoryQty(tx.fromAmount) + " " + tx.fromSymbol
+          : "";
+      const right =
+        tx.toAmount != null && tx.toSymbol
+          ? formatHistoryQty(tx.toAmount) + " " + tx.toSymbol
+          : "";
+      if (left && right) {
+        amt = left + " → " + right;
+        amtClass = " history-pair";
+      } else if (right) {
+        amt = formatHistoryAmount(tx.toAmount, tx.toSymbol);
+      } else if (left) {
+        amt = formatHistoryAmount(-tx.fromAmount, tx.fromSymbol);
+      } else {
+        amt =
+          tx.amount > 0
+            ? formatHistoryAmount(tx.direction === "in" ? tx.amount : -tx.amount, tx.symbol)
+            : "—";
+      }
+    } else {
+      amt =
+        tx.amount > 0
+          ? formatHistoryAmount(tx.direction === "in" ? tx.amount : -tx.amount, tx.symbol)
+          : "—";
+    }
     const when = formatHistoryTime(tx.when);
     const href = tx.sig ? "https://solscan.io/tx/" + tx.sig : "#";
     li.innerHTML =
@@ -3526,7 +3720,7 @@ function paintHistory() {
       href +
       '" target="_blank" rel="noopener">' +
       '<span class="history-ico" aria-hidden="true">' +
-      historyIcon(tx.type) +
+      historyIcon(isPair ? "swap" : tx.type) +
       "</span>" +
       '<span class="history-meta"><strong>' +
       title +
@@ -3534,7 +3728,9 @@ function paintHistory() {
       (when || shortAddr(tx.sig || "")) +
       (tx.sig ? " · " + shortAddr(tx.sig) : "") +
       "</span></span>" +
-      '<span class="history-vals"><strong>' +
+      '<span class="history-vals"><strong class="' +
+      amtClass.trim() +
+      '">' +
       amt +
       "</strong><span>" +
       (tx.status || "confirmed") +
@@ -3542,7 +3738,8 @@ function paintHistory() {
     list.appendChild(li);
   });
   if (status) {
-    status.textContent = TX_HISTORY.length + " recent transaction" + (TX_HISTORY.length === 1 ? "" : "s");
+    status.textContent =
+      TX_HISTORY.length + " recent transaction" + (TX_HISTORY.length === 1 ? "" : "s");
   }
 }
 
@@ -3587,13 +3784,22 @@ async function refreshHistory() {
       if (!bySig[t.sig]) bySig[t.sig] = t;
     });
     // Prefetch mint meta for nicer symbols
-    const mints = Object.values(bySig)
-      .map((t) => t.mint)
-      .filter((m) => m && m !== USDC_MINT);
+    const mints = [];
+    Object.values(bySig).forEach((t) => {
+      [t.mint, t.fromMint, t.toMint].forEach((m) => {
+        if (m && m !== USDC_MINT && m !== WSOL_MINT) mints.push(m);
+      });
+    });
     if (mints.length) await resolveMintMeta(mints);
     Object.values(bySig).forEach((t) => {
       if (t.mint && MINT_META[t.mint] && MINT_META[t.mint].symbol) {
         t.symbol = MINT_META[t.mint].symbol;
+      }
+      if (t.fromMint && MINT_META[t.fromMint] && MINT_META[t.fromMint].symbol) {
+        t.fromSymbol = MINT_META[t.fromMint].symbol;
+      }
+      if (t.toMint && MINT_META[t.toMint] && MINT_META[t.toMint].symbol) {
+        t.toSymbol = MINT_META[t.toMint].symbol;
       }
     });
     TX_HISTORY = Object.values(bySig).sort((a, b) => (b.when || 0) - (a.when || 0));
@@ -4724,8 +4930,20 @@ function wire() {
     const btn = e.target && e.target.closest ? e.target.closest(".wc-conn-disconnect") : null;
     if (!btn) return;
     e.preventDefault();
+    const kind = btn.getAttribute("data-kind") || "";
     const topic = btn.getAttribute("data-topic") || "";
-    wcDisconnectTopic(topic).catch((err) => console.warn(err));
+    const origin =
+      btn.getAttribute("data-origin") ||
+      (topic.indexOf("inject:") === 0 ? topic.slice("inject:".length) : "");
+    const run =
+      kind === "inject" || topic.indexOf("inject:") === 0
+        ? disconnectInjectOrigin(origin).then(() =>
+            refreshWcConnections({ ensure: false })
+          )
+        : wcDisconnectTopic(topic);
+    run
+      .then(() => showToast("Disconnected"))
+      .catch((err) => console.warn(err));
   });
   $("wcProposalApprove")?.addEventListener("click", () => {
     wcApprovePending().catch((err) => console.error(err));
@@ -4773,7 +4991,11 @@ function wire() {
   ) {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== "local") return;
-      if (changes.gladiator_wc_sessions || changes.gladiator_wc_pending) {
+      if (
+        changes.gladiator_wc_sessions ||
+        changes.gladiator_wc_pending ||
+        changes.gladiator_trusted_origins
+      ) {
         paintWcConnections().catch(() => {});
       }
       if (IS_WC_HOST && changes.gladiator_wc_pending) {

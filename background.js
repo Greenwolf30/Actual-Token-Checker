@@ -232,6 +232,64 @@ async function trustOrigin(origin) {
   await storageSet({ [TRUSTED_KEY]: list.slice(-100) });
 }
 
+async function untrustOrigin(origin) {
+  if (!origin) return;
+  const list = await readTrustedOrigins();
+  const next = list.filter((o) => o !== origin);
+  if (next.length === list.length) return;
+  await storageSet({ [TRUSTED_KEY]: next });
+}
+
+function niceDappName(origin) {
+  try {
+    const host = new URL(origin).hostname.toLowerCase().replace(/^www\./, "");
+    if (host === "jup.ag" || host.endsWith(".jup.ag")) return "Jupiter";
+    if (host === "pump.fun" || host.endsWith(".pump.fun")) return "pump.fun";
+    if (host === "raydium.io" || host.endsWith(".raydium.io")) return "Raydium";
+    if (host === "tensor.trade" || host.endsWith(".tensor.trade")) return "Tensor";
+    if (host === "orca.so" || host.endsWith(".orca.so")) return "Orca";
+    if (host === "drift.trade" || host.endsWith(".drift.trade")) return "Drift";
+    if (host === "mango.markets" || host.endsWith(".mango.markets")) return "Mango";
+    if (host === "kamino.finance" || host.endsWith(".kamino.finance")) return "Kamino";
+    if (host === "sanctum.so" || host.endsWith(".sanctum.so")) return "Sanctum";
+    return host;
+  } catch (_) {
+    return origin || "dApp";
+  }
+}
+
+async function listInjectConnections() {
+  const origins = await readTrustedOrigins();
+  return origins.map((origin) => ({
+    kind: "inject",
+    topic: "inject:" + origin,
+    origin,
+    name: niceDappName(origin),
+    url: origin,
+    icon: "",
+    accounts: [],
+    status: "active",
+  }));
+}
+
+async function forceDisconnectOrigin(origin) {
+  await untrustOrigin(origin);
+  if (!origin || !chrome.tabs || !chrome.tabs.query) return;
+  try {
+    let pattern = origin;
+    if (!/\/$/.test(pattern)) pattern += "/";
+    const tabs = await chrome.tabs.query({ url: [pattern + "*", origin] });
+    for (const tab of tabs) {
+      if (!tab || !tab.id) continue;
+      try {
+        chrome.tabs.sendMessage(tab.id, { type: "gladiator-force-disconnect" }, () => {
+          void chrome.runtime.lastError;
+        });
+      } catch (_) {}
+    }
+  } catch (_) {}
+}
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -332,6 +390,7 @@ async function handleProviderRequest(msg, sender) {
   }
 
   if (method === "disconnect") {
+    if (origin) await untrustOrigin(origin);
     return { ok: true };
   }
 
@@ -528,6 +587,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     isPageInjectEnabled()
       .then((enabled) => sendResponse({ ok: true, enabled }))
       .catch(() => sendResponse({ ok: true, enabled: true }));
+    return true;
+  }
+
+  if (msg.type === "gladiator-list-dapp-connections") {
+    listInjectConnections()
+      .then((items) => sendResponse({ ok: true, items }))
+      .catch((err) =>
+        sendResponse({
+          ok: false,
+          items: [],
+          error: String(err && err.message ? err.message : err),
+        })
+      );
+    return true;
+  }
+
+  if (msg.type === "gladiator-disconnect-dapp") {
+    const origin = String(msg.origin || "").trim();
+    forceDisconnectOrigin(origin)
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) =>
+        sendResponse({ ok: false, error: String(err && err.message ? err.message : err) })
+      );
     return true;
   }
 
