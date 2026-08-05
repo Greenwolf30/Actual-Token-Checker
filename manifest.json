@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Gladiator Wallet",
   "short_name": "Gladiator",
-  "version": "0.5.62",
+  "version": "0.5.63",
   "description": "Gladiator multi-chain wallet \u2014 Wallet Standard Solana provider + WalletConnect for dApps.",
   "action": {
     "default_title": "Gladiator",
@@ -27,7 +27,8 @@
     "storage",
     "clipboardWrite",
     "offscreen",
-    "scripting"
+    "scripting",
+    "alarms"
   ],
   "host_permissions": [
     "https://*/*",
