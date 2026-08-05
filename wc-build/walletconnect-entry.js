@@ -215,6 +215,72 @@ async function init(projectId, metadata, opts) {
   return walletKit;
 }
 
+function peerKeyFromMeta(meta) {
+  if (!meta || typeof meta !== "object") return "";
+  const url = String(meta.url || "").trim();
+  if (url) {
+    try {
+      const u = new URL(url);
+      return (u.host || url).toLowerCase().replace(/^www\./, "");
+    } catch (_) {
+      return url.toLowerCase();
+    }
+  }
+  return String(meta.name || "")
+    .trim()
+    .toLowerCase();
+}
+
+/** Keep one session per dApp (same site/name). Re-connecting used to stack duplicates. */
+async function pruneDuplicatePeerSessions(keepTopic) {
+  if (!walletKit) return 0;
+  const sessions = getActiveSessions();
+  const topics = Object.keys(sessions);
+  if (topics.length < 2) return 0;
+
+  // Group topics by peer; keep newest expiry (or explicit keepTopic).
+  const groups = new Map();
+  for (const topic of topics) {
+    const s = sessions[topic] || {};
+    const key = peerKeyFromMeta(s.peer && s.peer.metadata) || "topic:" + topic;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(topic);
+  }
+
+  const keep = new Set();
+  for (const [, group] of groups) {
+    if (group.length === 1) {
+      keep.add(group[0]);
+      continue;
+    }
+    if (keepTopic && group.includes(keepTopic)) {
+      keep.add(keepTopic);
+      continue;
+    }
+    let best = group[0];
+    let bestExp = Number((sessions[best] && sessions[best].expiry) || 0);
+    for (const topic of group) {
+      const exp = Number((sessions[topic] && sessions[topic].expiry) || 0);
+      if (exp >= bestExp) {
+        best = topic;
+        bestExp = exp;
+      }
+    }
+    keep.add(best);
+  }
+
+  let removed = 0;
+  for (const topic of topics) {
+    if (keep.has(topic)) continue;
+    try {
+      await disconnectSession(topic);
+      removed++;
+    } catch (_) {}
+  }
+  if (removed) status("Removed " + removed + " duplicate session(s) for the same dApp");
+  return removed;
+}
+
 async function approveProposal(proposal) {
   const pubkey = await handlers.getSolanaPublicKey();
   if (!pubkey) throw new Error("No Solana address — open/import a wallet first");
@@ -261,10 +327,32 @@ async function approveProposal(proposal) {
     throw new Error("dApp required Ethereum — select Solana on the site and retry");
   }
 
+  // Drop prior sessions to this same dApp before accepting a new one.
+  const proposerMeta =
+    proposal &&
+    proposal.params &&
+    proposal.params.proposer &&
+    proposal.params.proposer.metadata;
+  const incomingKey = peerKeyFromMeta(proposerMeta);
+  if (incomingKey) {
+    const existing = getActiveSessions();
+    for (const topic of Object.keys(existing)) {
+      const meta = existing[topic] && existing[topic].peer && existing[topic].peer.metadata;
+      if (peerKeyFromMeta(meta) === incomingKey) {
+        try {
+          await disconnectSession(topic);
+        } catch (_) {}
+      }
+    }
+  }
+
   const session = await walletKit.approveSession({
     id: proposal.id,
     namespaces,
   });
+  try {
+    await pruneDuplicatePeerSessions(session && session.topic);
+  } catch (_) {}
   status(
     "Connected to " +
       ((session && session.peer && session.peer.metadata && session.peer.metadata.name) ||
@@ -470,6 +558,7 @@ const api = {
   listSessions,
   disconnectSession,
   disconnectAll,
+  pruneDuplicatePeerSessions,
   processPendings,
   setHandlers,
   SOLANA_MAINNET,

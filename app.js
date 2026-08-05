@@ -1837,6 +1837,17 @@ async function refreshWcConnections(opts) {
     } catch (_) {}
     items = collectLiveWcSessions();
   }
+  // Collapse stacked sessions from repeated Connects to the same dApp (e.g. jup.ag).
+  if (
+    items.length > 1 &&
+    window.GladiatorWC &&
+    typeof GladiatorWC.pruneDuplicatePeerSessions === "function"
+  ) {
+    try {
+      const removed = await GladiatorWC.pruneDuplicatePeerSessions();
+      if (removed) items = collectLiveWcSessions();
+    } catch (_) {}
+  }
   if (items.length) {
     await persistWcSessions(items);
   } else if (window.GladiatorWC && GladiatorWC.isReady && GladiatorWC.isReady()) {
