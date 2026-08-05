@@ -30,6 +30,7 @@
       "sanctum.so",
       "uniswap.org",
       "relay.link",
+      "sol-incinerator.com",
       "localhost",
       "127.0.0.1",
     ];

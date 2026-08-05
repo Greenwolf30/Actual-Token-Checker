@@ -1299,6 +1299,8 @@ async function injectAllMatchingTabs() {
         "https://*.uniswap.org/*",
         "https://relay.link/*",
         "https://*.relay.link/*",
+        "https://sol-incinerator.com/*",
+        "https://*.sol-incinerator.com/*",
         "http://localhost/*",
         "http://127.0.0.1/*",
       ],
@@ -1365,6 +1367,7 @@ function shouldInjectProvider(url) {
       "sanctum.so",
       "uniswap.org",
       "relay.link",
+      "sol-incinerator.com",
       "localhost",
       "127.0.0.1",
     ];
