@@ -360,24 +360,36 @@ function showToast(msg) {
 }
 
 async function storageGet() {
-  // Extension: chrome.storage.local is source of truth (localStorage can stay stale
-  // after BTC/Sui repairs if quota/write fails, which hid bc1q / Sui addresses).
+  let chromeState = null;
+  let localState = null;
+
   if (IS_EXTENSION) {
     try {
-      const fromChrome = await new Promise((resolve) => {
+      chromeState = await new Promise((resolve) => {
         try {
           chrome.storage.local.get([STORE_KEY], (r) => resolve((r && r[STORE_KEY]) || null));
         } catch (_) {
           resolve(null);
         }
       });
-      if (fromChrome && Array.isArray(fromChrome.accounts)) return fromChrome;
     } catch (_) {}
   }
   try {
     const raw = localStorage.getItem(STORE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) localState = JSON.parse(raw);
   } catch (_) {}
+
+  const chromeOk = chromeState && Array.isArray(chromeState.accounts) && chromeState.accounts.length;
+  const localOk = localState && Array.isArray(localState.accounts) && localState.accounts.length;
+  const chromeHasSecrets = chromeOk && stateHasPlainSecrets(chromeState);
+  const localHasSecrets = localOk && stateHasPlainSecrets(localState);
+
+  // Prefer whichever copy still has signing keys. Older builds could leave
+  // chrome.storage with addresses-only while localStorage still had secrets.
+  if (chromeHasSecrets) return chromeState;
+  if (localHasSecrets) return localState;
+  if (chromeOk) return chromeState;
+  if (localOk) return localState;
   return null;
 }
 
@@ -4509,6 +4521,104 @@ function openSettings(opts) {
   }
 }
 
+/** In-page Jupiter provider signing — uses the same keys as WalletConnect. */
+async function ensureProviderSignerAccount() {
+  if (isVaultLocked()) {
+    openVaultModal("migrate");
+    throw new Error("Enter your old password once to restore signing keys");
+  }
+  const acc = activeAccount(STATE);
+  if (!acc) throw new Error("No wallet — create/import one in Gladiator");
+  if (await ensureAccountSolanaFromMnemonic(acc)) {
+    try {
+      await storageSet(STATE);
+    } catch (_) {}
+  }
+  if (!(acc.solana && acc.solana.secretKey)) {
+    go("settings");
+    showToast("Import seed phrase or Solana secret key to enable swaps");
+    throw new Error("No Solana key — open Gladiator and create/import a wallet");
+  }
+  return acc;
+}
+
+async function handleProviderSignRequest(method, params) {
+  const p = params || {};
+  if (method === "getPubkey") {
+    const acc = await ensureProviderSignerAccount();
+    return { publicKey: acc.solana.publicKey };
+  }
+
+  const acc = await ensureProviderSignerAccount();
+  const kp = solanaKeypairFromAccount(acc);
+
+  if (method === "signTransaction") {
+    const bytes = decodeWcTxBytes(p.transaction);
+    const signed = signSolanaTxBytes(bytes, kp);
+    return { signedTransaction: signed.transactionBase64 };
+  }
+
+  if (method === "signAllTransactions") {
+    const list = p.transactions || [];
+    if (!list.length) throw new Error("No transactions to sign");
+    const signedTransactions = list.map((item) => {
+      const blob = typeof item === "string" ? item : item && item.transaction;
+      const signed = signSolanaTxBytes(decodeWcTxBytes(blob), kp);
+      return signed.transactionBase64;
+    });
+    return { signedTransactions };
+  }
+
+  if (method === "signAndSendTransaction") {
+    const bytes = decodeWcTxBytes(p.transaction);
+    const signed = signSolanaTxBytes(bytes, kp);
+    const solChain = CHAINS.find((c) => c.id === "solana");
+    const rpcs = solRpcList(solChain);
+    const b64 = signed.transactionBase64;
+    const sig = await solRpc(
+      "sendTransaction",
+      [
+        b64,
+        {
+          encoding: "base64",
+          skipPreflight: false,
+          preflightCommitment: "confirmed",
+          maxRetries: 3,
+        },
+      ],
+      rpcs
+    );
+    if (!sig) throw new Error("Broadcast failed");
+    return { signature: typeof sig === "string" ? sig : String(sig) };
+  }
+
+  if (method === "signMessage") {
+    if (!window.nacl) throw new Error("nacl missing");
+    const msg = base64ToBytes(p.message);
+    const sig = nacl.sign.detached(msg, kp.secretKey);
+    return { signature: bytesToBase64(sig) };
+  }
+
+  throw new Error("Unsupported provider method: " + method);
+}
+
+function wireProviderSignBridge() {
+  if (!(IS_EXTENSION && typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)) {
+    return;
+  }
+  if (wireProviderSignBridge._wired) return;
+  wireProviderSignBridge._wired = true;
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (!msg || msg.type !== "gladiator-wallet-sign") return;
+    handleProviderSignRequest(msg.method, msg.params || {})
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((err) =>
+        sendResponse({ ok: false, error: String(err && err.message ? err.message : err) })
+      );
+    return true;
+  });
+}
+
 async function refreshAll() {
   // Drop prior-chain holdings immediately so UI never sticks on ETH/etc.
   HOLDINGS = [];
@@ -4910,13 +5020,21 @@ async function boot() {
     console.error("solana-tx.bundle missing");
   }
   STATE = await ensureState();
+  wireProviderSignBridge();
   if (!isVaultLocked() && (await repairAllExtraKeys(STATE))) {
     try {
       await storageSet(STATE);
+      showToast("Signing keys restored");
     } catch (err) {
       console.warn("[boot-persist]", err);
       showToast("Could not save BTC/Sui keys — storage full?");
     }
+  } else if (!isVaultLocked()) {
+    // Re-sync whichever store still has secrets into both storages.
+    try {
+      const acc = activeAccount(STATE);
+      if (acc && acc.solana && acc.solana.secretKey) await storageSet(STATE);
+    } catch (_) {}
   }
   wire();
   paintSwitchers();

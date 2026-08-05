@@ -229,8 +229,70 @@ async function requireSignerReady() {
 }
 
 async function getActivePublicKey() {
-  const acc = await requireSignerReady();
-  return acc.publicKey;
+  // Connect may succeed with address-only; signing still requires secretKey.
+  const bag = await storageGet([STORE_KEY]);
+  const state = bag[STORE_KEY];
+  if (!state || !state.accounts || !state.accounts.length) {
+    throw new Error("No wallet — open Gladiator and create/import one");
+  }
+  const acc =
+    state.accounts.find((a) => a.id === state.activeAccountId) || state.accounts[0];
+  const pk = acc && acc.solana && acc.solana.publicKey;
+  if (!pk) throw new Error("No Solana address on active wallet");
+  return pk;
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Ask the open Gladiator wallet page to sign (same key path as WalletConnect). */
+function callWalletWindow(method, params) {
+  return new Promise((resolve, reject) => {
+    try {
+      chrome.runtime.sendMessage(
+        { type: "gladiator-wallet-sign", method, params: params || {} },
+        (response) => {
+          const err = chrome.runtime.lastError;
+          if (err) {
+            reject(new Error(err.message || "Wallet window unavailable"));
+            return;
+          }
+          if (!response) {
+            reject(new Error("No wallet window responder"));
+            return;
+          }
+          if (response.ok === false) {
+            reject(new Error(response.error || "Wallet sign failed"));
+            return;
+          }
+          resolve(response.result);
+        }
+      );
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+async function signViaWalletWindow(method, params) {
+  // Ensure a wallet page is open so app.js can answer.
+  try {
+    await focusOrOpenWcWallet({ focus: true, settings: false, restore: false });
+  } catch (_) {}
+  let lastErr = null;
+  for (let i = 0; i < 24; i++) {
+    try {
+      return await callWalletWindow(method, params);
+    } catch (err) {
+      lastErr = err;
+      const msg = String(err && err.message ? err.message : err);
+      // Hard failures (missing keys / locked) should surface immediately.
+      if (/No Solana key|Unlock|password|locked|import/i.test(msg)) throw err;
+      await sleep(250);
+    }
+  }
+  throw lastErr || new Error("Open the Gladiator wallet window to sign");
 }
 
 async function handleProviderRequest(msg, sender) {
@@ -244,14 +306,14 @@ async function handleProviderRequest(msg, sender) {
     if (onlyIfTrusted && origin && !trusted.includes(origin)) {
       return null; // silent fail for onlyIfTrusted
     }
-    let publicKey;
+    // Prefer live wallet window (has repaired/unlocked keys); fall back to storage.
+    let publicKey = null;
     try {
-      publicKey = await getActivePublicKey();
-    } catch (err) {
-      throw err;
-    }
+      const live = await signViaWalletWindow("getPubkey", { origin });
+      if (live && live.publicKey) publicKey = live.publicKey;
+    } catch (_) {}
+    if (!publicKey) publicKey = await getActivePublicKey();
     if (origin) await trustOrigin(origin);
-    // Warm offscreen signer in the background — never block connect on it.
     callOffscreen("getPubkey", {}).catch(() => {});
     return { publicKey };
   }
@@ -266,9 +328,20 @@ async function handleProviderRequest(msg, sender) {
     method === "signAndSendTransaction" ||
     method === "signMessage"
   ) {
-    // Ensure keys exist (and open restore UI if not) before offscreen signing.
-    await requireSignerReady();
-    return await callOffscreen(method, params);
+    try {
+      return await signViaWalletWindow(method, params);
+    } catch (err) {
+      // Fallback to offscreen if wallet page can't answer but storage has keys.
+      try {
+        await requireSignerReady();
+        return await callOffscreen(method, params);
+      } catch (_) {
+        try {
+          await focusOrOpenWcWallet({ focus: true, settings: false, restore: true });
+        } catch (_) {}
+        throw err;
+      }
+    }
   }
 
   throw new Error("Unsupported provider method: " + method);
@@ -382,6 +455,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg) return;
   // Offscreen document handles these — do not claim the message here.
   if (msg.type === "gladiator-offscreen") return;
+  // Wallet page (app.js) handles in-page provider signing.
+  if (msg.type === "gladiator-wallet-sign") return;
 
   if (msg.type === "gladiator-set-inject") {
     const enabled = !!msg.enabled;
