@@ -49,6 +49,20 @@
     );
   }
 
+  function storageSet(state) {
+    return new Promise((resolve, reject) => {
+      try {
+        chrome.storage.local.set({ [STORE_KEY]: state }, () => {
+          const err = chrome.runtime.lastError;
+          if (err) reject(err);
+          else resolve();
+        });
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
   function getBase58() {
     return (
       (typeof window !== "undefined" && window.Base58) ||
@@ -66,11 +80,56 @@
     );
   }
 
+  async function deriveSolanaFromMnemonic(mnemonic) {
+    if (!window.ethers || !window.SolanaHD) {
+      throw new Error("HD libs missing in offscreen — reload Gladiator");
+    }
+    const B58 = getBase58();
+    if (!B58) throw new Error("Base58 missing in offscreen");
+    const phrase = String(mnemonic || "").trim().replace(/\s+/g, " ");
+    const m = ethers.Mnemonic.fromPhrase(phrase);
+    const seed = ethers.getBytes(m.computeSeed());
+    const solKp = await SolanaHD.deriveSolanaKeypair(seed, 0);
+    return {
+      publicKey: B58.encode(solKp.publicKey),
+      secretKey: B58.encode(solKp.secretKey),
+    };
+  }
+
+  async function ensureAccountWithSecret(state) {
+    const acc = activeAccount(state);
+    if (!acc) throw new Error("No wallet — open the Gladiator extension and create/import one");
+    if (acc.solana && acc.solana.secretKey) return { state, acc };
+
+    const mnemonic = String(acc.mnemonic || "").trim();
+    if (!mnemonic) {
+      if (state.vault && state.vault.data) {
+        throw new Error(
+          "Keys still locked — open the Gladiator extension icon and enter your old password once"
+        );
+      }
+      throw new Error(
+        "No Solana key — open the Gladiator extension icon and create/import a wallet"
+      );
+    }
+
+    const derived = await deriveSolanaFromMnemonic(mnemonic);
+    acc.solana = {
+      ...(acc.solana || {}),
+      publicKey: (acc.solana && acc.solana.publicKey) || derived.publicKey,
+      secretKey: derived.secretKey,
+    };
+    try {
+      await storageSet(state);
+    } catch (_) {}
+    return { state, acc };
+  }
+
   function keypairFromAccount(acc) {
     ensureBuffer();
     if (!window.solanaWeb3) throw new Error("Solana library missing in offscreen");
     if (!acc || !acc.solana || !acc.solana.secretKey) {
-      throw new Error("No Solana key — open Gladiator and create/import a wallet");
+      throw new Error("No Solana key — open the Gladiator extension icon and import a wallet");
     }
     const B58 = getBase58();
     if (!B58 || typeof B58.decode !== "function") {
@@ -160,20 +219,15 @@
 
   async function getPubkey() {
     const state = await storageGet();
-    const acc = activeAccount(state);
-    const pk = acc && acc.solana && acc.solana.publicKey;
-    if (!pk) throw new Error("No Solana address in Gladiator");
-    if (!acc.solana.secretKey) {
-      throw new Error("Wallet keys locked/missing — open Gladiator once to restore");
-    }
-    // Prove the key material loads.
+    const { acc } = await ensureAccountWithSecret(state || {});
     keypairFromAccount(acc);
-    return pk;
+    return acc.solana.publicKey;
   }
 
   async function signTransaction(params) {
     const state = await storageGet();
-    const kp = keypairFromAccount(activeAccount(state));
+    const { acc } = await ensureAccountWithSecret(state || {});
+    const kp = keypairFromAccount(acc);
     const u8 = decodeTx(params && params.transaction);
     if (!canDeserialize(u8)) {
       throw new Error("Could not decode Solana transaction from Jupiter");
@@ -183,7 +237,8 @@
 
   async function signAllTransactions(params) {
     const state = await storageGet();
-    const kp = keypairFromAccount(activeAccount(state));
+    const { acc } = await ensureAccountWithSecret(state || {});
+    const kp = keypairFromAccount(acc);
     const list = (params && params.transactions) || [];
     if (!list.length) throw new Error("No transactions to sign");
     const signedTransactions = list.map((item) => {
@@ -197,7 +252,8 @@
 
   async function signAndSendTransaction(params) {
     const state = await storageGet();
-    const kp = keypairFromAccount(activeAccount(state));
+    const { acc } = await ensureAccountWithSecret(state || {});
+    const kp = keypairFromAccount(acc);
     const u8 = decodeTx(params && params.transaction);
     if (!canDeserialize(u8)) throw new Error("Could not decode Solana transaction");
     const signedB64 = signTxBytes(u8, kp);
@@ -243,7 +299,7 @@
 
   async function signMessage(params) {
     const state = await storageGet();
-    const acc = activeAccount(state);
+    const { acc } = await ensureAccountWithSecret(state || {});
     const kp = keypairFromAccount(acc);
     const naclApi = getNacl();
     if (!naclApi || !naclApi.sign || !naclApi.sign.detached) {

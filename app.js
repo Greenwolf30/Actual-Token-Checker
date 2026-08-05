@@ -5024,16 +5024,18 @@ async function boot() {
   if (!isVaultLocked() && (await repairAllExtraKeys(STATE))) {
     try {
       await storageSet(STATE);
-      showToast("Signing keys restored");
+      showToast("Signing keys ready for Jupiter");
     } catch (err) {
       console.warn("[boot-persist]", err);
-      showToast("Could not save BTC/Sui keys — storage full?");
+      showToast("Could not save keys — storage full?");
     }
   } else if (!isVaultLocked()) {
-    // Re-sync whichever store still has secrets into both storages.
+    // Always re-write so offscreen signer sees the same secrets as this popup.
     try {
       const acc = activeAccount(STATE);
-      if (acc && acc.solana && acc.solana.secretKey) await storageSet(STATE);
+      if (acc && ((acc.solana && acc.solana.secretKey) || acc.mnemonic)) {
+        await storageSet(STATE);
+      }
     } catch (_) {}
   }
   wire();
@@ -5043,25 +5045,8 @@ async function boot() {
   go("home");
   if (isVaultLocked()) {
     openVaultModal("migrate");
+    showToast("Enter old password once — then Jupiter swaps work in-wallet");
   }
-  try {
-    const q = new URLSearchParams((location && location.search) || "");
-    if (q.get("restore") === "1") {
-      if (isVaultLocked()) {
-        openVaultModal("migrate");
-        showToast("Enter your old password to restore signing keys");
-      } else {
-        const acc = activeAccount(STATE);
-        if (!(acc && acc.solana && acc.solana.secretKey)) {
-          go("settings");
-          showToast("Import your seed phrase or Solana secret key to enable swaps");
-        } else {
-          showToast("Signing keys ready — retry the Jupiter swap");
-        }
-      }
-    }
-  } catch (_) {}
-
   const bootAcc = activeAccount(STATE);
   if (bootAcc && bootAcc.mnemonic && window.MultiHD) {
     const missing = [];
