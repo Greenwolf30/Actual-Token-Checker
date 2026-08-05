@@ -398,18 +398,30 @@ function listSessions() {
     const s = sessions[topic] || {};
     const meta = (s.peer && s.peer.metadata) || {};
     const ns = s.namespaces || {};
-    const sol = ns.solana || {};
-    const accounts = Array.isArray(sol.accounts) ? sol.accounts : [];
-    const chains = Array.isArray(sol.chains)
-      ? sol.chains
-      : accounts.map((a) => String(a).split(":").slice(0, 2).join(":")).filter(Boolean);
+    const accounts = [];
+    const chains = [];
+    for (const key of Object.keys(ns)) {
+      const block = ns[key] || {};
+      if (Array.isArray(block.accounts)) {
+        for (const a of block.accounts) accounts.push(a);
+      }
+      if (Array.isArray(block.chains)) {
+        for (const c of block.chains) chains.push(c);
+      }
+    }
+    if (!chains.length) {
+      for (const a of accounts) {
+        const parts = String(a).split(":");
+        if (parts.length >= 2) chains.push(parts[0] + ":" + parts[1]);
+      }
+    }
     return {
       topic,
       name: meta.name || "dApp",
       url: meta.url || "",
       icon: Array.isArray(meta.icons) && meta.icons[0] ? meta.icons[0] : "",
-      accounts,
-      chains,
+      accounts: Array.from(new Set(accounts)),
+      chains: Array.from(new Set(chains)),
       expiry: s.expiry || 0,
       status: "active",
     };

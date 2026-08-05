@@ -1736,27 +1736,124 @@ function accountHint(accounts) {
   return addr.slice(0, 4) + "…" + addr.slice(-4);
 }
 
-async function loadWcSessionMirror() {
+const WC_SESSIONS_STORE = "gladiator_wc_sessions";
+
+function collectLiveWcSessions() {
   try {
-    if (window.GladiatorWC && GladiatorWC.isReady()) {
-      if (typeof GladiatorWC.listSessions === "function") return GladiatorWC.listSessions();
-      const sessions = GladiatorWC.getActiveSessions() || {};
-      return Object.keys(sessions).map((topic) => {
-        const s = sessions[topic] || {};
-        const meta = (s.peer && s.peer.metadata) || {};
-        const sol = (s.namespaces && s.namespaces.solana) || {};
-        return {
-          topic,
-          name: meta.name || "dApp",
-          url: meta.url || "",
-          icon: Array.isArray(meta.icons) && meta.icons[0] ? meta.icons[0] : "",
-          accounts: sol.accounts || [],
-          status: "active",
-        };
+    if (!(window.GladiatorWC && GladiatorWC.isReady())) return [];
+    if (typeof GladiatorWC.listSessions === "function") {
+      return GladiatorWC.listSessions() || [];
+    }
+    const sessions = GladiatorWC.getActiveSessions() || {};
+    return Object.keys(sessions).map((topic) => {
+      const s = sessions[topic] || {};
+      const meta = (s.peer && s.peer.metadata) || {};
+      const ns = s.namespaces || {};
+      const accounts = [];
+      for (const key of Object.keys(ns)) {
+        const block = ns[key] || {};
+        if (Array.isArray(block.accounts)) accounts.push(...block.accounts);
+      }
+      return {
+        topic,
+        name: meta.name || "dApp",
+        url: meta.url || "",
+        icon: Array.isArray(meta.icons) && meta.icons[0] ? meta.icons[0] : "",
+        accounts,
+        status: "active",
+      };
+    });
+  } catch (_) {
+    return [];
+  }
+}
+
+async function persistWcSessions(items) {
+  const list = Array.isArray(items) ? items : collectLiveWcSessions();
+  const payload = { at: Date.now(), items: list };
+  try {
+    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+      await new Promise((resolve) => {
+        chrome.storage.local.set({ [WC_SESSIONS_STORE]: payload }, () => resolve());
       });
+    } else {
+      localStorage.setItem(WC_SESSIONS_STORE, JSON.stringify(payload));
     }
   } catch (_) {}
-  return [];
+  return list;
+}
+
+async function readPersistedWcSessions() {
+  try {
+    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+      const bag = await new Promise((resolve) => {
+        chrome.storage.local.get([WC_SESSIONS_STORE], (r) => resolve(r || {}));
+      });
+      const items = bag[WC_SESSIONS_STORE] && bag[WC_SESSIONS_STORE].items;
+      return Array.isArray(items) ? items : [];
+    }
+    const raw = localStorage.getItem(WC_SESSIONS_STORE);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed && parsed.items) ? parsed.items : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+async function loadWcSessionMirror() {
+  // Prefer live WalletKit sessions; fall back to last persisted snapshot
+  // so Connections still shows Jupiter/etc after the popup reopens.
+  const live = collectLiveWcSessions();
+  if (live.length) {
+    await persistWcSessions(live);
+    return live;
+  }
+  return readPersistedWcSessions();
+}
+
+async function refreshWcConnections(opts) {
+  const ensure = !opts || opts.ensure !== false;
+  const poll = opts && typeof opts.poll === "number" ? opts.poll : 0;
+  if (
+    ensure &&
+    STATE &&
+    STATE.wcProjectId &&
+    window.GladiatorWC &&
+    !(GladiatorWC.isReady && GladiatorWC.isReady())
+  ) {
+    try {
+      await ensureWalletConnect();
+    } catch (_) {}
+  }
+  // Session approve can land a moment after pair — optional short poll.
+  let items = collectLiveWcSessions();
+  for (let i = 0; i < poll && !items.length; i++) {
+    await new Promise((r) => setTimeout(r, 300));
+    try {
+      if (window.GladiatorWC && typeof GladiatorWC.processPendings === "function") {
+        await GladiatorWC.processPendings();
+      }
+    } catch (_) {}
+    items = collectLiveWcSessions();
+  }
+  if (items.length) {
+    await persistWcSessions(items);
+  } else if (window.GladiatorWC && GladiatorWC.isReady && GladiatorWC.isReady()) {
+    // WalletKit restored and empty — drop stale mirror.
+    await persistWcSessions([]);
+    items = [];
+  } else {
+    items = await readPersistedWcSessions();
+  }
+  paintWcConnectionsList(items);
+  if (items.length) {
+    const name = items[0].name || "dApp";
+    setWcStatus(
+      "Connected to " + name + (items.length > 1 ? " (+" + (items.length - 1) + ")" : "")
+    );
+  }
+  return items;
 }
 
 function paintWcConnectionsList(items) {
@@ -1820,50 +1917,26 @@ function paintWcConnectionsList(items) {
 }
 
 async function paintWcConnections() {
-  const items = await loadWcSessionMirror();
-  paintWcConnectionsList(items);
-  if (items.length) {
-    const active = items.filter((x) => x && x.status !== "pending");
-    const pending = items.filter((x) => x && x.status === "pending");
-    if (active.length) {
-      const name = active[0].name || "dApp";
-      setWcStatus(
-        "Connected to " +
-          name +
-          (active.length > 1 ? " (+" + (active.length - 1) + ")" : "") +
-          (pending.length ? " · 1 pending" : "")
-      );
-    } else if (pending.length) {
-      setWcStatus("Pending WalletConnect…");
-    }
-  }
+  await refreshWcConnections({ ensure: true });
 }
 
 function paintWcSettings() {
   const input = $("wcProjectId");
   if (input && STATE) input.value = STATE.wcProjectId || "";
-  paintWcConnections().catch(() => {});
-  try {
-    if (window.GladiatorWC && GladiatorWC.isReady()) {
-      const sessions = GladiatorWC.getActiveSessions() || {};
-      const n = Object.keys(sessions).length;
-      if (n) {
-        const first = sessions[Object.keys(sessions)[0]];
-        const name =
-          (first && first.peer && first.peer.metadata && first.peer.metadata.name) || "dApp";
-        setWcStatus("Connected to " + name + (n > 1 ? " (+" + (n - 1) + ")" : ""));
-        return;
+  refreshWcConnections({ ensure: true })
+    .then((items) => {
+      if (items && items.length) return;
+      const el = $("wcStatus");
+      const cur = el && el.textContent ? el.textContent.trim() : "";
+      if (!cur || cur === "Not connected" || /^Ready|^Add a/.test(cur)) {
+        setWcStatus(
+          STATE && STATE.wcProjectId
+            ? "Ready — paste a wc: URI"
+            : "Add a Reown Project ID to start"
+        );
       }
-    }
-  } catch (_) {}
-  // Status may already be set by paintWcConnections; only fall back if empty/default.
-  const el = $("wcStatus");
-  const cur = el && el.textContent ? el.textContent.trim() : "";
-  if (!cur || cur === "Not connected" || /^Ready|^Add a/.test(cur)) {
-    setWcStatus(
-      STATE && STATE.wcProjectId ? "Ready — paste a wc: URI" : "Add a Reown Project ID to start"
-    );
-  }
+    })
+    .catch(() => {});
 }
 
 async function wcDisconnectTopic(topic) {
@@ -1884,6 +1957,7 @@ async function wcDisconnectTopic(topic) {
     } else {
       await GladiatorWC.disconnectAll();
     }
+    await persistWcSessions();
     setWcStatus("Disconnected");
     showToast("Disconnected");
     paintWcSettings();
@@ -2077,7 +2151,8 @@ async function ensureWalletConnect() {
           if ($("wcUri")) $("wcUri").value = "";
           setWcStatus("Session linked — waiting for ownership signature…");
           showToast("Linked");
-          paintWcSettings();
+          await persistWcSessions();
+          await refreshWcConnections({ ensure: false, poll: 4 });
         } catch (err) {
           // Fallback: show manual approve if auto fails
           openWcProposalModal(proposal);
@@ -2090,9 +2165,10 @@ async function ensureWalletConnect() {
         try {
           setWcStatus("Ownership auth — signing…");
           await GladiatorWC.approveAuthenticate(payload);
-          setWcStatus("Ownership signed — check pump.fun");
+          setWcStatus("Ownership signed — check dApp");
           showToast("Ownership signed");
-          paintWcSettings();
+          await persistWcSessions();
+          await refreshWcConnections({ ensure: false });
         } catch (err) {
           const msg = String(err && err.message ? err.message : err);
           setWcStatus("Auth failed: " + msg);
@@ -2100,18 +2176,19 @@ async function ensureWalletConnect() {
         }
       },
       onRequest: async (event) => {
-        // pump.fun "writes" sign requests to the wallet over WC relay.
+        // dApp "writes" sign requests to the wallet over WC relay.
         // Handle them here — do not wait on a custom UI button.
         const method =
           (event && event.params && event.params.request && event.params.request.method) ||
           "request";
         try {
-          setWcStatus("pump.fun request: " + method + " — signing…");
+          setWcStatus("dApp request: " + method + " — signing…");
           showToast("Signing " + method.replace(/^solana_/, "") + "…");
           await GladiatorWC.handleRequest(event);
-          setWcStatus("Signed " + method.replace(/^solana_/, "") + " — check pump.fun");
-          showToast("Signed — check pump.fun");
-          paintWcSettings();
+          setWcStatus("Signed " + method.replace(/^solana_/, "") + " — check dApp");
+          showToast("Signed — check dApp");
+          await persistWcSessions();
+          await refreshWcConnections({ ensure: false });
         } catch (err) {
           const msg = String(err && err.message ? err.message : err);
           setWcStatus("Sign failed: " + msg);
@@ -2120,12 +2197,13 @@ async function ensureWalletConnect() {
           openWcSignRequest(event);
         }
       },
-      onSessionDelete: () => {
+      onSessionDelete: async () => {
         WC_PENDING_REQUEST = null;
         hideWcApproveBar();
         setWcStatus("Disconnected");
         showToast("WalletConnect disconnected");
-        paintWcSettings();
+        await persistWcSessions([]);
+        await refreshWcConnections({ ensure: false });
       },
       onStatus: (msg) => {
         if (msg) setWcStatus(msg);
@@ -2139,7 +2217,6 @@ async function ensureWalletConnect() {
     url: IS_EXTENSION ? "https://gladiator.wallet" : location.origin,
     icons: [],
   });
-  paintWcSettings();
   return GladiatorWC;
 }
 
@@ -2195,6 +2272,7 @@ async function wcConnectFromUri() {
         await GladiatorWC.processPendings();
       }
     } catch (_) {}
+    await refreshWcConnections({ ensure: false, poll: 10 });
     paintWcSettings();
   } catch (err) {
     const msg = String(err && err.message ? err.message : err);
@@ -2211,6 +2289,7 @@ async function wcDisconnect() {
       await ensureWalletConnect();
       await GladiatorWC.disconnectAll();
     }
+    await persistWcSessions([]);
     setWcStatus("Disconnected");
     showToast("Disconnected");
     paintWcSettings();
@@ -4014,8 +4093,14 @@ function wire() {
     wcDisconnect().catch((err) => console.warn(err));
   });
   $("wcRefreshConnections")?.addEventListener("click", () => {
-    paintWcConnections()
-      .then(() => showToast("Connections refreshed"))
+    refreshWcConnections({ ensure: true, poll: 6 })
+      .then((items) => {
+        showToast(
+          items && items.length
+            ? items.length + " connection" + (items.length === 1 ? "" : "s")
+            : "No active connections"
+        );
+      })
       .catch((err) => console.warn(err));
   });
   $("wcConnectionsList")?.addEventListener("click", (e) => {
@@ -4320,9 +4405,12 @@ async function boot() {
   if (STATE.wcProjectId && window.GladiatorWC) {
     try {
       await ensureWalletConnect();
+      await refreshWcConnections({ ensure: false, poll: 4 });
+      paintWcSettings();
     } catch (err) {
       console.warn("[wc-boot]", err);
       setWcStatus(String(err && err.message ? err.message : err));
+      paintWcSettings();
     }
   } else {
     paintWcSettings();
