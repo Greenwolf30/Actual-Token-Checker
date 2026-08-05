@@ -7439,9 +7439,7 @@ async function respondDappApprove(approved, error) {
       );
     });
   } catch (_) {}
-  showToast(
-    approved ? "Approved · site can finish this swap" : "Rejected"
-  );
+  showToast(approved ? "Approved" : "Rejected");
 }
 
 async function processDappApproveRequest(req) {

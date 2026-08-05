@@ -876,38 +876,9 @@ const DAPP_APPROVE_REQ = "gladiator_dapp_approve_req";
 const DAPP_APPROVE_RES = "gladiator_dapp_approve_res";
 /** Same UI as the toolbar wallet (not a separate “relay” build). */
 const APPROVE_UI_PATH = "popup.html";
-/** origin -> session expiry ms — covers Jupiter multi-step sign bursts. */
-const dappSessionUntil = new Map();
-const DAPP_SESSION_MS = 2 * 60 * 1000;
 
 function sleepMs(ms) {
   return new Promise((r) => setTimeout(r, ms));
-}
-
-function grantDappSession(origin, ms) {
-  const o = String(origin || "").trim();
-  if (!o) return;
-  dappSessionUntil.set(o, Date.now() + (ms || DAPP_SESSION_MS));
-}
-
-function hasDappSession(origin) {
-  const o = String(origin || "").trim();
-  if (!o) return false;
-  const until = dappSessionUntil.get(o) || 0;
-  if (Date.now() >= until) {
-    dappSessionUntil.delete(o);
-    return false;
-  }
-  return true;
-}
-
-function isSessionSignMethod(method) {
-  return (
-    method === "signTransaction" ||
-    method === "signAllTransactions" ||
-    method === "signAndSendTransaction" ||
-    method === "signMessage"
-  );
 }
 
 /**
@@ -968,11 +939,6 @@ async function ensureApprovalSurface() {
 
 /** Ask the user to approve a dApp action inside the Gladiator wallet UI. */
 async function requestUserApproval({ origin, method, title, body, chain }) {
-  // After connect/approve, allow a short sign burst without reopening UI each step.
-  if (isSessionSignMethod(method) && hasDappSession(origin)) {
-    return true;
-  }
-
   const reqId =
     "dap_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
   await storageSet({
@@ -1001,18 +967,7 @@ async function requestUserApproval({ origin, method, title, body, chain }) {
     const res = bag[DAPP_APPROVE_RES];
     if (!res || res.id !== reqId) continue;
     await storageSet({ [DAPP_APPROVE_REQ]: null, [DAPP_APPROVE_RES]: null });
-    if (res.approved) {
-      // Connect or any sign approval starts a short swap session.
-      if (
-        method === "connect" ||
-        method === "eth_requestAccounts" ||
-        isSessionSignMethod(method) ||
-        res.session
-      ) {
-        grantDappSession(origin);
-      }
-      return true;
-    }
+    if (res.approved) return true;
     const err = new Error(res.error || "User rejected the request");
     err.code = 4001;
     throw err;
@@ -1097,6 +1052,7 @@ async function handleProviderRequest(msg, sender) {
     method === "signAndSendTransaction" ||
     method === "signMessage"
   ) {
+    // Stay connected until the user disconnects, but approve every tx/sign.
     const trusted = await readTrustedOrigins();
     const isTrusted = !!(origin && trusted.includes(origin));
     if (!isTrusted) {
@@ -1110,24 +1066,24 @@ async function handleProviderRequest(msg, sender) {
         chain: "solana",
       });
       if (origin) await trustOrigin(origin);
-      // Connect approval already grants a short sign session for the swap.
-    } else if (!hasDappSession(origin)) {
-      const labels = {
-        signTransaction: "Approve swap / sign?",
-        signAllTransactions: "Approve swap / sign?",
-        signAndSendTransaction: "Approve swap / send?",
-        signMessage: "Sign message?",
-      };
-      await requestUserApproval({
-        origin,
-        method,
-        title: labels[method] || "Approve?",
-        body:
-          shortOriginHost(origin) +
-          " wants to sign with your Solana wallet. Approving allows this site for 2 minutes so the swap can finish.",
-        chain: "solana",
-      });
     }
+    const labels = {
+      signTransaction: "Approve transaction?",
+      signAllTransactions: "Approve transactions?",
+      signAndSendTransaction: "Approve & send transaction?",
+      signMessage: "Sign message?",
+    };
+    await requestUserApproval({
+      origin,
+      method,
+      title: labels[method] || "Approve?",
+      body:
+        shortOriginHost(origin) +
+        " wants to " +
+        (method === "signMessage" ? "sign a message" : "sign a transaction") +
+        " with your Solana wallet.",
+      chain: "solana",
+    });
 
     const acc = await requireSignerReady();
     const needFee =
