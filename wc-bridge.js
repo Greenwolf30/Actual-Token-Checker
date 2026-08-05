@@ -5,6 +5,7 @@
 (function () {
   const STORE_KEY = "gladiator_wallet_v1";
   const PENDING_KEY = "gladiator_wc_pending";
+  const SESSIONS_KEY = "gladiator_wc_sessions";
   const SOLANA_MAINNET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
 
   const statusEl = document.getElementById("status");
@@ -99,7 +100,38 @@
         return;
       }
       GladiatorWC.processPendings().catch(() => {});
+      publishSessions().catch(() => {});
     }, 500);
+  }
+
+  async function publishSessions() {
+    try {
+      const { pending } = await loadState();
+      const active =
+        window.GladiatorWC && typeof GladiatorWC.listSessions === "function"
+          ? GladiatorWC.listSessions()
+          : [];
+      const items = Array.isArray(active) ? active.slice() : [];
+      if (pending && pending.uri && String(pending.uri).startsWith("wc:")) {
+        items.unshift({
+          topic: "pending:" + String(pending.at || Date.now()),
+          name: "Pending connect",
+          url: "",
+          icon: "",
+          accounts: [],
+          chains: ["solana"],
+          expiry: 0,
+          status: "pending",
+          uri: String(pending.uri).slice(0, 48) + "…",
+        });
+      }
+      await storageSet({
+        [SESSIONS_KEY]: {
+          at: Date.now(),
+          items,
+        },
+      });
+    } catch (_) {}
   }
 
   function decodeBytes(raw) {
@@ -278,6 +310,7 @@
           "Session linked.\nWaiting for ownership signature from pump.fun…\n(Keep this window open — do not close)",
           "ok"
         );
+        await publishSessions();
         startOwnershipWatch();
       },
       onAuthenticate: async (payload) => {
@@ -288,6 +321,7 @@
             "Ownership auth signed.\nCheck pump.fun — “Click confirm” should finish.",
             "ok"
           );
+          await publishSessions();
         } catch (err) {
           setStatus("Auth sign failed: " + (err && err.message ? err.message : err), "bad");
           throw err;
@@ -306,11 +340,15 @@
               " — look at pump.fun (ownership step should clear)",
             "ok"
           );
+          await publishSessions();
         } catch (err) {
           setStatus("Sign failed: " + (err && err.message ? err.message : err), "bad");
         }
       },
-      onSessionDelete: () => setStatus("Disconnected from dApp", "bad"),
+      onSessionDelete: async () => {
+        setStatus("Disconnected from dApp", "bad");
+        await publishSessions();
+      },
       onStatus: (msg) => {
         if (msg) setStatus(msg);
       },
@@ -384,25 +422,41 @@
         "Paired. Approving session + ownership signature automatically.\nKeep this window open — pump.fun’s “Click confirm” waits on this.",
         "ok"
       );
+      await publishSessions();
       startOwnershipWatch();
     } catch (err) {
       setStatus("Connect failed: " + (err && err.message ? err.message : err), "bad");
+      await publishSessions();
     } finally {
       pairing = false;
     }
   }
 
-  async function disconnect() {
+  async function disconnect(topic) {
     try {
-      // Wallet-initiated WC session delete — relay notifies pump.fun / the dApp.
       if (window.GladiatorWC && GladiatorWC.isReady()) {
-        await GladiatorWC.disconnectAll();
+        if (topic && !String(topic).startsWith("pending:")) {
+          if (typeof GladiatorWC.disconnectSession === "function") {
+            await GladiatorWC.disconnectSession(topic);
+          } else {
+            await GladiatorWC.disconnectAll();
+          }
+        } else {
+          await GladiatorWC.disconnectAll();
+        }
       }
+      const clearPending = !topic || String(topic).startsWith("pending:");
       await storageSet({
-        [PENDING_KEY]: null,
-        gladiator_wc_cmd: { type: "disconnected", at: Date.now() },
+        ...(clearPending ? { [PENDING_KEY]: null } : {}),
+        gladiator_wc_cmd: { type: "disconnected", at: Date.now(), topic: topic || null },
       });
-      setStatus("Disconnected — session end sent to dApp (pump.fun)", "bad");
+      await publishSessions();
+      setStatus(
+        topic && !String(topic).startsWith("pending:")
+          ? "Disconnected that dApp session"
+          : "Disconnected — session end sent to dApp (pump.fun)",
+        "bad"
+      );
     } catch (err) {
       setStatus(String(err && err.message ? err.message : err), "bad");
     }
@@ -417,14 +471,20 @@
       const next = changes[PENDING_KEY].newValue;
       if (next && next.uri && String(next.uri).startsWith("wc:")) {
         setStatus("New wc: link received — connecting…");
-        connectPending();
+        connectPending().then(() => publishSessions());
+      } else {
+        publishSessions().catch(() => {});
       }
     }
     if (changes.gladiator_wc_cmd) {
       const cmd = changes.gladiator_wc_cmd.newValue;
       if (cmd && cmd.type === "disconnect") {
-        setStatus("Disconnect requested from Gladiator…");
-        disconnect();
+        setStatus(
+          cmd.topic
+            ? "Disconnect requested for one session…"
+            : "Disconnect requested from Gladiator…"
+        );
+        disconnect(cmd.topic || null);
       }
     }
   });
@@ -433,6 +493,7 @@
   setInterval(() => {
     if (!window.GladiatorWC || !GladiatorWC.isReady()) return;
     GladiatorWC.processPendings().catch(() => {});
+    publishSessions().catch(() => {});
   }, 2500);
 
   // Boot
@@ -462,6 +523,7 @@
           );
         }
       }
+      await publishSessions();
     } catch (err) {
       setStatus("Boot failed: " + (err && err.message ? err.message : err), "bad");
     }

@@ -371,18 +371,49 @@ async function rejectRequest(event, message) {
   status("Request rejected");
 }
 
+async function disconnectSession(topic) {
+  if (!walletKit || !topic) return;
+  await walletKit.disconnectSession({
+    topic: String(topic),
+    reason: { code: 6000, message: "User disconnected" },
+  });
+  status("Disconnected session");
+}
+
 async function disconnectAll() {
   if (!walletKit) return;
   const sessions = getActiveSessions();
   for (const topic of Object.keys(sessions)) {
     try {
-      await walletKit.disconnectSession({
-        topic,
-        reason: { code: 6000, message: "User disconnected" },
-      });
+      await disconnectSession(topic);
     } catch (_) {}
   }
   status("Disconnected");
+}
+
+/** Compact session list for UI / storage mirroring. */
+function listSessions() {
+  const sessions = getActiveSessions();
+  return Object.keys(sessions).map((topic) => {
+    const s = sessions[topic] || {};
+    const meta = (s.peer && s.peer.metadata) || {};
+    const ns = s.namespaces || {};
+    const sol = ns.solana || {};
+    const accounts = Array.isArray(sol.accounts) ? sol.accounts : [];
+    const chains = Array.isArray(sol.chains)
+      ? sol.chains
+      : accounts.map((a) => String(a).split(":").slice(0, 2).join(":")).filter(Boolean);
+    return {
+      topic,
+      name: meta.name || "dApp",
+      url: meta.url || "",
+      icon: Array.isArray(meta.icons) && meta.icons[0] ? meta.icons[0] : "",
+      accounts,
+      chains,
+      expiry: s.expiry || 0,
+      status: "active",
+    };
+  });
 }
 
 async function processPendings() {
@@ -424,6 +455,8 @@ const api = {
   handleRequest,
   rejectRequest,
   getActiveSessions,
+  listSessions,
+  disconnectSession,
   disconnectAll,
   processPendings,
   setHandlers,

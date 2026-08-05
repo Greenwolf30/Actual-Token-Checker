@@ -2755,6 +2755,148 @@ body.is-local .dock {
   text-decoration: underline;
 }
 
+.wc-connections {
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.wc-connections-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.wc-connections-head strong {
+  font-size: 0.86rem;
+  letter-spacing: 0.02em;
+  color: #f2eef8;
+}
+
+.wc-btn-refresh {
+  min-height: 30px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: #cdd6ea !important;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.wc-connections-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.wc-connections-list:empty {
+  display: none;
+}
+
+.wc-conn-item {
+  display: grid;
+  grid-template-columns: 36px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.wc-conn-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  object-fit: cover;
+  background: rgba(20, 241, 149, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.wc-conn-icon.fallback {
+  display: grid;
+  place-items: center;
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: #14f195;
+}
+
+.wc-conn-meta {
+  min-width: 0;
+}
+
+.wc-conn-meta strong {
+  display: block;
+  font-size: 0.86rem;
+  color: #f2eef8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wc-conn-meta span {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.72rem;
+  color: #9aa3b5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wc-conn-badge {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.wc-conn-badge.active {
+  background: rgba(20, 241, 149, 0.16);
+  color: #14f195;
+}
+
+.wc-conn-badge.pending {
+  background: rgba(255, 196, 80, 0.16);
+  color: #ffc450;
+}
+
+.wc-conn-disconnect {
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 120, 120, 0.4);
+  background: rgba(196, 59, 78, 0.28);
+  color: #ffd5d5 !important;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.wc-connections-empty {
+  margin: 4px 0 0;
+  font-size: 0.78rem;
+  color: #9aa3b5;
+  line-height: 1.35;
+}
+
+.wc-connections-empty[hidden] {
+  display: none;
+}
+
 #wcSettingsBlock #wcStatus {
   color: #e8eefc;
   font-weight: 600;

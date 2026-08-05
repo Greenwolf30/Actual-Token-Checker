@@ -1719,9 +1719,159 @@ function signSolanaTxBytes(bytes, keypair) {
   };
 }
 
+function shortHost(url) {
+  try {
+    return new URL(url).host || url;
+  } catch (_) {
+    return url || "";
+  }
+}
+
+function accountHint(accounts) {
+  if (!accounts || !accounts.length) return "";
+  const a = String(accounts[0] || "");
+  const parts = a.split(":");
+  const addr = parts[parts.length - 1] || a;
+  if (addr.length < 10) return addr;
+  return addr.slice(0, 4) + "…" + addr.slice(-4);
+}
+
+async function loadWcSessionMirror() {
+  if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+    try {
+      const bag = await new Promise((resolve) => {
+        chrome.storage.local.get(["gladiator_wc_sessions", "gladiator_wc_pending"], (r) =>
+          resolve(r || {})
+        );
+      });
+      const items =
+        (bag.gladiator_wc_sessions && bag.gladiator_wc_sessions.items) || [];
+      const pending = bag.gladiator_wc_pending;
+      const out = Array.isArray(items) ? items.slice() : [];
+      if (
+        pending &&
+        pending.uri &&
+        String(pending.uri).startsWith("wc:") &&
+        !out.some((x) => x && x.status === "pending")
+      ) {
+        out.unshift({
+          topic: "pending:" + String(pending.at || Date.now()),
+          name: "Pending connect",
+          url: "",
+          status: "pending",
+          uri: String(pending.uri).slice(0, 48) + "…",
+          accounts: [],
+        });
+      }
+      return out;
+    } catch (_) {}
+  }
+  try {
+    if (window.GladiatorWC && GladiatorWC.isReady()) {
+      if (typeof GladiatorWC.listSessions === "function") return GladiatorWC.listSessions();
+      const sessions = GladiatorWC.getActiveSessions() || {};
+      return Object.keys(sessions).map((topic) => {
+        const s = sessions[topic] || {};
+        const meta = (s.peer && s.peer.metadata) || {};
+        const sol = (s.namespaces && s.namespaces.solana) || {};
+        return {
+          topic,
+          name: meta.name || "dApp",
+          url: meta.url || "",
+          icon: Array.isArray(meta.icons) && meta.icons[0] ? meta.icons[0] : "",
+          accounts: sol.accounts || [],
+          status: "active",
+        };
+      });
+    }
+  } catch (_) {}
+  return [];
+}
+
+function paintWcConnectionsList(items) {
+  const list = $("wcConnectionsList");
+  const empty = $("wcConnectionsEmpty");
+  if (!list) return;
+  const rows = Array.isArray(items) ? items : [];
+  list.innerHTML = "";
+  if (!rows.length) {
+    if (empty) empty.hidden = false;
+    return;
+  }
+  if (empty) empty.hidden = true;
+  for (const item of rows) {
+    if (!item) continue;
+    const li = document.createElement("li");
+    li.className = "wc-conn-item";
+    li.dataset.topic = item.topic || "";
+
+    const iconUrl = item.icon || "";
+    let iconHtml;
+    if (iconUrl && /^https?:/i.test(iconUrl)) {
+      iconHtml =
+        '<img class="wc-conn-icon" alt="" src="' +
+        iconUrl.replace(/"/g, "") +
+        '" onerror="this.classList.add(\'fallback\');this.removeAttribute(\'src\');this.textContent=\'WC\';" />';
+    } else {
+      const initials = String(item.name || "WC")
+        .replace(/[^A-Za-z0-9]/g, "")
+        .slice(0, 2)
+        .toUpperCase() || "WC";
+      iconHtml = '<div class="wc-conn-icon fallback">' + initials + "</div>";
+    }
+
+    const status = item.status === "pending" ? "pending" : "active";
+    const sub =
+      status === "pending"
+        ? item.uri || "Waiting for pair / approve…"
+        : [shortHost(item.url), accountHint(item.accounts)].filter(Boolean).join(" · ") ||
+          "Solana session";
+
+    li.innerHTML =
+      iconHtml +
+      '<div class="wc-conn-meta">' +
+      "<strong></strong>" +
+      "<span></span>" +
+      '<em class="wc-conn-badge ' +
+      status +
+      '">' +
+      status +
+      "</em>" +
+      "</div>" +
+      '<button type="button" class="wc-conn-disconnect" data-topic="">Disconnect</button>';
+    li.querySelector("strong").textContent = item.name || "dApp";
+    li.querySelector("span").textContent = sub;
+    const btn = li.querySelector(".wc-conn-disconnect");
+    btn.dataset.topic = item.topic || "";
+    btn.textContent = status === "pending" ? "Cancel" : "Disconnect";
+    list.appendChild(li);
+  }
+}
+
+async function paintWcConnections() {
+  const items = await loadWcSessionMirror();
+  paintWcConnectionsList(items);
+  if (items.length) {
+    const active = items.filter((x) => x && x.status !== "pending");
+    const pending = items.filter((x) => x && x.status === "pending");
+    if (active.length) {
+      const name = active[0].name || "dApp";
+      setWcStatus(
+        "Connected to " +
+          name +
+          (active.length > 1 ? " (+" + (active.length - 1) + ")" : "") +
+          (pending.length ? " · 1 pending" : "")
+      );
+    } else if (pending.length) {
+      setWcStatus("Pending WalletConnect — keep bridge window open");
+    }
+  }
+}
+
 function paintWcSettings() {
   const input = $("wcProjectId");
   if (input && STATE) input.value = STATE.wcProjectId || "";
+  paintWcConnections().catch(() => {});
   try {
     if (window.GladiatorWC && GladiatorWC.isReady()) {
       const sessions = GladiatorWC.getActiveSessions() || {};
@@ -1735,7 +1885,59 @@ function paintWcSettings() {
       }
     }
   } catch (_) {}
-  setWcStatus(STATE && STATE.wcProjectId ? "Ready — paste a wc: URI" : "Add a Reown Project ID to start");
+  // Status may already be set by paintWcConnections; only fall back if empty/default.
+  const el = $("wcStatus");
+  const cur = el && el.textContent ? el.textContent.trim() : "";
+  if (!cur || cur === "Not connected" || /^Ready|^Add a/.test(cur)) {
+    setWcStatus(
+      STATE && STATE.wcProjectId ? "Ready — paste a wc: URI" : "Add a Reown Project ID to start"
+    );
+  }
+}
+
+async function wcDisconnectTopic(topic) {
+  const t = String(topic || "").trim();
+  if (!t) {
+    await wcDisconnect();
+    return;
+  }
+  try {
+    if (IS_EXTENSION && typeof chrome !== "undefined" && chrome.storage) {
+      await new Promise((resolve, reject) => {
+        chrome.storage.local.set(
+          {
+            gladiator_wc_cmd: { type: "disconnect", topic: t, at: Date.now() },
+            ...(t.startsWith("pending:") ? { gladiator_wc_pending: null } : {}),
+          },
+          () => {
+            const err = chrome.runtime.lastError;
+            if (err) reject(err);
+            else resolve();
+          }
+        );
+      });
+      try {
+        chrome.runtime.sendMessage({ type: "wc-open-bridge" }, () => void chrome.runtime.lastError);
+      } catch (_) {}
+      setWcStatus(t.startsWith("pending:") ? "Cancelled pending connect" : "Disconnect sent");
+      showToast(t.startsWith("pending:") ? "Pending cancelled" : "Disconnecting…");
+      setTimeout(() => paintWcConnections().catch(() => {}), 400);
+      return;
+    }
+    if (window.GladiatorWC && GladiatorWC.isReady()) {
+      if (t.startsWith("pending:")) {
+        /* nothing local */
+      } else if (typeof GladiatorWC.disconnectSession === "function") {
+        await GladiatorWC.disconnectSession(t);
+      } else {
+        await GladiatorWC.disconnectAll();
+      }
+    }
+    showToast("Disconnected");
+    paintWcSettings();
+  } catch (err) {
+    showToast(String(err && err.message ? err.message : err));
+  }
 }
 
 function showWcApproveBar(hintText, statusText) {
@@ -2061,6 +2263,7 @@ async function wcDisconnect() {
           {
             gladiator_wc_cmd: { type: "disconnect", at: Date.now() },
             gladiator_wc_pending: null,
+            gladiator_wc_sessions: { at: Date.now(), items: [] },
           },
           () => {
             const err = chrome.runtime.lastError;
@@ -2078,6 +2281,7 @@ async function wcDisconnect() {
     }
     setWcStatus("Disconnect sent — pump.fun should drop the session");
     showToast("Disconnected");
+    paintWcConnections().catch(() => {});
   } catch (err) {
     showToast(String(err && err.message ? err.message : err));
   }
@@ -3791,6 +3995,7 @@ function paintSettings() {
 function openSettings(opts) {
   closeAddrMenu();
   go("settings");
+  paintWcSettings();
   if (opts && opts.focusWc) {
     requestAnimationFrame(() => {
       const block = $("wcSettingsBlock");
@@ -3876,6 +4081,37 @@ function wire() {
   $("wcDisconnectBtn")?.addEventListener("click", () => {
     wcDisconnect().catch((err) => console.warn(err));
   });
+  $("wcRefreshConnections")?.addEventListener("click", () => {
+    paintWcConnections()
+      .then(() => showToast("Connections refreshed"))
+      .catch((err) => console.warn(err));
+    // Ask bridge to republish if it's open
+    if (IS_EXTENSION && typeof chrome !== "undefined" && chrome.runtime) {
+      try {
+        chrome.runtime.sendMessage({ type: "wc-open-bridge" }, () => void chrome.runtime.lastError);
+      } catch (_) {}
+    }
+  });
+  $("wcConnectionsList")?.addEventListener("click", (e) => {
+    const btn = e.target && e.target.closest ? e.target.closest(".wc-conn-disconnect") : null;
+    if (!btn) return;
+    e.preventDefault();
+    const topic = btn.getAttribute("data-topic") || "";
+    wcDisconnectTopic(topic).catch((err) => console.warn(err));
+  });
+  if (
+    IS_EXTENSION &&
+    typeof chrome !== "undefined" &&
+    chrome.storage &&
+    chrome.storage.onChanged
+  ) {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== "local") return;
+      if (changes.gladiator_wc_sessions || changes.gladiator_wc_pending) {
+        paintWcConnections().catch(() => {});
+      }
+    });
+  }
   $("wcProposalApprove")?.addEventListener("click", () => {
     wcApprovePending().catch((err) => console.error(err));
   });
