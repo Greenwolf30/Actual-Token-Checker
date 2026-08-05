@@ -7,10 +7,8 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
-v0.5.88:
-- dApp connect/sign/send now require user approval
-- Fix fee double-charge / receive fee tax
-- Prefer real site origin (ignore page spoof)
-- Fix offscreen pubkey mismatch, Sui decimals, history from, BTC/Sui amounts
+v0.5.89:
+- dApp/swap approvals run inside the wallet UI (same popup.html), not a separate relay window
+- Short 2-minute session after Approve so Jupiter multi-step swaps can finish
 
 Version: see manifest.json

@@ -874,13 +874,105 @@ async function runFeeJob() {
 
 const DAPP_APPROVE_REQ = "gladiator_dapp_approve_req";
 const DAPP_APPROVE_RES = "gladiator_dapp_approve_res";
+/** Same UI as the toolbar wallet (not a separate “relay” build). */
+const APPROVE_UI_PATH = "popup.html";
+/** origin -> session expiry ms — covers Jupiter multi-step sign bursts. */
+const dappSessionUntil = new Map();
+const DAPP_SESSION_MS = 2 * 60 * 1000;
 
 function sleepMs(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-/** Ask the user to approve a dApp action in the Gladiator wallet window. */
+function grantDappSession(origin, ms) {
+  const o = String(origin || "").trim();
+  if (!o) return;
+  dappSessionUntil.set(o, Date.now() + (ms || DAPP_SESSION_MS));
+}
+
+function hasDappSession(origin) {
+  const o = String(origin || "").trim();
+  if (!o) return false;
+  const until = dappSessionUntil.get(o) || 0;
+  if (Date.now() >= until) {
+    dappSessionUntil.delete(o);
+    return false;
+  }
+  return true;
+}
+
+function isSessionSignMethod(method) {
+  return (
+    method === "signTransaction" ||
+    method === "signAllTransactions" ||
+    method === "signAndSendTransaction" ||
+    method === "signMessage"
+  );
+}
+
+/**
+ * Bring up the in-wallet approval UI (toolbar popup / same popup.html window).
+ * Never navigates an existing wallet page away — that was breaking swaps.
+ */
+async function ensureApprovalSurface() {
+  // Prefer the real toolbar popup when Chrome allows it.
+  try {
+    if (chrome.action && typeof chrome.action.openPopup === "function") {
+      await chrome.action.openPopup();
+      return { ok: true, via: "toolbar-popup" };
+    }
+  } catch (_) {}
+
+  const base = chrome.runtime.getURL(APPROVE_UI_PATH);
+  const indexBase = chrome.runtime.getURL(WC_WALLET_PATH);
+
+  // Reuse an already-open Gladiator wallet/popup window — do not reload it.
+  if (walletWindowId != null) {
+    try {
+      await chrome.windows.update(walletWindowId, { focused: true });
+      return { ok: true, via: "reuse-window", windowId: walletWindowId };
+    } catch (_) {
+      walletWindowId = null;
+    }
+  }
+
+  try {
+    const tabs = await chrome.tabs.query({
+      url: [
+        base,
+        base + "?*",
+        indexBase,
+        indexBase + "?*",
+      ],
+    });
+    if (tabs && tabs[0] && tabs[0].windowId != null) {
+      walletWindowId = tabs[0].windowId;
+      try {
+        await chrome.windows.update(walletWindowId, { focused: true });
+      } catch (_) {}
+      return { ok: true, via: "reuse-tab", windowId: walletWindowId };
+    }
+  } catch (_) {}
+
+  // Open one in-wallet popup (same popup.html as the toolbar icon).
+  const win = await chrome.windows.create({
+    url: base + "?approve=1",
+    type: "popup",
+    width: 380,
+    height: 720,
+    focused: true,
+  });
+  walletWindowId = win && win.id != null ? win.id : null;
+  return { ok: true, via: "new-popup", windowId: walletWindowId };
+}
+
+/** Ask the user to approve a dApp action inside the Gladiator wallet UI. */
 async function requestUserApproval({ origin, method, title, body, chain }) {
+  // After connect/approve, allow a short sign burst without reopening UI each step.
+  if (isSessionSignMethod(method) && hasDappSession(origin)) {
+    return true;
+  }
+
   const reqId =
     "dap_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
   await storageSet({
@@ -896,9 +988,12 @@ async function requestUserApproval({ origin, method, title, body, chain }) {
     [DAPP_APPROVE_RES]: null,
   });
   try {
-    await focusOrOpenWcWallet({ focus: true, settings: false, restore: true });
-  } catch (_) {
-    await nudgeWalletPopup();
+    await ensureApprovalSurface();
+  } catch (err) {
+    console.warn("[Gladiator] approval surface", err);
+    try {
+      await nudgeWalletPopup();
+    } catch (_) {}
   }
   for (let i = 0; i < 120; i++) {
     await sleepMs(500);
@@ -906,7 +1001,18 @@ async function requestUserApproval({ origin, method, title, body, chain }) {
     const res = bag[DAPP_APPROVE_RES];
     if (!res || res.id !== reqId) continue;
     await storageSet({ [DAPP_APPROVE_REQ]: null, [DAPP_APPROVE_RES]: null });
-    if (res.approved) return true;
+    if (res.approved) {
+      // Connect or any sign approval starts a short swap session.
+      if (
+        method === "connect" ||
+        method === "eth_requestAccounts" ||
+        isSessionSignMethod(method) ||
+        res.session
+      ) {
+        grantDappSession(origin);
+      }
+      return true;
+    }
     const err = new Error(res.error || "User rejected the request");
     err.code = 4001;
     throw err;
@@ -1004,24 +1110,24 @@ async function handleProviderRequest(msg, sender) {
         chain: "solana",
       });
       if (origin) await trustOrigin(origin);
+      // Connect approval already grants a short sign session for the swap.
+    } else if (!hasDappSession(origin)) {
+      const labels = {
+        signTransaction: "Approve swap / sign?",
+        signAllTransactions: "Approve swap / sign?",
+        signAndSendTransaction: "Approve swap / send?",
+        signMessage: "Sign message?",
+      };
+      await requestUserApproval({
+        origin,
+        method,
+        title: labels[method] || "Approve?",
+        body:
+          shortOriginHost(origin) +
+          " wants to sign with your Solana wallet. Approving allows this site for 2 minutes so the swap can finish.",
+        chain: "solana",
+      });
     }
-    const labels = {
-      signTransaction: "Sign transaction",
-      signAllTransactions: "Sign transactions",
-      signAndSendTransaction: "Sign & send transaction",
-      signMessage: "Sign message",
-    };
-    await requestUserApproval({
-      origin,
-      method,
-      title: (labels[method] || "Approve") + "?",
-      body:
-        shortOriginHost(origin) +
-        " is requesting: " +
-        (labels[method] || method) +
-        ".",
-      chain: "solana",
-    });
 
     const acc = await requireSignerReady();
     const needFee =

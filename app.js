@@ -7407,6 +7407,10 @@ function openDappApproveModal(req) {
   }
   pendingDappApproveId = req && req.id ? req.id : null;
   if (modal) modal.hidden = false;
+  // Keep the in-wallet UI focused on the approval (don't leave users on a blank panel).
+  try {
+    if (typeof go === "function") go("home", { skipScroll: true });
+  } catch (_) {}
 }
 
 function closeDappApproveModal() {
@@ -7426,6 +7430,7 @@ async function respondDappApprove(approved, error) {
           [DAPP_APPROVE_RES_KEY]: {
             id,
             approved: !!approved,
+            session: !!approved,
             error: error || (approved ? "" : "User rejected the request"),
           },
           [DAPP_APPROVE_REQ_KEY]: null,
@@ -7434,7 +7439,9 @@ async function respondDappApprove(approved, error) {
       );
     });
   } catch (_) {}
-  showToast(approved ? "Approved" : "Rejected");
+  showToast(
+    approved ? "Approved · site can finish this swap" : "Rejected"
+  );
 }
 
 async function processDappApproveRequest(req) {
