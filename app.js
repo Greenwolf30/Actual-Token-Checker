@@ -6019,6 +6019,11 @@ async function selectChain(chainId) {
   } else {
     showToast(chain.name);
   }
+  // If seed/keys panel is open, swap to this chain's private key only.
+  const backup = $("backupReveal");
+  if (backup && !backup.hidden) {
+    paintBackupChainKey(activeAccount(STATE));
+  }
   await refreshAll();
 }
 
@@ -6464,6 +6469,72 @@ async function ensureActiveSeededAccount() {
   return seeded;
 }
 
+/** Private key for the currently selected chain only (never mix Solana/EVM/etc.). */
+function chainPrivateKeyInfo(account, chain) {
+  const c = chain || activeChain(STATE);
+  const acc = account || activeAccount(STATE);
+  if (!acc || !c) {
+    return { label: "Private key", value: "", note: "", copyLabel: "Copy private key" };
+  }
+  if (c.kind === "solana") {
+    return {
+      label: "Solana secret key",
+      value: (acc.solana && acc.solana.secretKey) || "",
+      note: "",
+      copyLabel: "Copy Solana secret",
+    };
+  }
+  if (c.kind === "evm") {
+    return {
+      label: (c.name || "EVM") + " private key",
+      value: (acc.evm && acc.evm.privateKey) || "",
+      note:
+        "This key is for EVM networks only (Ethereum, Base, Polygon, Robinhood). Solana uses a different key.",
+      copyLabel: "Copy " + (c.symbol || "EVM") + " key",
+    };
+  }
+  if (c.kind === "bitcoin") {
+    return {
+      label: "Bitcoin private key",
+      value: (acc.bitcoin && acc.bitcoin.privateKey) || "",
+      note: "",
+      copyLabel: "Copy Bitcoin key",
+    };
+  }
+  if (c.kind === "sui") {
+    return {
+      label: "Sui private key",
+      value: (acc.sui && acc.sui.secretKey) || "",
+      note: "",
+      copyLabel: "Copy Sui key",
+    };
+  }
+  return { label: "Private key", value: "", note: "", copyLabel: "Copy private key" };
+}
+
+function paintBackupChainKey(account) {
+  const info = chainPrivateKeyInfo(account, activeChain(STATE));
+  const label = $("backupChainKeyLabel");
+  const box = $("backupChainSecret");
+  const note = $("backupChainKeyNote");
+  const copyBtn = $("copyChainSecretBtn");
+  if (label) label.textContent = info.label;
+  if (box) {
+    box.value = info.value || "";
+    box.rows = info.value && info.value.length > 80 ? 3 : 2;
+  }
+  if (note) {
+    if (info.note) {
+      note.hidden = false;
+      note.textContent = info.note;
+    } else {
+      note.hidden = true;
+      note.textContent = "";
+    }
+  }
+  if (copyBtn) copyBtn.textContent = info.copyLabel || "Copy private key";
+}
+
 async function showBackup() {
   try {
     await requireUnlocked("backup");
@@ -6494,8 +6565,6 @@ async function showBackup() {
   paintSwitchers();
   renderAccountsPanel();
   const box = $("backupReveal");
-  const sol = $("backupSolSecret");
-  const evm = $("backupEvmSecret");
   const label = $("backupWalletLabel");
   const seedBox = $("backupMnemonic");
   const seedNote = $("seedPhraseNote");
@@ -6506,12 +6575,11 @@ async function showBackup() {
     seedBox.hidden = true; // grid is the primary view
   }
   renderSeedGrid(phrase);
-  if (sol) sol.value = (acc && acc.solana && acc.solana.secretKey) || "";
-  if (evm) evm.value = (acc && acc.evm && acc.evm.privateKey) || "";
+  paintBackupChainKey(acc);
   if (label) {
     label.textContent =
       (acc && acc.name ? acc.name + " · " : "") +
-      (wordCount ? wordCount + "-word seed phrase" : "Private keys");
+      (wordCount ? wordCount + "-word seed phrase" : "Private key");
   }
   if (seedNote) {
     if (phrase) {
@@ -6528,21 +6596,30 @@ async function showBackup() {
   if (box) box.hidden = false;
   const status = $("accountStatus");
   if (status) {
+    const chain = activeChain(STATE);
     status.textContent = phrase
-      ? wordCount + "-word seed visible — write it down offline."
-      : "Private keys visible — keep offline.";
+      ? wordCount +
+        "-word seed visible — private key shown for " +
+        ((chain && chain.name) || "this chain") +
+        " only."
+      : "Private key for " +
+        ((chain && chain.name) || "this chain") +
+        " visible — keep offline.";
   }
 }
 
 function hideBackup() {
   const box = $("backupReveal");
   if (box) box.hidden = true;
-  const sol = $("backupSolSecret");
-  const evm = $("backupEvmSecret");
+  const chainKey = $("backupChainSecret");
   const seedBox = $("backupMnemonic");
-  if (sol) sol.value = "";
-  if (evm) evm.value = "";
+  if (chainKey) chainKey.value = "";
   if (seedBox) seedBox.value = "";
+  const note = $("backupChainKeyNote");
+  if (note) {
+    note.hidden = true;
+    note.textContent = "";
+  }
   renderSeedGrid("");
   const status = $("accountStatus");
   if (status) status.textContent = "";
@@ -7354,17 +7431,14 @@ function wire() {
     copyText(v);
     showToast("Seed phrase copied");
   });
-  $("copySolSecretBtn")?.addEventListener("click", () => {
-    const v = ($("backupSolSecret")?.value || "").trim();
+  $("copyChainSecretBtn")?.addEventListener("click", () => {
+    const v = ($("backupChainSecret")?.value || "").trim();
     if (!v) return showToast("Open Show seed phrase first");
     copyText(v);
-    showToast("Solana secret copied");
-  });
-  $("copyEvmSecretBtn")?.addEventListener("click", () => {
-    const v = ($("backupEvmSecret")?.value || "").trim();
-    if (!v) return showToast("Open Show seed phrase first");
-    copyText(v);
-    showToast("EVM key copied");
+    const chain = activeChain(STATE);
+    showToast(
+      ((chain && chain.name) || "Chain") + " private key copied"
+    );
   });
   $("saveRpcBtn")?.addEventListener("click", async () => {
     const raw = ($("solRpcInput")?.value || "").trim();

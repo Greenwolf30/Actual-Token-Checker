@@ -12,7 +12,7 @@
       href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=0.5.83" />
+    <link rel="stylesheet" href="./styles.css?v=0.5.84" />
   </head>
   <body class="is-extension">
     <div class="atmosphere" aria-hidden="true">
@@ -270,18 +270,14 @@
             <textarea id="backupMnemonic" class="secret-box" readonly rows="3" spellcheck="false" hidden></textarea>
             <button type="button" class="photon-chip" id="copyMnemonicBtn">Copy seed phrase</button>
             <details class="photon-details" style="margin-top: 8px">
-              <summary>Show private keys</summary>
+              <summary>Show private key</summary>
               <div class="photon-details-body">
                 <label class="field">
-                  <span>Solana secret key</span>
-                  <textarea id="backupSolSecret" class="secret-box" readonly rows="3" spellcheck="false"></textarea>
+                  <span id="backupChainKeyLabel">Private key</span>
+                  <textarea id="backupChainSecret" class="secret-box" readonly rows="3" spellcheck="false"></textarea>
                 </label>
-                <button type="button" class="photon-chip" id="copySolSecretBtn">Copy Solana secret</button>
-                <label class="field">
-                  <span>EVM private key</span>
-                  <textarea id="backupEvmSecret" class="secret-box" readonly rows="2" spellcheck="false"></textarea>
-                </label>
-                <button type="button" class="photon-chip" id="copyEvmSecretBtn">Copy EVM key</button>
+                <button type="button" class="photon-chip" id="copyChainSecretBtn">Copy private key</button>
+                <p class="photon-sub" id="backupChainKeyNote" hidden></p>
               </div>
             </details>
           </div>
@@ -584,13 +580,13 @@
     <script src="./lib/ethers.umd.min.js"></script>
     <script src="./lib/solana-hd.js"></script>
     <script src="./lib/multi-hd.js"></script>
-    <script src="./lib/btc-send.bundle.js?v=0.5.83"></script>
+    <script src="./lib/btc-send.bundle.js?v=0.5.84"></script>
     <script src="./lib/buffer.min.js"></script>
-    <script src="./lib/solana-tx.bundle.js?v=0.5.83"></script>
+    <script src="./lib/solana-tx.bundle.js?v=0.5.84"></script>
     <script src="./lib/qrcode.min.js"></script>
-    <script src="./lib/walletconnect.bundle.js?v=0.5.83"></script>
-    <script src="./lib/ledger-solana.bundle.js?v=0.5.83"></script>
+    <script src="./lib/walletconnect.bundle.js?v=0.5.84"></script>
+    <script src="./lib/ledger-solana.bundle.js?v=0.5.84"></script>
     <script src="./config.js"></script>
-    <script src="./app.js?v=0.5.83"></script>
+    <script src="./app.js?v=0.5.84"></script>
   </body>
 </html>

@@ -7,7 +7,7 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
-v0.5.83:
-- Inject on relay.link (Solana + Robinhood / EVM bridge)
+v0.5.84:
+- Show only the active chain's private key (Solana vs EVM vs BTC vs Sui)
 
 Version: see manifest.json
