@@ -972,6 +972,8 @@ async function injectAllMatchingTabs() {
         "https://*.sanctum.so/*",
         "https://uniswap.org/*",
         "https://*.uniswap.org/*",
+        "https://relay.link/*",
+        "https://*.relay.link/*",
         "http://localhost/*",
         "http://127.0.0.1/*",
       ],
@@ -1037,6 +1039,7 @@ function shouldInjectProvider(url) {
       "kamino.finance",
       "sanctum.so",
       "uniswap.org",
+      "relay.link",
       "localhost",
       "127.0.0.1",
     ];

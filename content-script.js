@@ -26,6 +26,7 @@
       "kamino.finance",
       "sanctum.so",
       "uniswap.org",
+      "relay.link",
       "localhost",
       "127.0.0.1",
     ];

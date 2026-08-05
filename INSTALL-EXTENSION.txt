@@ -7,7 +7,7 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
-v0.5.82:
-- In-page wallet inject limited to 3 tries per page refresh
+v0.5.83:
+- Inject on relay.link (Solana + Robinhood / EVM bridge)
 
 Version: see manifest.json

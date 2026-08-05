@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Gladiator Wallet",
   "short_name": "Gladiator",
-  "version": "0.5.82",
+  "version": "0.5.83",
   "description": "Gladiator multi-chain wallet \u2014 Solana Wallet Standard + Uniswap EIP-1193 + WalletConnect + Ledger.",
   "action": {
     "default_title": "Gladiator",
@@ -107,6 +107,8 @@
         "https://*.sanctum.so/*",
         "https://uniswap.org/*",
         "https://*.uniswap.org/*",
+        "https://relay.link/*",
+        "https://*.relay.link/*",
         "http://localhost/*",
         "http://127.0.0.1/*"
       ],
@@ -137,6 +139,8 @@
         "https://*.sanctum.so/*",
         "https://uniswap.org/*",
         "https://*.uniswap.org/*",
+        "https://relay.link/*",
+        "https://*.relay.link/*",
         "http://localhost/*",
         "http://127.0.0.1/*"
       ],
