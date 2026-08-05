@@ -1,11 +1,14 @@
 /**
  * Isolated-world bridge + page-world provider inject for allowlisted dApps.
  * Runs at document_start so Jupiter can discover Gladiator during wallet scan.
+ * Also hosts the in-page Approve UI (no separate side window).
  */
 (function () {
   const PAGE = "gladiator-wallet-page";
   const REPLY = "gladiator-wallet-page-reply";
   const FORCE = "gladiator-wallet-force-disconnect";
+  const DAPP_APPROVE_REQ = "gladiator_dapp_approve_req";
+  const DAPP_APPROVE_RES = "gladiator_dapp_approve_res";
 
   function allowHost(hostname) {
     const host = String(hostname || "")
@@ -128,10 +131,137 @@
 
   try {
     chrome.runtime.onMessage.addListener((msg) => {
-      if (!msg || msg.type !== "gladiator-force-disconnect") return;
+      if (!msg) return;
+      if (msg.type === "gladiator-force-disconnect") {
+        try {
+          window.postMessage({ source: FORCE }, "*");
+        } catch (_) {}
+        return;
+      }
+      if (msg.type === "gladiator-show-approve" && msg.req) {
+        showInPageApprove(msg.req);
+      }
+    });
+  } catch (_) {}
+
+  /* ---------- In-page Approve UI (stays on the dApp — no side window) ---------- */
+  let approveHost = null;
+  let approveShadow = null;
+  let pendingApproveId = null;
+
+  function ensureApproveHost() {
+    if (approveHost && approveHost.isConnected) return approveShadow;
+    approveHost = document.createElement("div");
+    approveHost.id = "gladiator-approve-host";
+    approveHost.style.cssText =
+      "all:initial;position:fixed;inset:0;z-index:2147483646;pointer-events:none;";
+    (document.documentElement || document.body).appendChild(approveHost);
+    approveShadow = approveHost.attachShadow({ mode: "closed" });
+    return approveShadow;
+  }
+
+  function hideInPageApprove() {
+    pendingApproveId = null;
+    if (approveShadow) approveShadow.innerHTML = "";
+    if (approveHost) approveHost.style.pointerEvents = "none";
+  }
+
+  function respondInPageApprove(approved) {
+    const id = pendingApproveId;
+    hideInPageApprove();
+    if (!id) return;
+    try {
+      chrome.storage.local.set({
+        [DAPP_APPROVE_RES]: {
+          id,
+          approved: !!approved,
+          error: approved ? "" : "User rejected the request",
+        },
+        [DAPP_APPROVE_REQ]: null,
+      });
+    } catch (_) {}
+  }
+
+  function showInPageApprove(req) {
+    if (!req || !req.id) return;
+    if (!allowHost(location.hostname)) return;
+    const root = ensureApproveHost();
+    pendingApproveId = req.id;
+    if (approveHost) approveHost.style.pointerEvents = "auto";
+
+    const title = String(req.title || "Approve request?");
+    const body = String(
+      req.body ||
+        (req.origin || "A site") + " is requesting wallet access."
+    );
+    const hostLabel = (function () {
       try {
-        window.postMessage({ source: FORCE }, "*");
-      } catch (_) {}
+        return new URL(req.origin || location.origin).hostname;
+      } catch (_) {
+        return req.origin || location.hostname;
+      }
+    })();
+
+    root.innerHTML =
+      '<style>' +
+      ":host, * { box-sizing: border-box; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; }" +
+      ".backdrop { position: fixed; inset: 0; background: rgba(6,8,16,0.72); display: grid; place-items: center; padding: 20px; }" +
+      ".card { width: min(360px, 100%); border-radius: 18px; border: 1px solid rgba(184,167,207,0.35); " +
+      "background: linear-gradient(165deg, #1a1524 0%, #0d1018 55%, #12101a 100%); " +
+      "color: #e8eefc; box-shadow: 0 24px 60px rgba(0,0,0,0.55); padding: 18px 18px 16px; pointer-events: auto; }" +
+      ".brand { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }" +
+      ".logo { width: 36px; height: 36px; border-radius: 10px; object-fit: cover; background: rgba(184,167,207,0.15); }" +
+      ".brand strong { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; }" +
+      ".brand span { display: block; font-size: 11px; color: rgba(232,238,252,0.55); margin-top: 2px; }" +
+      "h2 { margin: 0 0 8px; font-size: 18px; font-weight: 700; color: #fff; }" +
+      "p { margin: 0 0 8px; font-size: 13px; line-height: 1.45; color: rgba(232,238,252,0.82); }" +
+      ".sub { font-size: 11px; color: rgba(232,238,252,0.5); margin-bottom: 14px; }" +
+      ".actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }" +
+      "button { appearance: none; border: 0; border-radius: 12px; padding: 12px 14px; font-size: 14px; font-weight: 650; cursor: pointer; }" +
+      ".no { background: rgba(255,255,255,0.08); color: #e8eefc; }" +
+      ".yes { background: linear-gradient(180deg, #c9b8e0 0%, #b8a7cf 100%); color: #1a1024; }" +
+      ".no:hover { background: rgba(255,255,255,0.12); }" +
+      ".yes:hover { filter: brightness(1.05); }" +
+      "</style>" +
+      '<div class="backdrop" part="backdrop">' +
+      '<div class="card" role="alertdialog" aria-modal="true">' +
+      '<div class="brand">' +
+      '<img class="logo" alt="" src="' +
+      chrome.runtime.getURL("icons/icon48.png") +
+      '" />' +
+      "<div><strong>Gladiator</strong><span>" +
+      hostLabel +
+      "</span></div></div>" +
+      "<h2></h2><p class='body'></p>" +
+      '<p class="sub">Connection stays until you disconnect. Every transaction needs Approve.</p>' +
+      '<div class="actions">' +
+      '<button type="button" class="no">Reject</button>' +
+      '<button type="button" class="yes">Approve</button>' +
+      "</div></div></div>";
+
+    root.querySelector("h2").textContent = title;
+    root.querySelector("p.body").textContent = body;
+    root.querySelector("button.no").addEventListener("click", function () {
+      respondInPageApprove(false);
+    });
+    root.querySelector("button.yes").addEventListener("click", function () {
+      respondInPageApprove(true);
+    });
+  }
+
+  // If an approval request is already pending when this tab loads, show it.
+  try {
+    chrome.storage.local.get([DAPP_APPROVE_REQ], function (bag) {
+      const req = bag && bag[DAPP_APPROVE_REQ];
+      if (!req || !req.id) return;
+      if (req.at && Date.now() - Number(req.at) > 2 * 60 * 1000) return;
+      showInPageApprove(req);
+    });
+    chrome.storage.onChanged.addListener(function (changes, area) {
+      if (area !== "local" || !changes[DAPP_APPROVE_REQ]) return;
+      const req = changes[DAPP_APPROVE_REQ].newValue;
+      if (req && req.id) showInPageApprove(req);
+      else hideInPageApprove();
     });
   } catch (_) {}
 })();

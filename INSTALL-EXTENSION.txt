@@ -7,8 +7,8 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
-v0.5.90:
-- Stay connected until user disconnects
-- Prompt Approve for every transaction / sign (no timed auto-sign session)
+v0.5.91:
+- Approve prompts show as Gladiator overlay ON the dApp page (no side window)
+- Connect until disconnect; Approve every transaction
 
 Version: see manifest.json

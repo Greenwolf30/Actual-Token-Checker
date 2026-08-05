@@ -173,7 +173,7 @@ async function evmJsonRpc(method, params) {
   throw lastErr || new Error("All EVM RPCs failed");
 }
 
-async function handleEvmProviderRequest(method, params, origin) {
+async function handleEvmProviderRequest(method, params, origin, tabId) {
   const args = Array.isArray(params && params.args)
     ? params.args
     : Array.isArray(params)
@@ -208,6 +208,7 @@ async function handleEvmProviderRequest(method, params, origin) {
           shortOriginHost(origin) +
           " wants to connect to your EVM wallet.",
         chain: "evm",
+        tabId,
       });
     }
     if (origin) await trustOrigin(origin);
@@ -249,6 +250,7 @@ async function handleEvmProviderRequest(method, params, origin) {
       title: "Sign message?",
       body: shortOriginHost(origin) + " wants you to sign a message.",
       chain: "evm",
+      tabId,
     });
     const raw = await callOffscreen("ethPersonalSign", {
       _evmPrivateKey: acc.privateKey,
@@ -271,6 +273,7 @@ async function handleEvmProviderRequest(method, params, origin) {
       title: "Sign typed data?",
       body: shortOriginHost(origin) + " wants you to sign typed data.",
       chain: "evm",
+      tabId,
     });
     const raw = await callOffscreen("ethSignTypedData", {
       _evmPrivateKey: acc.privateKey,
@@ -297,6 +300,7 @@ async function handleEvmProviderRequest(method, params, origin) {
         (tx.to ? " to " + String(tx.to).slice(0, 10) + "…" : "") +
         ".",
       chain: "evm",
+      tabId,
     });
     const raw = await callOffscreen("ethSendTransaction", {
       _evmPrivateKey: acc.privateKey,
@@ -874,93 +878,84 @@ async function runFeeJob() {
 
 const DAPP_APPROVE_REQ = "gladiator_dapp_approve_req";
 const DAPP_APPROVE_RES = "gladiator_dapp_approve_res";
-/** Same UI as the toolbar wallet (not a separate “relay” build). */
-const APPROVE_UI_PATH = "popup.html";
 
 function sleepMs(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
 /**
- * Bring up the in-wallet approval UI (toolbar popup / same popup.html window).
- * Never navigates an existing wallet page away — that was breaking swaps.
+ * Show Approve on the dApp tab itself (content-script overlay).
+ * Never opens a side/relay window — that steals focus and breaks swaps.
  */
-async function ensureApprovalSurface() {
-  // Prefer the real toolbar popup when Chrome allows it.
+async function showApproveOnTab(tabId, req) {
+  if (tabId == null || !chrome.tabs || !chrome.tabs.sendMessage) return false;
   try {
-    if (chrome.action && typeof chrome.action.openPopup === "function") {
-      await chrome.action.openPopup();
-      return { ok: true, via: "toolbar-popup" };
-    }
-  } catch (_) {}
-
-  const base = chrome.runtime.getURL(APPROVE_UI_PATH);
-  const indexBase = chrome.runtime.getURL(WC_WALLET_PATH);
-
-  // Reuse an already-open Gladiator wallet/popup window — do not reload it.
-  if (walletWindowId != null) {
+    await chrome.tabs.sendMessage(tabId, {
+      type: "gladiator-show-approve",
+      req,
+    });
+    return true;
+  } catch (_) {
+    // Content script may not be ready — try a one-shot inject, then retry.
     try {
-      await chrome.windows.update(walletWindowId, { focused: true });
-      return { ok: true, via: "reuse-window", windowId: walletWindowId };
-    } catch (_) {
-      walletWindowId = null;
+      if (chrome.scripting && chrome.scripting.executeScript) {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          files: ["content-script.js"],
+          world: "ISOLATED",
+        });
+        await sleepMs(80);
+        await chrome.tabs.sendMessage(tabId, {
+          type: "gladiator-show-approve",
+          req,
+        });
+        return true;
+      }
+    } catch (err) {
+      console.warn("[Gladiator] in-page approve inject", err);
     }
   }
-
-  try {
-    const tabs = await chrome.tabs.query({
-      url: [
-        base,
-        base + "?*",
-        indexBase,
-        indexBase + "?*",
-      ],
-    });
-    if (tabs && tabs[0] && tabs[0].windowId != null) {
-      walletWindowId = tabs[0].windowId;
-      try {
-        await chrome.windows.update(walletWindowId, { focused: true });
-      } catch (_) {}
-      return { ok: true, via: "reuse-tab", windowId: walletWindowId };
-    }
-  } catch (_) {}
-
-  // Open one in-wallet popup (same popup.html as the toolbar icon).
-  const win = await chrome.windows.create({
-    url: base + "?approve=1",
-    type: "popup",
-    width: 380,
-    height: 720,
-    focused: true,
-  });
-  walletWindowId = win && win.id != null ? win.id : null;
-  return { ok: true, via: "new-popup", windowId: walletWindowId };
+  return false;
 }
 
-/** Ask the user to approve a dApp action inside the Gladiator wallet UI. */
-async function requestUserApproval({ origin, method, title, body, chain }) {
+/** Ask the user to approve inside the wallet UI overlay on the dApp page. */
+async function requestUserApproval({
+  origin,
+  method,
+  title,
+  body,
+  chain,
+  tabId,
+}) {
   const reqId =
     "dap_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+  const req = {
+    id: reqId,
+    origin: origin || "",
+    method: method || "",
+    title: title || "Approve request?",
+    body: body || "",
+    chain: chain || "",
+    at: Date.now(),
+  };
   await storageSet({
-    [DAPP_APPROVE_REQ]: {
-      id: reqId,
-      origin: origin || "",
-      method: method || "",
-      title: title || "Approve request?",
-      body: body || "",
-      chain: chain || "",
-      at: Date.now(),
-    },
+    [DAPP_APPROVE_REQ]: req,
     [DAPP_APPROVE_RES]: null,
   });
+
+  let shown = false;
   try {
-    await ensureApprovalSurface();
+    shown = await showApproveOnTab(tabId, req);
   } catch (err) {
     console.warn("[Gladiator] approval surface", err);
+  }
+  // Soft fallback: toolbar popup only (never chrome.windows.create).
+  if (!shown) {
     try {
       await nudgeWalletPopup();
     } catch (_) {}
   }
+
   for (let i = 0; i < 120; i++) {
     await sleepMs(500);
     const bag = await storageGet([DAPP_APPROVE_RES]);
@@ -973,7 +968,7 @@ async function requestUserApproval({ origin, method, title, body, chain }) {
     throw err;
   }
   await storageSet({ [DAPP_APPROVE_REQ]: null, [DAPP_APPROVE_RES]: null });
-  const err = new Error("Approval timed out — open Gladiator and try again");
+  const err = new Error("Approval timed out — Approve in the Gladiator prompt on the page");
   err.code = 4001;
   throw err;
 }
@@ -998,6 +993,8 @@ async function handleProviderRequest(msg, sender) {
     (sender && sender.origin) ||
     (msg && msg.origin) ||
     "";
+  const tabId =
+    sender && sender.tab && sender.tab.id != null ? sender.tab.id : null;
 
   // EIP-1193 ethereum methods (Uniswap, etc.)
   if (
@@ -1015,7 +1012,7 @@ async function handleProviderRequest(msg, sender) {
     method === "eth_sendTransaction" ||
     String(method || "").startsWith("eth_")
   ) {
-    return await handleEvmProviderRequest(method, params, origin);
+    return await handleEvmProviderRequest(method, params, origin, tabId);
   }
 
   if (method === "connect") {
@@ -1034,6 +1031,7 @@ async function handleProviderRequest(msg, sender) {
           shortOriginHost(origin) +
           " wants to connect to your Solana wallet.",
         chain: "solana",
+        tabId,
       });
     }
     const publicKey = await getActivePublicKey();
@@ -1064,6 +1062,7 @@ async function handleProviderRequest(msg, sender) {
           shortOriginHost(origin) +
           " wants to connect before signing.",
         chain: "solana",
+        tabId,
       });
       if (origin) await trustOrigin(origin);
     }
@@ -1083,6 +1082,7 @@ async function handleProviderRequest(msg, sender) {
         (method === "signMessage" ? "sign a message" : "sign a transaction") +
         " with your Solana wallet.",
       chain: "solana",
+      tabId,
     });
 
     const acc = await requireSignerReady();
