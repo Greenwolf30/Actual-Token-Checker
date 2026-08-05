@@ -7,12 +7,9 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. Click the toolbar icon once → wait for “Jupiter signing ready”
 5. Hard-refresh jup.ag
 
-v0.5.63 — fee fix (important):
-- Fee job uses Chrome alarms so it survives service-worker sleep
-- Snapshots balances before/after swap (doesn’t rely on flaky getTransaction)
-- Forces offscreen signer refresh on reload so new fee code actually loads
-- Send-tab fees go out as a separate 2nd transfer
-- 0.85% → 64AdTRibAkKQBuRQ2qcehZioE6ARL27CDP8wZRFM4FSZ
-- After a Jupiter swap, wait ~10–40s then check the fee wallet
+v0.5.64:
+- FIX: Jupiter “pending wallet signatures” hang
+  (fee snapshot + offscreen restart were blocking/signing kills)
+- Signing is instant again; fee still collects afterward in the background
 
 Version: see manifest.json

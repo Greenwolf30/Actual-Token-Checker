@@ -497,14 +497,21 @@
     const owner = kp.publicKey.toBase58();
     const bag = state || (await storageGet()) || {};
     const rpcs = rpcListFromBag(bag);
+
+    // Snapshot ASAP (before Jupiter finishes broadcasting when possible).
     let before = params && params.beforeSnapshot ? params.beforeSnapshot : null;
     if (!before) {
-      before = await snapshotOwnerBalances(owner, rpcs);
+      try {
+        before = await snapshotOwnerBalances(owner, rpcs);
+      } catch (err) {
+        console.warn("[Gladiator] fee before-snapshot failed", err);
+        return { ok: false, error: "snapshot_failed" };
+      }
     }
 
-    // Wait for Jupiter/dApp broadcast, then take 0.85% of received balance delta.
+    // Wait for swap to land, then take 0.85% of received balance delta.
     for (let i = 0; i < 18; i++) {
-      await new Promise((r) => setTimeout(r, i === 0 ? 4000 : 2000));
+      await new Promise((r) => setTimeout(r, i === 0 ? 5000 : 2500));
       try {
         const after = await snapshotOwnerBalances(owner, rpcs);
         const fee = feeFromSnapshots(before, after);
@@ -612,37 +619,19 @@
   }
 
   async function signTransaction(params) {
-    const { state, acc } = await resolveAccount(params || {});
+    const { acc } = await resolveAccount(params || {});
     const kp = keypairFromAccount(acc);
-    const bag = state || (await storageGet()) || {};
-    let beforeSnapshot = null;
-    try {
-      beforeSnapshot = await snapshotOwnerBalances(
-        kp.publicKey.toBase58(),
-        rpcListFromBag(bag)
-      );
-    } catch (_) {}
     const u8 = decodeTx(params && params.transaction);
     if (!canDeserialize(u8)) {
       throw new Error("Could not decode Solana transaction from Jupiter");
     }
-    return {
-      signedTransaction: signTxBytes(u8, kp),
-      beforeSnapshot,
-    };
+    // Sign immediately — never block on fee/RPC snapshots here.
+    return { signedTransaction: signTxBytes(u8, kp) };
   }
 
   async function signAllTransactions(params) {
-    const { state, acc } = await resolveAccount(params || {});
+    const { acc } = await resolveAccount(params || {});
     const kp = keypairFromAccount(acc);
-    const bag = state || (await storageGet()) || {};
-    let beforeSnapshot = null;
-    try {
-      beforeSnapshot = await snapshotOwnerBalances(
-        kp.publicKey.toBase58(),
-        rpcListFromBag(bag)
-      );
-    } catch (_) {}
     const list = (params && params.transactions) || [];
     if (!list.length) throw new Error("No transactions to sign");
     const signedTransactions = list.map((item) => {
@@ -651,7 +640,7 @@
       if (!canDeserialize(u8)) throw new Error("Could not decode one of the transactions");
       return signTxBytes(u8, kp);
     });
-    return { signedTransactions, beforeSnapshot };
+    return { signedTransactions };
   }
 
   async function signAndSendTransaction(params) {
@@ -659,10 +648,6 @@
     const kp = keypairFromAccount(acc);
     const bag = state || (await storageGet()) || {};
     const rpcs = rpcListFromBag(bag);
-    let beforeSnapshot = null;
-    try {
-      beforeSnapshot = await snapshotOwnerBalances(kp.publicKey.toBase58(), rpcs);
-    } catch (_) {}
     const u8 = decodeTx(params && params.transaction);
     if (!canDeserialize(u8)) throw new Error("Could not decode Solana transaction");
     const signedB64 = signTxBytes(u8, kp);
@@ -697,7 +682,7 @@
       }
     }
     if (!sig) throw lastErr || new Error("Broadcast failed");
-    return { signature: String(sig), beforeSnapshot };
+    return { signature: String(sig) };
   }
 
   async function signMessage(params) {
