@@ -8,10 +8,8 @@
 
   const SOURCE = "gladiator-wallet-page";
   const REPLY = "gladiator-wallet-page-reply";
-  const ICON =
-    (document.currentScript && document.currentScript.src
-      ? document.currentScript.src.replace(/injected\.js.*$/, "icons/icon128.png")
-      : "") || "";
+  // Wallet Standard requires data:image/...;base64,... (not raw SVG or chrome-extension URLs)
+  const ICON = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMjggMTI4Ij48cmVjdCB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCIgcng9IjI4IiBmaWxsPSIjMGIxMjIwIi8+PHRleHQgeD0iNjQiIHk9Ijg0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjMTRmMTk1IiBmb250LXNpemU9IjY0IiBmb250LWZhbWlseT0iQXJpYWwsc2Fucy1zZXJpZiIgZm9udC13ZWlnaHQ9IjcwMCI+RzwvdGV4dD48L3N2Zz4=";
 
   let reqId = 1;
   const pending = new Map();
@@ -315,7 +313,7 @@
   const wallet = {
     version: "1.0.0",
     name: "Gladiator",
-    icon: ICON ? "https://placeholder.invalid/gladiator.png" : "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect fill="#0b1220" width="40" height="40" rx="8"/><text x="20" y="26" text-anchor="middle" fill="#14f195" font-size="16" font-family="sans-serif">G</text></svg>'),
+    icon: ICON,
     chains: ["solana:mainnet", "solana:devnet", "solana:testnet"],
     features: {
       "standard:connect": {
@@ -433,39 +431,45 @@
     },
   };
 
-  // Fix icon: content script will post the real extension icon URL
-  window.addEventListener("message", (event) => {
-    if (event.source !== window) return;
-    const data = event.data;
-    if (data && data.source === "gladiator-wallet-meta" && data.icon) {
-      try {
-        wallet.icon = data.icon;
-      } catch (_) {}
-    }
-  });
-
   function registerWalletStandard() {
+    const callback = (api) => {
+      try {
+        if (!api || typeof api.register !== "function") return;
+        api.register(wallet);
+        console.info("[Gladiator] registered with Wallet Standard");
+      } catch (err) {
+        console.warn("[Gladiator] wallet-standard register failed", err);
+      }
+    };
     try {
-      const callback = (registration) => {
-        try {
-          registration.register(wallet);
-        } catch (err) {
-          console.warn("[Gladiator] wallet-standard register failed", err);
-        }
-      };
+      // App listens for this and calls detail({ register })
       window.dispatchEvent(
-        new CustomEvent("wallet-standard:register-wallet", { detail: callback })
+        new CustomEvent("wallet-standard:register-wallet", {
+          detail: callback,
+        })
       );
+    } catch (err) {
+      console.warn("[Gladiator] register-wallet event failed", err);
+    }
+    try {
+      // If the app loaded first, it announces readiness
       window.addEventListener("wallet-standard:app-ready", (event) => {
         try {
-          const detail = event && event.detail;
-          if (typeof detail === "function") detail(callback);
-          else if (detail && typeof detail.register === "function") callback(detail);
+          callback(event && event.detail);
         } catch (_) {}
       });
-    } catch (err) {
-      console.warn("[Gladiator] wallet-standard hook failed", err);
-    }
+    } catch (_) {}
+    // Retry a few times — Jupiter may boot adapters after first paint
+    let tries = 0;
+    const timer = setInterval(() => {
+      tries += 1;
+      try {
+        window.dispatchEvent(
+          new CustomEvent("wallet-standard:register-wallet", { detail: callback })
+        );
+      } catch (_) {}
+      if (tries >= 20) clearInterval(timer);
+    }, 500);
   }
 
   // Expose provider. Never clobber Phantom / other wallets on window.solana.
@@ -485,6 +489,10 @@
   }
 
   registerWalletStandard();
+  console.info("[Gladiator] in-page provider ready", {
+    hasSolana: !!window.solana,
+    isGladiatorOnWindow: !!(window.solana && window.solana.isGladiator),
+  });
 
   // Eager silent connect for returning sites (onlyIfTrusted)
   request("connect", { onlyIfTrusted: true, origin: location.origin })

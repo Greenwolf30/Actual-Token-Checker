@@ -1,39 +1,10 @@
 /**
- * Content script — injects Gladiator provider into the page and bridges messages.
+ * Isolated-world bridge: page provider (MAIN) <-> extension background.
+ * Provider itself is injected via manifest content_scripts world:MAIN.
  */
 (function () {
   const PAGE = "gladiator-wallet-page";
   const REPLY = "gladiator-wallet-page-reply";
-
-  function inject() {
-    try {
-      if (document.documentElement.dataset.gladiatorInjected === "1") return;
-      document.documentElement.dataset.gladiatorInjected = "1";
-      const script = document.createElement("script");
-      script.src = chrome.runtime.getURL("injected.js");
-      script.async = false;
-      script.onload = () => {
-        try {
-          window.postMessage(
-            {
-              source: "gladiator-wallet-meta",
-              icon: chrome.runtime.getURL("icons/icon128.png"),
-            },
-            "*"
-          );
-        } catch (_) {}
-        script.remove();
-      };
-      (document.head || document.documentElement).appendChild(script);
-    } catch (err) {
-      console.warn("[Gladiator] inject failed", err);
-    }
-  }
-
-  inject();
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", inject, { once: true });
-  }
 
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
