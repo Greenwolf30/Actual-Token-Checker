@@ -160,6 +160,41 @@ function accountHasPlainSecrets(a) {
   return false;
 }
 
+function isLedgerAccount(a) {
+  return !!(a && (a.type === "ledger" || (a.ledger && a.ledger.path)));
+}
+
+function ledgerAccountIndex(a) {
+  if (!a) return 0;
+  if (a.ledger && a.ledger.accountIndex != null) return Number(a.ledger.accountIndex) || 0;
+  return 0;
+}
+
+function ledgerBadgeHtml(a) {
+  if (!isLedgerAccount(a)) return "";
+  return '<span class="ledger-badge" title="Ledger hardware wallet">Ledger</span>';
+}
+
+function getLedgerApi() {
+  const api =
+    (typeof window !== "undefined" && window.GladiatorLedger) ||
+    (typeof globalThis !== "undefined" && globalThis.GladiatorLedger) ||
+    null;
+  if (!api || typeof api.getAddress !== "function") {
+    throw new Error("Ledger library missing — reload the extension pack");
+  }
+  return api;
+}
+
+async function ensureLedgerSupported() {
+  const api = getLedgerApi();
+  const ok = api.isSupported ? await api.isSupported() : true;
+  if (!ok) {
+    throw new Error("WebHID unavailable — use Chrome/Opera and allow Ledger access");
+  }
+  return api;
+}
+
 function stateHasPlainSecrets(state) {
   return !!(state && Array.isArray(state.accounts) && state.accounts.some(accountHasPlainSecrets));
 }
@@ -601,6 +636,7 @@ async function createAccount(label) {
   return {
     id: uid(),
     name: label || "Account",
+    type: "software",
     createdAt: new Date().toISOString(),
     mnemonic: keys.mnemonic,
     solana: keys.solana,
@@ -608,6 +644,90 @@ async function createAccount(label) {
     bitcoin: keys.bitcoin,
     sui: keys.sui,
   };
+}
+
+function nextLedgerLabel() {
+  const n =
+    STATE.accounts.filter((a) => isLedgerAccount(a)).length + 1;
+  return "Ledger " + n;
+}
+
+function nextLedgerAccountIndex() {
+  const used = new Set(
+    STATE.accounts
+      .filter(isLedgerAccount)
+      .map((a) => ledgerAccountIndex(a))
+  );
+  let i = 0;
+  while (used.has(i)) i += 1;
+  return i;
+}
+
+async function connectLedgerAccount(opts) {
+  const status = $("accountStatus");
+  const api = await ensureLedgerSupported();
+  const accountIndex =
+    opts && opts.accountIndex != null
+      ? Number(opts.accountIndex) || 0
+      : nextLedgerAccountIndex();
+  showToast("Connect Ledger · open Solana app…");
+  if (status) {
+    status.textContent =
+      "Unlock Ledger, open the Solana app, then approve the connection prompt.";
+  }
+  const got = await api.getAddress(accountIndex, false);
+  const publicKey = got && got.publicKey;
+  if (!publicKey) throw new Error("Ledger returned no Solana address");
+  const dup = STATE.accounts.find(
+    (a) => a.solana && a.solana.publicKey === publicKey
+  );
+  if (dup) {
+    STATE.activeAccountId = dup.id;
+    if (!isLedgerAccount(dup)) {
+      dup.type = "ledger";
+      dup.ledger = {
+        path: got.path || api.pathForIndex(accountIndex),
+        accountIndex,
+      };
+      if (!String(dup.name || "").toLowerCase().includes("ledger")) {
+        dup.name = nextLedgerLabel();
+      }
+    }
+    await storageSet(STATE);
+    await refreshAll();
+    showToast("Ledger already linked · " + (dup.name || shortAddr(publicKey)));
+    go("activity");
+    return dup;
+  }
+  const label =
+    (opts && opts.name && String(opts.name).trim()) || nextLedgerLabel();
+  const acc = {
+    id: uid(),
+    name: label.slice(0, 32),
+    type: "ledger",
+    createdAt: new Date().toISOString(),
+    mnemonic: "",
+    ledger: {
+      path: got.path || api.pathForIndex(accountIndex),
+      accountIndex,
+    },
+    solana: { publicKey, secretKey: "" },
+    evm: { address: "", privateKey: "" },
+  };
+  STATE.accounts.push(acc);
+  STATE.activeAccountId = acc.id;
+  await storageSet(STATE);
+  await refreshAll();
+  hideBackup();
+  showToast("Ledger connected · " + acc.name);
+  if (status) {
+    status.textContent =
+      "Ledger linked as “" +
+      acc.name +
+      "”. Rename it in Settings. Approve sends on the device.";
+  }
+  go("activity");
+  return acc;
 }
 
 async function ensureState() {
@@ -1881,6 +2001,9 @@ function selectedSendHolding() {
 function solanaKeypairFromAccount(acc) {
   if (isVaultLocked()) throw new Error("Unlock wallet first");
   if (!window.solanaWeb3) throw new Error("Solana tx library missing — restart with start.ps1 from the latest wallet folder");
+  if (isLedgerAccount(acc)) {
+    throw new Error("Ledger account — approve the transaction on your device");
+  }
   if (!acc || !acc.solana || !acc.solana.secretKey) throw new Error("No Solana key on this account");
   const sk = Base58.decode(acc.solana.secretKey);
   if (sk.length === 64) return solanaWeb3.Keypair.fromSecretKey(sk);
@@ -3044,14 +3167,40 @@ function ensureBrowserBuffer() {
   }
 }
 
-async function broadcastSolTx(tx, signer, rpcs) {
+async function signLegacyTxWithLedger(tx, acc) {
+  ensureBrowserBuffer();
+  const api = await ensureLedgerSupported();
+  const idx = ledgerAccountIndex(acc);
+  const pkStr = acc.solana && acc.solana.publicKey;
+  if (!pkStr) throw new Error("Ledger account has no public key");
+  const { PublicKey } = solanaWeb3;
+  const pubkey = new PublicKey(pkStr);
+  showToast("Approve on Ledger…");
+  const message = tx.serializeMessage();
+  const msgBytes = message instanceof Uint8Array ? message : new Uint8Array(message);
+  const signed = await api.signTransaction(idx, msgBytes);
+  const sigBytes = signed.signatureBytes
+    ? new Uint8Array(signed.signatureBytes)
+    : Base58.decode(signed.signature);
+  tx.addSignature(pubkey, sigBytes);
+  return tx;
+}
+
+async function broadcastSolTx(tx, signer, rpcs, ledgerAcc) {
   ensureBrowserBuffer();
   const latest = await solRpc("getLatestBlockhash", [{ commitment: "confirmed" }], rpcs);
   const blockhash = latest && latest.value && latest.value.blockhash;
   if (!blockhash) throw new Error("Could not fetch blockhash");
-  tx.feePayer = signer.publicKey;
-  tx.recentBlockhash = blockhash;
-  tx.sign(signer);
+  if (ledgerAcc && isLedgerAccount(ledgerAcc)) {
+    const { PublicKey } = solanaWeb3;
+    tx.feePayer = new PublicKey(ledgerAcc.solana.publicKey);
+    tx.recentBlockhash = blockhash;
+    await signLegacyTxWithLedger(tx, ledgerAcc);
+  } else {
+    tx.feePayer = signer.publicKey;
+    tx.recentBlockhash = blockhash;
+    tx.sign(signer);
+  }
   const raw = tx.serialize();
   const u8 = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
   const b64 = bytesToBase64(u8);
@@ -3095,14 +3244,19 @@ async function broadcastSolTx(tx, signer, rpcs) {
 
 async function sendSolNative(acc, toAddr, amountSol) {
   const { PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } = solanaWeb3;
-  const from = solanaKeypairFromAccount(acc);
-  const fromAddr = from.publicKey.toBase58();
+  const ledger = isLedgerAccount(acc);
+  const from = ledger ? null : solanaKeypairFromAccount(acc);
+  const fromAddr = ledger
+    ? acc.solana.publicKey
+    : from.publicKey.toBase58();
+  if (!fromAddr) throw new Error("No Solana address on this account");
   // Keep stored pubkey aligned with the signing key
-  if (acc.solana && acc.solana.publicKey !== fromAddr) {
+  if (!ledger && acc.solana && acc.solana.publicKey !== fromAddr) {
     acc.solana.publicKey = fromAddr;
     await storageSet(STATE);
     paintSwitchers();
   }
+  const fromPubkey = ledger ? new PublicKey(fromAddr) : from.publicKey;
   let to;
   let feeTo;
   try {
@@ -3164,12 +3318,12 @@ async function sendSolNative(acc, toAddr, amountSol) {
   ensureBrowserBuffer();
   const tx = new Transaction().add(
     SystemProgram.transfer({
-      fromPubkey: from.publicKey,
+      fromPubkey: fromPubkey,
       toPubkey: to,
       lamports: lamports,
     })
   );
-  const sig = await broadcastSolTx(tx, from, rpcs);
+  const sig = await broadcastSolTx(tx, from, rpcs, ledger ? acc : null);
   // Separate fee tx so treasury always gets a clear transfer
   if (platformLamports > 0) {
     let feeErr = null;
@@ -3178,12 +3332,12 @@ async function sendSolNative(acc, toAddr, amountSol) {
         if (attempt) await new Promise((r) => setTimeout(r, 600 * attempt));
         const feeTx = new Transaction().add(
           SystemProgram.transfer({
-            fromPubkey: from.publicKey,
+            fromPubkey: fromPubkey,
             toPubkey: feeTo,
             lamports: platformLamports,
           })
         );
-        await broadcastSolTx(feeTx, from, rpcs);
+        await broadcastSolTx(feeTx, from, rpcs, ledger ? acc : null);
         feeErr = null;
         break;
       } catch (err) {
@@ -3207,7 +3361,13 @@ async function sendSplToken(acc, holding, toAddr, amountUi) {
     ASSOCIATED_TOKEN_PROGRAM_ID,
   } = splToken;
   if (!holding || !holding.mint) throw new Error("Select a token");
-  const from = solanaKeypairFromAccount(acc);
+  const ledger = isLedgerAccount(acc);
+  const from = ledger ? null : solanaKeypairFromAccount(acc);
+  const fromAddr = ledger
+    ? acc.solana && acc.solana.publicKey
+    : from.publicKey.toBase58();
+  if (!fromAddr) throw new Error("No Solana address on this account");
+  const fromPubkey = ledger ? new PublicKey(fromAddr) : from.publicKey;
   let destOwner;
   let feeOwner;
   try {
@@ -3226,8 +3386,7 @@ async function sendSplToken(acc, holding, toAddr, amountUi) {
   let rawAmount = uiAmountToRaw(amountUi, decimals);
   if (rawAmount <= 0n) throw new Error("Amount too small");
   const skipPlatform =
-    from.publicKey.toBase58() === PLATFORM_FEE_WALLET ||
-    toAddr === PLATFORM_FEE_WALLET;
+    fromAddr === PLATFORM_FEE_WALLET || toAddr === PLATFORM_FEE_WALLET;
   let feeRaw = skipPlatform ? 0n : platformFeeRaw(rawAmount);
   const balRaw = uiAmountToRaw(holding.amount, decimals);
   if (rawAmount + feeRaw > balRaw) {
@@ -3249,7 +3408,7 @@ async function sendSplToken(acc, holding, toAddr, amountUi) {
   }
   const srcAta = getAssociatedTokenAddressSync(
     mintPk,
-    from.publicKey,
+    fromPubkey,
     false,
     programId,
     ASSOCIATED_TOKEN_PROGRAM_ID
@@ -3271,7 +3430,7 @@ async function sendSplToken(acc, holding, toAddr, amountUi) {
   const tx = new Transaction();
   tx.add(
     createAssociatedTokenAccountIdempotentInstruction(
-      from.publicKey,
+      fromPubkey,
       destAta,
       destOwner,
       mintPk,
@@ -3284,7 +3443,7 @@ async function sendSplToken(acc, holding, toAddr, amountUi) {
       srcAta,
       mintPk,
       destAta,
-      from.publicKey,
+      fromPubkey,
       rawAmount <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(rawAmount) : rawAmount,
       decimals,
       [],
@@ -3294,14 +3453,14 @@ async function sendSplToken(acc, holding, toAddr, amountUi) {
   const solChain = CHAINS.find((c) => c.id === "solana") || activeChain(STATE);
   const rpcs = solRpcList(solChain);
   // SPL transfers still burn SOL for fees (+ possible ATA rent)
-  const solBal = await fetchSolBalance(from.publicKey.toBase58(), rpcs);
+  const solBal = await fetchSolBalance(fromAddr, rpcs);
   if (solBal < 0.004) {
     throw new Error(
       "Insufficient SOL for token send fees — need ~0.004 SOL on this wallet. Receive address: " +
-        from.publicKey.toBase58()
+        fromAddr
     );
   }
-  const sig = await broadcastSolTx(tx, from, rpcs);
+  const sig = await broadcastSolTx(tx, from, rpcs, ledger ? acc : null);
   if (feeRaw > 0n) {
     let feeErr = null;
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -3310,7 +3469,7 @@ async function sendSplToken(acc, holding, toAddr, amountUi) {
         const feeTx = new Transaction();
         feeTx.add(
           createAssociatedTokenAccountIdempotentInstruction(
-            from.publicKey,
+            fromPubkey,
             feeAta,
             feeOwner,
             mintPk,
@@ -3323,14 +3482,14 @@ async function sendSplToken(acc, holding, toAddr, amountUi) {
             srcAta,
             mintPk,
             feeAta,
-            from.publicKey,
+            fromPubkey,
             feeRaw <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(feeRaw) : feeRaw,
             decimals,
             [],
             programId
           )
         );
-        await broadcastSolTx(feeTx, from, rpcs);
+        await broadcastSolTx(feeTx, from, rpcs, ledger ? acc : null);
         feeErr = null;
         break;
       } catch (err) {
@@ -3972,14 +4131,19 @@ function paintBrandAccount() {
   const label = $("brandAcctLabel");
   if (label) {
     const name = (acc && acc.name) || "Wallet";
-    label.textContent = name + " · " + shortAddr(addr);
+    label.textContent =
+      name + (isLedgerAccount(acc) ? " · Ledger" : "") + " · " + shortAddr(addr);
     label.title = addr || "";
   }
   const sub = $("acctDrawerSub");
   if (sub) {
+    const ledgerN = (STATE.accounts || []).filter(isLedgerAccount).length;
     sub.textContent =
       (STATE.accounts && STATE.accounts.length
-        ? STATE.accounts.length + " wallet" + (STATE.accounts.length === 1 ? "" : "s")
+        ? STATE.accounts.length +
+          " wallet" +
+          (STATE.accounts.length === 1 ? "" : "s") +
+          (ledgerN ? " · " + ledgerN + " Ledger" : "")
         : "No wallets") +
       " · active " +
       ((acc && acc.name) || "—");
@@ -4001,10 +4165,12 @@ function renderAcctDrawerList() {
     btn.innerHTML =
       '<img class="acct-drawer-avatar" src="./icons/gladiator.png?v=2" alt="" width="36" height="36" />' +
       '<span class="acct-drawer-meta"><strong>' +
-      (a.name || "W" + (idx + 1)) +
+      escapeHtml(a.name || "W" + (idx + 1)) +
       (active ? " · Active" : "") +
+      ledgerBadgeHtml(a) +
       "</strong><span>" +
       shortAddr(addr) +
+      (isLedgerAccount(a) ? " · Ledger" : "") +
       "</span></span>" +
       '<span class="acct-drawer-bal" data-drawer-bal="' +
       a.id +
@@ -4432,7 +4598,8 @@ function renderAccountsPanel() {
     li.innerHTML =
       '<span class="photon-radio" aria-hidden="true"></span>' +
       '<span class="photon-name">' +
-      (a.name || "W" + (idx + 1)) +
+      escapeHtml(a.name || "W" + (idx + 1)) +
+      ledgerBadgeHtml(a) +
       (active ? "<small>Active</small>" : "") +
       "</span>" +
       '<span class="photon-addr" title="' +
@@ -4445,7 +4612,9 @@ function renderAccountsPanel() {
       "</span>" +
       '<span class="photon-actions">' +
       '<button type="button" class="photon-icon-btn" data-act="copy" title="Copy address">⧉</button>' +
-      '<button type="button" class="photon-icon-btn" data-act="key" title="View seed / keys">◉</button>' +
+      (isLedgerAccount(a)
+        ? '<button type="button" class="photon-icon-btn" data-act="ledger" title="Ledger account"> Ledger</button>'
+        : '<button type="button" class="photon-icon-btn" data-act="key" title="View seed / keys">◉</button>') +
       '<button type="button" class="photon-icon-btn photon-icon-danger" data-act="remove" title="Remove account">✕</button>' +
       "</span>";
 
@@ -4464,6 +4633,18 @@ function renderAccountsPanel() {
           await storageSet(STATE);
           paintSwitchers();
           await showBackup();
+          renderAccountsPanel();
+          return;
+        }
+        if (act === "ledger") {
+          STATE.activeAccountId = a.id;
+          await storageSet(STATE);
+          paintSwitchers();
+          showToast(
+            (a.name || "Ledger") +
+              " · path " +
+              ((a.ledger && a.ledger.path) || "44'/501'/" + ledgerAccountIndex(a) + "'")
+          );
           renderAccountsPanel();
           return;
         }
@@ -4599,6 +4780,7 @@ async function importAccountFromSecrets() {
       acc = {
         id: uid(),
         name: "Imported " + (STATE.accounts.length + 1),
+        type: "software",
         createdAt: new Date().toISOString(),
         mnemonic: keys.mnemonic,
         solana: keys.solana,
@@ -4612,6 +4794,7 @@ async function importAccountFromSecrets() {
       acc = {
         id: uid(),
         name: "Imported " + (STATE.accounts.length + 1),
+        type: "software",
         createdAt: new Date().toISOString(),
         mnemonic: "",
         solana: sol,
@@ -4684,6 +4867,25 @@ async function showBackup() {
     await requireUnlocked("backup");
   } catch (err) {
     showToast(String(err && err.message ? err.message : err));
+    return;
+  }
+  const current = activeAccount(STATE);
+  if (isLedgerAccount(current)) {
+    hideBackup();
+    showToast(
+      (current.name || "Ledger") +
+        " is a hardware wallet — keys stay on the device"
+    );
+    const status = $("accountStatus");
+    if (status) {
+      status.textContent =
+        "Ledger account “" +
+        (current.name || "Ledger") +
+        "” · path " +
+        ((current.ledger && current.ledger.path) ||
+          "44'/501'/" + ledgerAccountIndex(current) + "'") +
+        ". Rename it in Settings.";
+    }
     return;
   }
   const acc = await ensureActiveSeededAccount();
@@ -4874,7 +5076,18 @@ function paintWalletRenameList() {
         '" value="' +
         escapeHtml(a.name || "W" + (idx + 1)) +
         '" aria-label="Rename wallet" />' +
+        (isLedgerAccount(a)
+          ? '<span class="ledger-badge">Ledger</span>'
+          : "") +
         (active ? '<span class="photon-sub">Active</span>' : "") +
+        (isLedgerAccount(a)
+          ? '<span class="photon-sub">path ' +
+            escapeHtml(
+              (a.ledger && a.ledger.path) ||
+                "44'/501'/" + ledgerAccountIndex(a) + "'"
+            ) +
+            "</span>"
+          : "") +
         "</div>" +
         '<button type="button" class="photon-chip" data-rename-save="' +
         escapeHtml(a.id) +
@@ -4933,6 +5146,12 @@ async function ensureProviderSignerAccount() {
   }
   const acc = activeAccount(STATE);
   if (!acc) throw new Error("No wallet — create/import one in Gladiator");
+  if (isLedgerAccount(acc)) {
+    if (!(acc.solana && acc.solana.publicKey)) {
+      throw new Error("Ledger account missing public key — reconnect Ledger");
+    }
+    return acc;
+  }
   if (await ensureAccountSolanaFromMnemonic(acc)) {
     try {
       await storageSet(STATE);
@@ -4940,10 +5159,50 @@ async function ensureProviderSignerAccount() {
   }
   if (!(acc.solana && acc.solana.secretKey)) {
     go("settings");
-    showToast("Import seed phrase or Solana secret key to enable swaps");
+    showToast("Import seed phrase, Solana secret, or Connect Ledger");
     throw new Error("No Solana key — open Gladiator and create/import a wallet");
   }
   return acc;
+}
+
+async function signSolanaTxBytesWithLedger(bytes, acc) {
+  ensureBrowserBuffer();
+  const api = await ensureLedgerSupported();
+  const idx = ledgerAccountIndex(acc);
+  const { PublicKey, Transaction, VersionedTransaction } = solanaWeb3;
+  const pubkey = new PublicKey(acc.solana.publicKey);
+  showToast("Approve on Ledger…");
+
+  if (VersionedTransaction) {
+    try {
+      const vtx = VersionedTransaction.deserialize(bytes);
+      const msg = vtx.message.serialize();
+      const msgBytes = msg instanceof Uint8Array ? msg : new Uint8Array(msg);
+      const signed = await api.signTransaction(idx, msgBytes);
+      const sig = signed.signatureBytes
+        ? new Uint8Array(signed.signatureBytes)
+        : Base58.decode(signed.signature);
+      vtx.addSignature(pubkey, sig);
+      const out = vtx.serialize();
+      return bytesToBase64(out instanceof Uint8Array ? out : new Uint8Array(out));
+    } catch (err) {
+      // Fall through to legacy only when deserialize failed.
+      try {
+        VersionedTransaction.deserialize(bytes);
+        throw err;
+      } catch (inner) {
+        if (inner === err) throw err;
+      }
+    }
+  }
+
+  const tx = Transaction.from(bytes);
+  await signLegacyTxWithLedger(tx, acc);
+  const raw = tx.serialize({
+    requireAllSignatures: false,
+    verifySignatures: false,
+  });
+  return bytesToBase64(raw instanceof Uint8Array ? raw : new Uint8Array(raw));
 }
 
 async function handleProviderSignRequest(method, params) {
@@ -4954,10 +5213,15 @@ async function handleProviderSignRequest(method, params) {
   }
 
   const acc = await ensureProviderSignerAccount();
-  const kp = solanaKeypairFromAccount(acc);
+  const ledger = isLedgerAccount(acc);
+  const kp = ledger ? null : solanaKeypairFromAccount(acc);
 
   if (method === "signTransaction") {
     const bytes = decodeWcTxBytes(p.transaction);
+    if (ledger) {
+      const signedB64 = await signSolanaTxBytesWithLedger(bytes, acc);
+      return { signedTransaction: signedB64 };
+    }
     const signed = signSolanaTxBytes(bytes, kp);
     return { signedTransaction: signed.transactionBase64 };
   }
@@ -4965,20 +5229,26 @@ async function handleProviderSignRequest(method, params) {
   if (method === "signAllTransactions") {
     const list = p.transactions || [];
     if (!list.length) throw new Error("No transactions to sign");
-    const signedTransactions = list.map((item) => {
+    const signedTransactions = [];
+    for (const item of list) {
       const blob = typeof item === "string" ? item : item && item.transaction;
-      const signed = signSolanaTxBytes(decodeWcTxBytes(blob), kp);
-      return signed.transactionBase64;
-    });
+      const bytes = decodeWcTxBytes(blob);
+      if (ledger) {
+        signedTransactions.push(await signSolanaTxBytesWithLedger(bytes, acc));
+      } else {
+        signedTransactions.push(signSolanaTxBytes(bytes, kp).transactionBase64);
+      }
+    }
     return { signedTransactions };
   }
 
   if (method === "signAndSendTransaction") {
     const bytes = decodeWcTxBytes(p.transaction);
-    const signed = signSolanaTxBytes(bytes, kp);
+    const b64 = ledger
+      ? await signSolanaTxBytesWithLedger(bytes, acc)
+      : signSolanaTxBytes(bytes, kp).transactionBase64;
     const solChain = CHAINS.find((c) => c.id === "solana");
     const rpcs = solRpcList(solChain);
-    const b64 = signed.transactionBase64;
     const sig = await solRpc(
       "sendTransaction",
       [
@@ -4997,6 +5267,9 @@ async function handleProviderSignRequest(method, params) {
   }
 
   if (method === "signMessage") {
+    if (ledger) {
+      throw new Error("Ledger message signing — open Gladiator and use Solana app support");
+    }
     if (!window.nacl) throw new Error("nacl missing");
     const msg = base64ToBytes(p.message);
     const sig = nacl.sign.detached(msg, kp.secretKey);
@@ -5020,6 +5293,75 @@ function wireProviderSignBridge() {
         sendResponse({ ok: false, error: String(err && err.message ? err.message : err) })
       );
     return true;
+  });
+}
+
+const LEDGER_REQ_KEY = "gladiator_ledger_sign_req";
+const LEDGER_RES_KEY = "gladiator_ledger_sign_res";
+let ledgerSignBusy = false;
+
+async function processLedgerSignRequest(req) {
+  if (!req || !req.id || ledgerSignBusy) return;
+  ledgerSignBusy = true;
+  try {
+    showToast("Ledger sign request · approve on device");
+    // Prefer the Ledger account matching the request pubkey.
+    if (req.publicKey && STATE && Array.isArray(STATE.accounts)) {
+      const match = STATE.accounts.find(
+        (a) => a.solana && a.solana.publicKey === req.publicKey
+      );
+      if (match && match.id !== STATE.activeAccountId) {
+        STATE.activeAccountId = match.id;
+        await storageSet(STATE);
+        paintSwitchers();
+      }
+    }
+    const result = await handleProviderSignRequest(req.method, req.params || {});
+    await new Promise((resolve, reject) => {
+      chrome.storage.local.set(
+        { [LEDGER_RES_KEY]: { id: req.id, result }, [LEDGER_REQ_KEY]: null },
+        () => {
+          const err = chrome.runtime.lastError;
+          if (err) reject(err);
+          else resolve();
+        }
+      );
+    });
+    showToast("Ledger signed");
+  } catch (err) {
+    try {
+      await new Promise((resolve) => {
+        chrome.storage.local.set(
+          {
+            [LEDGER_RES_KEY]: {
+              id: req.id,
+              error: String(err && err.message ? err.message : err),
+            },
+            [LEDGER_REQ_KEY]: null,
+          },
+          () => resolve()
+        );
+      });
+    } catch (_) {}
+    showToast(String(err && err.message ? err.message : err));
+  } finally {
+    ledgerSignBusy = false;
+  }
+}
+
+function wireLedgerSignBridge() {
+  if (!(IS_EXTENSION && typeof chrome !== "undefined" && chrome.storage && chrome.storage.local)) {
+    return;
+  }
+  if (wireLedgerSignBridge._wired) return;
+  wireLedgerSignBridge._wired = true;
+  chrome.storage.local.get([LEDGER_REQ_KEY], (bag) => {
+    if (bag && bag[LEDGER_REQ_KEY]) processLedgerSignRequest(bag[LEDGER_REQ_KEY]);
+  });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local" || !changes[LEDGER_REQ_KEY]) return;
+    const req = changes[LEDGER_REQ_KEY].newValue;
+    if (req) processLedgerSignRequest(req);
   });
 }
 
@@ -5067,6 +5409,21 @@ function wire() {
     closeAcctDrawer();
     await addAccount();
   });
+  const onConnectLedger = async () => {
+    try {
+      closeAcctDrawer();
+      await connectLedgerAccount();
+    } catch (err) {
+      console.warn(err);
+      showToast(String(err && err.message ? err.message : err));
+      const status = $("accountStatus");
+      if (status) {
+        status.textContent = String(err && err.message ? err.message : err);
+      }
+    }
+  };
+  $("acctDrawerLedger")?.addEventListener("click", onConnectLedger);
+  $("connectLedgerBtn")?.addEventListener("click", onConnectLedger);
   $("acctDrawerManage")?.addEventListener("click", () => {
     closeAcctDrawer();
     go("activity");
@@ -5453,6 +5810,7 @@ async function boot() {
   }
   STATE = await ensureState();
   wireProviderSignBridge();
+  wireLedgerSignBridge();
   // Always push wallet into chrome.storage + SW memory so Jupiter signing works.
   try {
     if (!isVaultLocked()) {

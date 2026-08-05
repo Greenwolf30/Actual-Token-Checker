@@ -12,7 +12,7 @@
       href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=0.5.68" />
+    <link rel="stylesheet" href="./styles.css?v=0.5.69" />
   </head>
   <body class="is-extension">
     <div class="atmosphere" aria-hidden="true">
@@ -235,9 +235,14 @@
               <h2 class="photon-title">Wallets</h2>
               <p class="photon-sub">Multi-wallet · select one to trade</p>
             </div>
-            <button type="button" class="photon-gen" id="createAccountBtn">
-              Generate Wallet
-            </button>
+            <div class="photon-gen-row">
+              <button type="button" class="photon-gen" id="createAccountBtn">
+                Generate Wallet
+              </button>
+              <button type="button" class="photon-chip" id="connectLedgerBtn" title="Connect Ledger Nano (Solana app)">
+                Connect Ledger
+              </button>
+            </div>
           </header>
 
           <div class="photon-table-head" aria-hidden="true">
@@ -474,6 +479,9 @@
           <button type="button" class="photon-gen photon-gen-block" id="acctDrawerGenerate">
             Generate Wallet
           </button>
+          <button type="button" class="photon-chip photon-gen-block" id="acctDrawerLedger">
+            Connect Ledger
+          </button>
           <button type="button" class="photon-chip acct-drawer-manage" id="acctDrawerManage">
             Manage accounts
           </button>
@@ -531,10 +539,11 @@
     <script src="./lib/solana-hd.js"></script>
     <script src="./lib/multi-hd.js"></script>
     <script src="./lib/buffer.min.js"></script>
-    <script src="./lib/solana-tx.bundle.js?v=0.5.68"></script>
+    <script src="./lib/solana-tx.bundle.js?v=0.5.69"></script>
     <script src="./lib/qrcode.min.js"></script>
-    <script src="./lib/walletconnect.bundle.js?v=0.5.68"></script>
+    <script src="./lib/walletconnect.bundle.js?v=0.5.69"></script>
+    <script src="./lib/ledger-solana.bundle.js?v=0.5.69"></script>
     <script src="./config.js"></script>
-    <script src="./app.js?v=0.5.68"></script>
+    <script src="./app.js?v=0.5.69"></script>
   </body>
 </html>

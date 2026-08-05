@@ -34,6 +34,10 @@ function waitForPersist(timeoutMs) {
   });
 }
 
+function isLedgerAccount(a) {
+  return !!(a && (a.type === "ledger" || (a.ledger && a.ledger.path)));
+}
+
 function cacheSignerFromState(state) {
   if (!state || !Array.isArray(state.accounts) || !state.accounts.length) {
     return null;
@@ -45,8 +49,19 @@ function cacheSignerFromState(state) {
   const secretKey = acc.solana.secretKey || "";
   const mnemonic = acc.mnemonic || "";
   if (!publicKey) return null;
-  if (!secretKey && !mnemonic) return null;
-  cachedSigner = { publicKey, secretKey, mnemonic };
+  const ledger = isLedgerAccount(acc);
+  if (!secretKey && !mnemonic && !ledger) return null;
+  cachedSigner = {
+    publicKey,
+    secretKey,
+    mnemonic,
+    ledger,
+    accountIndex:
+      acc.ledger && acc.ledger.accountIndex != null
+        ? Number(acc.ledger.accountIndex) || 0
+        : 0,
+    accountId: acc.id || null,
+  };
   return cachedSigner;
 }
 
@@ -295,14 +310,19 @@ function sleep(ms) {
 }
 
 async function getActiveSolanaAccount() {
-  if (cachedSigner && (cachedSigner.secretKey || cachedSigner.mnemonic)) {
+  if (
+    cachedSigner &&
+    (cachedSigner.secretKey || cachedSigner.mnemonic || cachedSigner.ledger)
+  ) {
     return {
       publicKey: cachedSigner.publicKey,
       secretKey: cachedSigner.secretKey || "",
       mnemonic: cachedSigner.mnemonic || "",
+      ledger: !!cachedSigner.ledger,
+      accountIndex: cachedSigner.accountIndex || 0,
       needsMigrate: false,
       hasSigner: true,
-      accountId: null,
+      accountId: cachedSigner.accountId || null,
       fromCache: true,
     };
   }
@@ -314,9 +334,11 @@ async function getActiveSolanaAccount() {
       publicKey: cached.publicKey,
       secretKey: cached.secretKey || "",
       mnemonic: cached.mnemonic || "",
+      ledger: !!cached.ledger,
+      accountIndex: cached.accountIndex || 0,
       needsMigrate: false,
       hasSigner: true,
-      accountId: null,
+      accountId: cached.accountId || null,
       fromCache: false,
     };
   }
@@ -326,14 +348,55 @@ async function getActiveSolanaAccount() {
   const pk = acc && acc.solana && acc.solana.publicKey;
   if (!pk) return null;
   const needsMigrate = !!(state.vault && state.vault.data);
+  const ledger = isLedgerAccount(acc);
   return {
     publicKey: pk,
     secretKey: "",
     mnemonic: "",
+    ledger,
+    accountIndex:
+      acc.ledger && acc.ledger.accountIndex != null
+        ? Number(acc.ledger.accountIndex) || 0
+        : 0,
     needsMigrate,
-    hasSigner: false,
+    hasSigner: ledger,
     accountId: acc && acc.id,
   };
+}
+
+async function signViaWalletWindow(method, params, acc) {
+  const reqId = "led_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+  const LEDGER_REQ = "gladiator_ledger_sign_req";
+  const LEDGER_RES = "gladiator_ledger_sign_res";
+  await storageSet({
+    [LEDGER_REQ]: {
+      id: reqId,
+      method,
+      params: params || {},
+      publicKey: acc.publicKey,
+      accountIndex: acc.accountIndex || 0,
+      at: Date.now(),
+    },
+    [LEDGER_RES]: null,
+  });
+  try {
+    await focusOrOpenWcWallet({ focus: true, settings: false, restore: true });
+  } catch (_) {
+    await nudgeWalletPopup();
+  }
+  for (let i = 0; i < 180; i++) {
+    await sleep(500);
+    const bag = await storageGet([LEDGER_RES]);
+    const res = bag[LEDGER_RES];
+    if (!res || res.id !== reqId) continue;
+    await storageSet({ [LEDGER_REQ]: null, [LEDGER_RES]: null });
+    if (res.error) throw new Error(res.error);
+    return res.result;
+  }
+  await storageSet({ [LEDGER_REQ]: null, [LEDGER_RES]: null });
+  throw new Error(
+    "Ledger sign timed out — keep Gladiator open and approve on the device"
+  );
 }
 
 async function nudgeWalletPopup() {
@@ -565,6 +628,22 @@ async function handleProviderRequest(msg, sender) {
     method === "signMessage"
   ) {
     const acc = await requireSignerReady();
+    const needFee =
+      method === "signTransaction" ||
+      method === "signAllTransactions" ||
+      method === "signAndSendTransaction";
+
+    // Ledger keys never leave the device — sign in the wallet window via WebHID.
+    if (acc.ledger) {
+      const result = await signViaWalletWindow(method, params, acc);
+      return {
+        result,
+        feeAcc: null,
+        hintSig: result && result.signature ? String(result.signature) : "",
+        snapPromise: null,
+      };
+    }
+
     const enriched = {
       ...params,
       _publicKey: acc.publicKey,
@@ -572,10 +651,6 @@ async function handleProviderRequest(msg, sender) {
       _mnemonic: acc.mnemonic || "",
     };
     // Start balance snapshot in parallel with signing (does not delay Jupiter).
-    const needFee =
-      method === "signTransaction" ||
-      method === "signAllTransactions" ||
-      method === "signAndSendTransaction";
     const snapPromise = needFee
       ? callOffscreen("snapshotBalances", {
           _publicKey: acc.publicKey,
