@@ -1028,9 +1028,33 @@ const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const WSOL_MINT = "So11111111111111111111111111111111111111112";
+/** Platform fee: 0.085% of each in-wallet Solana send → treasury */
+const PLATFORM_FEE_WALLET = "64AdTRibAkKQBuRQ2qcehZioE6ARL27CDP8wZRFM4FSZ";
+const PLATFORM_FEE_NUM = 85n; // 85 / 100000 = 0.00085 = 0.085%
+const PLATFORM_FEE_DEN = 100000n;
 
 MINT_META[USDC_MINT] = { symbol: "USDC", name: "USD Coin" };
 MINT_META[WSOL_MINT] = { symbol: "SOL", name: "Wrapped SOL" };
+
+function platformFeeRaw(amountRaw) {
+  try {
+    const raw = typeof amountRaw === "bigint" ? amountRaw : BigInt(String(amountRaw || 0));
+    if (raw <= 0n) return 0n;
+    const fee = (raw * PLATFORM_FEE_NUM) / PLATFORM_FEE_DEN;
+    return fee > 0n ? fee : 0n;
+  } catch (_) {
+    return 0n;
+  }
+}
+
+function platformFeeUi(amountUi, decimals) {
+  const raw = uiAmountToRaw(amountUi, decimals == null ? 9 : decimals);
+  const fee = platformFeeRaw(raw);
+  if (fee <= 0n) return 0;
+  const d = Number(decimals == null ? 9 : decimals);
+  const base = Math.pow(10, d);
+  return Number(fee) / base;
+}
 
 async function solRpc(method, params, rpcs) {
   // Prefer local proxy first (local serve.py only). Extension uses public HTTPS RPCs.
@@ -1772,7 +1796,13 @@ function paintHoldings() {
       .join("");
   }
   const fee = $("feeEst");
-  if (fee) fee.textContent = chain.name;
+  if (fee) {
+    if (chain.kind === "solana") {
+      fee.textContent = chain.name + " · 0.085% platform";
+    } else {
+      fee.textContent = chain.name;
+    }
+  }
   updateSendUsdEstimate();
   paintSendAvailable();
 }
@@ -3074,8 +3104,10 @@ async function sendSolNative(acc, toAddr, amountSol) {
     paintSwitchers();
   }
   let to;
+  let feeTo;
   try {
     to = new PublicKey(toAddr);
+    feeTo = new PublicKey(PLATFORM_FEE_WALLET);
   } catch {
     throw new Error("Invalid Solana recipient address");
   }
@@ -3087,9 +3119,14 @@ async function sendSolNative(acc, toAddr, amountSol) {
   const rpcs = solRpcList(solChain);
   const bal = await fetchSolBalance(fromAddr, rpcs);
   const balLamports = Math.floor(bal * 1e9 + 1e-9);
-  // Leave enough for fee so Max / full-balance sends don't fail
-  const feeLamports = 5000;
-  if (balLamports <= feeLamports) {
+  // Network fee buffer + 0.085% platform fee (skipped when sending to treasury)
+  const networkFeeLamports = 10000;
+  const skipPlatform =
+    fromAddr === PLATFORM_FEE_WALLET || toAddr === PLATFORM_FEE_WALLET;
+  let platformLamports = skipPlatform
+    ? 0
+    : Number(platformFeeRaw(BigInt(lamports)));
+  if (balLamports <= networkFeeLamports) {
     throw new Error(
       "Insufficient SOL on active wallet " +
         shortAddr(fromAddr) +
@@ -3099,8 +3136,18 @@ async function sendSolNative(acc, toAddr, amountSol) {
         fromAddr
     );
   }
-  if (lamports > balLamports - feeLamports) {
-    lamports = balLamports - feeLamports;
+  const maxSend = balLamports - networkFeeLamports - platformLamports;
+  if (lamports > maxSend) {
+    lamports = Math.max(0, maxSend);
+    platformLamports = skipPlatform
+      ? 0
+      : Number(platformFeeRaw(BigInt(lamports)));
+    // Re-clamp after fee recompute
+    const max2 = balLamports - networkFeeLamports - platformLamports;
+    if (lamports > max2) lamports = Math.max(0, max2);
+    platformLamports = skipPlatform
+      ? 0
+      : Number(platformFeeRaw(BigInt(lamports)));
   }
   if (!(lamports > 0)) {
     throw new Error(
@@ -3111,14 +3158,26 @@ async function sendSolNative(acc, toAddr, amountSol) {
         " SOL"
     );
   }
+  if (lamports + platformLamports + networkFeeLamports > balLamports) {
+    throw new Error("Insufficient SOL for amount + 0.085% platform fee");
+  }
   ensureBrowserBuffer();
   const tx = new Transaction().add(
     SystemProgram.transfer({
       fromPubkey: from.publicKey,
       toPubkey: to,
-      lamports: lamports, // integer lamports (u64)
+      lamports: lamports,
     })
   );
+  if (platformLamports > 0) {
+    tx.add(
+      SystemProgram.transfer({
+        fromPubkey: from.publicKey,
+        toPubkey: feeTo,
+        lamports: platformLamports,
+      })
+    );
+  }
   return broadcastSolTx(tx, from, rpcs);
 }
 
@@ -3135,8 +3194,10 @@ async function sendSplToken(acc, holding, toAddr, amountUi) {
   if (!holding || !holding.mint) throw new Error("Select a token");
   const from = solanaKeypairFromAccount(acc);
   let destOwner;
+  let feeOwner;
   try {
     destOwner = new PublicKey(toAddr);
+    feeOwner = new PublicKey(PLATFORM_FEE_WALLET);
   } catch {
     throw new Error("Invalid Solana recipient address");
   }
@@ -3147,10 +3208,29 @@ async function sendSplToken(acc, holding, toAddr, amountUi) {
       ? TOKEN_2022_PROGRAM_ID
       : TOKEN_PROGRAM_ID;
   const decimals = Number(holding.decimals || 0);
-  const rawAmount = uiAmountToRaw(amountUi, decimals);
+  let rawAmount = uiAmountToRaw(amountUi, decimals);
   if (rawAmount <= 0n) throw new Error("Amount too small");
-  if (Number(amountUi) > Number(holding.amount) + 1e-12) {
-    throw new Error("Amount exceeds token balance");
+  const skipPlatform =
+    from.publicKey.toBase58() === PLATFORM_FEE_WALLET ||
+    toAddr === PLATFORM_FEE_WALLET;
+  let feeRaw = skipPlatform ? 0n : platformFeeRaw(rawAmount);
+  const balRaw = uiAmountToRaw(holding.amount, decimals);
+  if (rawAmount + feeRaw > balRaw) {
+    // Fit amount + platform fee into balance
+    // Solve: send + fee(send) <= bal ≈ send = bal * DEN / (DEN + NUM)
+    const maxByFee =
+      (balRaw * PLATFORM_FEE_DEN) / (PLATFORM_FEE_DEN + (skipPlatform ? 0n : PLATFORM_FEE_NUM));
+    rawAmount = maxByFee < rawAmount ? maxByFee : rawAmount;
+    if (rawAmount > balRaw) rawAmount = balRaw;
+    feeRaw = skipPlatform ? 0n : platformFeeRaw(rawAmount);
+    if (rawAmount + feeRaw > balRaw) {
+      rawAmount = balRaw > feeRaw ? balRaw - feeRaw : 0n;
+      feeRaw = skipPlatform ? 0n : platformFeeRaw(rawAmount);
+    }
+  }
+  if (rawAmount <= 0n) throw new Error("Amount too small after fee");
+  if (rawAmount + feeRaw > balRaw) {
+    throw new Error("Amount exceeds token balance (including 0.085% platform fee)");
   }
   const srcAta = getAssociatedTokenAddressSync(
     mintPk,
@@ -3162,6 +3242,13 @@ async function sendSplToken(acc, holding, toAddr, amountUi) {
   const destAta = getAssociatedTokenAddressSync(
     mintPk,
     destOwner,
+    false,
+    programId,
+    ASSOCIATED_TOKEN_PROGRAM_ID
+  );
+  const feeAta = getAssociatedTokenAddressSync(
+    mintPk,
+    feeOwner,
     false,
     programId,
     ASSOCIATED_TOKEN_PROGRAM_ID
@@ -3189,13 +3276,37 @@ async function sendSplToken(acc, holding, toAddr, amountUi) {
       programId
     )
   );
+  if (feeRaw > 0n) {
+    tx.add(
+      createAssociatedTokenAccountIdempotentInstruction(
+        from.publicKey,
+        feeAta,
+        feeOwner,
+        mintPk,
+        programId,
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      )
+    );
+    tx.add(
+      createTransferCheckedInstruction(
+        srcAta,
+        mintPk,
+        feeAta,
+        from.publicKey,
+        feeRaw,
+        decimals,
+        [],
+        programId
+      )
+    );
+  }
   const solChain = CHAINS.find((c) => c.id === "solana") || activeChain(STATE);
   const rpcs = solRpcList(solChain);
   // SPL transfers still burn SOL for fees (+ possible ATA rent)
   const solBal = await fetchSolBalance(from.publicKey.toBase58(), rpcs);
-  if (solBal < 0.003) {
+  if (solBal < 0.004) {
     throw new Error(
-      "Insufficient SOL for token send fees — need ~0.003 SOL on this wallet. Receive address: " +
+      "Insufficient SOL for token send fees — need ~0.004 SOL on this wallet. Receive address: " +
         from.publicKey.toBase58()
     );
   }
@@ -5224,11 +5335,17 @@ function wire() {
     if (holding) {
       max = Number(holding.amount) || 0;
       if (holding.kind === "native" && chain.kind === "solana") {
-        // Keep fee buffer so Max does not trip insufficient-funds
-        max = Math.max(0, max - 0.000005);
+        // Network fee + 0.085% platform fee buffer
+        const net = 0.00001;
+        const afterNet = Math.max(0, max - net);
+        const fee = afterNet * 0.00085;
+        max = Math.max(0, afterNet - fee);
+      } else if (holding.kind === "spl" && chain.kind === "solana") {
+        max = Math.max(0, max / (1 + 0.00085));
       }
     } else {
-      max = Math.max(0, (Number(BALANCE.native) || 0) - 0.000005);
+      max = Math.max(0, (Number(BALANCE.native) || 0) - 0.00001);
+      if (chain.kind === "solana") max = Math.max(0, max / (1 + 0.00085));
     }
     if ($("sendAmount")) {
       $("sendAmount").value =

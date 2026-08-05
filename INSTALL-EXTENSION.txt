@@ -1,23 +1,24 @@
-Gladiator Wallet — load as unpacked Chrome/Opera extension
+Gladiator Wallet — update without losing your wallet
 
-1. Unzip → open the Gladiator-Wallet-0.5.57 folder
-2. chrome://extensions → REMOVE old Gladiator → Load unpacked → that folder
-3. Click Reload
-4. Click the Gladiator TOOLBAR ICON once
-5. Wait for toast: “Jupiter signing ready”
-6. Hard-refresh jup.ag → Connect → swap
+PREFERRED UPDATE (keeps seed / accounts):
+1. Unzip the new pack
+2. Copy everything INSIDE the new folder into your EXISTING Gladiator folder (overwrite)
+3. chrome://extensions → Gladiator → Reload (do NOT Remove)
+4. Click the toolbar icon once → wait for “Jupiter signing ready”
+
+Fresh install only if needed:
+1. Unzip → Load unpacked the Gladiator-Wallet folder
+2. Import seed phrase
+
+v0.5.58:
+- Popup slightly taller and a bit narrower
+- 0.085% platform fee on in-wallet Solana sends (SOL + tokens)
+  → 64AdTRibAkKQBuRQ2qcehZioE6ARL27CDP8wZRFM4FSZ
 
 v0.5.57:
-- Packaging fix — full extension folder (lib/fonts/config) so wallet boots again
+- Packaging fix — full extension folder so wallet boots
 
 v0.5.56:
-- Connections lists in-page dApps (Jupiter / pump.fun), not only WalletConnect
-- History shows swap pairs (e.g. 1000 USDC → TOKEN)
-
-v0.5.55:
-- Fixes “No wallet” on sign by caching keys in the extension service worker
-
-If toast does NOT say “Jupiter signing ready”:
-- Enter old password if prompted, or import seed/secret key, then reopen popup
+- Connections lists in-page dApps; History shows swap pairs
 
 Version: see manifest.json
