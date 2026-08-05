@@ -1028,10 +1028,10 @@ const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const WSOL_MINT = "So11111111111111111111111111111111111111112";
-/** Platform fee: 0.085% of each in-wallet Solana send → treasury */
+/** Platform fee: 0.85% of each in-wallet Solana send → treasury */
 const PLATFORM_FEE_WALLET = "64AdTRibAkKQBuRQ2qcehZioE6ARL27CDP8wZRFM4FSZ";
-const PLATFORM_FEE_NUM = 85n; // 85 / 100000 = 0.00085 = 0.085%
-const PLATFORM_FEE_DEN = 100000n;
+const PLATFORM_FEE_NUM = 85n; // 85 / 10000 = 0.0085 = 0.85%
+const PLATFORM_FEE_DEN = 10000n;
 
 MINT_META[USDC_MINT] = { symbol: "USDC", name: "USD Coin" };
 MINT_META[WSOL_MINT] = { symbol: "SOL", name: "Wrapped SOL" };
@@ -1798,7 +1798,7 @@ function paintHoldings() {
   const fee = $("feeEst");
   if (fee) {
     if (chain.kind === "solana") {
-      fee.textContent = chain.name + " · 0.085% platform";
+      fee.textContent = chain.name + " · 0.85% platform";
     } else {
       fee.textContent = chain.name;
     }
@@ -3119,7 +3119,7 @@ async function sendSolNative(acc, toAddr, amountSol) {
   const rpcs = solRpcList(solChain);
   const bal = await fetchSolBalance(fromAddr, rpcs);
   const balLamports = Math.floor(bal * 1e9 + 1e-9);
-  // Network fee buffer + 0.085% platform fee (skipped when sending to treasury)
+  // Network fee buffer + 0.85% platform fee (skipped when sending to treasury)
   const networkFeeLamports = 10000;
   const skipPlatform =
     fromAddr === PLATFORM_FEE_WALLET || toAddr === PLATFORM_FEE_WALLET;
@@ -3159,7 +3159,7 @@ async function sendSolNative(acc, toAddr, amountSol) {
     );
   }
   if (lamports + platformLamports + networkFeeLamports > balLamports) {
-    throw new Error("Insufficient SOL for amount + 0.085% platform fee");
+    throw new Error("Insufficient SOL for amount + 0.85% platform fee");
   }
   ensureBrowserBuffer();
   const tx = new Transaction().add(
@@ -3230,7 +3230,7 @@ async function sendSplToken(acc, holding, toAddr, amountUi) {
   }
   if (rawAmount <= 0n) throw new Error("Amount too small after fee");
   if (rawAmount + feeRaw > balRaw) {
-    throw new Error("Amount exceeds token balance (including 0.085% platform fee)");
+    throw new Error("Amount exceeds token balance (including 0.85% platform fee)");
   }
   const srcAta = getAssociatedTokenAddressSync(
     mintPk,
@@ -3413,7 +3413,7 @@ async function executeSend() {
         amountRaw +
         " " +
         symbol +
-        (chain.kind === "solana" ? " (+0.085% fee)" : "")
+        (chain.kind === "solana" ? " (+0.85% fee)" : "")
     );
     rememberLocalTx({
       sig: sig,
@@ -5341,17 +5341,17 @@ function wire() {
     if (holding) {
       max = Number(holding.amount) || 0;
       if (holding.kind === "native" && chain.kind === "solana") {
-        // Network fee + 0.085% platform fee buffer
+        // Network fee + 0.85% platform fee buffer
         const net = 0.00001;
         const afterNet = Math.max(0, max - net);
-        const fee = afterNet * 0.00085;
+        const fee = afterNet * 0.0085;
         max = Math.max(0, afterNet - fee);
       } else if (holding.kind === "spl" && chain.kind === "solana") {
-        max = Math.max(0, max / (1 + 0.00085));
+        max = Math.max(0, max / (1 + 0.0085));
       }
     } else {
       max = Math.max(0, (Number(BALANCE.native) || 0) - 0.00001);
-      if (chain.kind === "solana") max = Math.max(0, max / (1 + 0.00085));
+      if (chain.kind === "solana") max = Math.max(0, max / (1 + 0.0085));
     }
     if ($("sendAmount")) {
       $("sendAmount").value =

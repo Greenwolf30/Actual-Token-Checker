@@ -6,10 +6,11 @@ PREFERRED UPDATE (keeps seed / accounts):
 3. chrome://extensions → Gladiator → Reload (do NOT Remove)
 4. Click the toolbar icon once → wait for “Jupiter signing ready”
 
-v0.5.60:
-- Top-bar address stays inside the wallet (no side bleed / overflow)
+v0.5.61:
+- Platform fee raised to 0.85% on Solana sends + Jupiter/dApp swaps
+  → 64AdTRibAkKQBuRQ2qcehZioE6ARL27CDP8wZRFM4FSZ
 
-v0.5.59:
-- Narrower popup; 0.085% fee on Jupiter/dApp Solana txs too
+v0.5.60:
+- Top-bar address stays inside the wallet (no side bleed)
 
 Version: see manifest.json

