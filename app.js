@@ -7260,7 +7260,7 @@ function renderAccountsPanel() {
       '<span class="photon-actions">' +
       '<button type="button" class="photon-icon-btn" data-act="copy" title="Copy address">⧉</button>' +
       (isLedgerAccount(a)
-        ? '<button type="button" class="photon-icon-btn" data-act="ledger" title="Ledger account"> Ledger</button>'
+        ? '<button type="button" class="photon-icon-btn" data-act="ledger" title="Ledger path" aria-label="Ledger path">◌</button>'
         : '<button type="button" class="photon-icon-btn" data-act="key" title="View seed / keys">◉</button>') +
       '<button type="button" class="photon-icon-btn photon-icon-danger" data-act="remove" title="Remove account">✕</button>' +
       "</span>";
