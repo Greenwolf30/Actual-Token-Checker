@@ -7,8 +7,8 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
-v0.5.80:
-- ⋮ → Manage tokens scrolls to Settings → Manage tokens
-- History on Ethereum / Base / Polygon / Robinhood (Blockscout native + ERC-20)
+v0.5.81:
+- History shows from/to wallet on send & receive (all chains)
+- Bitcoin + Sui history from explorers (with counterparty wallets)
 
 Version: see manifest.json

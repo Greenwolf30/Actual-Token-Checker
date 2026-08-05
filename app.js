@@ -4630,6 +4630,139 @@ function formatHistoryTime(ts) {
   }
 }
 
+function collectParsedIxs(tx) {
+  const message = tx && tx.transaction && tx.transaction.message;
+  const out = [];
+  const push = (ix) => {
+    if (ix) out.push(ix);
+  };
+  ((message && message.instructions) || []).forEach(push);
+  ((tx.meta && tx.meta.innerInstructions) || []).forEach((group) => {
+    (group.instructions || []).forEach(push);
+  });
+  return out;
+}
+
+/** Best-effort counterparty wallet for a Solana send/receive. */
+function solanaCounterparty(owner, tx, direction, mint) {
+  if (!owner || !tx) return "";
+  const ixs = collectParsedIxs(tx);
+  for (const ix of ixs) {
+    const p = ix.parsed;
+    if (!p || !p.info) continue;
+    const prog = String(ix.program || ix.programId || "");
+    const typ = String(p.type || "");
+    const info = p.info;
+    if (typ === "transfer" && /system/i.test(prog)) {
+      if (direction === "in" && info.destination === owner && info.source) {
+        return String(info.source);
+      }
+      if (direction === "out" && info.source === owner && info.destination) {
+        return String(info.destination);
+      }
+    }
+    if (
+      (typ === "transfer" || typ === "transferChecked") &&
+      /token/i.test(prog)
+    ) {
+      const auth = info.authority || info.multisigAuthority || "";
+      const src = info.source || info.sourceAccount || "";
+      const dst = info.destination || info.destinationAccount || "";
+      if (direction === "out" && auth === owner) {
+        // Prefer destination token-account owner from balances.
+        const destOwner = solanaTokenAccountOwner(tx, dst) || "";
+        if (destOwner && destOwner !== owner) return destOwner;
+      }
+      if (direction === "in") {
+        const srcOwner = solanaTokenAccountOwner(tx, src) || auth || "";
+        if (srcOwner && srcOwner !== owner) return srcOwner;
+      }
+    }
+  }
+
+  // Opposite token-balance mover on the same mint.
+  if (mint) {
+    const deltas = {};
+    const bump = (row, sign) => {
+      if (!row || !row.owner || row.mint !== mint || row.owner === owner) return;
+      const amt =
+        Number(
+          row.uiTokenAmount && row.uiTokenAmount.uiAmountString != null
+            ? row.uiTokenAmount.uiAmountString
+            : row.uiTokenAmount && row.uiTokenAmount.uiAmount
+        ) || 0;
+      deltas[row.owner] = (deltas[row.owner] || 0) + sign * amt;
+    };
+    (tx.meta.preTokenBalances || []).forEach((t) => bump(t, -1));
+    (tx.meta.postTokenBalances || []).forEach((t) => bump(t, 1));
+    const want = direction === "in" ? -1 : 1;
+    let best = "";
+    let bestAbs = 0;
+    Object.keys(deltas).forEach((o) => {
+      const d = deltas[o];
+      if (d * want > 0 && Math.abs(d) > bestAbs) {
+        bestAbs = Math.abs(d);
+        best = o;
+      }
+    });
+    if (best) return best;
+  }
+
+  // Opposite native SOL mover (simple transfers).
+  if (!mint) {
+    const message = tx.transaction && tx.transaction.message;
+    const accountKeys = (message && message.accountKeys) || [];
+    const keys = accountKeys.map((k) =>
+      typeof k === "string" ? k : k.pubkey || ""
+    );
+    const pre = tx.meta.preBalances || [];
+    const post = tx.meta.postBalances || [];
+    const want = direction === "in" ? -1 : 1;
+    let best = "";
+    let bestAbs = 0;
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i];
+      if (!k || k === owner) continue;
+      const d = ((post[i] || 0) - (pre[i] || 0)) / 1e9;
+      if (d * want > 0 && Math.abs(d) > bestAbs && Math.abs(d) > 0.000001) {
+        bestAbs = Math.abs(d);
+        best = k;
+      }
+    }
+    if (best) return best;
+  }
+
+  // Fee payer as weak fallback on receives.
+  if (direction === "in") {
+    const message = tx.transaction && tx.transaction.message;
+    const accountKeys = (message && message.accountKeys) || [];
+    const feePayer =
+      typeof accountKeys[0] === "string"
+        ? accountKeys[0]
+        : accountKeys[0] && accountKeys[0].pubkey;
+    if (feePayer && feePayer !== owner) return String(feePayer);
+  }
+  return "";
+}
+
+function solanaTokenAccountOwner(tx, tokenAccount) {
+  if (!tokenAccount || !tx || !tx.meta) return "";
+  const rows = [].concat(
+    tx.meta.preTokenBalances || [],
+    tx.meta.postTokenBalances || []
+  );
+  const message = tx.transaction && tx.transaction.message;
+  const accountKeys = (message && message.accountKeys) || [];
+  const keys = accountKeys.map((k) =>
+    typeof k === "string" ? k : k.pubkey || ""
+  );
+  for (const row of rows) {
+    if (row == null || row.accountIndex == null) continue;
+    if (keys[row.accountIndex] === tokenAccount && row.owner) return row.owner;
+  }
+  return "";
+}
+
 function classifySolanaTx(owner, tx) {
   if (!tx || !tx.meta || tx.meta.err) return null;
   const message = tx.transaction && tx.transaction.message;
@@ -4782,6 +4915,11 @@ function classifySolanaTx(owner, tx) {
     return null;
   }
 
+  const counterparty =
+    type === "send" || type === "receive" || type === "transfer"
+      ? solanaCounterparty(owner, tx, direction, mint)
+      : "";
+
   return {
     type,
     direction,
@@ -4795,6 +4933,7 @@ function classifySolanaTx(owner, tx) {
     toAmount,
     toSymbol,
     toMint,
+    counterparty: counterparty || "",
   };
 }
 
@@ -4887,6 +5026,24 @@ function clearHistoryForSwitch(msg) {
   if (status) status.textContent = msg || "Loading history…";
 }
 
+function historyPartyLine(tx) {
+  const party = String(tx.counterparty || "").trim();
+  if (!party) return "";
+  const isPair =
+    tx.type === "swap" || tx.type === "buy" || tx.type === "sell";
+  if (isPair) return "";
+  const label = tx.direction === "in" ? "from" : "to";
+  return (
+    '<span class="history-party" title="' +
+    escapeHtml(party) +
+    '">' +
+    label +
+    " " +
+    escapeHtml(shortAddr(party)) +
+    "</span>"
+  );
+}
+
 function paintHistory() {
   const list = $("historyList");
   const status = $("historyStatus");
@@ -4946,6 +5103,7 @@ function paintHistory() {
     }
     const when = formatHistoryTime(tx.when);
     const href = historyExplorerTxUrl(tx.sig, chain);
+    const party = historyPartyLine(tx);
     li.innerHTML =
       '<a class="history-row ' +
       dirClass +
@@ -4960,7 +5118,9 @@ function paintHistory() {
       "</strong><span>" +
       (when || shortAddr(tx.sig || "")) +
       (tx.sig ? " · " + shortAddr(tx.sig) : "") +
-      "</span></span>" +
+      "</span>" +
+      party +
+      "</span>" +
       '<span class="history-vals"><strong class="' +
       amtClass.trim() +
       '">' +
@@ -5017,6 +5177,8 @@ async function fetchEvmHistoryForOwner(owner, chain) {
           item.status === "ok" ||
           item.result === "success" ||
           item.result == null;
+        const fromRaw = String((item.from && item.from.hash) || "");
+        const toRaw = String((item.to && item.to.hash) || "");
         out.push({
           sig: hash,
           type: direction === "in" ? "receive" : "send",
@@ -5026,6 +5188,7 @@ async function fetchEvmHistoryForOwner(owner, chain) {
           when: parseBlockscoutTime(item.timestamp),
           status: ok ? "confirmed" : "failed",
           chainId: chain.id,
+          counterparty: direction === "in" ? fromRaw : toRaw,
         });
       }
     }
@@ -5069,6 +5232,8 @@ async function fetchEvmHistoryForOwner(owner, chain) {
         );
         if (!(amount > 0)) continue;
         const direction = to === addr && from !== addr ? "in" : "out";
+        const fromRaw = String((item.from && item.from.hash) || "");
+        const toRaw = String((item.to && item.to.hash) || "");
         out.push({
           sig: hash,
           type: direction === "in" ? "receive" : "send",
@@ -5079,12 +5244,233 @@ async function fetchEvmHistoryForOwner(owner, chain) {
           when: parseBlockscoutTime(item.timestamp),
           status: "confirmed",
           chainId: chain.id,
+          counterparty: direction === "in" ? fromRaw : toRaw,
         });
       }
     }
   } catch (err) {
     console.warn("[evm-history transfers]", chain && chain.id, err);
   }
+
+  return out.sort((a, b) => (b.when || 0) - (a.when || 0)).slice(0, 40);
+}
+
+/** Bitcoin history via mempool/blockstream address txs (native BTC). */
+async function fetchBtcHistoryForOwner(owner, chain) {
+  if (!owner) return [];
+  const bases = [
+    "https://mempool.space/api",
+    String((chain && chain.rpc) || "https://blockstream.info/api").replace(/\/$/, ""),
+  ];
+  let items = null;
+  let lastErr = null;
+  for (const base of bases) {
+    try {
+      const res = await fetch(base + "/address/" + encodeURIComponent(owner) + "/txs");
+      if (!res.ok) throw new Error("btc history http " + res.status);
+      const j = await res.json();
+      if (Array.isArray(j)) {
+        items = j;
+        break;
+      }
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  if (!items) {
+    if (lastErr) console.warn("[btc-history]", lastErr);
+    return [];
+  }
+
+  const me = String(owner);
+  const out = [];
+  for (const tx of items.slice(0, 40)) {
+    const vinAddrs = [];
+    let spent = 0;
+    for (const vin of tx.vin || []) {
+      const a =
+        (vin.prevout && vin.prevout.scriptpubkey_address) ||
+        vin.address ||
+        "";
+      if (!a) continue;
+      if (a === me) spent += Number((vin.prevout && vin.prevout.value) || 0) || 0;
+      else if (!vinAddrs.includes(a)) vinAddrs.push(a);
+    }
+    const voutAddrs = [];
+    let received = 0;
+    for (const vout of tx.vout || []) {
+      const a = vout.scriptpubkey_address || "";
+      if (!a) continue;
+      if (a === me) received += Number(vout.value) || 0;
+      else if (!voutAddrs.includes(a)) voutAddrs.push(a);
+    }
+    const net = received - spent;
+    if (Math.abs(net) < 1) continue;
+    const direction = net > 0 ? "in" : "out";
+    const amount = Math.abs(net) / 1e8;
+    const st = tx.status || {};
+    out.push({
+      sig: tx.txid || tx.hash || "",
+      type: direction === "in" ? "receive" : "send",
+      direction,
+      amount,
+      symbol: "BTC",
+      when: Number(st.block_time) || 0,
+      status: st.confirmed === false ? "pending" : "confirmed",
+      chainId: (chain && chain.id) || "bitcoin",
+      counterparty:
+        direction === "in"
+          ? vinAddrs[0] || ""
+          : voutAddrs[0] || "",
+    });
+  }
+  return out;
+}
+
+function suiOwnerAddress(owner) {
+  if (!owner) return "";
+  if (typeof owner === "string") return owner;
+  if (owner.AddressOwner) return String(owner.AddressOwner);
+  if (owner.ObjectOwner) return String(owner.ObjectOwner);
+  return "";
+}
+
+function suiCoinSymbol(coinType) {
+  const t = String(coinType || "");
+  if (!t || /::sui::SUI$/i.test(t)) return "SUI";
+  const parts = t.split("::");
+  return parts[parts.length - 1] || "TOKEN";
+}
+
+async function suiQueryTxBlocks(filter, rpcs, limit) {
+  const list =
+    rpcs && rpcs.length
+      ? rpcs
+      : [
+          "https://sui-mainnet-endpoint.blockvision.org",
+          "https://rpc-mainnet.suiscan.xyz",
+        ];
+  let lastErr = null;
+  for (const rpc of list) {
+    try {
+      const res = await fetch(rpc, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "suix_queryTransactionBlocks",
+          params: [
+            {
+              filter,
+              options: {
+                showInput: true,
+                showEffects: true,
+                showBalanceChanges: true,
+              },
+              limit: limit || 20,
+              order: "descending",
+            },
+          ],
+        }),
+      });
+      if (!res.ok) throw new Error("sui history http " + res.status);
+      const j = await res.json();
+      if (j.error) throw new Error(j.error.message || "sui rpc");
+      return (j.result && j.result.data) || [];
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  if (lastErr) console.warn("[sui-history]", lastErr);
+  return [];
+}
+
+/** Sui native / coin transfers via balanceChanges. */
+async function fetchSuiHistoryForOwner(owner, chain) {
+  if (!owner) return [];
+  const rpcs = (chain && chain.rpcs) || [];
+  const [fromBlocks, toBlocks] = await Promise.all([
+    suiQueryTxBlocks({ FromAddress: owner }, rpcs, 20),
+    suiQueryTxBlocks({ ToAddress: owner }, rpcs, 20),
+  ]);
+  const byDigest = {};
+  [...fromBlocks, ...toBlocks].forEach((b) => {
+    if (b && b.digest) byDigest[b.digest] = b;
+  });
+
+  const me = String(owner).toLowerCase();
+  const out = [];
+  Object.values(byDigest).forEach((block) => {
+    const changes = block.balanceChanges || [];
+    const byCoin = {};
+    changes.forEach((c) => {
+      const addr = suiOwnerAddress(c.owner);
+      if (!addr) return;
+      const coin = c.coinType || "0x2::sui::SUI";
+      if (!byCoin[coin]) byCoin[coin] = {};
+      const amt = Number(c.amount) || 0;
+      byCoin[coin][addr] = (byCoin[coin][addr] || 0) + amt;
+    });
+
+    let best = null;
+    Object.keys(byCoin).forEach((coin) => {
+      const map = byCoin[coin];
+      let myDelta = 0;
+      Object.keys(map).forEach((a) => {
+        if (a.toLowerCase() === me) myDelta += map[a];
+      });
+      if (!myDelta) return;
+      if (!best || Math.abs(myDelta) > Math.abs(best.myDelta)) {
+        best = { coin, myDelta, map };
+      }
+    });
+    if (!best) return;
+
+    const direction = best.myDelta > 0 ? "in" : "out";
+    const want = direction === "in" ? -1 : 1;
+    let counterparty = "";
+    let bestAbs = 0;
+    Object.keys(best.map).forEach((a) => {
+      if (a.toLowerCase() === me) return;
+      const d = best.map[a];
+      if (d * want > 0 && Math.abs(d) > bestAbs) {
+        bestAbs = Math.abs(d);
+        counterparty = a;
+      }
+    });
+    if (!counterparty && direction === "in") {
+      const sender =
+        block.transaction &&
+        block.transaction.data &&
+        block.transaction.data.sender;
+      if (sender && String(sender).toLowerCase() !== me) {
+        counterparty = String(sender);
+      }
+    }
+
+    const decimals = /::sui::SUI$/i.test(best.coin) ? 9 : 9;
+    const ts = Number(
+      (block.timestampMs != null
+        ? block.timestampMs
+        : block.checkpointTimestampMs) || 0
+    );
+    out.push({
+      sig: block.digest,
+      type: direction === "in" ? "receive" : "send",
+      direction,
+      amount: Math.abs(best.myDelta) / Math.pow(10, decimals),
+      symbol: suiCoinSymbol(best.coin),
+      mint: /::sui::SUI$/i.test(best.coin) ? null : best.coin,
+      when: ts > 1e12 ? Math.floor(ts / 1000) : ts,
+      status:
+        block.effects && block.effects.status && block.effects.status.status === "failure"
+          ? "failed"
+          : "confirmed",
+      chainId: (chain && chain.id) || "sui",
+      counterparty: counterparty || "",
+    });
+  });
 
   return out.sort((a, b) => (b.when || 0) - (a.when || 0)).slice(0, 40);
 }
@@ -5124,6 +5510,7 @@ async function refreshHistory() {
       when: t.when ? Math.floor(Number(t.when) / (Number(t.when) > 1e12 ? 1000 : 1)) : 0,
       status: "local",
       chainId: t.chainId || chain.id,
+      counterparty: t.counterparty || t.to || t.from || "",
     }));
 
   const mergeLocal = (remote) => {
@@ -5135,6 +5522,9 @@ async function refreshHistory() {
     local.forEach((t) => {
       const k = (t.sig || "") + ":" + (t.mint || t.symbol || "");
       if (!byKey[k]) byKey[k] = t;
+      else if (!byKey[k].counterparty && t.counterparty) {
+        byKey[k].counterparty = t.counterparty;
+      }
     });
     return Object.values(byKey).sort((a, b) => (b.when || 0) - (a.when || 0));
   };
@@ -5167,6 +5557,74 @@ async function refreshHistory() {
         status.textContent =
           "History sync failed: " +
           (err && err.message ? err.message : "explorer error") +
+          (local.length ? " · showing local sends" : "");
+      }
+    }
+    return;
+  }
+
+  // Bitcoin: mempool/blockstream address txs.
+  if (chain.kind === "bitcoin") {
+    const owner = acc.bitcoin && acc.bitcoin.address;
+    if (!owner) {
+      if (seq !== historySeq) return;
+      TX_HISTORY = local;
+      paintHistory();
+      if (status) status.textContent = "No Bitcoin address on this wallet.";
+      return;
+    }
+    try {
+      const remote = await fetchBtcHistoryForOwner(owner, chain);
+      if (seq !== historySeq) return;
+      TX_HISTORY = mergeLocal(remote);
+      paintHistory();
+      if (status && !TX_HISTORY.length) {
+        status.textContent =
+          "No " + chain.name + " activity yet for this wallet.";
+      }
+    } catch (err) {
+      console.warn("[history-btc]", err);
+      if (seq !== historySeq) return;
+      TX_HISTORY = local.sort((a, b) => (b.when || 0) - (a.when || 0));
+      paintHistory();
+      if (status) {
+        status.textContent =
+          "History sync failed: " +
+          (err && err.message ? err.message : "explorer error") +
+          (local.length ? " · showing local sends" : "");
+      }
+    }
+    return;
+  }
+
+  // Sui: balance-change history via RPC.
+  if (chain.kind === "sui") {
+    const owner = acc.sui && acc.sui.address;
+    if (!owner) {
+      if (seq !== historySeq) return;
+      TX_HISTORY = local;
+      paintHistory();
+      if (status) status.textContent = "No Sui address on this wallet.";
+      return;
+    }
+    try {
+      const remote = await fetchSuiHistoryForOwner(owner, chain);
+      if (seq !== historySeq) return;
+      TX_HISTORY = mergeLocal(remote);
+      paintHistory();
+      if (status && !TX_HISTORY.length) {
+        status.textContent =
+          "No " + chain.name + " activity yet for this wallet.";
+      }
+    } catch (err) {
+      console.warn("[history-sui]", err);
+      if (seq !== historySeq) return;
+      TX_HISTORY = local.sort((a, b) => (b.when || 0) - (a.when || 0));
+      paintHistory();
+      if (status) {
+        status.textContent =
+          "History sync failed: " +
+          (err && err.message ? err.message : "RPC error") +
           (local.length ? " · showing local sends" : "");
       }
     }
@@ -5209,6 +5667,9 @@ async function refreshHistory() {
     });
     local.forEach((t) => {
       if (!bySig[t.sig]) bySig[t.sig] = t;
+      else if (!bySig[t.sig].counterparty && t.counterparty) {
+        bySig[t.sig].counterparty = t.counterparty;
+      }
     });
     // Prefetch mint meta for nicer symbols
     const mints = [];

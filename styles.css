@@ -1862,6 +1862,11 @@ body.is-extension .acct-drawer {
   text-overflow: ellipsis;
 }
 
+.history-meta .history-party {
+  color: rgba(232, 238, 252, 0.72);
+  font-size: 0.7rem;
+}
+
 .history-vals {
   text-align: right;
   display: flex;
