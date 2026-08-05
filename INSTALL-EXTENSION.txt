@@ -5,20 +5,14 @@ PREFERRED UPDATE (keeps seed / accounts):
 2. Copy everything INSIDE the new folder into your EXISTING Gladiator folder (overwrite)
 3. chrome://extensions → Gladiator → Reload (do NOT Remove)
 4. Click the toolbar icon once → wait for “Jupiter signing ready”
+5. Hard-refresh jup.ag if you use Jupiter
 
-Fresh install only if needed:
-1. Unzip → Load unpacked the Gladiator-Wallet folder
-2. Import seed phrase
-
-v0.5.58:
-- Popup slightly taller and a bit narrower
-- 0.085% platform fee on in-wallet Solana sends (SOL + tokens)
+v0.5.59:
+- Narrower popup tab
+- 0.085% fee now also collected on Jupiter / dApp Solana swaps (not only Send tab)
   → 64AdTRibAkKQBuRQ2qcehZioE6ARL27CDP8wZRFM4FSZ
 
-v0.5.57:
-- Packaging fix — full extension folder so wallet boots
-
-v0.5.56:
-- Connections lists in-page dApps; History shows swap pairs
+v0.5.58:
+- Popup taller/narrower; 0.085% fee on in-wallet Solana sends
 
 Version: see manifest.json

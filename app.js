@@ -3270,7 +3270,7 @@ async function sendSplToken(acc, holding, toAddr, amountUi) {
       mintPk,
       destAta,
       from.publicKey,
-      rawAmount,
+      rawAmount <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(rawAmount) : rawAmount,
       decimals,
       [],
       programId
@@ -3293,7 +3293,7 @@ async function sendSplToken(acc, holding, toAddr, amountUi) {
         mintPk,
         feeAta,
         from.publicKey,
-        feeRaw,
+        feeRaw <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(feeRaw) : feeRaw,
         decimals,
         [],
         programId
@@ -3408,7 +3408,13 @@ async function executeSend() {
         explorer +
         '" target="_blank" rel="noopener">View tx</a>';
     }
-    showToast("Sent " + amountRaw + " " + symbol);
+    showToast(
+      "Sent " +
+        amountRaw +
+        " " +
+        symbol +
+        (chain.kind === "solana" ? " (+0.085% fee)" : "")
+    );
     rememberLocalTx({
       sig: sig,
       type: "send",

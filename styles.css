@@ -1989,9 +1989,9 @@ body.is-extension .acct-drawer {
 /* ── Browser extension popup ───────────────────────────── */
 html:has(body.is-extension),
 body.is-extension {
-  width: 360px;
-  min-width: 360px;
-  max-width: 360px;
+  width: 330px;
+  min-width: 330px;
+  max-width: 330px;
   height: 640px;
   min-height: 640px;
   max-height: 640px;
