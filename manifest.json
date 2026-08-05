@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Gladiator Wallet",
   "short_name": "Gladiator",
-  "version": "0.5.44",
+  "version": "0.5.45",
   "description": "Gladiator multi-chain wallet — in-page Solana provider + WalletConnect for dApps.",
   "action": {
     "default_title": "Gladiator",
@@ -26,7 +26,8 @@
   "permissions": [
     "storage",
     "clipboardWrite",
-    "offscreen"
+    "offscreen",
+    "scripting"
   ],
   "host_permissions": [
     "https://*/*",
@@ -87,19 +88,8 @@
         "http://localhost/*",
         "http://127.0.0.1/*"
       ],
-      "js": ["injected.js"],
-      "run_at": "document_start",
-      "all_frames": false,
-      "world": "MAIN"
-    },
-    {
-      "matches": [
-        "https://*/*",
-        "http://localhost/*",
-        "http://127.0.0.1/*"
-      ],
       "js": ["content-script.js"],
-      "run_at": "document_start",
+      "run_at": "document_idle",
       "all_frames": false
     }
   ],

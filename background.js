@@ -223,6 +223,55 @@ chrome.windows.onRemoved.addListener((id) => {
   if (id === walletWindowId) walletWindowId = null;
 });
 
+/** Inject provider AFTER the page finishes loading — never at document_start.
+ *  Default OFF: early MAIN-world inject was blanking Jupiter. Enable later via storage.
+ */
+const INJECT_FLAG = "gladiator_page_inject";
+const injectedTabs = new Set();
+
+function shouldInjectProvider(url) {
+  if (!url || !/^https?:/i.test(url)) return false;
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    if (host === "chrome.google.com" || host.endsWith("chromewebstore.google.com")) return false;
+  } catch (_) {
+    return false;
+  }
+  return true;
+}
+
+async function isPageInjectEnabled() {
+  const bag = await storageGet([INJECT_FLAG]);
+  // Explicit true only — default disabled until Jupiter-safe.
+  return bag[INJECT_FLAG] === true;
+}
+
+async function injectProviderIntoTab(tabId) {
+  if (injectedTabs.has(tabId)) return;
+  if (!(await isPageInjectEnabled())) return;
+  if (!chrome.scripting || !chrome.scripting.executeScript) return;
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["injected.js"],
+      world: "MAIN",
+    });
+    injectedTabs.add(tabId);
+  } catch (_) {}
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  injectedTabs.delete(tabId);
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== "complete") return;
+  if (!shouldInjectProvider(tab && tab.url)) return;
+  setTimeout(() => {
+    injectProviderIntoTab(tabId).catch(() => {});
+  }, 2500);
+});
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg) return;
 

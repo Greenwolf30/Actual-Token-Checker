@@ -1,5 +1,5 @@
 /**
- * Page MAIN-world provider. Keep this crash-proof — errors here can blank Jupiter.
+ * Page MAIN-world provider. Injected AFTER page load (never at document_start).
  */
 (function () {
   try {
@@ -202,7 +202,6 @@
         title: document.title || "",
       });
       if (!result || !result.publicKey) {
-        // Silent/trusted connect must NOT throw — Jupiter auto-connect relies on that.
         if (onlyIfTrusted) return { publicKey: null };
         throw new Error("No Solana address in Gladiator");
       }
@@ -296,10 +295,7 @@
         if (m === "signAllTransactions")
           return signAllTransactions(params && params.transactions);
         if (m === "signAndSendTransaction")
-          return signAndSendTransaction(
-            params && params.transaction,
-            params && params.options
-          );
+          return signAndSendTransaction(params && params.transaction, params && params.options);
         if (m === "signMessage")
           return signMessage(params && params.message, params && params.display);
         throw new Error("Unsupported method: " + m);
@@ -451,11 +447,7 @@
           if (registered) return;
           api.register(wallet);
           registered = true;
-        } catch (err) {
-          try {
-            console.warn("[Gladiator] wallet-standard register failed", err);
-          } catch (_) {}
-        }
+        } catch (_) {}
       };
       try {
         window.dispatchEvent(
@@ -469,45 +461,14 @@
           } catch (_) {}
         });
       } catch (_) {}
-      // One delayed retry only (do NOT spam — that can crash Jupiter)
-      setTimeout(() => {
-        if (registered) return;
-        try {
-          window.dispatchEvent(
-            new CustomEvent("wallet-standard:register-wallet", { detail: callback })
-          );
-        } catch (_) {}
-      }, 1500);
     }
 
-    // Expose Gladiator without fighting Phantom / Jupiter stubs.
+    // Never touch window.solana — that fights Phantom/Jupiter and can blank the page.
     try {
       window.gladiator = provider;
       window.gladiatorSolana = provider;
     } catch (_) {}
 
-    // Only set window.solana if completely unset — never replace existing providers.
-    try {
-      if (typeof window.solana === "undefined") {
-        window.solana = provider;
-      }
-    } catch (_) {}
-
     registerWalletStandard();
-
-    // Soft silent restore — never throw into the page
-    request("connect", { onlyIfTrusted: true, origin: location.origin })
-      .then((result) => {
-        if (!(result && result.publicKey)) return;
-        publicKey = new PublicKey(result.publicKey);
-        isConnected = true;
-        emit("connect", publicKey);
-        emitStandard("change", { accounts: getAccounts() });
-      })
-      .catch(() => {});
-  } catch (err) {
-    try {
-      console.warn("[Gladiator] provider init failed", err);
-    } catch (_) {}
-  }
+  } catch (_) {}
 })();
