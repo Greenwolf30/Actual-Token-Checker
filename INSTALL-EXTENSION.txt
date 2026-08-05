@@ -1,0 +1,18 @@
+Gladiator Wallet — Chrome / Opera extension (v0.5.25)
+
+Load:
+1. Unzip this package to a folder (no __pycache__).
+2. opera://extensions or chrome://extensions → Developer mode → Load unpacked.
+3. Remove any older Gladiator folder first, then load this one.
+
+WalletConnect (pump.fun):
+1. Create a free Project ID at https://cloud.reown.com
+2. Open Gladiator → ⋮ → WalletConnect
+3. Paste Project ID, then paste a fresh wc: URI from pump.fun
+4. Keep the extension popup open while connecting / signing
+5. Approve the session prompt
+
+Notes:
+- wc: URIs expire quickly — if connect fails, copy a new QR/URI from pump.fun.
+- Extension Advanced · RPC is Solana/Helius only (Ethereum uses built-in public RPCs).
+- If balances are 0, import the seed from your funded wallet.

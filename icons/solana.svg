@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Solana">
+  <defs>
+    <linearGradient id="sol" x1="20" y1="24" x2="108" y2="104" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#00FFA3"/>
+      <stop offset="0.45" stop-color="#03E1FF"/>
+      <stop offset="1" stop-color="#DC1FFF"/>
+    </linearGradient>
+  </defs>
+  <!-- Full-bleed black disc — no padding / white ring -->
+  <circle cx="64" cy="64" r="64" fill="#000000"/>
+  <!-- Three official-style bars, edge-to-edge within the disc -->
+  <g fill="url(#sol)">
+    <path d="M28.5 40.2c1.15-1.15 2.7-1.8 4.35-1.8h66.4c2.75 0 4.12 3.32 2.18 5.26l-8.7 8.7c-1.15 1.15-2.7 1.8-4.35 1.8H21.98c-2.75 0-4.12-3.32-2.18-5.26l8.7-8.7z"/>
+    <path d="M99.5 56.9c-1.15-1.15-2.7-1.8-4.35-1.8H28.75c-2.75 0-4.12 3.32-2.18 5.26l8.7 8.7c1.15 1.15 2.7 1.8 4.35 1.8h66.4c2.75 0 4.12-3.32 2.18-5.26l-8.7-8.7z"/>
+    <path d="M28.5 73.6c1.15-1.15 2.7-1.8 4.35-1.8h66.4c2.75 0 4.12 3.32 2.18 5.26l-8.7 8.7c-1.15 1.15-2.7 1.8-4.35 1.8H21.98c-2.75 0-4.12-3.32-2.18-5.26l8.7-8.7z"/>
+  </g>
+</svg>

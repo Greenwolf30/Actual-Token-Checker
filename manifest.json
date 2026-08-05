@@ -1,0 +1,82 @@
+{
+  "manifest_version": 3,
+  "name": "Gladiator Wallet",
+  "short_name": "Gladiator",
+  "version": "0.5.25",
+  "description": "Gladiator multi-chain wallet with WalletConnect for Solana dApps (pump.fun).",
+  "action": {
+    "default_title": "Gladiator",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "storage",
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "https://*.helius-rpc.com/*",
+    "https://1rpc.io/*",
+    "https://api.coingecko.com/*",
+    "https://api.mainnet-beta.solana.com/*",
+    "https://base.publicnode.com/*",
+    "https://basescan.org/*",
+    "https://blockstream.info/*",
+    "https://cloudflare-eth.com/*",
+    "https://eth.llamarpc.com/*",
+    "https://ethereum.publicnode.com/*",
+    "https://etherscan.io/*",
+    "https://lite-api.jup.ag/*",
+    "https://mainnet.base.org/*",
+    "https://mainnet.helius-rpc.com/*",
+    "https://mempool.space/*",
+    "https://polygon-bor.publicnode.com/*",
+    "https://polygon-rpc.com/*",
+    "https://polygonscan.com/*",
+    "https://robinhoodchain.blockscout.com/*",
+    "https://rpc-mainnet.suiscan.xyz/*",
+    "https://rpc.ankr.com/*",
+    "https://rpc.helius.xyz/*",
+    "https://rpc.mainnet.chain.robinhood.com/*",
+    "https://solana-rpc.publicnode.com/*",
+    "https://solana.drpc.org/*",
+    "https://sui-mainnet-endpoint.blockvision.org/*",
+    "https://tokens.jup.ag/*",
+    "https://*.walletconnect.com/*",
+    "https://*.walletconnect.org/*",
+    "wss://*.walletconnect.com/*",
+    "wss://*.walletconnect.org/*",
+    "https://*.reown.com/*",
+    "wss://*.reown.com/*",
+    "https://rpc.walletconnect.com/*",
+    "https://rpc.walletconnect.org/*",
+    "https://pulse.walletconnect.com/*",
+    "https://pulse.walletconnect.org/*",
+    "https://api.web3modal.org/*",
+    "https://api.web3modal.com/*",
+    "https://keys.walletconnect.com/*",
+    "https://keys.walletconnect.org/*",
+    "https://explorer-api.walletconnect.com/*",
+    "https://verify.walletconnect.com/*",
+    "https://verify.walletconnect.org/*",
+    "https://notify.walletconnect.com/*",
+    "https://echo.walletconnect.com/*",
+    "https://push.walletconnect.com/*"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}
