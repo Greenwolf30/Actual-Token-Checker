@@ -69,12 +69,14 @@ async function focusOrOpenWcWallet(opts) {
   const focus = !opts || opts.focus !== false;
   const openSettings = !opts || opts.settings !== false;
   const restore = !!(opts && opts.restore);
+  const ledger = !!(opts && opts.ledger);
   const base = chrome.runtime.getURL(WC_WALLET_PATH);
   let url = base;
-  if (restore) url = base + "?restore=1";
+  if (ledger) url = base + "?ledger=1";
+  else if (restore) url = base + "?restore=1";
   else if (openSettings) url = base + "?wc=1";
 
-  const shouldNavigate = openSettings || restore;
+  const shouldNavigate = openSettings || restore || ledger;
 
   if (walletWindowId != null) {
     try {
@@ -937,7 +939,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "wc-open-wallet" || msg.type === "wc-open-bridge") {
     focusOrOpenWcWallet({
       focus: msg.focus !== false,
-      settings: msg.settings !== false,
+      settings: msg.ledger ? false : msg.settings !== false,
+      restore: !!msg.restore,
+      ledger: !!msg.ledger,
     })
       .then((r) => sendResponse(r))
       .catch((err) =>

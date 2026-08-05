@@ -5,19 +5,11 @@ PREFERRED UPDATE (keeps seed / accounts):
 2. Copy everything INSIDE the new folder into your EXISTING Gladiator folder (overwrite)
 3. chrome://extensions → Gladiator → Reload (do NOT Remove)
 4. If Chrome asks for new permissions (HID / Ledger), Allow
-5. Click the toolbar icon once → wait for “Jupiter signing ready”
-6. Hard-refresh jup.ag (Ctrl+Shift+R) if you use Jupiter
+5. Click the toolbar icon once
 
-v0.5.70:
-- Total USD balance highlighted in yellow
-
-v0.5.69:
-- Connect Ledger (Solana app) from Accounts / Wallets
-- Ledger wallets labeled with a Ledger badge (rename in Settings)
-- In-wallet Send + Jupiter signing approve on the device
-
-Ledger tips:
-- Unlock Nano, open the Solana app, then tap Connect Ledger
-- Keep Gladiator open when a dApp asks Ledger to sign
+v0.5.71:
+- Gladiator brand text is orange/red
+- Clearer Ledger connect panel (Account # + Connect Ledger)
+- Popup opens the wallet window for reliable Ledger HID connect
 
 Version: see manifest.json

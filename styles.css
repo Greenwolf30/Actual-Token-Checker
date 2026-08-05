@@ -330,7 +330,7 @@ img.brand-mark {
   font-weight: 400;
   letter-spacing: -0.03em;
   line-height: 1;
-  color: #b8a7cf;
+  color: #ff6a3d;
 }
 
 .brand-acct {
@@ -893,7 +893,7 @@ body.is-extension .acct-drawer {
   letter-spacing: 0.02em;
   text-transform: uppercase;
   line-height: 0.95;
-  background: linear-gradient(180deg, #ffffff 10%, #b8a7cf 100%);
+  background: linear-gradient(180deg, #ffb347 8%, #ff5a1f 48%, #d62828 100%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -2055,6 +2055,7 @@ body.is-extension .brand-chip-sm .brand-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: #ff6a3d;
 }
 
 body.is-extension .brand-chip-sm .brand-acct {
@@ -2358,15 +2359,44 @@ body.is-local .dock {
   justify-content: flex-end;
 }
 
+.ledger-connect-block {
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 106, 61, 0.28);
+  background: rgba(255, 90, 31, 0.08);
+}
+
+.ledger-connect-block .photon-sub {
+  margin: 0 0 10px;
+}
+
+.ledger-connect-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+}
+
+.ledger-connect-row .field {
+  flex: 1 1 90px;
+  margin: 0;
+  min-width: 90px;
+}
+
+.ledger-connect-row .photon-gen {
+  flex: 0 0 auto;
+}
+
 .ledger-badge {
   display: inline-flex;
   align-items: center;
   margin-left: 6px;
   padding: 1px 6px;
   border-radius: 999px;
-  border: 1px solid rgba(184, 167, 207, 0.35);
-  background: rgba(184, 167, 207, 0.12);
-  color: rgba(214, 204, 230, 0.95);
+  border: 1px solid rgba(255, 106, 61, 0.4);
+  background: rgba(255, 90, 31, 0.16);
+  color: #ffb089;
   font-size: 0.62rem;
   font-weight: 700;
   letter-spacing: 0.04em;

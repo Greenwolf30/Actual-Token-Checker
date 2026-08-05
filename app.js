@@ -665,17 +665,35 @@ function nextLedgerAccountIndex() {
 
 async function connectLedgerAccount(opts) {
   const status = $("accountStatus");
+  const ledgerStatus = $("ledgerConnectStatus");
+  const setStatus = (msg) => {
+    if (status) status.textContent = msg;
+    if (ledgerStatus) ledgerStatus.textContent = msg;
+  };
   const api = await ensureLedgerSupported();
-  const accountIndex =
+  let accountIndex =
     opts && opts.accountIndex != null
-      ? Number(opts.accountIndex) || 0
-      : nextLedgerAccountIndex();
+      ? Number(opts.accountIndex)
+      : Number(($("ledgerAccountIndex") && $("ledgerAccountIndex").value) || 0);
+  if (!Number.isFinite(accountIndex) || accountIndex < 0) accountIndex = 0;
+  accountIndex = Math.floor(accountIndex);
   showToast("Connect Ledger · open Solana app…");
-  if (status) {
-    status.textContent =
-      "Unlock Ledger, open the Solana app, then approve the connection prompt.";
+  setStatus(
+    "Unlock Ledger, open the Solana app, then approve the browser HID prompt."
+  );
+  let got;
+  try {
+    got = await api.getAddress(accountIndex, true);
+  } catch (err) {
+    const msg = String(err && err.message ? err.message : err);
+    if (/denied|cancel|No device selected/i.test(msg)) {
+      throw new Error("Ledger connection cancelled — try Connect Ledger again");
+    }
+    if (/busy|locked|blind/i.test(msg)) {
+      throw new Error("Unlock Ledger and open the Solana app, then retry");
+    }
+    throw err;
   }
-  const got = await api.getAddress(accountIndex, false);
   const publicKey = got && got.publicKey;
   if (!publicKey) throw new Error("Ledger returned no Solana address");
   const dup = STATE.accounts.find(
@@ -692,10 +710,16 @@ async function connectLedgerAccount(opts) {
       if (!String(dup.name || "").toLowerCase().includes("ledger")) {
         dup.name = nextLedgerLabel();
       }
+    } else {
+      dup.ledger = {
+        path: got.path || api.pathForIndex(accountIndex),
+        accountIndex,
+      };
     }
     await storageSet(STATE);
     await refreshAll();
     showToast("Ledger already linked · " + (dup.name || shortAddr(publicKey)));
+    setStatus("Connected · " + (dup.name || shortAddr(publicKey)));
     go("activity");
     return dup;
   }
@@ -720,14 +744,50 @@ async function connectLedgerAccount(opts) {
   await refreshAll();
   hideBackup();
   showToast("Ledger connected · " + acc.name);
-  if (status) {
-    status.textContent =
-      "Ledger linked as “" +
+  setStatus(
+    "Ledger linked as “" +
       acc.name +
-      "”. Rename it in Settings. Approve sends on the device.";
-  }
+      "”. Rename it in Settings. Approve sends on the device."
+  );
   go("activity");
   return acc;
+}
+
+async function startLedgerConnectFlow() {
+  const idxEl = $("ledgerAccountIndex");
+  const accountIndex = Math.max(
+    0,
+    Math.floor(Number((idxEl && idxEl.value) || 0) || 0)
+  );
+  // Popup is too small / closes on HID prompts — open the wallet window.
+  if (IS_EXTENSION_POPUP) {
+    try {
+      await new Promise((resolve) => {
+        chrome.storage.local.set(
+          {
+            gladiator_ledger_connect: {
+              at: Date.now(),
+              accountIndex,
+            },
+          },
+          () => resolve()
+        );
+      });
+    } catch (_) {}
+    await openWalletWindowForWc({
+      focus: true,
+      settings: false,
+      ledger: true,
+    });
+    showToast("Approve Ledger in the Gladiator window…");
+    const status = $("ledgerConnectStatus");
+    if (status) {
+      status.textContent =
+        "Opened Gladiator window — unlock Ledger, open Solana app, approve connect.";
+    }
+    return;
+  }
+  await connectLedgerAccount({ accountIndex });
 }
 
 async function ensureState() {
@@ -2661,6 +2721,8 @@ function openWalletWindowForWc(opts) {
         type: "wc-open-wallet",
         focus: !opts || opts.focus !== false,
         settings: !opts || opts.settings !== false,
+        restore: !!(opts && opts.restore),
+        ledger: !!(opts && opts.ledger),
       },
       (r) => resolve(r || {})
     );
@@ -5412,14 +5474,15 @@ function wire() {
   const onConnectLedger = async () => {
     try {
       closeAcctDrawer();
-      await connectLedgerAccount();
+      await startLedgerConnectFlow();
     } catch (err) {
       console.warn(err);
       showToast(String(err && err.message ? err.message : err));
       const status = $("accountStatus");
-      if (status) {
-        status.textContent = String(err && err.message ? err.message : err);
-      }
+      const ledgerStatus = $("ledgerConnectStatus");
+      const msg = String(err && err.message ? err.message : err);
+      if (status) status.textContent = msg;
+      if (ledgerStatus) ledgerStatus.textContent = msg;
     }
   };
   $("acctDrawerLedger")?.addEventListener("click", onConnectLedger);
@@ -5888,6 +5951,29 @@ async function boot() {
         const q = new URLSearchParams((location && location.search) || "");
         if (q.get("wc") === "1") {
           openSettings({ focusWc: true });
+        }
+        if (q.get("ledger") === "1") {
+          go("activity");
+          let accountIndex = 0;
+          try {
+            const bag = await chromeLocalGet(["gladiator_ledger_connect"]);
+            const pending = bag && bag.gladiator_ledger_connect;
+            if (pending && pending.accountIndex != null) {
+              accountIndex = Math.max(0, Math.floor(Number(pending.accountIndex) || 0));
+            }
+            if ($("ledgerAccountIndex")) $("ledgerAccountIndex").value = String(accountIndex);
+            await chromeLocalSet({ gladiator_ledger_connect: null });
+          } catch (_) {}
+          setTimeout(() => {
+            connectLedgerAccount({ accountIndex }).catch((err) => {
+              console.warn(err);
+              showToast(String(err && err.message ? err.message : err));
+              const ledgerStatus = $("ledgerConnectStatus");
+              if (ledgerStatus) {
+                ledgerStatus.textContent = String(err && err.message ? err.message : err);
+              }
+            });
+          }, 400);
         }
       } catch (_) {}
       const paired = await consumePendingWcUri();

@@ -12,7 +12,7 @@
       href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=0.5.70" />
+    <link rel="stylesheet" href="./styles.css?v=0.5.71" />
   </head>
   <body class="is-extension">
     <div class="atmosphere" aria-hidden="true">
@@ -239,9 +239,6 @@
               <button type="button" class="photon-gen" id="createAccountBtn">
                 Generate Wallet
               </button>
-              <button type="button" class="photon-chip" id="connectLedgerBtn" title="Connect Ledger Nano (Solana app)">
-                Connect Ledger
-              </button>
             </div>
           </header>
 
@@ -282,6 +279,36 @@
               </div>
             </details>
           </div>
+
+          <details class="photon-details" open>
+            <summary>Ledger hardware wallet</summary>
+            <div class="photon-details-body">
+              <div class="ledger-connect-block">
+                <p class="photon-sub">
+                  Unlock your Nano, open the <strong>Solana</strong> app, then connect.
+                  Keys stay on the device.
+                </p>
+                <div class="ledger-connect-row">
+                  <label class="field">
+                    <span>Account #</span>
+                    <input
+                      id="ledgerAccountIndex"
+                      type="number"
+                      min="0"
+                      max="50"
+                      step="1"
+                      value="0"
+                      inputmode="numeric"
+                    />
+                  </label>
+                  <button type="button" class="photon-gen" id="connectLedgerBtn" title="Connect Ledger Nano (Solana app)">
+                    Connect Ledger
+                  </button>
+                </div>
+                <p class="photon-sub" id="ledgerConnectStatus" style="margin-top: 8px"></p>
+              </div>
+            </div>
+          </details>
 
           <details class="photon-details" open>
             <summary>Import seed phrase / key</summary>
@@ -539,11 +566,11 @@
     <script src="./lib/solana-hd.js"></script>
     <script src="./lib/multi-hd.js"></script>
     <script src="./lib/buffer.min.js"></script>
-    <script src="./lib/solana-tx.bundle.js?v=0.5.70"></script>
+    <script src="./lib/solana-tx.bundle.js?v=0.5.71"></script>
     <script src="./lib/qrcode.min.js"></script>
-    <script src="./lib/walletconnect.bundle.js?v=0.5.70"></script>
-    <script src="./lib/ledger-solana.bundle.js?v=0.5.70"></script>
+    <script src="./lib/walletconnect.bundle.js?v=0.5.71"></script>
+    <script src="./lib/ledger-solana.bundle.js?v=0.5.71"></script>
     <script src="./config.js"></script>
-    <script src="./app.js?v=0.5.70"></script>
+    <script src="./app.js?v=0.5.71"></script>
   </body>
 </html>
