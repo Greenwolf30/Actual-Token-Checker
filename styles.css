@@ -2612,6 +2612,14 @@ body.is-local .dock {
   border-bottom: 1px solid var(--ph-line);
 }
 
+#importSolField[hidden],
+#importEvmField[hidden],
+#importBtcField[hidden],
+#importSuiField[hidden],
+#importChainKeyNote[hidden] {
+  display: none !important;
+}
+
 .photon-details-body {
   padding: 12px 14px 14px;
   display: grid;

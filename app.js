@@ -588,47 +588,65 @@ function emptyChainKeys() {
   };
 }
 
+function setImportFieldVisible(el, on) {
+  if (!el) return;
+  el.hidden = !on;
+  el.style.display = on ? "" : "none";
+  if (!on) {
+    const input = el.querySelector("input, textarea");
+    if (input) input.value = "";
+  }
+}
+
 /** Show only the private-key import field for the active chain. */
 function paintImportFields() {
   const chain = activeChain(STATE);
   const kind = (chain && chain.kind) || "solana";
-  const sol = $("importSolField");
-  const evm = $("importEvmField");
-  const btc = $("importBtcField");
-  const sui = $("importSuiField");
-  const note = $("importChainKeyNote");
+  const showSol = kind === "solana";
+  const showEvm = kind === "evm";
+  const showBtc = kind === "bitcoin";
+  const showSui = kind === "sui";
+  setImportFieldVisible($("importSolField"), showSol);
+  setImportFieldVisible($("importEvmField"), showEvm);
+  setImportFieldVisible($("importBtcField"), showBtc);
+  setImportFieldVisible($("importSuiField"), showSui);
+  // Never leave a cross-chain key sitting in a hidden input.
+  if (!showSol && $("importSolSecret")) $("importSolSecret").value = "";
+  if (!showEvm && $("importEvmSecret")) $("importEvmSecret").value = "";
+  if (!showBtc && $("importBtcSecret")) $("importBtcSecret").value = "";
+  if (!showSui && $("importSuiSecret")) $("importSuiSecret").value = "";
+  const keyName = showSol
+    ? "Solana secret"
+    : showEvm
+      ? "EVM private key"
+      : showBtc
+        ? "Bitcoin private key"
+        : showSui
+          ? "Sui private key"
+          : "private key";
   const summary = $("importPanelSummary");
-  if (sol) sol.hidden = kind !== "solana";
-  if (evm) evm.hidden = kind !== "evm";
-  if (btc) btc.hidden = kind !== "bitcoin";
-  if (sui) sui.hidden = kind !== "sui";
-  // Clear hidden fields so a leftover key from another chain cannot be imported.
-  if (kind !== "solana" && $("importSolSecret")) $("importSolSecret").value = "";
-  if (kind !== "evm" && $("importEvmSecret")) $("importEvmSecret").value = "";
-  if (kind !== "bitcoin" && $("importBtcSecret")) $("importBtcSecret").value = "";
-  if (kind !== "sui" && $("importSuiSecret")) $("importSuiSecret").value = "";
-  const keyName =
-    kind === "solana"
-      ? "Solana secret"
-      : kind === "evm"
-        ? "EVM private key"
-        : kind === "bitcoin"
-          ? "Bitcoin private key"
-          : kind === "sui"
-            ? "Sui private key"
-            : "private key";
   if (summary) {
     summary.textContent =
       "Import seed / " + ((chain && chain.name) || "chain") + " key";
   }
+  const note = $("importChainKeyNote");
   if (note) {
     note.hidden = false;
-    note.textContent =
-      "Private-key import is for " +
-      ((chain && chain.name) || "this chain") +
-      " only (" +
-      keyName +
-      "). Seed phrase still restores all chains.";
+    note.style.display = "";
+    if (showEvm) {
+      note.textContent =
+        "EVM chains: paste an EVM private key only. Solana secret import is hidden here.";
+    } else if (showSol) {
+      note.textContent =
+        "Solana: paste a Solana secret key only. EVM private-key import is hidden here.";
+    } else {
+      note.textContent =
+        "Private-key import is for " +
+        ((chain && chain.name) || "this chain") +
+        " only (" +
+        keyName +
+        "). Seed phrase still restores all chains.";
+    }
   }
 }
 
@@ -1241,6 +1259,7 @@ function go(panel, opts) {
   if (panel === "receive") renderReceive();
   if (panel === "activity") {
     renderAccountsPanel();
+    paintImportFields();
     refreshAccountBalances();
   }
   if (panel === "send") {
