@@ -908,16 +908,16 @@ body.is-extension .acct-drawer {
 }
 
 .balance-block {
-  margin-top: 28px;
-  padding: 18px 16px 16px;
-  border: 1px solid var(--line-strong);
-  border-radius: 18px;
+  margin-top: 22px;
+  padding: 16px 14px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
   background:
-    linear-gradient(165deg, rgba(255, 255, 255, 0.045), transparent 46%),
-    linear-gradient(180deg, rgba(16, 22, 36, 0.92), rgba(9, 13, 22, 0.88));
+    linear-gradient(165deg, rgba(255, 255, 255, 0.04), transparent 48%),
+    linear-gradient(180deg, rgba(14, 18, 28, 0.92), rgba(8, 11, 18, 0.9));
   box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.05) inset,
-    0 18px 40px rgba(0, 0, 0, 0.32);
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 12px 28px rgba(0, 0, 0, 0.28);
 }
 
 .balance-label-row {
@@ -952,19 +952,20 @@ body.is-extension .acct-drawer {
 
 .balance-value {
   margin: 8px 0 0;
-  font-family: var(--font-display);
-  font-size: clamp(2.4rem, 9vw, 3.1rem);
-  font-weight: 400;
-  letter-spacing: 0.01em;
+  font-family: var(--font-ui);
+  font-size: clamp(2.35rem, 8.5vw, 2.9rem);
+  font-weight: 700;
+  letter-spacing: -0.04em;
   line-height: 1;
   font-variant-numeric: tabular-nums;
-  color: #b8a66a;
+  color: #c4b278;
 }
 
 .balance-value .currency {
-  font-size: 0.55em;
+  font-size: 0.58em;
   margin-right: 2px;
-  color: #c4b278;
+  font-weight: 700;
+  color: #b8a66a;
 }
 
 .balance-receive-note {
@@ -1044,22 +1045,22 @@ body.is-extension .acct-drawer {
 .cta-row {
   display: grid;
   grid-template-columns: 1.15fr 1.15fr 0.95fr;
-  gap: 10px;
-  margin-top: 28px;
+  gap: 8px;
+  margin-top: 18px;
 }
 
 .btn {
-  --btn-h: 50px;
+  --btn-h: 46px;
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   min-height: var(--btn-h);
-  padding: 0 16px;
+  padding: 0 14px;
   border-radius: 12px;
-  font-size: 0.92rem;
-  font-weight: 400;
+  font-size: 0.88rem;
+  font-weight: 600;
   letter-spacing: -0.015em;
   isolation: isolate;
   overflow: hidden;
@@ -1293,14 +1294,12 @@ body.is-extension .acct-drawer {
 
 /* Holdings */
 .holdings {
-  margin-top: 28px;
-  padding: 14px 12px 12px;
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 36%),
-    rgba(8, 11, 18, 0.55);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  margin-top: 22px;
+  padding: 4px 0 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .section-head {
@@ -1308,28 +1307,28 @@ body.is-extension .acct-drawer {
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
-  padding: 0 4px;
+  margin-bottom: 8px;
+  padding: 0 2px;
 }
 
 .section-head h2 {
   margin: 0;
-  font-family: var(--font-display);
-  font-size: 0.92rem;
-  font-weight: 400;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--accent-bright);
+  color: var(--muted);
 }
 
 .section-note {
-  font-size: 0.74rem;
+  font-size: 0.72rem;
   color: var(--muted);
   font-weight: 600;
-  padding: 3px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  background: rgba(0, 0, 0, 0.28);
+  padding: 0;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
 }
 
 .token-list,
@@ -1344,10 +1343,13 @@ body.is-extension .acct-drawer {
 
 /* Compact holdings so many tokens fit under SOL without endless scroll. */
 .token-list {
-  gap: 3px;
+  gap: 0;
   max-height: min(48vh, 380px);
   overflow-y: auto;
-  padding-right: 2px;
+  padding: 2px 0;
+  border-radius: 14px;
+  border: 1px solid var(--holdings-edge);
+  background: rgba(10, 14, 22, 0.55);
   scrollbar-width: thin;
 }
 
@@ -1386,12 +1388,28 @@ body.is-extension .acct-drawer {
 }
 
 .token-list .token-row {
-  grid-template-columns: 28px 1fr auto;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: 10px;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset;
+  grid-template-columns: 30px 1fr auto;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  background: transparent;
+  box-shadow: none;
   animation-duration: 0.28s;
+}
+
+.token-list > li:last-child .token-row {
+  border-bottom: 0;
+}
+
+.token-list .token-row:hover,
+.token-list .token-row:active {
+  background: rgba(184, 167, 207, 0.07);
+  border-color: transparent;
+  border-bottom-color: rgba(255, 255, 255, 0.04);
+  box-shadow: none;
+  transform: none;
 }
 
 @keyframes rowIn {
@@ -1464,8 +1482,8 @@ body.is-extension .acct-drawer {
 }
 
 .token-list .token-logo {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
 }
 
 .token-logo-img {
@@ -1482,13 +1500,13 @@ body.is-extension .acct-drawer {
 
 .token-list .token-logo-img,
 .token-list .token-icon {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   box-shadow: none;
 }
 
 .token-list .token-icon {
-  font-size: 0.58rem;
+  font-size: 0.6rem;
 }
 
 .token-meta strong,
@@ -1505,7 +1523,9 @@ body.is-extension .acct-drawer {
 }
 
 .token-list .token-meta strong {
-  font-size: 0.8rem;
+  font-size: 0.86rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1536,7 +1556,8 @@ body.is-extension .acct-drawer {
 }
 
 .token-list .token-vals strong {
-  font-size: 0.78rem;
+  font-size: 0.82rem;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -1554,106 +1575,151 @@ body.is-extension .acct-drawer {
   font-size: 0.66rem;
 }
 
-.holdings {
-  margin-top: 18px;
-  padding: 10px 10px 8px;
+/* Token detail (Phantom / Solflare-style asset page) */
+.panel-token {
+  padding-bottom: 8px;
 }
 
-/* Token detail (Phantom / Solflare-style asset page) */
-.token-detail-head {
+.token-detail-nav {
   display: grid;
-  grid-template-columns: 52px 1fr;
-  gap: 12px;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
   align-items: center;
-  margin-top: 4px;
+}
+
+.token-back {
+  width: 34px;
+  height: 34px;
+  margin: 0;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--ink-soft);
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.token-back:hover {
+  opacity: 1;
+  color: var(--ink);
+  border-color: rgba(184, 167, 207, 0.35);
+  background: rgba(184, 167, 207, 0.1);
+}
+
+.token-detail-identity {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
 }
 
 .token-detail-logo {
-  width: 52px;
-  height: 52px;
+  width: 36px;
+  height: 36px;
   display: grid;
   place-items: center;
 }
 
 .token-detail-logo .token-logo-img,
 .token-detail-logo .token-icon {
-  width: 52px;
-  height: 52px;
+  width: 36px;
+  height: 36px;
 }
 
 .token-detail-name {
   margin: 0;
-  font-family: var(--font-display);
-  font-size: 1.55rem;
-  font-weight: 400;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  line-height: 1.05;
+  font-family: var(--font-ui);
+  font-size: 1.02rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  text-transform: none;
+  line-height: 1.15;
   color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .token-detail-symbol {
-  margin: 4px 0 0;
-  font-size: 0.82rem;
+  margin: 2px 0 0;
+  font-size: 0.74rem;
   color: var(--muted);
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
 }
 
 .token-detail-price-block {
   margin-top: 18px;
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
 }
 
 .token-detail-price {
   margin: 0;
-  font-size: 1.85rem;
+  font-family: var(--font-ui);
+  font-size: 2rem;
   font-weight: 700;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.04em;
   font-variant-numeric: tabular-nums;
   color: var(--ink);
+  line-height: 1;
 }
 
 .token-detail-change {
   margin: 0;
-  font-size: 0.88rem;
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 0.78rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--muted);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .token-detail-change.is-up {
-  color: var(--ok);
+  color: #1d3b2a;
+  background: rgba(61, 214, 140, 0.9);
+  border-color: transparent;
 }
 
 .token-detail-change.is-down {
-  color: var(--danger);
+  color: #3b1717;
+  background: rgba(255, 120, 120, 0.9);
+  border-color: transparent;
 }
 
 .token-chart-card {
-  margin-top: 16px;
-  padding: 12px 10px 8px;
-  border-radius: 16px;
-  border: 1px solid var(--holdings-edge);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 40%),
-    rgba(8, 11, 18, 0.55);
+  margin-top: 14px;
+  padding: 4px 0 0;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
 }
 
 .token-chart-ranges {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
   gap: 4px;
-  margin-bottom: 8px;
+  margin-top: 10px;
+  padding: 3px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .token-chart-range {
-  flex: 1;
   min-height: 30px;
-  border-radius: 8px;
-  border: 1px solid transparent;
+  border-radius: 9px;
+  border: 0;
   background: transparent;
   color: var(--muted);
   font-size: 0.72rem;
@@ -1661,25 +1727,24 @@ body.is-extension .acct-drawer {
   letter-spacing: 0.04em;
   transition:
     background 0.15s ease,
-    color 0.15s ease,
-    border-color 0.15s ease;
+    color 0.15s ease;
 }
 
 .token-chart-range:hover {
   color: var(--ink-soft);
-  background: rgba(255, 255, 255, 0.03);
 }
 
 .token-chart-range.is-active {
   color: var(--ink);
-  border-color: rgba(184, 167, 207, 0.28);
-  background: rgba(184, 167, 207, 0.12);
+  background: rgba(184, 167, 207, 0.18);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset;
 }
 
 .token-chart-wrap {
   position: relative;
   width: 100%;
-  height: 160px;
+  height: 168px;
+  margin: 0 -2px;
 }
 
 .token-chart-wrap canvas {
@@ -1696,36 +1761,88 @@ body.is-extension .acct-drawer {
   place-items: center;
   color: var(--muted);
   font-size: 0.8rem;
-  background: rgba(8, 11, 18, 0.35);
-  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 50%),
+    rgba(8, 11, 18, 0.2);
+  border-radius: 12px;
+}
+
+.token-holding-strip {
+  margin-top: 16px;
+  padding: 14px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-radius: 14px;
+  border: 1px solid var(--holdings-edge);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 55%),
+    rgba(12, 16, 24, 0.72);
+}
+
+.token-holding-label {
+  margin: 0;
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.token-holding-amount {
+  margin: 4px 0 0;
+  font-size: 1.02rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.token-holding-usd {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #c4b278;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
 }
 
 .token-detail-stats {
-  margin: 18px 0 0;
+  margin: 12px 0 0;
   padding: 0;
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: 0;
+  border-radius: 14px;
+  border: 1px solid var(--holdings-edge);
+  overflow: hidden;
+  background: rgba(12, 16, 24, 0.55);
 }
 
 .token-detail-stats > div {
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid var(--holdings-edge);
-  background: var(--holdings-row);
+  padding: 12px 14px;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
+}
+
+.token-detail-stats > div + div {
+  border-left: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .token-detail-stats dt {
   margin: 0;
-  font-size: 0.68rem;
-  letter-spacing: 0.05em;
+  font-size: 0.66rem;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
+  font-weight: 700;
 }
 
 .token-detail-stats dd {
   margin: 5px 0 0;
-  font-size: 0.92rem;
+  font-size: 0.9rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--ink);
@@ -1734,36 +1851,40 @@ body.is-extension .acct-drawer {
 
 .token-detail-cta {
   grid-template-columns: 1fr 1fr;
-  margin-top: 18px;
+  margin-top: 16px;
 }
 
 /* Forms / secondary panels */
 .back-link {
-  margin: 0 0 18px;
+  margin: 0 0 14px;
   padding: 0;
-  font-weight: 400;
-  color: var(--accent-bright);
-  transition: opacity 0.15s ease;
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: var(--ink-soft);
+  transition: color 0.15s ease, opacity 0.15s ease;
 }
 
 .back-link:hover {
-  opacity: 0.85;
+  color: var(--accent-bright);
+  opacity: 1;
 }
 
 .panel-title {
   margin: 0;
-  font-family: var(--font-display);
-  font-size: 2.2rem;
-  font-weight: 400;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  line-height: 1;
+  font-family: var(--font-ui);
+  font-size: 1.55rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  text-transform: none;
+  line-height: 1.1;
   color: var(--ink);
 }
 
 .panel-sub {
-  margin: 10px 0 0;
-  color: var(--ink-soft);
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.4;
 }
 
 .form {
@@ -2506,17 +2627,29 @@ body.is-extension .stage {
   scrollbar-color: rgba(184, 167, 207, 0.35) transparent;
 }
 
-body.is-extension .brand-hero {
-  font-size: 2.2rem;
+body.is-extension .eyebrow,
+body.is-extension .lede {
+  display: none;
 }
 
-body.is-extension .lede {
-  font-size: 0.88rem;
-  max-width: none;
+body.is-extension .brand-hero {
+  display: none;
+}
+
+body.is-extension .balance-block {
+  margin-top: 4px;
 }
 
 body.is-extension .balance-value {
-  font-size: 2.2rem;
+  font-size: 2.35rem;
+}
+
+body.is-extension .holdings {
+  margin-top: 16px;
+}
+
+body.is-extension .panel-title {
+  font-size: 1.35rem;
 }
 
 body.is-extension .dock {

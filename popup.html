@@ -12,7 +12,7 @@
       href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=0.5.93" />
+    <link rel="stylesheet" href="./styles.css?v=0.5.94" />
   </head>
   <body class="is-extension">
     <div class="atmosphere" aria-hidden="true">
@@ -153,15 +153,17 @@
           </section>
         </section>
 
-        <section class="panel" id="panel-token" data-panel="token" hidden>
-          <button type="button" class="back-link" data-go="home">← Back</button>
-          <header class="token-detail-head">
-            <div class="token-detail-logo" id="tokenDetailLogo" aria-hidden="true"></div>
-            <div class="token-detail-titles">
-              <h2 class="token-detail-name" id="tokenDetailName">Token</h2>
-              <p class="token-detail-symbol" id="tokenDetailSymbol">—</p>
+        <section class="panel panel-token" id="panel-token" data-panel="token" hidden>
+          <div class="token-detail-nav">
+            <button type="button" class="back-link token-back" data-go="home">←</button>
+            <div class="token-detail-identity">
+              <div class="token-detail-logo" id="tokenDetailLogo" aria-hidden="true"></div>
+              <div class="token-detail-titles">
+                <h2 class="token-detail-name" id="tokenDetailName">Token</h2>
+                <p class="token-detail-symbol" id="tokenDetailSymbol">—</p>
+              </div>
             </div>
-          </header>
+          </div>
 
           <div class="token-detail-price-block">
             <p class="token-detail-price" id="tokenDetailPrice">—</p>
@@ -169,27 +171,27 @@
           </div>
 
           <div class="token-chart-card">
+            <div class="token-chart-wrap">
+              <canvas id="tokenChartCanvas" width="360" height="168" aria-label="Price chart"></canvas>
+              <p class="token-chart-empty" id="tokenChartEmpty" hidden>Chart unavailable</p>
+            </div>
             <div class="token-chart-ranges" id="tokenChartRanges" role="tablist" aria-label="Chart range">
               <button type="button" class="token-chart-range is-active" data-range="1H">1H</button>
               <button type="button" class="token-chart-range" data-range="1D">1D</button>
               <button type="button" class="token-chart-range" data-range="1W">1W</button>
               <button type="button" class="token-chart-range" data-range="1M">1M</button>
             </div>
-            <div class="token-chart-wrap">
-              <canvas id="tokenChartCanvas" width="360" height="160" aria-label="Price chart"></canvas>
-              <p class="token-chart-empty" id="tokenChartEmpty" hidden>Chart unavailable</p>
+          </div>
+
+          <div class="token-holding-strip">
+            <div>
+              <p class="token-holding-label">Your balance</p>
+              <p class="token-holding-amount" id="tokenDetailBalance">—</p>
             </div>
+            <p class="token-holding-usd" id="tokenDetailUsd">—</p>
           </div>
 
           <dl class="token-detail-stats">
-            <div>
-              <dt>Your balance</dt>
-              <dd id="tokenDetailBalance">—</dd>
-            </div>
-            <div>
-              <dt>Value</dt>
-              <dd id="tokenDetailUsd">—</dd>
-            </div>
             <div>
               <dt>24h volume</dt>
               <dd id="tokenDetailVol">—</dd>
@@ -674,13 +676,13 @@
     <script src="./lib/ethers.umd.min.js"></script>
     <script src="./lib/solana-hd.js"></script>
     <script src="./lib/multi-hd.js"></script>
-    <script src="./lib/btc-send.bundle.js?v=0.5.93"></script>
+    <script src="./lib/btc-send.bundle.js?v=0.5.94"></script>
     <script src="./lib/buffer.min.js"></script>
-    <script src="./lib/solana-tx.bundle.js?v=0.5.93"></script>
+    <script src="./lib/solana-tx.bundle.js?v=0.5.94"></script>
     <script src="./lib/qrcode.min.js"></script>
-    <script src="./lib/walletconnect.bundle.js?v=0.5.93"></script>
-    <script src="./lib/ledger-solana.bundle.js?v=0.5.93"></script>
+    <script src="./lib/walletconnect.bundle.js?v=0.5.94"></script>
+    <script src="./lib/ledger-solana.bundle.js?v=0.5.94"></script>
     <script src="./config.js"></script>
-    <script src="./app.js?v=0.5.93"></script>
+    <script src="./app.js?v=0.5.94"></script>
   </body>
 </html>

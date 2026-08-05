@@ -7,8 +7,8 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
-v0.5.93:
-- Tap a holding to open a token page with price, stats, and chart
-- Send / Receive from the token page
+v0.5.94:
+- More professional wallet UI (cleaner home, holdings list, token page)
+- Token page layout closer to Phantom / Solflare
 
 Version: see manifest.json

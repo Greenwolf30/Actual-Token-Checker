@@ -3110,7 +3110,7 @@ function drawTokenChart(canvas, points, up) {
   const empty = $("tokenChartEmpty");
   const wrap = canvas.parentElement;
   const cssW = Math.max(280, (wrap && wrap.clientWidth) || canvas.clientWidth || 320);
-  const cssH = Math.max(140, (wrap && wrap.clientHeight) || 160);
+  const cssH = Math.max(148, (wrap && wrap.clientHeight) || 168);
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   canvas.width = Math.floor(cssW * dpr);
   canvas.height = Math.floor(cssH * dpr);
@@ -3127,8 +3127,8 @@ function drawTokenChart(canvas, points, up) {
   }
   if (empty) empty.hidden = true;
 
-  const padX = 6;
-  const padY = 10;
+  const padX = 2;
+  const padY = 12;
   const prices = points.map((p) => p.price);
   let min = Math.min.apply(null, prices);
   let max = Math.max.apply(null, prices);
@@ -3140,47 +3140,68 @@ function drawTokenChart(canvas, points, up) {
       max += 1;
     }
   }
+  // Soft padding so the line never kisses the edges.
+  const pad = (max - min) * 0.08 || Math.abs(max) * 0.02 || 1;
+  min -= pad;
+  max += pad;
   const span = max - min || 1;
   const xAt = (i) => padX + (i / (points.length - 1)) * (cssW - padX * 2);
   const yAt = (price) => padY + (1 - (price - min) / span) * (cssH - padY * 2);
+  const coords = points.map((p, i) => ({ x: xAt(i), y: yAt(p.price) }));
 
-  const stroke = up ? "rgba(110, 210, 150, 0.95)" : "rgba(230, 120, 120, 0.95)";
-  const fillTop = up ? "rgba(110, 210, 150, 0.28)" : "rgba(230, 120, 120, 0.22)";
+  // Subtle horizontal guides
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.045)";
+  ctx.lineWidth = 1;
+  for (let g = 1; g <= 3; g++) {
+    const gy = padY + ((cssH - padY * 2) * g) / 4;
+    ctx.beginPath();
+    ctx.moveTo(padX, gy);
+    ctx.lineTo(cssW - padX, gy);
+    ctx.stroke();
+  }
 
-  ctx.beginPath();
-  points.forEach((p, i) => {
-    const x = xAt(i);
-    const y = yAt(p.price);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
-  ctx.lineTo(xAt(points.length - 1), cssH - padY);
-  ctx.lineTo(xAt(0), cssH - padY);
+  const stroke = up ? "#4adf95" : "#f07171";
+  const fillTop = up ? "rgba(74, 223, 149, 0.26)" : "rgba(240, 113, 113, 0.2)";
+
+  const strokePath = () => {
+    ctx.beginPath();
+    ctx.moveTo(coords[0].x, coords[0].y);
+    for (let i = 1; i < coords.length; i++) {
+      const prev = coords[i - 1];
+      const cur = coords[i];
+      const midX = (prev.x + cur.x) / 2;
+      const midY = (prev.y + cur.y) / 2;
+      ctx.quadraticCurveTo(prev.x, prev.y, midX, midY);
+    }
+    const last = coords[coords.length - 1];
+    ctx.lineTo(last.x, last.y);
+  };
+
+  strokePath();
+  ctx.lineTo(coords[coords.length - 1].x, cssH - padY + 4);
+  ctx.lineTo(coords[0].x, cssH - padY + 4);
   ctx.closePath();
-  const grad = ctx.createLinearGradient(0, padY, 0, cssH - padY);
+  const grad = ctx.createLinearGradient(0, padY, 0, cssH);
   grad.addColorStop(0, fillTop);
-  grad.addColorStop(1, "rgba(8, 11, 18, 0)");
+  grad.addColorStop(0.85, "rgba(8, 11, 18, 0)");
   ctx.fillStyle = grad;
   ctx.fill();
 
-  ctx.beginPath();
-  points.forEach((p, i) => {
-    const x = xAt(i);
-    const y = yAt(p.price);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
+  strokePath();
   ctx.strokeStyle = stroke;
-  ctx.lineWidth = 2;
+  ctx.lineWidth = 2.25;
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
   ctx.stroke();
 
-  // end dot
-  const last = points[points.length - 1];
+  const last = coords[coords.length - 1];
   ctx.beginPath();
-  ctx.arc(xAt(points.length - 1), yAt(last.price), 3.2, 0, Math.PI * 2);
+  ctx.arc(last.x, last.y, 3.6, 0, Math.PI * 2);
   ctx.fillStyle = stroke;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(last.x, last.y, 6.5, 0, Math.PI * 2);
+  ctx.fillStyle = up ? "rgba(74, 223, 149, 0.18)" : "rgba(240, 113, 113, 0.18)";
   ctx.fill();
   return true;
 }
@@ -3198,7 +3219,11 @@ function paintTokenDetailSkeleton() {
   const usdEl = $("tokenDetailUsd");
   if (logo) logo.innerHTML = tokenLogoHtml(h);
   if (nameEl) nameEl.textContent = name;
-  if (symEl) symEl.textContent = symbol + (chain ? " · " + chain.name : "");
+  if (symEl) {
+    symEl.textContent =
+      (symbol && symbol !== "TOKEN" ? symbol : name) +
+      (chain ? " · " + chain.name : "");
+  }
   const qty =
     Number(h.amount) >= 1
       ? Number(h.amount).toLocaleString(undefined, { maximumFractionDigits: 6 })
@@ -3215,7 +3240,7 @@ function paintTokenDetailSkeleton() {
   const px = tokenDetailUnitPrice(h, chain);
   if (priceEl) priceEl.textContent = formatTokenUnitPrice(px);
   if (changeEl) {
-    changeEl.textContent = "Loading…";
+    changeEl.textContent = "···";
     changeEl.className = "token-detail-change";
   }
   const volEl = $("tokenDetailVol");
@@ -3275,7 +3300,7 @@ async function paintTokenDetail() {
     } else {
       const n = Number(ch);
       const sign = n > 0 ? "+" : "";
-      changeEl.textContent = sign + n.toFixed(2) + "% · " + range;
+      changeEl.textContent = sign + n.toFixed(2) + "%  " + range;
       changeEl.className =
         "token-detail-change " + (n > 0 ? "is-up" : n < 0 ? "is-down" : "");
     }
