@@ -8477,10 +8477,6 @@ function wire() {
   });
   $("acctDrawerClose")?.addEventListener("click", () => closeAcctDrawer());
   $("acctDrawerBackdrop")?.addEventListener("click", () => closeAcctDrawer());
-  $("acctDrawerGenerate")?.addEventListener("click", async () => {
-    closeAcctDrawer();
-    await addAccount();
-  });
   const onConnectLedger = async () => {
     try {
       closeAcctDrawer();
@@ -8495,7 +8491,6 @@ function wire() {
       if (ledgerStatus) ledgerStatus.textContent = msg;
     }
   };
-  $("acctDrawerLedger")?.addEventListener("click", onConnectLedger);
   $("connectLedgerBtn")?.addEventListener("click", onConnectLedger);
   $("acctDrawerManage")?.addEventListener("click", () => {
     closeAcctDrawer();

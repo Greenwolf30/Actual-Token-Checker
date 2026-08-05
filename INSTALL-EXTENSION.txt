@@ -7,6 +7,9 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.5:
+- Accounts sidebar: remove Generate Wallet + Connect Ledger (use Manage accounts)
+
 v0.6.4:
 - Remove duplicate “Ledger” word on Accounts rows (was overlapping the delete button)
 
