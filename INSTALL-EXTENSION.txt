@@ -8,6 +8,9 @@ PREFERRED UPDATE (keeps seed / accounts):
 5. Click the toolbar icon once → wait for “Jupiter signing ready”
 6. Hard-refresh jup.ag (Ctrl+Shift+R) if you use Jupiter
 
+v0.5.70:
+- Total USD balance highlighted in yellow
+
 v0.5.69:
 - Connect Ledger (Solana app) from Accounts / Wallets
 - Ledger wallets labeled with a Ledger badge (rename in Settings)
