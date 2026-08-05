@@ -1,5 +1,6 @@
 /**
  * Invisible offscreen signer for in-page Solana dApp requests (Jupiter, etc).
+ * Mirrors the proven WalletConnect signing path in app.js.
  */
 (function () {
   const STORE_KEY = "gladiator_wallet_v1";
@@ -20,6 +21,17 @@
     return out;
   }
 
+  function ensureBuffer() {
+    const g = typeof globalThis !== "undefined" ? globalThis : window;
+    if (typeof g.Buffer === "undefined" || typeof g.Buffer.alloc !== "function") {
+      const fromLib = window.solanaWeb3 && window.solanaWeb3.Buffer;
+      if (fromLib) g.Buffer = fromLib;
+    }
+    if (typeof g.Buffer === "undefined" || typeof g.Buffer.alloc !== "function") {
+      throw new Error("Buffer missing in offscreen — reload Gladiator");
+    }
+  }
+
   function storageGet() {
     return new Promise((resolve) => {
       try {
@@ -37,15 +49,37 @@
     );
   }
 
+  function getBase58() {
+    return (
+      (typeof window !== "undefined" && window.Base58) ||
+      (typeof globalThis !== "undefined" && globalThis.Base58) ||
+      null
+    );
+  }
+
+  function getNacl() {
+    return (
+      (typeof window !== "undefined" && window.nacl) ||
+      (typeof self !== "undefined" && self.nacl) ||
+      (typeof globalThis !== "undefined" && globalThis.nacl) ||
+      null
+    );
+  }
+
   function keypairFromAccount(acc) {
+    ensureBuffer();
     if (!window.solanaWeb3) throw new Error("Solana library missing in offscreen");
     if (!acc || !acc.solana || !acc.solana.secretKey) {
       throw new Error("No Solana key — open Gladiator and create/import a wallet");
     }
-    const sk = Base58.decode(acc.solana.secretKey);
+    const B58 = getBase58();
+    if (!B58 || typeof B58.decode !== "function") {
+      throw new Error("Base58 missing in offscreen — reload Gladiator");
+    }
+    const sk = B58.decode(acc.solana.secretKey);
     if (sk.length === 64) return solanaWeb3.Keypair.fromSecretKey(sk);
     if (sk.length === 32) return solanaWeb3.Keypair.fromSeed(sk);
-    throw new Error("Corrupt Solana secret key");
+    throw new Error("Corrupt Solana secret key (need 32 or 64 bytes)");
   }
 
   function canDeserialize(u8) {
@@ -66,29 +100,62 @@
   function decodeTx(b64) {
     const u8 = base64ToBytes(b64);
     if (canDeserialize(u8)) return u8;
-    // Rare: some callers send base58
     try {
-      const as58 = Base58.decode(String(b64 || ""));
-      if (canDeserialize(as58)) return as58;
+      const B58 = getBase58();
+      if (B58 && typeof B58.decode === "function") {
+        const as58 = B58.decode(String(b64 || ""));
+        if (canDeserialize(as58)) return as58;
+      }
     } catch (_) {}
     return u8;
   }
 
+  /**
+   * Sign serialized Solana tx bytes. Prefer VersionedTransaction (Jupiter swaps).
+   * Never call legacy serialize() with requireAllSignatures:true — multi-signer
+   * txs would throw even after a valid partialSign.
+   */
   function signTxBytes(u8, keypair) {
+    ensureBuffer();
     const { Transaction, VersionedTransaction } = solanaWeb3;
+    const bytes = u8 instanceof Uint8Array ? u8 : new Uint8Array(u8);
+    if (!bytes.length) throw new Error("Empty transaction");
+
+    let vtErr = null;
     if (VersionedTransaction) {
       try {
-        const vtx = VersionedTransaction.deserialize(u8);
+        const vtx = VersionedTransaction.deserialize(bytes);
         vtx.sign([keypair]);
         const signed = vtx.serialize();
         const signedBytes = signed instanceof Uint8Array ? signed : new Uint8Array(signed);
         return bytesToBase64(signedBytes);
-      } catch (_) {}
+      } catch (err) {
+        vtErr = err;
+        // Only fall through when deserialize itself failed (not a versioned tx).
+        try {
+          VersionedTransaction.deserialize(bytes);
+          // deserialize worked — signing failed; don't try legacy
+          throw err;
+        } catch (inner) {
+          if (inner === err) throw err;
+          // deserialize failed → try legacy below
+        }
+      }
     }
-    const tx = Transaction.from(u8);
-    tx.partialSign(keypair);
-    const signed = tx.serialize();
-    return bytesToBase64(signed instanceof Uint8Array ? signed : new Uint8Array(signed));
+
+    try {
+      const tx = Transaction.from(bytes);
+      tx.partialSign(keypair);
+      const signed = tx.serialize({
+        requireAllSignatures: false,
+        verifySignatures: false,
+      });
+      return bytesToBase64(signed instanceof Uint8Array ? signed : new Uint8Array(signed));
+    } catch (legacyErr) {
+      const a = vtErr && (vtErr.message || vtErr);
+      const b = legacyErr && (legacyErr.message || legacyErr);
+      throw new Error("Sign failed: " + String(b || a || "unknown"));
+    }
   }
 
   async function getPubkey() {
@@ -99,6 +166,8 @@
     if (!acc.solana.secretKey) {
       throw new Error("Wallet keys locked/missing — open Gladiator once to restore");
     }
+    // Prove the key material loads.
+    keypairFromAccount(acc);
     return pk;
   }
 
@@ -106,6 +175,9 @@
     const state = await storageGet();
     const kp = keypairFromAccount(activeAccount(state));
     const u8 = decodeTx(params && params.transaction);
+    if (!canDeserialize(u8)) {
+      throw new Error("Could not decode Solana transaction from Jupiter");
+    }
     return { signedTransaction: signTxBytes(u8, kp) };
   }
 
@@ -113,9 +185,12 @@
     const state = await storageGet();
     const kp = keypairFromAccount(activeAccount(state));
     const list = (params && params.transactions) || [];
+    if (!list.length) throw new Error("No transactions to sign");
     const signedTransactions = list.map((item) => {
       const blob = typeof item === "string" ? item : item && item.transaction;
-      return signTxBytes(decodeTx(blob), kp);
+      const u8 = decodeTx(blob);
+      if (!canDeserialize(u8)) throw new Error("Could not decode one of the transactions");
+      return signTxBytes(u8, kp);
     });
     return { signedTransactions };
   }
@@ -123,7 +198,9 @@
   async function signAndSendTransaction(params) {
     const state = await storageGet();
     const kp = keypairFromAccount(activeAccount(state));
-    const signedB64 = signTxBytes(decodeTx(params && params.transaction), kp);
+    const u8 = decodeTx(params && params.transaction);
+    if (!canDeserialize(u8)) throw new Error("Could not decode Solana transaction");
+    const signedB64 = signTxBytes(u8, kp);
     const rpcs = [
       (state && state.solRpc) || "",
       "https://api.mainnet-beta.solana.com",
@@ -143,7 +220,12 @@
             method: "sendTransaction",
             params: [
               signedB64,
-              { encoding: "base64", preflightCommitment: "confirmed", skipPreflight: false },
+              {
+                encoding: "base64",
+                preflightCommitment: "confirmed",
+                skipPreflight: false,
+                maxRetries: 3,
+              },
             ],
           }),
         });
@@ -163,9 +245,12 @@
     const state = await storageGet();
     const acc = activeAccount(state);
     const kp = keypairFromAccount(acc);
-    if (!window.nacl) throw new Error("nacl missing");
+    const naclApi = getNacl();
+    if (!naclApi || !naclApi.sign || !naclApi.sign.detached) {
+      throw new Error("nacl missing in offscreen");
+    }
     const msg = base64ToBytes(params && params.message);
-    const sig = nacl.sign.detached(msg, kp.secretKey);
+    const sig = naclApi.sign.detached(msg, kp.secretKey);
     return { signature: bytesToBase64(sig) };
   }
 
@@ -183,6 +268,14 @@
           return await signAndSendTransaction(msg.params || {});
         case "signMessage":
           return await signMessage(msg.params || {});
+        case "ping":
+          return {
+            ok: true,
+            solanaWeb3: !!window.solanaWeb3,
+            Base58: !!(window.Base58 && window.Base58.decode),
+            nacl: !!(window.nacl && window.nacl.sign),
+            Buffer: typeof Buffer !== "undefined",
+          };
         default:
           throw new Error("Unknown offscreen method: " + msg.method);
       }
@@ -194,5 +287,9 @@
     return true;
   });
 
-  console.info("[Gladiator] offscreen signer ready");
+  console.info("[Gladiator] offscreen signer ready", {
+    solanaWeb3: !!window.solanaWeb3,
+    Base58: !!(getBase58() && getBase58().decode),
+    nacl: !!(getNacl() && getNacl().sign),
+  });
 })();

@@ -385,11 +385,22 @@
           const out = [];
           for (const input of inputs) {
             const bytes = toTxBytes(input && input.transaction);
-            const result = await request("signTransaction", {
-              transaction: b64FromBytes(bytes),
-              versioned: true,
-              origin: location.origin,
-            });
+            let result;
+            try {
+              result = await request("signTransaction", {
+                transaction: b64FromBytes(bytes),
+                versioned: true,
+                origin: location.origin,
+              });
+            } catch (err) {
+              throw new Error(
+                "Gladiator sign failed: " +
+                  String((err && err.message) || err || "unknown")
+              );
+            }
+            if (!result || !result.signedTransaction) {
+              throw new Error("Gladiator returned empty signed transaction");
+            }
             out.push({
               signedTransaction: bytesFromB64(result.signedTransaction),
             });

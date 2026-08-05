@@ -1963,7 +1963,10 @@ function signSolanaTxBytes(bytes, keypair) {
   }
   const tx = Transaction.from(u8);
   tx.partialSign(keypair);
-  const signed = tx.serialize();
+  const signed = tx.serialize({
+    requireAllSignatures: false,
+    verifySignatures: false,
+  });
   const signedBytes = signed instanceof Uint8Array ? signed : new Uint8Array(signed);
   const sig0 = tx.signatures && tx.signatures[0] && tx.signatures[0].signature;
   return {

@@ -4,20 +4,20 @@ Gladiator Wallet — load as unpacked Chrome/Opera extension
 2. Load unpacked → select THIS folder (Gladiator-Wallet-Extension)
 3. Reload the extension after updates (manifest version must change)
 
+v0.5.50:
+- Fix Jupiter “wallet signing failed” on swap
+- Offscreen signer now matches WalletConnect signing (versioned txs +
+  partial serialize without requireAllSignatures)
+- Clearer sign error messages; offscreen boot retry
+
 v0.5.49:
-- Real Gladiator PNG logo in Jupiter’s wallet list
-- Connect click fixed (no longer blocked by offscreen signer warm-up)
-- Content-script bridge always present; provider still injects after page load
-- Open Gladiator once and create/import a wallet before connecting on jup.ag
+- Real Gladiator PNG logo + connect click fix
 
 If jup.ag ever blanks again:
 - chrome.storage.local set gladiator_page_inject = false
-  (or ask and we’ll ship a kill-switch build)
 
-WalletConnect:
+WalletConnect still works as fallback:
 - Settings → Project ID + wc: URI → Connect
 - Keep the Gladiator wallet window open while swapping
-
-Self-test: open test-wallet-standard.html (via a local server or extension page)
 
 Version: see manifest.json

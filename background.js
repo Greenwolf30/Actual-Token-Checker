@@ -76,17 +76,32 @@ async function ensureOffscreen() {
     try {
       await chrome.offscreen.createDocument({
         url: OFFSCREEN_URL,
-        reasons: ["WORKERS"],
+        // LOCAL_STORAGE covers chrome.storage + scripted crypto work.
+        reasons: ["LOCAL_STORAGE", "BLOBS"],
         justification: "Sign Solana transactions for in-page dApps like Jupiter",
       });
     } catch (err) {
       const msg = String(err && err.message ? err.message : err);
-      if (!/already exists|only a single offscreen/i.test(msg)) throw err;
+      if (!/already exists|only a single offscreen/i.test(msg)) {
+        // Fallback reason set for older Chrome/Opera builds.
+        try {
+          await chrome.offscreen.createDocument({
+            url: OFFSCREEN_URL,
+            reasons: ["WORKERS"],
+            justification: "Sign Solana transactions for in-page dApps like Jupiter",
+          });
+        } catch (err2) {
+          const msg2 = String(err2 && err2.message ? err2.message : err2);
+          if (!/already exists|only a single offscreen/i.test(msg2)) throw err2;
+        }
+      }
     } finally {
       offscreenCreating = null;
     }
   })();
   await offscreenCreating;
+  // Give the offscreen page a beat to attach its message listener.
+  await new Promise((r) => setTimeout(r, 150));
 }
 
 function callOffscreen(method, params) {
@@ -97,21 +112,37 @@ function callOffscreen(method, params) {
       reject(err);
       return;
     }
-    chrome.runtime.sendMessage(
-      { type: "gladiator-offscreen", method, params: params || {} },
-      (response) => {
-        const err = chrome.runtime.lastError;
-        if (err) {
-          reject(new Error(err.message || "Offscreen unavailable"));
-          return;
-        }
-        if (!response || response.ok === false) {
-          reject(new Error((response && response.error) || "Sign failed"));
-          return;
-        }
-        resolve(response.result);
+
+    const sendOnce = () =>
+      new Promise((res, rej) => {
+        chrome.runtime.sendMessage(
+          { type: "gladiator-offscreen", method, params: params || {} },
+          (response) => {
+            const err = chrome.runtime.lastError;
+            if (err) {
+              rej(new Error(err.message || "Offscreen unavailable"));
+              return;
+            }
+            if (!response || response.ok === false) {
+              rej(new Error((response && response.error) || "Sign failed"));
+              return;
+            }
+            res(response.result);
+          }
+        );
+      });
+
+    try {
+      resolve(await sendOnce());
+    } catch (err) {
+      // Retry once — offscreen may still be booting after createDocument.
+      try {
+        await new Promise((r) => setTimeout(r, 300));
+        resolve(await sendOnce());
+      } catch (err2) {
+        reject(err2);
       }
-    );
+    }
   });
 }
 
@@ -220,7 +251,17 @@ chrome.runtime.onInstalled.addListener((details) => {
   }
   // Crash-safe Wallet Standard inject is ON by default (allowlisted Solana dApps).
   storageSet({ gladiator_page_inject: true }).catch(() => {});
-  ensureOffscreen().catch(() => {});
+  // Recreate offscreen so updated signer scripts load after extension reload.
+  (async () => {
+    try {
+      if (chrome.offscreen && chrome.offscreen.closeDocument) {
+        await chrome.offscreen.closeDocument();
+      }
+    } catch (_) {}
+    try {
+      await ensureOffscreen();
+    } catch (_) {}
+  })();
 });
 
 chrome.runtime.onStartup.addListener(() => {
@@ -310,6 +351,8 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg) return;
+  // Offscreen document handles these — do not claim the message here.
+  if (msg.type === "gladiator-offscreen") return;
 
   if (msg.type === "gladiator-set-inject") {
     const enabled = !!msg.enabled;
