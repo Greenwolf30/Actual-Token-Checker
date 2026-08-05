@@ -7,17 +7,11 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.5.78:
+- Total balance shows a “Received …” notice when new tokens/native arrive after Sync
+- Pill under $ balance + toast; dismiss with ×
+
 v0.5.77:
-- Send tokens/native on all chains:
-  · Solana: SOL + SPL
-  · Ethereum / Base / Polygon / Robinhood: ETH/POL + ERC-20
-  · Bitcoin: BTC
-  · Sui: SUI + coins
-- Sui token balances shown on Home
-
-v0.5.76:
-- Show ERC-20 tokens + Settings → Manage tokens toggles
-
-Receive: use the Receive address for the selected chain (tokens go to that same address).
+- Send tokens/native on Solana, EVM, Bitcoin, Sui
 
 Version: see manifest.json

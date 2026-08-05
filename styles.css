@@ -967,6 +967,78 @@ body.is-extension .acct-drawer {
   color: #c4b278;
 }
 
+.balance-receive-note {
+  margin: 10px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(61, 214, 140, 0.35);
+  background: linear-gradient(
+    105deg,
+    rgba(61, 214, 140, 0.16),
+    rgba(184, 167, 207, 0.1)
+  );
+  color: #b8e7c8;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  animation: receiveNoteIn 0.35s ease-out;
+}
+
+.balance-receive-note[hidden] {
+  display: none !important;
+}
+
+.balance-receive-ico {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(61, 214, 140, 0.22);
+  color: #7dffb2;
+  font-size: 0.85rem;
+}
+
+#balanceReceiveText {
+  flex: 1 1 auto;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.balance-receive-dismiss {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--ink-soft);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.balance-receive-dismiss:hover {
+  color: var(--ink);
+  background: rgba(0, 0, 0, 0.35);
+}
+
+@keyframes receiveNoteIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .balance-sol {
   margin: 12px 0 0;
   font-family: var(--font-mono);

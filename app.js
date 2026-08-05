@@ -1184,7 +1184,10 @@ let balanceSeq = 0;
 /** Recent txs for History tab */
 let TX_HISTORY = [];
 let historySeq = 0;
+/** Active “you received tokens” banner under total balance */
+let RECEIVE_ALERT = null; // { text, symbols:[], at, accountId, chainId }
 const LOCAL_TX_KEY = "gladiator_local_txs_v1";
+const HOLDINGS_SNAP_KEY = "gladiator_holdings_snap_v1";
 const SWAP_PROGRAMS = new Set([
   "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
   "JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB",
@@ -1933,6 +1936,9 @@ async function refreshBalance() {
         ACCOUNT_SOL[acc.id] = { sol: Number(nextBalance.native) || 0, loading: false, error: "" };
       }
       paintManageTokens();
+      if (acc && nextBalance.ok) {
+        maybeNotifyReceives(acc.id, chain.id, nextHoldings);
+      }
     }
   } catch (err) {
     if (!stillCurrent()) return;
@@ -1967,6 +1973,166 @@ async function refreshBalance() {
   }
 }
 
+function loadHoldingsSnaps() {
+  try {
+    const raw = localStorage.getItem(HOLDINGS_SNAP_KEY);
+    const obj = raw ? JSON.parse(raw) : {};
+    return obj && typeof obj === "object" ? obj : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveHoldingsSnaps(map) {
+  try {
+    localStorage.setItem(HOLDINGS_SNAP_KEY, JSON.stringify(map || {}));
+  } catch (_) {}
+}
+
+function holdingsSnapKey(accountId, chainId) {
+  return String(accountId || "") + ":" + String(chainId || "");
+}
+
+function formatReceiveQty(n) {
+  const abs = Math.abs(Number(n) || 0);
+  if (abs >= 1000) return abs.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  if (abs >= 1) return abs.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  if (abs >= 0.0001) return abs.toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+  return abs.toPrecision(3);
+}
+
+/**
+ * Compare current holdings to last snapshot for this wallet+chain.
+ * First sync only baselines (no alert). Later increases = received.
+ */
+function detectAndRecordReceives(accountId, chainId, holdings) {
+  if (!accountId || !chainId) return [];
+  const key = holdingsSnapKey(accountId, chainId);
+  const snaps = loadHoldingsSnaps();
+  const prev = snaps[key] && typeof snaps[key] === "object" ? snaps[key] : null;
+  const next = {};
+  for (const h of holdings || []) {
+    if (!h) continue;
+    const id = h.mint ? String(h.mint).toLowerCase() : "__native__";
+    next[id] = Number(h.amount) || 0;
+  }
+  const received = [];
+  if (prev) {
+    for (const id of Object.keys(next)) {
+      const before = Number(prev[id]) || 0;
+      const after = Number(next[id]) || 0;
+      const delta = after - before;
+      const minDelta = id === "__native__" ? 1e-8 : 1e-12;
+      if (!(delta > minDelta)) continue;
+      const h = (holdings || []).find((row) => {
+        const rid = row.mint ? String(row.mint).toLowerCase() : "__native__";
+        return rid === id;
+      });
+      const chain = CHAINS.find((c) => c.id === chainId);
+      received.push({
+        mint: id === "__native__" ? null : id,
+        symbol:
+          (h && h.symbol) ||
+          (id === "__native__" ? (chain && chain.symbol) || "COIN" : "TOKEN"),
+        amount: delta,
+        isNew: !Object.prototype.hasOwnProperty.call(prev, id),
+        kind: (h && h.kind) || (id === "__native__" ? "native" : "token"),
+      });
+    }
+  }
+  snaps[key] = next;
+  // Cap stored keys
+  const keys = Object.keys(snaps);
+  if (keys.length > 80) {
+    keys.slice(0, keys.length - 80).forEach((k) => delete snaps[k]);
+  }
+  saveHoldingsSnaps(snaps);
+  return received;
+}
+
+function receiveAlertText(items) {
+  const list = (items || []).filter(Boolean);
+  if (!list.length) return "";
+  // Prefer token receives in the headline; include native if that's all we got.
+  const tokens = list.filter((x) => x.kind !== "native");
+  const use = tokens.length ? tokens : list;
+  if (use.length === 1) {
+    const r = use[0];
+    return (
+      "Received " +
+      formatReceiveQty(r.amount) +
+      " " +
+      (r.symbol || "TOKEN") +
+      (r.isNew && r.kind !== "native" ? " · new token" : "")
+    );
+  }
+  if (use.length === 2) {
+    return (
+      "Received " +
+      (use[0].symbol || "TOKEN") +
+      " + " +
+      (use[1].symbol || "TOKEN")
+    );
+  }
+  return "Received " + use.length + " tokens";
+}
+
+function dismissReceiveAlert() {
+  RECEIVE_ALERT = null;
+  paintReceiveAlert();
+}
+
+function paintReceiveAlert() {
+  const note = $("balanceReceiveNote");
+  const text = $("balanceReceiveText");
+  if (!note) return;
+  const acc = activeAccount(STATE);
+  const chain = activeChain(STATE);
+  const stillRelevant =
+    RECEIVE_ALERT &&
+    acc &&
+    chain &&
+    RECEIVE_ALERT.accountId === acc.id &&
+    RECEIVE_ALERT.chainId === chain.id;
+  if (!stillRelevant || !RECEIVE_ALERT.text) {
+    note.hidden = true;
+    if (text) text.textContent = "";
+    return;
+  }
+  if (text) text.textContent = RECEIVE_ALERT.text;
+  note.hidden = false;
+}
+
+function maybeNotifyReceives(accountId, chainId, holdings) {
+  const received = detectAndRecordReceives(accountId, chainId, holdings);
+  if (!received.length) {
+    paintReceiveAlert();
+    return;
+  }
+  // Prefer highlighting token inflows in the balance area.
+  const tokens = received.filter((r) => r.kind !== "native");
+  const focus = tokens.length ? tokens : received;
+  const text = receiveAlertText(focus);
+  RECEIVE_ALERT = {
+    text,
+    symbols: focus.map((r) => r.symbol).filter(Boolean),
+    items: focus,
+    at: Date.now(),
+    accountId,
+    chainId,
+  };
+  paintReceiveAlert();
+  showToast(text);
+  const delta = $("dayDelta");
+  if (delta) {
+    delta.textContent =
+      focus.length === 1
+        ? "received · " + (focus[0].symbol || "token")
+        : "received · " + focus.length + " tokens";
+    delta.className = "delta up";
+  }
+}
+
 function paintBalances() {
   const chain = activeChain(STATE);
   const fiat = $("fiatBalance");
@@ -1989,21 +2155,38 @@ function paintBalances() {
   const digits =
     chain.kind === "bitcoin" ? 8 : chain.kind === "solana" || chain.kind === "sui" ? 4 : 5;
   if (native) native.textContent = Number(BALANCE.native || 0).toFixed(digits);
+  const acc = activeAccount(STATE);
+  const alertActive =
+    RECEIVE_ALERT &&
+    acc &&
+    chain &&
+    RECEIVE_ALERT.accountId === acc.id &&
+    RECEIVE_ALERT.chainId === chain.id &&
+    Date.now() - (RECEIVE_ALERT.at || 0) < 10 * 60 * 1000;
   if (delta) {
-    const tokN = vis.filter(
-      (h) =>
-        (h.kind === "spl" || h.kind === "erc20" || h.kind === "sui_coin") &&
-        Number(h.amount) > 0
-    ).length;
-    delta.textContent = BALANCE.ok
-      ? tokN
-        ? "on-chain · " + tokN + " token" + (tokN === 1 ? "" : "s")
-        : "on-chain"
-      : chain.kind === "solana"
-        ? "Solana sync failed — check Helius in Advanced · RPC"
-        : chain.name + " sync failed — retry Sync";
-    delta.className = "delta " + (BALANCE.ok ? "up" : "");
+    if (alertActive && RECEIVE_ALERT.symbols && RECEIVE_ALERT.symbols.length) {
+      delta.textContent =
+        RECEIVE_ALERT.symbols.length === 1
+          ? "received · " + RECEIVE_ALERT.symbols[0]
+          : "received · " + RECEIVE_ALERT.symbols.length + " tokens";
+      delta.className = "delta up";
+    } else {
+      const tokN = vis.filter(
+        (h) =>
+          (h.kind === "spl" || h.kind === "erc20" || h.kind === "sui_coin") &&
+          Number(h.amount) > 0
+      ).length;
+      delta.textContent = BALANCE.ok
+        ? tokN
+          ? "on-chain · " + tokN + " token" + (tokN === 1 ? "" : "s")
+          : "on-chain"
+        : chain.kind === "solana"
+          ? "Solana sync failed — check Helius in Advanced · RPC"
+          : chain.name + " sync failed — retry Sync";
+      delta.className = "delta " + (BALANCE.ok ? "up" : "");
+    }
   }
+  paintReceiveAlert();
 }
 
 function chainLogoSrc(chainOrLogo) {
@@ -4922,6 +5105,8 @@ function renderAcctDrawerList() {
       if (a.id !== STATE.activeAccountId) {
         STATE.activeAccountId = a.id;
         clearHistoryForSwitch("Loading history for " + (a.name || "wallet") + "…");
+        RECEIVE_ALERT = null;
+        paintReceiveAlert();
         await storageSet(STATE);
         await refreshAll();
         showToast("Active · " + (a.name || "Wallet"));
@@ -5137,6 +5322,15 @@ async function selectChain(chainId) {
   clearHistoryForSwitch(
     "Loading " + ((nextChain && nextChain.name) || "chain") + " history…"
   );
+  // Receive banner is per wallet+chain — hide while switching.
+  if (
+    RECEIVE_ALERT &&
+    RECEIVE_ALERT.chainId &&
+    RECEIVE_ALERT.chainId !== chainId
+  ) {
+    RECEIVE_ALERT = null;
+    paintReceiveAlert();
+  }
   // Swap top-bar address immediately for the selected chain (before RPC).
   paintActiveChainAddress();
   paintChainPicker();
@@ -5403,6 +5597,8 @@ function renderAccountsPanel() {
       if (a.id === STATE.activeAccountId) return;
       STATE.activeAccountId = a.id;
       clearHistoryForSwitch("Loading history for " + (a.name || "wallet") + "…");
+      RECEIVE_ALERT = null;
+      paintReceiveAlert();
       await storageSet(STATE);
       await refreshAll();
       showToast("Active · " + a.name);
@@ -6572,6 +6768,10 @@ function wire() {
             ? " — paste API key or full Helius URL, Save, stay on Solana, and import your seed if balances are on another wallet."
             : "");
     }
+  });
+  $("balanceReceiveDismiss")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    dismissReceiveAlert();
   });
   $("settingsSyncBtn")?.addEventListener("click", async () => {
     showToast("Syncing…");

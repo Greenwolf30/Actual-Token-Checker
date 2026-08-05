@@ -12,7 +12,7 @@
       href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=0.5.77" />
+    <link rel="stylesheet" href="./styles.css?v=0.5.78" />
   </head>
   <body class="is-extension">
     <div class="atmosphere" aria-hidden="true">
@@ -106,6 +106,13 @@
             </div>
             <p class="balance-value">
               <span class="currency">$</span><span id="fiatBalance">0.00</span>
+            </p>
+            <p class="balance-receive-note" id="balanceReceiveNote" hidden>
+              <span class="balance-receive-ico" aria-hidden="true">↘</span>
+              <span id="balanceReceiveText">Received tokens</span>
+              <button type="button" class="balance-receive-dismiss" id="balanceReceiveDismiss" aria-label="Dismiss">
+                ×
+              </button>
             </p>
             <p class="balance-sol">
               <img
@@ -578,13 +585,13 @@
     <script src="./lib/ethers.umd.min.js"></script>
     <script src="./lib/solana-hd.js"></script>
     <script src="./lib/multi-hd.js"></script>
-    <script src="./lib/btc-send.bundle.js?v=0.5.77"></script>
+    <script src="./lib/btc-send.bundle.js?v=0.5.78"></script>
     <script src="./lib/buffer.min.js"></script>
-    <script src="./lib/solana-tx.bundle.js?v=0.5.77"></script>
+    <script src="./lib/solana-tx.bundle.js?v=0.5.78"></script>
     <script src="./lib/qrcode.min.js"></script>
-    <script src="./lib/walletconnect.bundle.js?v=0.5.77"></script>
-    <script src="./lib/ledger-solana.bundle.js?v=0.5.77"></script>
+    <script src="./lib/walletconnect.bundle.js?v=0.5.78"></script>
+    <script src="./lib/ledger-solana.bundle.js?v=0.5.78"></script>
     <script src="./config.js"></script>
-    <script src="./app.js?v=0.5.77"></script>
+    <script src="./app.js?v=0.5.78"></script>
   </body>
 </html>
