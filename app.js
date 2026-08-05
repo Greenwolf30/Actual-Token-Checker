@@ -1737,35 +1737,6 @@ function accountHint(accounts) {
 }
 
 async function loadWcSessionMirror() {
-  if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
-    try {
-      const bag = await new Promise((resolve) => {
-        chrome.storage.local.get(["gladiator_wc_sessions", "gladiator_wc_pending"], (r) =>
-          resolve(r || {})
-        );
-      });
-      const items =
-        (bag.gladiator_wc_sessions && bag.gladiator_wc_sessions.items) || [];
-      const pending = bag.gladiator_wc_pending;
-      const out = Array.isArray(items) ? items.slice() : [];
-      if (
-        pending &&
-        pending.uri &&
-        String(pending.uri).startsWith("wc:") &&
-        !out.some((x) => x && x.status === "pending")
-      ) {
-        out.unshift({
-          topic: "pending:" + String(pending.at || Date.now()),
-          name: "Pending connect",
-          url: "",
-          status: "pending",
-          uri: String(pending.uri).slice(0, 48) + "…",
-          accounts: [],
-        });
-      }
-      return out;
-    } catch (_) {}
-  }
   try {
     if (window.GladiatorWC && GladiatorWC.isReady()) {
       if (typeof GladiatorWC.listSessions === "function") return GladiatorWC.listSessions();
@@ -1863,7 +1834,7 @@ async function paintWcConnections() {
           (pending.length ? " · 1 pending" : "")
       );
     } else if (pending.length) {
-      setWcStatus("Pending WalletConnect — keep bridge window open");
+      setWcStatus("Pending WalletConnect…");
     }
   }
 }
@@ -1902,37 +1873,18 @@ async function wcDisconnectTopic(topic) {
     return;
   }
   try {
-    if (IS_EXTENSION && typeof chrome !== "undefined" && chrome.storage) {
-      await new Promise((resolve, reject) => {
-        chrome.storage.local.set(
-          {
-            gladiator_wc_cmd: { type: "disconnect", topic: t, at: Date.now() },
-            ...(t.startsWith("pending:") ? { gladiator_wc_pending: null } : {}),
-          },
-          () => {
-            const err = chrome.runtime.lastError;
-            if (err) reject(err);
-            else resolve();
-          }
-        );
-      });
-      try {
-        chrome.runtime.sendMessage({ type: "wc-open-bridge" }, () => void chrome.runtime.lastError);
-      } catch (_) {}
-      setWcStatus(t.startsWith("pending:") ? "Cancelled pending connect" : "Disconnect sent");
-      showToast(t.startsWith("pending:") ? "Pending cancelled" : "Disconnecting…");
-      setTimeout(() => paintWcConnections().catch(() => {}), 400);
+    await ensureWalletConnect();
+    if (t.startsWith("pending:")) {
+      showToast("Nothing to cancel");
+      paintWcSettings();
       return;
     }
-    if (window.GladiatorWC && GladiatorWC.isReady()) {
-      if (t.startsWith("pending:")) {
-        /* nothing local */
-      } else if (typeof GladiatorWC.disconnectSession === "function") {
-        await GladiatorWC.disconnectSession(t);
-      } else {
-        await GladiatorWC.disconnectAll();
-      }
+    if (typeof GladiatorWC.disconnectSession === "function") {
+      await GladiatorWC.disconnectSession(t);
+    } else {
+      await GladiatorWC.disconnectAll();
     }
+    setWcStatus("Disconnected");
     showToast("Disconnected");
     paintWcSettings();
   } catch (err) {
@@ -2041,6 +1993,17 @@ async function ensureWalletConnect() {
         if (!pk) throw new Error("No Solana address on active wallet");
         return pk;
       },
+      signUtf8Message: async (message) => {
+        const acc = activeAccount(STATE);
+        const kp = solanaKeypairFromAccount(acc);
+        if (!window.nacl) throw new Error("nacl missing");
+        const bytes =
+          message instanceof Uint8Array
+            ? message
+            : new TextEncoder().encode(String(message));
+        const sig = nacl.sign.detached(bytes, kp.secretKey);
+        return Base58.encode(sig);
+      },
       signSolanaMessage: async (params) => {
         const p = normalizeWcParams(params);
         const acc = activeAccount(STATE);
@@ -2112,8 +2075,8 @@ async function ensureWalletConnect() {
           WC_PENDING_PROPOSAL = null;
           hideWcApproveBar();
           if ($("wcUri")) $("wcUri").value = "";
-          setWcStatus("Session linked — waiting for pump.fun sign request…");
-          showToast("Linked — keep popup open");
+          setWcStatus("Session linked — waiting for ownership signature…");
+          showToast("Linked");
           paintWcSettings();
         } catch (err) {
           // Fallback: show manual approve if auto fails
@@ -2121,6 +2084,19 @@ async function ensureWalletConnect() {
           setWcStatus(
             "Auto-approve failed: " + String(err && err.message ? err.message : err)
           );
+        }
+      },
+      onAuthenticate: async (payload) => {
+        try {
+          setWcStatus("Ownership auth — signing…");
+          await GladiatorWC.approveAuthenticate(payload);
+          setWcStatus("Ownership signed — check pump.fun");
+          showToast("Ownership signed");
+          paintWcSettings();
+        } catch (err) {
+          const msg = String(err && err.message ? err.message : err);
+          setWcStatus("Auth failed: " + msg);
+          showToast(msg);
         }
       },
       onRequest: async (event) => {
@@ -2149,6 +2125,7 @@ async function ensureWalletConnect() {
         hideWcApproveBar();
         setWcStatus("Disconnected");
         showToast("WalletConnect disconnected");
+        paintWcSettings();
       },
       onStatus: (msg) => {
         if (msg) setWcStatus(msg);
@@ -2205,48 +2182,20 @@ async function wcConnectFromUri() {
     await storageSet(STATE);
   }
 
-  // Extension popup dies when you click away — open a persistent bridge window
-  // so pump.fun can deliver "approve/sign" requests into the wallet.
-  if (IS_EXTENSION && typeof chrome !== "undefined" && chrome.runtime && chrome.storage) {
-    try {
-      await new Promise((resolve, reject) => {
-        chrome.storage.local.set(
-          {
-            gladiator_wc_pending: {
-              uri,
-              projectId,
-              at: Date.now(),
-            },
-          },
-          () => {
-            const err = chrome.runtime.lastError;
-            if (err) reject(err);
-            else resolve();
-          }
-        );
-      });
-      const res = await new Promise((resolve) => {
-        chrome.runtime.sendMessage({ type: "wc-open-bridge" }, (r) => resolve(r || {}));
-      });
-      if (res && res.ok === false) throw new Error(res.error || "Could not open bridge");
-      setWcStatus(
-        "Opened WalletConnect window — keep THAT window open. pump.fun sends approve there."
-      );
-      showToast("Keep the WalletConnect window open");
-      if ($("wcUri")) $("wcUri").value = "";
-      return;
-    } catch (err) {
-      const msg = String(err && err.message ? err.message : err);
-      setWcStatus("Bridge open failed: " + msg + " — trying in popup");
-    }
-  }
-
-  setWcStatus("Connecting… keep this window open");
+  setWcStatus("Connecting…");
   showToast("Connecting…");
   try {
     await ensureWalletConnect();
     await GladiatorWC.pair(uri);
-    setWcStatus("Paired — keep this page open for pump.fun approve/sign");
+    if ($("wcUri")) $("wcUri").value = "";
+    setWcStatus("Paired — approving session / signature…");
+    // Catch late proposal / ownership sign while URI is still fresh
+    try {
+      if (typeof GladiatorWC.processPendings === "function") {
+        await GladiatorWC.processPendings();
+      }
+    } catch (_) {}
+    paintWcSettings();
   } catch (err) {
     const msg = String(err && err.message ? err.message : err);
     setWcStatus("Connect failed: " + msg);
@@ -2256,32 +2205,15 @@ async function wcConnectFromUri() {
 
 async function wcDisconnect() {
   try {
-    // Live WC session usually lives in the bridge window, not this popup.
-    if (IS_EXTENSION && typeof chrome !== "undefined" && chrome.storage) {
-      await new Promise((resolve, reject) => {
-        chrome.storage.local.set(
-          {
-            gladiator_wc_cmd: { type: "disconnect", at: Date.now() },
-            gladiator_wc_pending: null,
-            gladiator_wc_sessions: { at: Date.now(), items: [] },
-          },
-          () => {
-            const err = chrome.runtime.lastError;
-            if (err) reject(err);
-            else resolve();
-          }
-        );
-      });
-      try {
-        chrome.runtime.sendMessage({ type: "wc-open-bridge" }, () => void chrome.runtime.lastError);
-      } catch (_) {}
-    }
     if (window.GladiatorWC && GladiatorWC.isReady()) {
       await GladiatorWC.disconnectAll();
+    } else if (STATE && STATE.wcProjectId && window.GladiatorWC) {
+      await ensureWalletConnect();
+      await GladiatorWC.disconnectAll();
     }
-    setWcStatus("Disconnect sent — pump.fun should drop the session");
+    setWcStatus("Disconnected");
     showToast("Disconnected");
-    paintWcConnections().catch(() => {});
+    paintWcSettings();
   } catch (err) {
     showToast(String(err && err.message ? err.message : err));
   }
@@ -4085,12 +4017,6 @@ function wire() {
     paintWcConnections()
       .then(() => showToast("Connections refreshed"))
       .catch((err) => console.warn(err));
-    // Ask bridge to republish if it's open
-    if (IS_EXTENSION && typeof chrome !== "undefined" && chrome.runtime) {
-      try {
-        chrome.runtime.sendMessage({ type: "wc-open-bridge" }, () => void chrome.runtime.lastError);
-      } catch (_) {}
-    }
   });
   $("wcConnectionsList")?.addEventListener("click", (e) => {
     const btn = e.target && e.target.closest ? e.target.closest(".wc-conn-disconnect") : null;
@@ -4099,19 +4025,6 @@ function wire() {
     const topic = btn.getAttribute("data-topic") || "";
     wcDisconnectTopic(topic).catch((err) => console.warn(err));
   });
-  if (
-    IS_EXTENSION &&
-    typeof chrome !== "undefined" &&
-    chrome.storage &&
-    chrome.storage.onChanged
-  ) {
-    chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== "local") return;
-      if (changes.gladiator_wc_sessions || changes.gladiator_wc_pending) {
-        paintWcConnections().catch(() => {});
-      }
-    });
-  }
   $("wcProposalApprove")?.addEventListener("click", () => {
     wcApprovePending().catch((err) => console.error(err));
   });
@@ -4404,16 +4317,7 @@ async function boot() {
   await fetchPrices();
   updateSendUsdEstimate();
   await refreshBalance();
-  // Extension: do NOT init WalletConnect in the toolbar popup — it fights the
-  // persistent wc-bridge window for the same relay session. Bridge owns WC.
-  if (IS_EXTENSION) {
-    paintWcSettings();
-    setWcStatus(
-      STATE.wcProjectId
-        ? "Paste wc: URI → Connect (opens WalletConnect window)"
-        : "Add a WalletConnect Project ID, then paste a wc: URI"
-    );
-  } else if (STATE.wcProjectId && window.GladiatorWC) {
+  if (STATE.wcProjectId && window.GladiatorWC) {
     try {
       await ensureWalletConnect();
     } catch (err) {
