@@ -7,6 +7,9 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.8:
+- Ledger: picking ETH/Polygon/Base auto-runs Link EVM (open Ethereum app first). Bitcoin/Sui Ledger still blocked.
+
 v0.6.7:
 - Ledger multi-chain: Link EVM (Ethereum app) for ETH / Polygon / Base / Robinhood ETH; Solana still via Solana app. Bitcoin & Sui Ledger not yet.
 

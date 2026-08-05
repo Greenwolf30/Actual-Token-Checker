@@ -7208,11 +7208,25 @@ async function selectChain(chainId) {
   const accPre = activeAccount(STATE);
   if (accPre && isLedgerAccount(accPre) && nextChain) {
     if (nextChain.kind === "evm" && !ledgerHasEvm(accPre)) {
-      showToast("Link EVM first — open Ethereum app, then Link EVM");
-      return;
+      // Chain click is a user gesture — run Link EVM now (Ethereum app must be open).
+      try {
+        showToast("Open Ethereum app on Ledger… linking EVM");
+        await linkLedgerEvm(accPre, { skipRefresh: true });
+      } catch (err) {
+        showToast(String(err && err.message ? err.message : err));
+        return;
+      }
+      if (!ledgerHasEvm(accPre)) {
+        showToast("Link EVM failed — open Ethereum app, then try again");
+        return;
+      }
     }
     if (nextChain.kind === "bitcoin" || nextChain.kind === "sui") {
-      showToast("Ledger " + nextChain.name + " not supported yet");
+      showToast(
+        "Ledger " +
+          nextChain.name +
+          " not supported yet — use a seed wallet, or stay on Solana / EVM"
+      );
       return;
     }
   }
