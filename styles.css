@@ -2007,7 +2007,7 @@ body.is-extension .shell {
   height: 100%;
   min-height: 100%;
   margin: 0;
-  padding: 12px 12px 78px;
+  padding: 12px 10px 78px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -2019,32 +2019,39 @@ body.is-extension .topbar-main {
   flex-direction: row;
   align-items: center;
   justify-content: flex-start;
-  gap: 8px;
-  column-gap: 8px;
+  gap: 6px;
+  column-gap: 6px;
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
 }
 
 body.is-extension .topbar-main > .brand-chip {
   justify-self: auto;
-  flex: 0 0 auto;
-  max-width: 132px;
+  flex: 0 1 auto;
+  max-width: 108px;
+  min-width: 0;
 }
 
 body.is-extension .brand-chip-sm {
-  max-width: 132px;
+  max-width: 108px;
   min-height: 32px;
   height: 32px;
-  padding: 3px 8px 3px 3px;
-  gap: 5px;
+  padding: 3px 6px 3px 3px;
+  gap: 4px;
 }
 
 body.is-extension .brand-chip-sm .brand-mark {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
 }
 
 body.is-extension .brand-chip-sm .brand-name {
-  font-size: 0.74rem;
+  font-size: 0.7rem;
   letter-spacing: -0.05em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 body.is-extension .brand-chip-sm .brand-acct {
@@ -2052,71 +2059,90 @@ body.is-extension .brand-chip-sm .brand-acct {
 }
 
 body.is-extension .brand-chip-sm .brand-chevron {
-  font-size: 0.62rem;
+  font-size: 0.58rem;
+  flex: 0 0 auto;
 }
 
 body.is-extension .topbar-center {
   position: relative;
   z-index: 2;
   justify-self: auto;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   min-width: 0;
-  max-width: 156px;
+  max-width: 118px;
   display: flex;
   justify-content: flex-start;
   margin-left: 0;
+  overflow: hidden;
 }
 
 body.is-extension .chain-picker {
-  min-width: 132px;
-  max-width: 156px;
+  min-width: 0;
+  max-width: 118px;
+  width: 100%;
 }
 
 body.is-extension .chain-picker-btn {
   width: 100%;
-  min-width: 132px;
+  min-width: 0;
   min-height: 32px;
   height: 32px;
-  padding: 0 10px;
-  gap: 6px;
+  padding: 0 8px;
+  gap: 5px;
   border-radius: 9px;
 }
 
 body.is-extension .chain-picker-logo,
 body.is-extension .addr-chip-logo {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
 }
 
 body.is-extension .chain-picker-title {
-  font-size: 0.82rem;
+  font-size: 0.76rem;
   letter-spacing: -0.02em;
-  max-width: 7.6rem;
+  max-width: 100%;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 body.is-extension .topbar-meta {
   justify-self: auto;
-  margin-left: auto; /* push address away from chain / Gladiator group */
-  margin-right: 12px; /* keep address off the right edge */
+  margin-left: auto;
+  margin-right: 0;
   padding-right: 0;
-  flex: 0 0 auto;
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 42%;
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  overflow: hidden;
 }
 
 body.is-extension .addr-plain,
 body.is-extension .addr-chip {
+  min-width: 0;
+  max-width: 100%;
+  width: auto;
   min-height: 32px;
   height: 32px;
   gap: 4px;
+  padding: 0;
+  overflow: hidden;
 }
 
 body.is-extension .addr-short {
-  font-size: 0.7rem;
-  max-width: 5.6rem;
+  font-size: 0.68rem;
+  max-width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 body.is-extension .stage {

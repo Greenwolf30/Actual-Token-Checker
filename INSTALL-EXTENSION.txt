@@ -5,14 +5,11 @@ PREFERRED UPDATE (keeps seed / accounts):
 2. Copy everything INSIDE the new folder into your EXISTING Gladiator folder (overwrite)
 3. chrome://extensions → Gladiator → Reload (do NOT Remove)
 4. Click the toolbar icon once → wait for “Jupiter signing ready”
-5. Hard-refresh jup.ag if you use Jupiter
+
+v0.5.60:
+- Top-bar address stays inside the wallet (no side bleed / overflow)
 
 v0.5.59:
-- Narrower popup tab
-- 0.085% fee now also collected on Jupiter / dApp Solana swaps (not only Send tab)
-  → 64AdTRibAkKQBuRQ2qcehZioE6ARL27CDP8wZRFM4FSZ
-
-v0.5.58:
-- Popup taller/narrower; 0.085% fee on in-wallet Solana sends
+- Narrower popup; 0.085% fee on Jupiter/dApp Solana txs too
 
 Version: see manifest.json
