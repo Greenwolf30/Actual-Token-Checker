@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Gladiator Wallet",
   "short_name": "Gladiator",
-  "version": "0.5.48",
+  "version": "0.5.49",
   "description": "Gladiator multi-chain wallet \u2014 Wallet Standard Solana provider + WalletConnect for dApps.",
   "action": {
     "default_title": "Gladiator",
@@ -80,6 +80,18 @@
     "https://notify.walletconnect.com/*",
     "https://echo.walletconnect.com/*",
     "https://push.walletconnect.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": ["content-script.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
   ],
   "web_accessible_resources": [
     {

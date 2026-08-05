@@ -34,7 +34,7 @@
                 error:
                   (response && response.error) ||
                   (err && err.message) ||
-                  (!response ? "Gladiator extension unavailable" : null),
+                  (!response ? "Gladiator extension unavailable" : undefined),
               },
               "*"
             );

@@ -163,9 +163,7 @@ async function getActivePublicKey() {
     state.accounts.find((a) => a.id === state.activeAccountId) || state.accounts[0];
   const pk = acc && acc.solana && acc.solana.publicKey;
   if (!pk) throw new Error("No Solana address on active wallet");
-  if (!acc.solana.secretKey) {
-    throw new Error("Keys missing — open Gladiator once to restore your wallet");
-  }
+  // Connect only needs the public address. Signing still requires secretKey.
   return pk;
 }
 
@@ -180,10 +178,19 @@ async function handleProviderRequest(msg, sender) {
     if (onlyIfTrusted && origin && !trusted.includes(origin)) {
       return null; // silent fail for onlyIfTrusted
     }
-    const publicKey = await getActivePublicKey();
-    // Warm signer; also verifies keys are usable
-    await callOffscreen("getPubkey", {});
+    let publicKey;
+    try {
+      publicKey = await getActivePublicKey();
+    } catch (err) {
+      // Wake the wallet UI so the user can create/import / unlock keys.
+      try {
+        await focusOrOpenWcWallet({ focus: true, settings: false });
+      } catch (_) {}
+      throw err;
+    }
     if (origin) await trustOrigin(origin);
+    // Warm offscreen signer in the background — never block connect on it.
+    callOffscreen("getPubkey", {}).catch(() => {});
     return { publicKey };
   }
 
