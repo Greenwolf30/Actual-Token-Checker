@@ -124,10 +124,8 @@ const IS_EXTENSION = !!(
   chrome.runtime.id
 );
 
-/** In-memory only — never written to disk. */
-let VAULT_PASS = null;
-let VAULT_UNLOCKED = true;
-const VAULT_ITERATIONS = 310000;
+/** Legacy vault migrate: one-time decrypt if an old encrypted blob exists. */
+let VAULT_MIGRATE_MODE = false;
 
 function bufToB64(buf) {
   const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
@@ -159,36 +157,6 @@ function stateHasPlainSecrets(state) {
   return !!(state && Array.isArray(state.accounts) && state.accounts.some(accountHasPlainSecrets));
 }
 
-function publicAccountView(a) {
-  if (!a) return a;
-  return {
-    id: a.id,
-    name: a.name,
-    createdAt: a.createdAt,
-    solana: a.solana ? { publicKey: a.solana.publicKey } : null,
-    evm: a.evm ? { address: a.evm.address } : null,
-    bitcoin: a.bitcoin
-      ? { address: a.bitcoin.address, publicKey: a.bitcoin.publicKey }
-      : null,
-    sui: a.sui ? { address: a.sui.address, publicKey: a.sui.publicKey } : null,
-  };
-}
-
-function extractAccountSecrets(accounts) {
-  const out = {};
-  for (const a of accounts || []) {
-    if (!a || !a.id) continue;
-    out[a.id] = {
-      mnemonic: a.mnemonic || "",
-      solanaSecretKey: (a.solana && a.solana.secretKey) || "",
-      evmPrivateKey: (a.evm && a.evm.privateKey) || "",
-      bitcoinPrivateKey: (a.bitcoin && a.bitcoin.privateKey) || "",
-      suiSecretKey: (a.sui && a.sui.secretKey) || "",
-    };
-  }
-  return out;
-}
-
 function applyAccountSecrets(accounts, secretsMap) {
   return (accounts || []).map((a) => {
     const s = secretsMap && secretsMap[a.id];
@@ -211,7 +179,7 @@ function applyAccountSecrets(accounts, secretsMap) {
   });
 }
 
-async function deriveVaultKey(password, saltBytes) {
+async function deriveVaultKey(password, saltBytes, iterations) {
   const baseKey = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(String(password)),
@@ -223,7 +191,7 @@ async function deriveVaultKey(password, saltBytes) {
     {
       name: "PBKDF2",
       salt: saltBytes,
-      iterations: VAULT_ITERATIONS,
+      iterations: iterations || 310000,
       hash: "SHA-256",
     },
     baseKey,
@@ -233,28 +201,13 @@ async function deriveVaultKey(password, saltBytes) {
   );
 }
 
-async function encryptVaultPayload(password, payload) {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const key = await deriveVaultKey(password, salt);
-  const plain = new TextEncoder().encode(JSON.stringify(payload));
-  const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plain);
-  return {
-    v: 1,
-    salt: bufToB64(salt),
-    iv: bufToB64(iv),
-    data: bufToB64(cipher),
-    iterations: VAULT_ITERATIONS,
-  };
-}
-
 async function decryptVaultPayload(password, vault) {
   if (!vault || !vault.data || !vault.salt || !vault.iv) {
     throw new Error("No encrypted vault");
   }
   const salt = b64ToBuf(vault.salt);
   const iv = b64ToBuf(vault.iv);
-  const key = await deriveVaultKey(password, salt);
+  const key = await deriveVaultKey(password, salt, vault.iterations);
   const plainBuf = await crypto.subtle.decrypt(
     { name: "AES-GCM", iv },
     key,
@@ -263,39 +216,13 @@ async function decryptVaultPayload(password, vault) {
   return JSON.parse(new TextDecoder().decode(plainBuf));
 }
 
-async function sealStateForDisk(state, password) {
-  const secrets = extractAccountSecrets(state.accounts);
-  const vault = await encryptVaultPayload(password, { secrets, at: Date.now() });
-  return {
-    activeAccountId: state.activeAccountId,
-    activeChainId: state.activeChainId,
-    solRpc: state.solRpc || "",
-    addressBook: Array.isArray(state.addressBook) ? state.addressBook : [],
-    wcProjectId: state.wcProjectId || "",
-    accounts: (state.accounts || []).map(publicAccountView),
-    vault,
-    vaultEnabled: true,
-  };
-}
-
 function isVaultLocked() {
-  return !!(STATE && STATE.vaultEnabled && !VAULT_UNLOCKED);
+  // Encryption paused — only "locked" while awaiting one-time migrate unlock.
+  return !!(STATE && STATE._needsVaultMigrate);
 }
 
 function paintVaultStatus() {
-  const el = $("vaultStatus");
-  if (!el) return;
-  if (STATE && STATE.vaultEnabled && VAULT_UNLOCKED) {
-    el.textContent = "Seed & keys encrypted — wallet unlocked";
-  } else if (STATE && STATE.vaultEnabled) {
-    el.textContent = "Locked — enter password to use keys";
-  } else if (stateHasPlainSecrets(STATE)) {
-    el.textContent = "Not encrypted yet — set a password below";
-  } else {
-    el.textContent = "Set a password to encrypt your seed phrase";
-  }
-  const lockBtn = $("vaultLockBtn");
-  if (lockBtn) lockBtn.hidden = !(STATE && STATE.vaultEnabled && VAULT_UNLOCKED);
+  // Vault UI removed; keep no-op for any leftover calls.
 }
 
 function gladiatorConfig() {
@@ -448,20 +375,11 @@ async function storageGet() {
 }
 
 async function storageSet(data) {
-  let toStore = data;
-  try {
-    // While unlocked with a password, always write encrypted secrets (never plaintext).
-    if (VAULT_PASS && VAULT_UNLOCKED && data && Array.isArray(data.accounts)) {
-      toStore = await sealStateForDisk(data, VAULT_PASS);
-      // Keep vault blob on live STATE so lock can re-use it without another read.
-      if (STATE && data === STATE) {
-        STATE.vault = toStore.vault;
-        STATE.vaultEnabled = true;
-      }
-    }
-  } catch (err) {
-    console.warn("[vault-seal]", err);
-    throw err;
+  // Encryption paused — always persist plaintext wallet state.
+  const toStore = data;
+  if (toStore && typeof toStore === "object") {
+    delete toStore.vault;
+    delete toStore.vaultEnabled;
   }
   const raw = JSON.stringify(toStore);
   let localOk = false;
@@ -683,15 +601,17 @@ async function ensureState() {
   if (typeof state.wcProjectId !== "string") state.wcProjectId = "";
   if (!Array.isArray(state.addressBook)) state.addressBook = [];
 
-  // Encrypted vault on disk: load public addresses only until unlock.
-  if (state.vault && state.vault.data) {
+  // Legacy encrypted vault: require one-time password migrate, then plaintext.
+  if (state.vault && state.vault.data && !stateHasPlainSecrets(state)) {
+    state._needsVaultMigrate = true;
     state.vaultEnabled = true;
-    state.accounts = (state.accounts || []).map(publicAccountView);
-    VAULT_UNLOCKED = false;
-    VAULT_PASS = null;
   } else {
+    state._needsVaultMigrate = false;
     state.vaultEnabled = false;
-    VAULT_UNLOCKED = true;
+    if (state.vault) {
+      delete state.vault;
+      await storageSet(state);
+    }
     let repaired = false;
     for (const a of state.accounts) {
       if (repairAccountSolanaKeys(a)) repaired = true;
@@ -706,7 +626,7 @@ function openVaultModal(mode) {
   const modal = $("vaultModal");
   if (!modal) return;
   modal.hidden = false;
-  modal.dataset.mode = mode || "unlock";
+  modal.dataset.mode = "migrate";
   const title = $("vaultModalTitle");
   const body = $("vaultModalBody");
   const pass2Wrap = $("vaultPass2Wrap");
@@ -716,20 +636,12 @@ function openVaultModal(mode) {
   if (err) err.textContent = "";
   if (pass1) pass1.value = "";
   if (pass2) pass2.value = "";
-  if (mode === "setup" || mode === "change") {
-    if (title) title.textContent = mode === "change" ? "Change password" : "Protect your wallet";
-    if (body) {
-      body.textContent =
-        mode === "change"
-          ? "Choose a new password. Your seed stays encrypted on this device."
-          : "Create a password to encrypt your seed phrase and private keys. You’ll need it to unlock Gladiator.";
-    }
-    if (pass2Wrap) pass2Wrap.hidden = false;
-  } else {
-    if (title) title.textContent = "Unlock wallet";
-    if (body) body.textContent = "Enter your password to decrypt keys for this session.";
-    if (pass2Wrap) pass2Wrap.hidden = true;
+  if (title) title.textContent = "Restore wallet";
+  if (body) {
+    body.textContent =
+      "Password encryption is paused. Enter your old password once to restore keys (then they stay unlocked on this device).";
   }
+  if (pass2Wrap) pass2Wrap.hidden = true;
   requestAnimationFrame(() => {
     if (pass1) pass1.focus();
   });
@@ -751,102 +663,40 @@ async function unlockVaultWithPassword(password) {
   const secrets = payload && payload.secrets;
   if (!secrets) throw new Error("Vault is empty");
   STATE.accounts = applyAccountSecrets(disk.accounts || STATE.accounts, secrets);
-  STATE.vault = disk.vault;
-  STATE.vaultEnabled = true;
   STATE.activeAccountId = disk.activeAccountId || STATE.activeAccountId;
-  VAULT_PASS = password;
-  VAULT_UNLOCKED = true;
-  // Re-seal with fresh IV so disk stays current after repairs.
+  STATE._needsVaultMigrate = false;
+  STATE.vaultEnabled = false;
+  delete STATE.vault;
   if (await repairAllExtraKeys(STATE)) {
-    await storageSet(STATE);
+    /* persist below */
   }
-  paintVaultStatus();
+  await storageSet(STATE);
   return true;
 }
 
-async function setupVaultPassword(password) {
-  if (!password || String(password).length < 6) {
-    throw new Error("Password must be at least 6 characters");
+async function requireUnlocked(_reason) {
+  if (isVaultLocked()) {
+    openVaultModal("migrate");
+    throw new Error("Enter your old password once to restore keys");
   }
-  if (!STATE || !Array.isArray(STATE.accounts)) throw new Error("No wallet loaded");
-  // If already vaulted, must be unlocked with secrets in memory.
-  if (STATE.vaultEnabled && !VAULT_UNLOCKED) {
-    throw new Error("Unlock the wallet first");
-  }
-  if (!stateHasPlainSecrets(STATE) && !(STATE.vaultEnabled && VAULT_UNLOCKED)) {
-    throw new Error("No keys in memory to encrypt");
-  }
-  VAULT_PASS = String(password);
-  VAULT_UNLOCKED = true;
-  await storageSet(STATE);
-  // Drop plaintext secrets from memory? Keep unlocked for session — user needs them.
-  // Disk is sealed. Memory stays unlocked until Lock / popup close.
-  paintVaultStatus();
-}
-
-async function lockVault() {
-  if (!(STATE && STATE.vaultEnabled)) return;
-  // Ensure latest secrets are sealed before wiping memory.
-  if (VAULT_PASS && VAULT_UNLOCKED && stateHasPlainSecrets(STATE)) {
-    await storageSet(STATE);
-  }
-  VAULT_PASS = null;
-  VAULT_UNLOCKED = false;
-  hideBackup();
-  STATE.accounts = (STATE.accounts || []).map(publicAccountView);
-  paintVaultStatus();
-  paintSwitchers();
-  showToast("Wallet locked");
-  openVaultModal("unlock");
-}
-
-async function requireUnlocked(reason) {
-  if (!isVaultLocked()) {
-    // Plaintext legacy: require setup before revealing seed.
-    if (!STATE.vaultEnabled && stateHasPlainSecrets(STATE) && reason === "backup") {
-      openVaultModal("setup");
-      throw new Error("Set a password to protect your seed before viewing it");
-    }
-    return true;
-  }
-  openVaultModal("unlock");
-  throw new Error("Unlock wallet first");
+  return true;
 }
 
 async function submitVaultModal() {
-  const modal = $("vaultModal");
-  const mode = (modal && modal.dataset.mode) || "unlock";
   const pass1 = (($("vaultPass1") && $("vaultPass1").value) || "").trim();
-  const pass2 = (($("vaultPass2") && $("vaultPass2").value) || "").trim();
   const errEl = $("vaultModalError");
   if (errEl) errEl.textContent = "";
   if (!pass1) throw new Error("Enter a password");
-
-  if (mode === "unlock") {
-    try {
-      await unlockVaultWithPassword(pass1);
-    } catch (_) {
-      throw new Error("Wrong password");
-    }
-    closeVaultModal();
-    showToast("Wallet unlocked");
-    paintSwitchers();
-    renderAccountsPanel();
-    await refreshBalance();
-    return;
+  try {
+    await unlockVaultWithPassword(pass1);
+  } catch (_) {
+    throw new Error("Wrong password");
   }
-
-  if (mode === "setup" || mode === "change") {
-    if (pass1.length < 6) throw new Error("Password must be at least 6 characters");
-    if (pass1 !== pass2) throw new Error("Passwords do not match");
-    if (mode === "change" && isVaultLocked()) {
-      throw new Error("Unlock first");
-    }
-    await setupVaultPassword(pass1);
-    closeVaultModal();
-    showToast(mode === "change" ? "Password updated" : "Seed encrypted");
-    paintVaultStatus();
-  }
+  closeVaultModal();
+  showToast("Wallet restored — encryption off");
+  paintSwitchers();
+  renderAccountsPanel();
+  await refreshBalance();
 }
 
 function solRpcList(chain) {
@@ -1977,18 +1827,62 @@ function decodeWcBytes(raw) {
     for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
     return out;
   }
-  // Solana WC payloads are usually base58 — try before base64 (overlap causes bad sigs).
   try {
     return Base58.decode(s);
   } catch (_) {}
-  // Base64
   if (/^[A-Za-z0-9+/]+=*$/.test(s) && s.length % 4 === 0) {
     try {
       return base64ToBytes(s);
     } catch (_) {}
   }
-  // UTF-8 text fallback
   return new TextEncoder().encode(s);
+}
+
+function canDeserializeSolTx(u8) {
+  if (!u8 || !u8.length || !window.solanaWeb3) return false;
+  const { Transaction, VersionedTransaction } = solanaWeb3;
+  if (VersionedTransaction) {
+    try {
+      VersionedTransaction.deserialize(u8);
+      return true;
+    } catch (_) {}
+  }
+  try {
+    Transaction.from(u8);
+    return true;
+  } catch (_) {}
+  return false;
+}
+
+/** Jupiter / WC Solana send transactions as base64 — prefer that over base58. */
+function decodeWcTxBytes(raw) {
+  if (raw == null) throw new Error("Missing transaction");
+  if (raw instanceof Uint8Array) return raw;
+  if (ArrayBuffer.isView(raw)) return new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
+  if (Array.isArray(raw)) return new Uint8Array(raw);
+  if (typeof raw !== "string") throw new Error("Unsupported transaction type");
+  const s = raw.trim();
+  if (!s) throw new Error("Empty transaction");
+  const candidates = [];
+  if (/^[A-Za-z0-9+/]+=*$/.test(s) && s.length % 4 === 0) {
+    try {
+      candidates.push(base64ToBytes(s));
+    } catch (_) {}
+  }
+  try {
+    candidates.push(Base58.decode(s));
+  } catch (_) {}
+  if (/^(0x)?[0-9a-fA-F]+$/.test(s) && s.replace(/^0x/, "").length % 2 === 0 && s.length >= 16) {
+    const hex = s.replace(/^0x/, "");
+    const out = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    candidates.push(out);
+  }
+  for (const c of candidates) {
+    if (canDeserializeSolTx(c)) return c;
+  }
+  if (candidates.length) return candidates[0];
+  throw new Error("Could not decode transaction");
 }
 
 /** WalletConnect solana_signMessage: message field is base58-encoded bytes. */
@@ -2040,20 +1934,21 @@ function signSolanaTxBytes(bytes, keypair) {
   ensureBrowserBuffer();
   const { Transaction, VersionedTransaction } = solanaWeb3;
   const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-  // Versioned txs start with a version/prefix byte; try Versioned first for pump.fun.
+  // Jupiter WC adapter wants:
+  //   signature = base58(64-byte ed25519 sig)
+  //   transaction = base64(fully signed serialized tx)
   if (VersionedTransaction) {
     try {
       const vtx = VersionedTransaction.deserialize(u8);
       vtx.sign([keypair]);
       const signed = vtx.serialize();
-      const sig =
-        vtx.signatures && vtx.signatures[0]
-          ? Base58.encode(vtx.signatures[0])
-          : Base58.encode(signed);
+      const signedBytes = signed instanceof Uint8Array ? signed : new Uint8Array(signed);
+      const sigBytes = vtx.signatures && vtx.signatures[0] ? vtx.signatures[0] : null;
       return {
-        signature: sig,
-        signedTransaction: Base58.encode(signed),
-        signedBytes: signed instanceof Uint8Array ? signed : new Uint8Array(signed),
+        signature: sigBytes ? Base58.encode(sigBytes) : Base58.encode(signedBytes.slice(1, 65)),
+        signedTransaction: Base58.encode(signedBytes),
+        transactionBase64: bytesToBase64(signedBytes),
+        signedBytes,
       };
     } catch (_) {
       /* fall through to legacy */
@@ -2062,11 +1957,13 @@ function signSolanaTxBytes(bytes, keypair) {
   const tx = Transaction.from(u8);
   tx.partialSign(keypair);
   const signed = tx.serialize();
+  const signedBytes = signed instanceof Uint8Array ? signed : new Uint8Array(signed);
   const sig0 = tx.signatures && tx.signatures[0] && tx.signatures[0].signature;
   return {
-    signature: Base58.encode(sig0 || signed),
-    signedTransaction: Base58.encode(signed),
-    signedBytes: signed instanceof Uint8Array ? signed : new Uint8Array(signed),
+    signature: Base58.encode(sig0 || signedBytes),
+    signedTransaction: Base58.encode(signedBytes),
+    transactionBase64: bytesToBase64(signedBytes),
+    signedBytes,
   };
 }
 
@@ -2166,7 +2063,9 @@ async function loadWcSessionMirror() {
 async function refreshWcConnections(opts) {
   const ensure = !opts || opts.ensure !== false;
   const poll = opts && typeof opts.poll === "number" ? opts.poll : 0;
+  // Extension: bridge owns live WC — popup only mirrors chrome.storage sessions.
   if (
+    !IS_EXTENSION &&
     ensure &&
     STATE &&
     STATE.wcProjectId &&
@@ -2308,12 +2207,33 @@ async function wcDisconnectTopic(topic) {
     return;
   }
   try {
-    await ensureWalletConnect();
     if (t.startsWith("pending:")) {
       showToast("Nothing to cancel");
       paintWcSettings();
       return;
     }
+    if (IS_EXTENSION && typeof chrome !== "undefined" && chrome.storage) {
+      await new Promise((resolve, reject) => {
+        chrome.storage.local.set(
+          {
+            gladiator_wc_cmd: { type: "disconnect", topic: t, at: Date.now() },
+          },
+          () => {
+            const err = chrome.runtime.lastError;
+            if (err) reject(err);
+            else resolve();
+          }
+        );
+      });
+      try {
+        chrome.runtime.sendMessage({ type: "wc-open-bridge" }, () => void chrome.runtime.lastError);
+      } catch (_) {}
+      setWcStatus("Disconnect sent");
+      showToast("Disconnected");
+      paintWcSettings();
+      return;
+    }
+    await ensureWalletConnect();
     if (typeof GladiatorWC.disconnectSession === "function") {
       await GladiatorWC.disconnectSession(t);
     } else {
@@ -2406,8 +2326,8 @@ function openWcSignRequest(event) {
 
 async function ensureWalletConnect() {
   if (isVaultLocked()) {
-    openVaultModal("unlock");
-    throw new Error("Unlock wallet first");
+    openVaultModal("migrate");
+    throw new Error("Enter old password once to restore keys");
   }
   if (!window.GladiatorWC) {
     throw new Error("WalletConnect bundle missing — reload the extension");
@@ -2461,10 +2381,13 @@ async function ensureWalletConnect() {
         const acc = activeAccount(STATE);
         const kp = solanaKeypairFromAccount(acc);
         const blob = extractWcTxBlob(p);
-        const bytes = decodeWcBytes(blob);
+        const bytes = decodeWcTxBytes(blob);
         const signed = signSolanaTxBytes(bytes, kp);
-        // WalletConnect Solana: result.signature is commonly the signed tx (base58) or sig.
-        return { signature: signed.signedTransaction };
+        // Jupiter reads `transaction` (base64) first; `signature` must be the 64-byte sig.
+        return {
+          signature: signed.signature,
+          transaction: signed.transactionBase64,
+        };
       },
       signAllSolanaTransactions: async (params) => {
         const p = normalizeWcParams(params);
@@ -2477,8 +2400,8 @@ async function ensureWalletConnect() {
         const out = [];
         for (const item of list) {
           const blob = typeof item === "string" ? item : extractWcTxBlob(normalizeWcParams(item));
-          const signed = signSolanaTxBytes(decodeWcBytes(blob), kp);
-          out.push(signed.signedTransaction);
+          const signed = signSolanaTxBytes(decodeWcTxBytes(blob), kp);
+          out.push(signed.transactionBase64);
         }
         return { transactions: out };
       },
@@ -2487,7 +2410,7 @@ async function ensureWalletConnect() {
         const acc = activeAccount(STATE);
         const kp = solanaKeypairFromAccount(acc);
         const blob = extractWcTxBlob(p);
-        const signed = signSolanaTxBytes(decodeWcBytes(blob), kp);
+        const signed = signSolanaTxBytes(decodeWcTxBytes(blob), kp);
         const solChain = CHAINS.find((c) => c.id === "solana");
         const rpcs = solRpcList(solChain);
         const b64 = bytesToBase64(signed.signedBytes);
@@ -2639,14 +2562,49 @@ async function wcConnectFromUri() {
     await storageSet(STATE);
   }
 
-  setWcStatus("Connecting…");
+  // Extension popup dies when you click Jupiter — open persistent relay window.
+  if (IS_EXTENSION && typeof chrome !== "undefined" && chrome.runtime && chrome.storage) {
+    try {
+      await new Promise((resolve, reject) => {
+        chrome.storage.local.set(
+          {
+            gladiator_wc_pending: {
+              uri,
+              projectId,
+              at: Date.now(),
+            },
+          },
+          () => {
+            const err = chrome.runtime.lastError;
+            if (err) reject(err);
+            else resolve();
+          }
+        );
+      });
+      const res = await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: "wc-open-bridge" }, (r) => resolve(r || {}));
+      });
+      if (res && res.ok === false) throw new Error(res.error || "Could not open relay window");
+      if ($("wcUri")) $("wcUri").value = "";
+      setWcStatus(
+        "Opened session relay — keep THAT window open. Jupiter swap confirms are signed there."
+      );
+      showToast("Keep the session relay window open");
+      paintWcSettings();
+      return;
+    } catch (err) {
+      const msg = String(err && err.message ? err.message : err);
+      setWcStatus("Relay open failed: " + msg + " — trying in popup");
+    }
+  }
+
+  setWcStatus("Connecting… keep this window open");
   showToast("Connecting…");
   try {
     await ensureWalletConnect();
     await GladiatorWC.pair(uri);
     if ($("wcUri")) $("wcUri").value = "";
     setWcStatus("Paired — approving session / signature…");
-    // Catch late proposal / ownership sign while URI is still fresh
     try {
       if (typeof GladiatorWC.processPendings === "function") {
         await GladiatorWC.processPendings();
@@ -2663,14 +2621,30 @@ async function wcConnectFromUri() {
 
 async function wcDisconnect() {
   try {
+    if (IS_EXTENSION && typeof chrome !== "undefined" && chrome.storage) {
+      await new Promise((resolve, reject) => {
+        chrome.storage.local.set(
+          {
+            gladiator_wc_cmd: { type: "disconnect", at: Date.now() },
+            gladiator_wc_pending: null,
+            gladiator_wc_sessions: { at: Date.now(), items: [] },
+          },
+          () => {
+            const err = chrome.runtime.lastError;
+            if (err) reject(err);
+            else resolve();
+          }
+        );
+      });
+      try {
+        chrome.runtime.sendMessage({ type: "wc-open-bridge" }, () => void chrome.runtime.lastError);
+      } catch (_) {}
+    }
     if (window.GladiatorWC && GladiatorWC.isReady()) {
-      await GladiatorWC.disconnectAll();
-    } else if (STATE && STATE.wcProjectId && window.GladiatorWC) {
-      await ensureWalletConnect();
       await GladiatorWC.disconnectAll();
     }
     await persistWcSessions([]);
-    setWcStatus("Disconnected");
+    setWcStatus("Disconnect sent");
     showToast("Disconnected");
     paintWcSettings();
   } catch (err) {
@@ -4479,7 +4453,19 @@ function wire() {
     wcDisconnect().catch((err) => console.warn(err));
   });
   $("wcRefreshConnections")?.addEventListener("click", () => {
-    refreshWcConnections({ ensure: true, poll: 6 })
+    if (IS_EXTENSION && typeof chrome !== "undefined" && chrome.storage) {
+      try {
+        chrome.storage.local.set(
+          { gladiator_wc_cmd: { type: "publish", at: Date.now() } },
+          () => void chrome.runtime.lastError
+        );
+        chrome.runtime.sendMessage(
+          { type: "wc-open-bridge", focus: false },
+          () => void chrome.runtime.lastError
+        );
+      } catch (_) {}
+    }
+    refreshWcConnections({ ensure: !IS_EXTENSION, poll: IS_EXTENSION ? 0 : 6 })
       .then((items) => {
         showToast(
           items && items.length
@@ -4515,27 +4501,6 @@ function wire() {
     await storageSet(STATE);
     paintWcSettings();
   });
-  $("vaultUnlockBtn")?.addEventListener("click", () => {
-    openVaultModal(STATE && STATE.vaultEnabled ? "unlock" : "setup");
-  });
-  $("vaultLockBtn")?.addEventListener("click", () => {
-    lockVault().catch((err) => showToast(String(err && err.message ? err.message : err)));
-  });
-  $("vaultChangeBtn")?.addEventListener("click", async () => {
-    try {
-      if (isVaultLocked()) {
-        openVaultModal("unlock");
-        return;
-      }
-      if (!STATE.vaultEnabled) {
-        openVaultModal("setup");
-        return;
-      }
-      openVaultModal("change");
-    } catch (err) {
-      showToast(String(err && err.message ? err.message : err));
-    }
-  });
   $("vaultModalSubmit")?.addEventListener("click", () => {
     submitVaultModal().catch((err) => {
       const el = $("vaultModalError");
@@ -4543,9 +4508,8 @@ function wire() {
     });
   });
   $("vaultModalCancel")?.addEventListener("click", () => {
-    // Allow cancel only if not forcing first-time setup / unlock for vaulted wallets.
     if (isVaultLocked()) {
-      showToast("Unlock required to use keys");
+      showToast("Enter old password once to restore keys");
       return;
     }
     closeVaultModal();
@@ -4553,17 +4517,22 @@ function wire() {
   $("vaultPass1")?.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      const mode = ($("vaultModal") && $("vaultModal").dataset.mode) || "unlock";
-      if (mode === "unlock") $("vaultModalSubmit")?.click();
-      else $("vaultPass2")?.focus();
-    }
-  });
-  $("vaultPass2")?.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
       $("vaultModalSubmit")?.click();
     }
   });
+  if (
+    IS_EXTENSION &&
+    typeof chrome !== "undefined" &&
+    chrome.storage &&
+    chrome.storage.onChanged
+  ) {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== "local") return;
+      if (changes.gladiator_wc_sessions || changes.gladiator_wc_pending) {
+        paintWcConnections().catch(() => {});
+      }
+    });
+  }
   document.addEventListener("click", (e) => {
     const wrap = $("addrMenuWrap");
     if (wrap && !wrap.contains(e.target)) closeAddrMenu();
@@ -4808,8 +4777,7 @@ async function boot() {
     console.error("solana-tx.bundle missing");
   }
   STATE = await ensureState();
-  // Second pass: always try to materialize BTC/Sui before first paint (unlocked only).
-  if (VAULT_UNLOCKED && (await repairAllExtraKeys(STATE))) {
+  if (!isVaultLocked() && (await repairAllExtraKeys(STATE))) {
     try {
       await storageSet(STATE);
     } catch (err) {
@@ -4821,12 +4789,9 @@ async function boot() {
   paintSwitchers();
   paintBalances();
   paintHoldings();
-  paintVaultStatus();
   go("home");
   if (isVaultLocked()) {
-    openVaultModal("unlock");
-  } else if (!STATE.vaultEnabled && stateHasPlainSecrets(STATE)) {
-    openVaultModal("setup");
+    openVaultModal("migrate");
   }
   const bootAcc = activeAccount(STATE);
   if (bootAcc && bootAcc.mnemonic && window.MultiHD) {
@@ -4843,7 +4808,16 @@ async function boot() {
   await fetchPrices();
   updateSendUsdEstimate();
   await refreshBalance();
-  if (STATE.wcProjectId && window.GladiatorWC) {
+  // Extension: bridge owns WalletConnect (popup closes during Jupiter swaps).
+  if (IS_EXTENSION) {
+    paintWcSettings();
+    setWcStatus(
+      STATE.wcProjectId
+        ? "Paste wc: URI → Connect (opens session relay window)"
+        : "Add a WalletConnect Project ID, then paste a wc: URI"
+    );
+    await refreshWcConnections({ ensure: false });
+  } else if (STATE.wcProjectId && window.GladiatorWC) {
     try {
       await ensureWalletConnect();
       await refreshWcConnections({ ensure: false, poll: 4 });

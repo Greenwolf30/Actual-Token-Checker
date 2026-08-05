@@ -350,19 +350,6 @@
           <h2 class="panel-title">Settings</h2>
           <p class="panel-sub">Address book, wallets, and sync.</p>
 
-          <div class="settings-block" id="vaultSettingsBlock">
-            <h3 class="settings-block-title">Wallet password</h3>
-            <p class="photon-sub">
-              Encrypt your seed phrase and private keys on this device. Only you can unlock them.
-            </p>
-            <p class="form-status" id="vaultStatus" role="status">Checking…</p>
-            <div class="wc-actions">
-              <button type="button" class="wc-btn-connect" id="vaultUnlockBtn">Unlock / Set password</button>
-              <button type="button" class="wc-btn-disconnect" id="vaultLockBtn" hidden>Lock</button>
-            </div>
-            <button type="button" class="photon-chip" id="vaultChangeBtn" style="margin-top:8px">Change password</button>
-          </div>
-
           <div class="settings-block">
             <h3 class="settings-block-title">Address book</h3>
             <p class="photon-sub">Save frequent recipients by name. Pick the name on Send.</p>
@@ -387,8 +374,8 @@
           <div class="settings-block" id="wcSettingsBlock">
             <h3 class="settings-block-title">WalletConnect</h3>
             <p class="photon-sub">
-              Paste Project ID + <code>wc:</code> URI → <strong>Connect</strong>.
-              Active sessions show below — disconnect anytime.
+              Paste Project ID + <code>wc:</code> URI → <strong>Connect</strong>
+              (opens a session relay window — keep it open for Jupiter swaps).
               Project ID:
               <a href="https://dashboard.walletconnect.com" target="_blank" rel="noreferrer">dashboard.walletconnect.com</a>
             </p>
@@ -426,7 +413,7 @@
               <p class="wc-connections-empty" id="wcConnectionsEmpty">No active or pending WalletConnect sessions.</p>
             </div>
             <div class="wc-approve-bar" id="wcApproveBar" hidden>
-              <p id="wcApproveHint">pump.fun is waiting — tap Approve to connect your Solana wallet.</p>
+              <p id="wcApproveHint">Jupiter / pump.fun is waiting — tap Approve to connect your Solana wallet.</p>
               <div class="wc-approve-actions">
                 <button type="button" class="wc-btn-reject" id="wcRejectInline">Reject</button>
                 <button type="button" class="wc-btn-approve" id="wcApproveInline">Approve</button>
@@ -496,8 +483,8 @@
 
     <div class="confirm-modal" id="vaultModal" hidden>
       <div class="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="vaultModalTitle" aria-describedby="vaultModalBody">
-        <h2 class="confirm-title" id="vaultModalTitle">Unlock wallet</h2>
-        <p class="confirm-body" id="vaultModalBody">Enter your password to decrypt keys for this session.</p>
+        <h2 class="confirm-title" id="vaultModalTitle">Restore wallet</h2>
+        <p class="confirm-body" id="vaultModalBody">Password encryption is paused. Enter your old password once to restore keys.</p>
         <label class="field vault-field">
           <span>Password</span>
           <input id="vaultPass1" type="password" autocomplete="current-password" placeholder="Password" />
