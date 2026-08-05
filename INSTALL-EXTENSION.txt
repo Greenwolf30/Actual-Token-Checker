@@ -7,7 +7,7 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
-v0.5.86:
-- Harden import UI: Solana secret only on Solana, EVM key only on EVM chains
+v0.5.87:
+- Unique wallets only — remove/prevent duplicates with the same address
 
 Version: see manifest.json

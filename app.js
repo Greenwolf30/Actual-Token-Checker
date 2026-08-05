@@ -775,6 +775,106 @@ async function createAccount(label) {
   };
 }
 
+function normalizeAddrKey(kind, addr) {
+  const a = String(addr || "").trim();
+  if (!a) return "";
+  if (kind === "evm" || kind === "sui") return kind + ":" + a.toLowerCase();
+  return kind + ":" + a;
+}
+
+/** Stable address keys for an account (empty addresses ignored). */
+function accountAddressKeys(account) {
+  if (!account) return [];
+  const out = [];
+  const sol = account.solana && account.solana.publicKey;
+  const evm = account.evm && account.evm.address;
+  const btc = account.bitcoin && account.bitcoin.address;
+  const sui = account.sui && account.sui.address;
+  if (sol) out.push(normalizeAddrKey("solana", sol));
+  if (evm) out.push(normalizeAddrKey("evm", evm));
+  if (btc) out.push(normalizeAddrKey("bitcoin", btc));
+  if (sui) out.push(normalizeAddrKey("sui", sui));
+  return out;
+}
+
+function accountsShareAddress(a, b) {
+  const keys = accountAddressKeys(a);
+  if (!keys.length) return false;
+  const set = new Set(keys);
+  return accountAddressKeys(b).some((k) => set.has(k));
+}
+
+function findDuplicateAccount(candidate, accounts, exceptId) {
+  const list = accounts || (STATE && STATE.accounts) || [];
+  return (
+    list.find(
+      (a) => a && a.id !== exceptId && accountsShareAddress(a, candidate)
+    ) || null
+  );
+}
+
+function accountDedupeScore(a) {
+  if (!a) return -1;
+  let s = 0;
+  if (a.mnemonic) s += 100;
+  if (a.solana && a.solana.secretKey) s += 20;
+  if (a.evm && a.evm.privateKey) s += 10;
+  if (a.bitcoin && a.bitcoin.privateKey) s += 5;
+  if (a.sui && a.sui.secretKey) s += 5;
+  if (isLedgerAccount(a)) s += 15;
+  const t = Date.parse(a.createdAt) || 0;
+  if (t) s += 1; // prefer any dated account over undated
+  return s;
+}
+
+/**
+ * Collapse accounts that share any chain address. Keeps the richer / preferred copy.
+ * Returns { accounts, removed }.
+ */
+function dedupeAccountsByAddress(accounts, preferredId) {
+  const list = Array.isArray(accounts) ? accounts.slice() : [];
+  const keep = [];
+  const removed = [];
+  for (const acc of list) {
+    if (!acc) continue;
+    if (!accountAddressKeys(acc).length) {
+      keep.push(acc);
+      continue;
+    }
+    let conflictIdx = -1;
+    for (let i = 0; i < keep.length; i++) {
+      if (accountsShareAddress(keep[i], acc)) {
+        conflictIdx = i;
+        break;
+      }
+    }
+    if (conflictIdx < 0) {
+      keep.push(acc);
+      continue;
+    }
+    const existing = keep[conflictIdx];
+    let winner = existing;
+    let loser = acc;
+    if (preferredId && acc.id === preferredId && existing.id !== preferredId) {
+      winner = acc;
+      loser = existing;
+    } else if (
+      preferredId &&
+      existing.id === preferredId &&
+      acc.id !== preferredId
+    ) {
+      winner = existing;
+      loser = acc;
+    } else if (accountDedupeScore(acc) > accountDedupeScore(existing)) {
+      winner = acc;
+      loser = existing;
+    }
+    keep[conflictIdx] = winner;
+    removed.push(loser);
+  }
+  return { accounts: keep, removed };
+}
+
 function nextLedgerLabel() {
   const n =
     STATE.accounts.filter((a) => isLedgerAccount(a)).length + 1;
@@ -910,6 +1010,20 @@ async function ensureState() {
       wcProjectId: "",
     };
     // New wallets stay plaintext until the user sets a password (prompted on boot).
+    await storageSet(state);
+  }
+  // Drop duplicate wallets that share any chain address (keep one unique copy).
+  const deduped = dedupeAccountsByAddress(
+    state.accounts,
+    state.activeAccountId
+  );
+  if (deduped.removed.length) {
+    state.accounts = deduped.accounts;
+    console.info(
+      "[dedupe] removed",
+      deduped.removed.length,
+      "duplicate wallet(s)"
+    );
     await storageSet(state);
   }
   if (!CHAINS.some((c) => c.id === state.activeChainId)) state.activeChainId = "solana";
@@ -6482,8 +6596,21 @@ async function removeAccount(accountId) {
 }
 
 async function addAccount() {
-  const n = STATE.accounts.length + 1;
-  const acc = await createAccount("W" + n);
+  const status = $("accountStatus");
+  let acc = null;
+  // Random wallets almost never collide; retry a few times just in case.
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const n = STATE.accounts.length + 1;
+    const candidate = await createAccount("W" + n);
+    if (findDuplicateAccount(candidate, STATE.accounts)) continue;
+    acc = candidate;
+    break;
+  }
+  if (!acc) {
+    showToast("Could not generate a unique wallet");
+    if (status) status.textContent = "Generate failed — address already exists.";
+    return;
+  }
   STATE.accounts.push(acc);
   STATE.activeAccountId = acc.id;
   await storageSet(STATE);
@@ -6491,7 +6618,6 @@ async function addAccount() {
   hideBackup();
   showToast("Generated " + acc.name + " · tap Show seed phrase to view");
   go("activity");
-  const status = $("accountStatus");
   if (status) {
     status.textContent =
       "Wallet created. Tap Show seed phrase when you are ready to back it up.";
@@ -6558,6 +6684,23 @@ async function importAccountFromSecrets() {
         bitcoin: empty.bitcoin,
         sui: empty.sui,
       };
+    }
+    const dup = findDuplicateAccount(acc, STATE.accounts);
+    if (dup) {
+      STATE.activeAccountId = dup.id;
+      if (chain && chain.id) STATE.activeChainId = chain.id;
+      await storageSet(STATE);
+      await refreshAll();
+      const addr = chainKeyAddress(dup, activeChain(STATE));
+      if (status) {
+        status.textContent =
+          "Already imported · " +
+          (dup.name || shortAddr(addr) || "wallet") +
+          " — switched to existing unique wallet.";
+      }
+      showToast("Wallet already exists · opened existing");
+      go("activity");
+      return;
     }
     STATE.accounts.push(acc);
     STATE.activeAccountId = acc.id;
