@@ -2209,12 +2209,28 @@ async function ensureWalletConnect() {
         }
       },
       onSessionDelete: async () => {
+        // Duplicate prune disconnects also emit session_delete — do NOT wipe the
+        // remaining live session / UI when that happens.
+        if (GladiatorWC.isPruningDuplicates && GladiatorWC.isPruningDuplicates()) {
+          await persistWcSessions();
+          return;
+        }
         WC_PENDING_REQUEST = null;
         hideWcApproveBar();
-        setWcStatus("Disconnected");
-        showToast("WalletConnect disconnected");
-        await persistWcSessions([]);
-        await refreshWcConnections({ ensure: false });
+        const live = collectLiveWcSessions();
+        await persistWcSessions(live);
+        if (live.length) {
+          setWcStatus(
+            "Connected to " +
+              (live[0].name || "dApp") +
+              (live.length > 1 ? " (+" + (live.length - 1) + ")" : "")
+          );
+          paintWcConnectionsList(live);
+        } else {
+          setWcStatus("Disconnected");
+          showToast("WalletConnect disconnected");
+          paintWcConnectionsList([]);
+        }
       },
       onStatus: (msg) => {
         if (msg) setWcStatus(msg);

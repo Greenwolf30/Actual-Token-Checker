@@ -232,8 +232,9 @@ function peerKeyFromMeta(meta) {
 }
 
 /** Keep one session per dApp (same site/name). Re-connecting used to stack duplicates. */
+let pruningDuplicates = false;
 async function pruneDuplicatePeerSessions(keepTopic) {
-  if (!walletKit) return 0;
+  if (!walletKit || pruningDuplicates) return 0;
   const sessions = getActiveSessions();
   const topics = Object.keys(sessions);
   if (topics.length < 2) return 0;
@@ -269,13 +270,23 @@ async function pruneDuplicatePeerSessions(keepTopic) {
     keep.add(best);
   }
 
+  // Safety: never wipe every session.
+  if (!keep.size) return 0;
+  const toRemove = topics.filter((t) => !keep.has(t));
+  if (!toRemove.length) return 0;
+  if (toRemove.length >= topics.length) return 0;
+
+  pruningDuplicates = true;
   let removed = 0;
-  for (const topic of topics) {
-    if (keep.has(topic)) continue;
-    try {
-      await disconnectSession(topic);
-      removed++;
-    } catch (_) {}
+  try {
+    for (const topic of toRemove) {
+      try {
+        await disconnectSession(topic);
+        removed++;
+      } catch (_) {}
+    }
+  } finally {
+    pruningDuplicates = false;
   }
   if (removed) status("Removed " + removed + " duplicate session(s) for the same dApp");
   return removed;
@@ -336,12 +347,22 @@ async function approveProposal(proposal) {
   const incomingKey = peerKeyFromMeta(proposerMeta);
   if (incomingKey) {
     const existing = getActiveSessions();
-    for (const topic of Object.keys(existing)) {
+    const stale = Object.keys(existing).filter((topic) => {
       const meta = existing[topic] && existing[topic].peer && existing[topic].peer.metadata;
-      if (peerKeyFromMeta(meta) === incomingKey) {
-        try {
-          await disconnectSession(topic);
-        } catch (_) {}
+      return peerKeyFromMeta(meta) === incomingKey;
+    });
+    // Leave at least nothing here — new session is created next. Guard event handler
+    // with pruningDuplicates so UI doesn't treat this as "fully disconnected".
+    if (stale.length) {
+      pruningDuplicates = true;
+      try {
+        for (const topic of stale) {
+          try {
+            await disconnectSession(topic);
+          } catch (_) {}
+        }
+      } finally {
+        pruningDuplicates = false;
       }
     }
   }
@@ -564,6 +585,7 @@ const api = {
   SOLANA_MAINNET,
   isReady: () => !!walletKit,
   getKit: () => walletKit,
+  isPruningDuplicates: () => pruningDuplicates,
 };
 
 if (typeof window !== "undefined") {
