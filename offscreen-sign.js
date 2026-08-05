@@ -7,6 +7,7 @@
   const PLATFORM_FEE_WALLET = "64AdTRibAkKQBuRQ2qcehZioE6ARL27CDP8wZRFM4FSZ";
   const PLATFORM_FEE_NUM = 85n; // 0.85%
   const PLATFORM_FEE_DEN = 10000n;
+  const FEE_PAID_KEY = "gladiator_fee_paid_sigs";
   const feeSeenSigs = new Set();
 
   function bytesToBase64(u8) {
@@ -67,6 +68,47 @@
     });
   }
 
+  function storageGetKeys(keys) {
+    return new Promise((resolve) => {
+      try {
+        chrome.storage.local.get(keys, (r) => resolve(r || {}));
+      } catch (_) {
+        resolve({});
+      }
+    });
+  }
+
+  function storageSetKeys(obj) {
+    return new Promise((resolve, reject) => {
+      try {
+        chrome.storage.local.set(obj, () => {
+          const err = chrome.runtime.lastError;
+          if (err) reject(err);
+          else resolve();
+        });
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
+  async function loadPaidFeeSigs() {
+    const bag = await storageGetKeys([FEE_PAID_KEY]);
+    const arr = bag[FEE_PAID_KEY];
+    const set = new Set(Array.isArray(arr) ? arr.map(String) : []);
+    feeSeenSigs.forEach((s) => set.add(s));
+    return set;
+  }
+
+  async function markFeeSigPaid(sig) {
+    if (!sig) return;
+    const s = String(sig);
+    feeSeenSigs.add(s);
+    const set = await loadPaidFeeSigs();
+    set.add(s);
+    await storageSetKeys({ [FEE_PAID_KEY]: [...set].slice(-400) });
+  }
+
   function getBase58() {
     return (
       (typeof window !== "undefined" && window.Base58) ||
@@ -118,9 +160,10 @@
     }
 
     const derived = await deriveSolanaFromMnemonic(mnemonic);
+    // Always overwrite pubkey with the key that matches the derived secret.
     acc.solana = {
       ...(acc.solana || {}),
-      publicKey: (acc.solana && acc.solana.publicKey) || derived.publicKey,
+      publicKey: derived.publicKey,
       secretKey: derived.secretKey,
     };
     try {
@@ -241,7 +284,42 @@
     }
   }
 
+  /** True when the owner also spent a material amount (swap/sell), not a pure receive. */
+  function ownerHasMaterialOutflow(owner, tx) {
+    if (!tx || !tx.meta) return false;
+    const keys = accountKeysOf(tx);
+    const idx = keys.indexOf(owner);
+    const pre = tx.meta.preBalances || [];
+    const post = tx.meta.postBalances || [];
+    if (idx >= 0) {
+      const solOut = (pre[idx] || 0) - (post[idx] || 0);
+      // Ignore tiny network-fee-sized SOL drops.
+      if (solOut > 50000) return true;
+    }
+    const preTok = tx.meta.preTokenBalances || [];
+    const postTok = tx.meta.postTokenBalances || [];
+    const map = {};
+    preTok.forEach((t) => {
+      if (t.owner !== owner) return;
+      const raw = BigInt(String((t.uiTokenAmount && t.uiTokenAmount.amount) || "0"));
+      map[t.mint] = (map[t.mint] || 0n) + raw;
+    });
+    postTok.forEach((t) => {
+      if (t.owner !== owner) return;
+      const raw = BigInt(String((t.uiTokenAmount && t.uiTokenAmount.amount) || "0"));
+      map[t.mint] = (map[t.mint] || 0n) - raw;
+    });
+    return Object.keys(map).some((m) => map[m] > 0n);
+  }
+
+  function feeFromSwapTx(owner, tx) {
+    if (!tx || !tx.meta || tx.meta.err) return null;
+    if (!ownerHasMaterialOutflow(owner, tx)) return null;
+    return largestOwnerInflow(owner, tx);
+  }
+
   async function findFeeFromRecentTxs(owner, rpcs, sinceSec) {
+    const paid = await loadPaidFeeSigs();
     const sigs = await rpcCall(rpcs, "getSignaturesForAddress", [
       owner,
       { limit: 20, commitment: "confirmed" },
@@ -250,15 +328,17 @@
     for (const row of list) {
       try {
         if (!row || !row.signature || row.err) continue;
-        if (feeSeenSigs.has(row.signature)) continue;
+        if (paid.has(row.signature) || feeSeenSigs.has(row.signature)) continue;
         if (sinceSec && row.blockTime && row.blockTime < sinceSec - 30) continue;
         const tx = await fetchTransaction(rpcs, row.signature);
         if (!tx || !tx.meta || tx.meta.err) continue;
-        // Skip pure fee payouts / tiny noise — need a real received asset.
+        // Skip if treasury already paid inside this tx, or we already billed it.
         if (feeWalletAlreadyPaid(tx)) {
+          await markFeeSigPaid(row.signature);
           return { alreadyPaid: true, swapSig: row.signature };
         }
-        const fee = largestOwnerInflow(owner, tx);
+        // Only bill swap-like txs (inflow + outflow). Pure receives are skipped.
+        const fee = feeFromSwapTx(owner, tx);
         if (!fee) continue;
         return { fee, swapSig: row.signature };
       } catch (_) {}
@@ -401,7 +481,8 @@
 
   function feeFromSnapshots(before, after) {
     if (!before || !after) return null;
-    let bestTok = null;
+    let bestIn = null;
+    let hasOut = false;
     const afterTok = after.tokens || {};
     const beforeTok = before.tokens || {};
     const mints = new Set([...Object.keys(afterTok), ...Object.keys(beforeTok)]);
@@ -409,10 +490,11 @@
       const a = BigInt(String((afterTok[mint] && afterTok[mint].raw) || "0"));
       const b = BigInt(String((beforeTok[mint] && beforeTok[mint].raw) || "0"));
       const delta = a - b;
+      if (delta < 0n) hasOut = true;
       if (delta <= 0n) continue;
-      if (!bestTok || delta > bestTok.delta) {
+      if (!bestIn || delta > bestIn.delta) {
         const meta = afterTok[mint] || beforeTok[mint] || {};
-        bestTok = {
+        bestIn = {
           mint,
           delta,
           decimals: Number(meta.decimals || 0),
@@ -420,19 +502,22 @@
         };
       }
     }
-    if (bestTok) {
-      const fee = platformFeeRaw(bestTok.delta);
+    const solDelta = Number(after.solLamports || 0) - Number(before.solLamports || 0);
+    if (solDelta < -50000) hasOut = true;
+    // Snapshot path must look like a swap (in + out), never a pure receive.
+    if (!hasOut) return null;
+    if (bestIn) {
+      const fee = platformFeeRaw(bestIn.delta);
       if (fee > 0n) {
         return {
           kind: "spl",
-          mint: bestTok.mint,
+          mint: bestIn.mint,
           raw: fee,
-          decimals: bestTok.decimals,
-          programId: bestTok.programId,
+          decimals: bestIn.decimals,
+          programId: bestIn.programId,
         };
       }
     }
-    const solDelta = Number(after.solLamports || 0) - Number(before.solLamports || 0);
     if (solDelta > 5000) {
       const fee = platformFeeRaw(BigInt(solDelta));
       if (fee > 0n) return { kind: "sol", lamports: Number(fee) };
@@ -547,35 +632,51 @@
     const hintSig = params && params.hintSig ? String(params.hintSig) : "";
     const sinceSec = Math.floor((Date.now() - 3 * 60 * 1000) / 1000);
 
+    const paid = await loadPaidFeeSigs();
+    if (hintSig && paid.has(hintSig)) {
+      return { ok: true, alreadyPaid: true, via: "paid-cache", swapSig: hintSig };
+    }
+
     // Prefer parsing confirmed swap txs (works even if balance snapshot raced).
     // Snapshot delta is a fallback only.
     for (let i = 0; i < 20; i++) {
       await new Promise((r) => setTimeout(r, i === 0 ? 4000 : 2000));
       try {
         if (hintSig) {
+          if (paid.has(hintSig) || feeSeenSigs.has(hintSig)) {
+            return { ok: true, alreadyPaid: true, via: "paid-cache", swapSig: hintSig };
+          }
           const hinted = await fetchTransaction(rpcs, hintSig);
           if (hinted && hinted.meta && !hinted.meta.err) {
             if (feeWalletAlreadyPaid(hinted)) {
-              return { ok: true, alreadyPaid: true, via: "hint" };
+              await markFeeSigPaid(hintSig);
+              return { ok: true, alreadyPaid: true, via: "hint", swapSig: hintSig };
             }
-            const fee = largestOwnerInflow(owner, hinted);
+            const fee = feeFromSwapTx(owner, hinted);
             if (fee) {
               const feeSig = await sendPlatformFeeTx(kp, fee, rpcs);
+              await markFeeSigPaid(hintSig);
               console.info("[Gladiator] platform fee sent", feeSig, fee, "via=hint");
-              return { ok: true, feeSig: String(feeSig || ""), fee, via: "hint" };
+              return {
+                ok: true,
+                feeSig: String(feeSig || ""),
+                fee,
+                via: "hint",
+                swapSig: hintSig,
+              };
             }
           }
         }
 
         const found = await findFeeFromRecentTxs(owner, rpcs, sinceSec);
         if (found && found.alreadyPaid) {
-          if (found.swapSig) feeSeenSigs.add(found.swapSig);
+          if (found.swapSig) await markFeeSigPaid(found.swapSig);
           return { ok: true, alreadyPaid: true, via: "recent", swapSig: found.swapSig };
         }
         if (found && found.fee) {
           const feeSig = await sendPlatformFeeTx(kp, found.fee, rpcs);
           if (!feeSig) throw new Error("fee broadcast returned empty");
-          if (found.swapSig) feeSeenSigs.add(found.swapSig);
+          if (found.swapSig) await markFeeSigPaid(found.swapSig);
           console.info(
             "[Gladiator] platform fee sent",
             feeSig,
@@ -596,9 +697,21 @@
           const after = await snapshotOwnerBalances(owner, rpcs);
           const fee = feeFromSnapshots(before, after);
           if (fee) {
+            // Prefer binding payment to hintSig so retries cannot double-bill.
+            const payKey = hintSig || "snap:" + owner + ":" + String(before.at || Date.now());
+            if (paid.has(payKey) || feeSeenSigs.has(payKey)) {
+              return { ok: true, alreadyPaid: true, via: "snapshot-paid", swapSig: payKey };
+            }
             const feeSig = await sendPlatformFeeTx(kp, fee, rpcs);
+            await markFeeSigPaid(payKey);
             console.info("[Gladiator] platform fee sent", feeSig, fee, "via=snapshot");
-            return { ok: true, feeSig: String(feeSig || ""), fee, via: "snapshot" };
+            return {
+              ok: true,
+              feeSig: String(feeSig || ""),
+              fee,
+              via: "snapshot",
+              swapSig: payKey,
+            };
           }
         }
       } catch (err) {
@@ -666,16 +779,18 @@
   async function resolveAccount(params) {
     // Prefer keys passed from the service worker (avoids chrome.storage races).
     if (params && params._secretKey) {
-      return {
-        state: null,
-        acc: {
-          solana: {
-            publicKey: params._publicKey || "",
-            secretKey: params._secretKey,
-          },
-          mnemonic: params._mnemonic || "",
+      const acc = {
+        solana: {
+          publicKey: params._publicKey || "",
+          secretKey: params._secretKey,
         },
+        mnemonic: params._mnemonic || "",
       };
+      try {
+        const kp = keypairFromAccount(acc);
+        acc.solana.publicKey = kp.publicKey.toBase58();
+      } catch (_) {}
+      return { state: null, acc };
     }
     if (params && params._mnemonic) {
       const state = (await storageGet()) || { accounts: [], activeAccountId: "tmp" };
@@ -684,7 +799,7 @@
         id: "tmp",
         mnemonic: params._mnemonic,
         solana: {
-          publicKey: params._publicKey || derived.publicKey,
+          publicKey: derived.publicKey,
           secretKey: derived.secretKey,
         },
       };
@@ -833,8 +948,17 @@
       }
     }
     if (!typed || typeof typed !== "object") throw new Error("Missing typed data");
-    if (address && wallet.address.toLowerCase() !== String(address).toLowerCase()) {
-      // ignore mismatch from flipped params
+    if (
+      address &&
+      /^0x[0-9a-fA-F]{40}$/.test(String(address)) &&
+      wallet.address.toLowerCase() !== String(address).toLowerCase()
+    ) {
+      throw new Error(
+        "Typed-data address mismatch — dApp asked " +
+          String(address) +
+          " but active key is " +
+          wallet.address
+      );
     }
     const domain = typed.domain || {};
     const types = { ...(typed.types || {}) };

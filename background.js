@@ -197,6 +197,19 @@ async function handleEvmProviderRequest(method, params, origin) {
     if (!acc || !acc.address) {
       throw new Error("No EVM address — open Gladiator and use a seed wallet (not Ledger-only)");
     }
+    const trusted = await readTrustedOrigins();
+    const isTrusted = !!(origin && trusted.includes(origin));
+    if (!isTrusted) {
+      await requestUserApproval({
+        origin,
+        method: "eth_requestAccounts",
+        title: "Connect wallet?",
+        body:
+          shortOriginHost(origin) +
+          " wants to connect to your EVM wallet.",
+        chain: "evm",
+      });
+    }
     if (origin) await trustOrigin(origin);
     return {
       result: {
@@ -230,6 +243,13 @@ async function handleEvmProviderRequest(method, params, origin) {
   if (method === "personal_sign" || method === "eth_sign") {
     const acc = await getActiveEvmAccount();
     if (!acc || !acc.privateKey) throw new Error("No EVM key to sign with");
+    await requestUserApproval({
+      origin,
+      method,
+      title: "Sign message?",
+      body: shortOriginHost(origin) + " wants you to sign a message.",
+      chain: "evm",
+    });
     const raw = await callOffscreen("ethPersonalSign", {
       _evmPrivateKey: acc.privateKey,
       _evmAddress: acc.address,
@@ -245,6 +265,13 @@ async function handleEvmProviderRequest(method, params, origin) {
   ) {
     const acc = await getActiveEvmAccount();
     if (!acc || !acc.privateKey) throw new Error("No EVM key to sign with");
+    await requestUserApproval({
+      origin,
+      method,
+      title: "Sign typed data?",
+      body: shortOriginHost(origin) + " wants you to sign typed data.",
+      chain: "evm",
+    });
     const raw = await callOffscreen("ethSignTypedData", {
       _evmPrivateKey: acc.privateKey,
       _evmAddress: acc.address,
@@ -257,6 +284,20 @@ async function handleEvmProviderRequest(method, params, origin) {
     const acc = await getActiveEvmAccount();
     if (!acc || !acc.privateKey) throw new Error("No EVM key to send with");
     const net = EVM_NETWORKS[dappEvmChainId] || EVM_NETWORKS[1];
+    const tx = (args && args[0]) || {};
+    await requestUserApproval({
+      origin,
+      method,
+      title: "Send transaction?",
+      body:
+        shortOriginHost(origin) +
+        " wants to send a " +
+        ((net && net.name) || "EVM") +
+        " transaction" +
+        (tx.to ? " to " + String(tx.to).slice(0, 10) + "…" : "") +
+        ".",
+      chain: "evm",
+    });
     const raw = await callOffscreen("ethSendTransaction", {
       _evmPrivateKey: acc.privateKey,
       _evmAddress: acc.address,
@@ -831,10 +872,71 @@ async function runFeeJob() {
   }
 }
 
+const DAPP_APPROVE_REQ = "gladiator_dapp_approve_req";
+const DAPP_APPROVE_RES = "gladiator_dapp_approve_res";
+
+function sleepMs(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Ask the user to approve a dApp action in the Gladiator wallet window. */
+async function requestUserApproval({ origin, method, title, body, chain }) {
+  const reqId =
+    "dap_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+  await storageSet({
+    [DAPP_APPROVE_REQ]: {
+      id: reqId,
+      origin: origin || "",
+      method: method || "",
+      title: title || "Approve request?",
+      body: body || "",
+      chain: chain || "",
+      at: Date.now(),
+    },
+    [DAPP_APPROVE_RES]: null,
+  });
+  try {
+    await focusOrOpenWcWallet({ focus: true, settings: false, restore: true });
+  } catch (_) {
+    await nudgeWalletPopup();
+  }
+  for (let i = 0; i < 120; i++) {
+    await sleepMs(500);
+    const bag = await storageGet([DAPP_APPROVE_RES]);
+    const res = bag[DAPP_APPROVE_RES];
+    if (!res || res.id !== reqId) continue;
+    await storageSet({ [DAPP_APPROVE_REQ]: null, [DAPP_APPROVE_RES]: null });
+    if (res.approved) return true;
+    const err = new Error(res.error || "User rejected the request");
+    err.code = 4001;
+    throw err;
+  }
+  await storageSet({ [DAPP_APPROVE_REQ]: null, [DAPP_APPROVE_RES]: null });
+  const err = new Error("Approval timed out — open Gladiator and try again");
+  err.code = 4001;
+  throw err;
+}
+
+function shortOriginHost(origin) {
+  try {
+    return new URL(origin).hostname || origin;
+  } catch (_) {
+    return origin || "unknown site";
+  }
+}
+
 async function handleProviderRequest(msg, sender) {
   const method = msg.method;
-  const params = msg.params || {};
-  const origin = params.origin || (sender && sender.origin) || msg.origin || "";
+  const params = Object.assign({}, msg.params || {});
+  // Prefer the isolated content-script / extension sender origin. Never trust
+  // a page-controlled params.origin (delete it if present).
+  try {
+    delete params.origin;
+  } catch (_) {}
+  const origin =
+    (sender && sender.origin) ||
+    (msg && msg.origin) ||
+    "";
 
   // EIP-1193 ethereum methods (Uniswap, etc.)
   if (
@@ -858,8 +960,20 @@ async function handleProviderRequest(msg, sender) {
   if (method === "connect") {
     const onlyIfTrusted = !!params.onlyIfTrusted;
     const trusted = await readTrustedOrigins();
-    if (onlyIfTrusted && origin && !trusted.includes(origin)) {
+    const isTrusted = !!(origin && trusted.includes(origin));
+    if (onlyIfTrusted && !isTrusted) {
       return { result: null };
+    }
+    if (!isTrusted) {
+      await requestUserApproval({
+        origin,
+        method: "connect",
+        title: "Connect wallet?",
+        body:
+          shortOriginHost(origin) +
+          " wants to connect to your Solana wallet.",
+        chain: "solana",
+      });
     }
     const publicKey = await getActivePublicKey();
     if (origin) await trustOrigin(origin);
@@ -877,6 +991,38 @@ async function handleProviderRequest(msg, sender) {
     method === "signAndSendTransaction" ||
     method === "signMessage"
   ) {
+    const trusted = await readTrustedOrigins();
+    const isTrusted = !!(origin && trusted.includes(origin));
+    if (!isTrusted) {
+      await requestUserApproval({
+        origin,
+        method: "connect",
+        title: "Connect wallet?",
+        body:
+          shortOriginHost(origin) +
+          " wants to connect before signing.",
+        chain: "solana",
+      });
+      if (origin) await trustOrigin(origin);
+    }
+    const labels = {
+      signTransaction: "Sign transaction",
+      signAllTransactions: "Sign transactions",
+      signAndSendTransaction: "Sign & send transaction",
+      signMessage: "Sign message",
+    };
+    await requestUserApproval({
+      origin,
+      method,
+      title: (labels[method] || "Approve") + "?",
+      body:
+        shortOriginHost(origin) +
+        " is requesting: " +
+        (labels[method] || method) +
+        ".",
+      chain: "solana",
+    });
+
     const acc = await requireSignerReady();
     const needFee =
       method === "signTransaction" ||

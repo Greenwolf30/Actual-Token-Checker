@@ -79,12 +79,17 @@
       const data = event.data;
       if (!data || data.source !== PAGE || data.id == null) return;
 
+      // Never trust page-supplied origin — always use this frame's location.
+      const params = Object.assign({}, data.params || {});
+      try {
+        delete params.origin;
+      } catch (_) {}
       chrome.runtime.sendMessage(
         {
           type: "gladiator-provider",
           id: data.id,
           method: data.method,
-          params: data.params || {},
+          params,
           origin: location.origin,
         },
         (response) => {

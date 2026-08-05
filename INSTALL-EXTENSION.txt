@@ -7,7 +7,10 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
-v0.5.87:
-- Unique wallets only — remove/prevent duplicates with the same address
+v0.5.88:
+- dApp connect/sign/send now require user approval
+- Fix fee double-charge / receive fee tax
+- Prefer real site origin (ignore page spoof)
+- Fix offscreen pubkey mismatch, Sui decimals, history from, BTC/Sui amounts
 
 Version: see manifest.json

@@ -4359,7 +4359,7 @@ async function sendBtcNative(acc, toAddr, amountBtc) {
   }
   if (!isValidBtcAddress(toAddr)) throw new Error("Invalid Bitcoin address");
   const fromAddress = acc.bitcoin.address;
-  const amountSats = Math.round(Number(amountBtc) * 1e8);
+  const amountSats = Number(uiAmountToRaw(amountBtc, 8));
   if (!(amountSats > 0)) throw new Error("Amount too small");
   const utxos = (await fetchBtcUtxos(fromAddress)).filter((u) => u.value > 0);
   if (!utxos.length) throw new Error("No Bitcoin UTXOs to spend");
@@ -4530,7 +4530,7 @@ async function sendSuiNative(acc, toAddr, amountSui) {
   if (!isValidSuiAddress(toAddr)) throw new Error("Invalid Sui address");
   const from = acc.sui.address;
   const rpcs = (CHAINS.find((c) => c.id === "sui") || {}).rpcs;
-  const amountMist = BigInt(Math.floor(Number(amountSui) * 1e9 + 1e-9));
+  const amountMist = uiAmountToRaw(amountSui, 9);
   if (!(amountMist > 0n)) throw new Error("Amount too small");
   const coinsPage = await suiRpcCall(
     "suix_getCoins",
@@ -4600,9 +4600,7 @@ async function sendSuiCoin(acc, holding, toAddr, amountUi) {
   const from = acc.sui.address;
   const rpcs = (CHAINS.find((c) => c.id === "sui") || {}).rpcs;
   const decimals = holding.decimals != null ? Number(holding.decimals) : 9;
-  const amountRaw = ethers.parseUnits
-    ? ethers.parseUnits(String(amountUi), decimals).toString()
-    : String(Math.floor(Number(amountUi) * 10 ** decimals));
+  const amountRaw = uiAmountToRaw(amountUi, decimals).toString();
   const coinsPage = await suiRpcCall("suix_getCoins", [from, coinType], rpcs);
   const coins = (coinsPage && coinsPage.data) || [];
   if (!coins.length) throw new Error("No coins of this type to spend");
@@ -4913,6 +4911,10 @@ function solanaCounterparty(owner, tx, direction, mint) {
         if (destOwner && destOwner !== owner) return destOwner;
       }
       if (direction === "in") {
+        // Only treat this ix as our receive when the destination ATA is ours.
+        const destOwner = solanaTokenAccountOwner(tx, dst) || "";
+        if (destOwner && destOwner !== owner) continue;
+        if (!destOwner && auth === owner) continue;
         const srcOwner = solanaTokenAccountOwner(tx, src) || auth || "";
         if (srcOwner && srcOwner !== owner) return srcOwner;
       }
@@ -5640,44 +5642,44 @@ async function fetchSuiHistoryForOwner(owner, chain) {
 
   const me = String(owner).toLowerCase();
   const out = [];
-  Object.values(byDigest).forEach((block) => {
+  for (const block of Object.values(byDigest)) {
     const changes = block.balanceChanges || [];
     const byCoin = {};
-    changes.forEach((c) => {
+    for (const c of changes) {
       const addr = suiOwnerAddress(c.owner);
-      if (!addr) return;
+      if (!addr) continue;
       const coin = c.coinType || "0x2::sui::SUI";
       if (!byCoin[coin]) byCoin[coin] = {};
       const amt = Number(c.amount) || 0;
       byCoin[coin][addr] = (byCoin[coin][addr] || 0) + amt;
-    });
+    }
 
     let best = null;
-    Object.keys(byCoin).forEach((coin) => {
+    for (const coin of Object.keys(byCoin)) {
       const map = byCoin[coin];
       let myDelta = 0;
-      Object.keys(map).forEach((a) => {
+      for (const a of Object.keys(map)) {
         if (a.toLowerCase() === me) myDelta += map[a];
-      });
-      if (!myDelta) return;
+      }
+      if (!myDelta) continue;
       if (!best || Math.abs(myDelta) > Math.abs(best.myDelta)) {
         best = { coin, myDelta, map };
       }
-    });
-    if (!best) return;
+    }
+    if (!best) continue;
 
     const direction = best.myDelta > 0 ? "in" : "out";
     const want = direction === "in" ? -1 : 1;
     let counterparty = "";
     let bestAbs = 0;
-    Object.keys(best.map).forEach((a) => {
-      if (a.toLowerCase() === me) return;
+    for (const a of Object.keys(best.map)) {
+      if (a.toLowerCase() === me) continue;
       const d = best.map[a];
       if (d * want > 0 && Math.abs(d) > bestAbs) {
         bestAbs = Math.abs(d);
         counterparty = a;
       }
-    });
+    }
     if (!counterparty && direction === "in") {
       const sender =
         block.transaction &&
@@ -5688,7 +5690,7 @@ async function fetchSuiHistoryForOwner(owner, chain) {
       }
     }
 
-    const decimals = /::sui::SUI$/i.test(best.coin) ? 9 : 9;
+    const decimals = await suiCoinDecimals(best.coin, rpcs);
     const ts = Number(
       (block.timestampMs != null
         ? block.timestampMs
@@ -5703,15 +5705,36 @@ async function fetchSuiHistoryForOwner(owner, chain) {
       mint: /::sui::SUI$/i.test(best.coin) ? null : best.coin,
       when: ts > 1e12 ? Math.floor(ts / 1000) : ts,
       status:
-        block.effects && block.effects.status && block.effects.status.status === "failure"
+        block.effects &&
+        block.effects.status &&
+        block.effects.status.status === "failure"
           ? "failed"
           : "confirmed",
       chainId: (chain && chain.id) || "sui",
       counterparty: counterparty || "",
     });
-  });
+  }
 
   return out.sort((a, b) => (b.when || 0) - (a.when || 0)).slice(0, 40);
+}
+
+const SUI_COIN_DECIMALS = { "0x2::sui::SUI": 9 };
+
+async function suiCoinDecimals(coinType, rpcs) {
+  const t = String(coinType || "");
+  if (!t || /::sui::SUI$/i.test(t)) return 9;
+  if (SUI_COIN_DECIMALS[t] != null) return SUI_COIN_DECIMALS[t];
+  try {
+    const meta = await suiRpcCall("suix_getCoinMetadata", [t], rpcs);
+    const d = Number(meta && meta.decimals);
+    if (Number.isFinite(d) && d >= 0 && d <= 18) {
+      SUI_COIN_DECIMALS[t] = d;
+      return d;
+    }
+  } catch (_) {}
+  // Safer unknown fallback than assuming 9 for every coin.
+  SUI_COIN_DECIMALS[t] = 6;
+  return 6;
 }
 
 async function refreshHistory() {
@@ -7366,7 +7389,95 @@ function wireProviderSignBridge() {
 
 const LEDGER_REQ_KEY = "gladiator_ledger_sign_req";
 const LEDGER_RES_KEY = "gladiator_ledger_sign_res";
+const DAPP_APPROVE_REQ_KEY = "gladiator_dapp_approve_req";
+const DAPP_APPROVE_RES_KEY = "gladiator_dapp_approve_res";
 let ledgerSignBusy = false;
+let dappApproveBusy = false;
+let pendingDappApproveId = null;
+
+function openDappApproveModal(req) {
+  const modal = $("dappApproveModal");
+  const title = $("dappApproveTitle");
+  const body = $("dappApproveBody");
+  if (title) title.textContent = (req && req.title) || "Approve request?";
+  if (body) {
+    body.textContent =
+      (req && req.body) ||
+      ((req && req.origin) || "A site") + " is requesting wallet access.";
+  }
+  pendingDappApproveId = req && req.id ? req.id : null;
+  if (modal) modal.hidden = false;
+}
+
+function closeDappApproveModal() {
+  const modal = $("dappApproveModal");
+  if (modal) modal.hidden = true;
+}
+
+async function respondDappApprove(approved, error) {
+  const id = pendingDappApproveId;
+  pendingDappApproveId = null;
+  closeDappApproveModal();
+  if (!id) return;
+  try {
+    await new Promise((resolve) => {
+      chrome.storage.local.set(
+        {
+          [DAPP_APPROVE_RES_KEY]: {
+            id,
+            approved: !!approved,
+            error: error || (approved ? "" : "User rejected the request"),
+          },
+          [DAPP_APPROVE_REQ_KEY]: null,
+        },
+        () => resolve()
+      );
+    });
+  } catch (_) {}
+  showToast(approved ? "Approved" : "Rejected");
+}
+
+async function processDappApproveRequest(req) {
+  if (!req || !req.id || dappApproveBusy) return;
+  // Ignore stale requests.
+  if (req.at && Date.now() - Number(req.at) > 2 * 60 * 1000) {
+    try {
+      chrome.storage.local.set({ [DAPP_APPROVE_REQ_KEY]: null });
+    } catch (_) {}
+    return;
+  }
+  dappApproveBusy = true;
+  try {
+    openDappApproveModal(req);
+  } finally {
+    dappApproveBusy = false;
+  }
+}
+
+function wireDappApproveBridge() {
+  if (
+    !(
+      IS_EXTENSION &&
+      typeof chrome !== "undefined" &&
+      chrome.storage &&
+      chrome.storage.local
+    )
+  ) {
+    return;
+  }
+  if (wireDappApproveBridge._wired) return;
+  wireDappApproveBridge._wired = true;
+  chrome.storage.local.get([DAPP_APPROVE_REQ_KEY], (bag) => {
+    if (bag && bag[DAPP_APPROVE_REQ_KEY]) {
+      processDappApproveRequest(bag[DAPP_APPROVE_REQ_KEY]);
+    }
+  });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local" || !changes[DAPP_APPROVE_REQ_KEY]) return;
+    const req = changes[DAPP_APPROVE_REQ_KEY].newValue;
+    if (req) processDappApproveRequest(req);
+  });
+}
 
 async function processLedgerSignRequest(req) {
   if (!req || !req.id || ledgerSignBusy) return;
@@ -7560,6 +7671,12 @@ function wire() {
     run
       .then(() => showToast("Disconnected"))
       .catch((err) => console.warn(err));
+  });
+  $("dappApproveApprove")?.addEventListener("click", () => {
+    respondDappApprove(true).catch(() => {});
+  });
+  $("dappApproveReject")?.addEventListener("click", () => {
+    respondDappApprove(false).catch(() => {});
   });
   $("wcProposalApprove")?.addEventListener("click", () => {
     wcApprovePending().catch((err) => console.error(err));
@@ -7902,6 +8019,7 @@ async function boot() {
   STATE = await ensureState();
   wireProviderSignBridge();
   wireLedgerSignBridge();
+  wireDappApproveBridge();
   // Always push wallet into chrome.storage + SW memory so Jupiter signing works.
   try {
     if (!isVaultLocked()) {
