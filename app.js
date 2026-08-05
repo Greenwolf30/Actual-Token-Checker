@@ -1596,6 +1596,7 @@ function solanaKeypairFromAccount(acc) {
 
 /* ——— WalletConnect (Solana / pump.fun) ——— */
 let WC_PENDING_PROPOSAL = null;
+let WC_PENDING_REQUEST = null;
 let WC_WIRED = false;
 
 function setWcStatus(msg) {
@@ -1613,29 +1614,63 @@ function base64ToBytes(b64) {
 function decodeWcBytes(raw) {
   if (raw == null) throw new Error("Missing payload");
   if (raw instanceof Uint8Array) return raw;
+  if (ArrayBuffer.isView(raw)) return new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
   if (Array.isArray(raw)) return new Uint8Array(raw);
   if (typeof raw !== "string") throw new Error("Unsupported payload type");
   const s = raw.trim();
   if (!s) throw new Error("Empty payload");
   // Hex
-  if (/^(0x)?[0-9a-fA-F]+$/.test(s) && s.replace(/^0x/, "").length % 2 === 0) {
+  if (/^(0x)?[0-9a-fA-F]+$/.test(s) && s.replace(/^0x/, "").length % 2 === 0 && s.length >= 16) {
     const hex = s.replace(/^0x/, "");
     const out = new Uint8Array(hex.length / 2);
     for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
     return out;
   }
-  // Base64-ish
+  // Solana WC payloads are usually base58 — try before base64 (overlap causes bad sigs).
+  try {
+    return Base58.decode(s);
+  } catch (_) {}
+  // Base64
   if (/^[A-Za-z0-9+/]+=*$/.test(s) && s.length % 4 === 0) {
     try {
       return base64ToBytes(s);
     } catch (_) {}
   }
-  // Base58
+  // UTF-8 text fallback
+  return new TextEncoder().encode(s);
+}
+
+/** WalletConnect solana_signMessage: message field is base58-encoded bytes. */
+function decodeWcSignMessage(raw) {
+  if (raw == null) throw new Error("Missing message");
+  if (raw instanceof Uint8Array) return raw;
+  if (typeof raw !== "string") return decodeWcBytes(raw);
+  const s = raw.trim();
+  if (!s) throw new Error("Empty message");
   try {
     return Base58.decode(s);
-  } catch (_) {}
-  // UTF-8 text fallback (signMessage)
-  return new TextEncoder().encode(s);
+  } catch (_) {
+    // pump.fun / some dApps may send utf8 text
+    return new TextEncoder().encode(s);
+  }
+}
+
+function normalizeWcParams(params) {
+  if (params == null) return {};
+  if (Array.isArray(params)) {
+    if (!params.length) return {};
+    const only = params[0];
+    if (only && typeof only === "object" && !Array.isArray(only)) return only;
+    if (typeof only === "string") {
+      return {
+        message: only,
+        transaction: only,
+        pubkey: typeof params[1] === "string" ? params[1] : undefined,
+      };
+    }
+    return {};
+  }
+  return params;
 }
 
 function extractWcTxBlob(params) {
@@ -1703,12 +1738,13 @@ function paintWcSettings() {
   setWcStatus(STATE && STATE.wcProjectId ? "Ready — paste a wc: URI" : "Add a Reown Project ID to start");
 }
 
-function showWcApproveBar(name) {
+function showWcApproveBar(hintText, statusText) {
   const bar = $("wcApproveBar");
   const hint = $("wcApproveHint");
   if (hint) {
     hint.textContent =
-      (name || "dApp") + " is waiting — tap Approve to connect your Solana wallet.";
+      hintText ||
+      "dApp is waiting — tap Approve in Gladiator.";
   }
   if (bar) {
     bar.hidden = false;
@@ -1717,7 +1753,8 @@ function showWcApproveBar(name) {
       bar.scrollIntoView({ behavior: "smooth", block: "center" });
     }
   }
-  setWcStatus("Waiting for Approve…");
+  setWcStatus(statusText || "Waiting for Approve…");
+  showToast(statusText || "Tap Approve");
 }
 
 function hideWcApproveBar() {
@@ -1748,7 +1785,10 @@ function openWcProposalModal(proposal) {
       ". Uses your active Gladiator Solana address.";
   }
   // Inline Approve is more reliable in the tiny extension popup.
-  showWcApproveBar(name);
+  showWcApproveBar(
+    "Connect to " + name + "? Tap Approve to link your Solana wallet.",
+    "Approve connection"
+  );
   const modal = $("wcProposalModal");
   if (modal) modal.hidden = false;
 }
@@ -1756,8 +1796,22 @@ function openWcProposalModal(proposal) {
 function closeWcProposalModal() {
   const modal = $("wcProposalModal");
   if (modal) modal.hidden = true;
-  hideWcApproveBar();
+  if (!WC_PENDING_REQUEST) hideWcApproveBar();
   WC_PENDING_PROPOSAL = null;
+}
+
+function openWcSignRequest(event) {
+  WC_PENDING_REQUEST = event;
+  const method =
+    (event && event.params && event.params.request && event.params.request.method) ||
+    "sign";
+  const label =
+    method === "solana_signMessage"
+      ? "Approve signature — pump.fun needs this to prove wallet ownership."
+      : method === "solana_signTransaction" || method === "solana_signAndSendTransaction"
+        ? "Approve transaction from the dApp."
+        : "Approve WalletConnect request (" + method + ").";
+  showWcApproveBar(label, "Tap Approve to sign");
 }
 
 async function ensureWalletConnect() {
@@ -1786,43 +1840,48 @@ async function ensureWalletConnect() {
         return pk;
       },
       signSolanaMessage: async (params) => {
+        const p = normalizeWcParams(params);
         const acc = activeAccount(STATE);
         const kp = solanaKeypairFromAccount(acc);
-        const raw = params && (params.message || params.msg || params);
-        let msgBytes = decodeWcBytes(raw);
-        // Some dApps wrap { message: utf8 } already as string — if decode produced ascii of base58, OK.
+        const raw = p.message || p.msg || (typeof params === "string" ? params : null);
+        if (!raw) throw new Error("No message to sign");
+        const msgBytes = decodeWcSignMessage(raw);
         if (!window.nacl) throw new Error("nacl missing");
+        // Solana Keypair.secretKey is 64 bytes (seed+pubkey) — required by nacl.sign.detached
         const sig = nacl.sign.detached(msgBytes, kp.secretKey);
         return { signature: Base58.encode(sig) };
       },
       signSolanaTransaction: async (params) => {
+        const p = normalizeWcParams(params);
         const acc = activeAccount(STATE);
         const kp = solanaKeypairFromAccount(acc);
-        const blob = extractWcTxBlob(params);
+        const blob = extractWcTxBlob(p);
         const bytes = decodeWcBytes(blob);
         const signed = signSolanaTxBytes(bytes, kp);
         // WalletConnect Solana: result.signature is commonly the signed tx (base58) or sig.
         return { signature: signed.signedTransaction };
       },
       signAllSolanaTransactions: async (params) => {
+        const p = normalizeWcParams(params);
         const acc = activeAccount(STATE);
         const kp = solanaKeypairFromAccount(acc);
         const list =
-          (params && (params.transactions || params.txs)) ||
+          (p && (p.transactions || p.txs)) ||
           (Array.isArray(params) ? params : null);
         if (!list || !list.length) throw new Error("No transactions to sign");
         const out = [];
         for (const item of list) {
-          const blob = typeof item === "string" ? item : extractWcTxBlob(item);
+          const blob = typeof item === "string" ? item : extractWcTxBlob(normalizeWcParams(item));
           const signed = signSolanaTxBytes(decodeWcBytes(blob), kp);
           out.push(signed.signedTransaction);
         }
         return { transactions: out };
       },
       signAndSendSolanaTransaction: async (params) => {
+        const p = normalizeWcParams(params);
         const acc = activeAccount(STATE);
         const kp = solanaKeypairFromAccount(acc);
-        const blob = extractWcTxBlob(params);
+        const blob = extractWcTxBlob(p);
         const signed = signSolanaTxBytes(decodeWcBytes(blob), kp);
         const solChain = CHAINS.find((c) => c.id === "solana");
         const rpcs = solRpcList(solChain);
@@ -1846,7 +1905,19 @@ async function ensureWalletConnect() {
       onProposal: async (proposal) => {
         openWcProposalModal(proposal);
       },
+      onRequest: async (event) => {
+        const method =
+          event && event.params && event.params.request && event.params.request.method;
+        // Account reads can answer immediately; signatures need the Approve tap.
+        if (method === "solana_getAccounts" || method === "solana_requestAccounts") {
+          await GladiatorWC.handleRequest(event);
+          return;
+        }
+        openWcSignRequest(event);
+      },
       onSessionDelete: () => {
+        WC_PENDING_REQUEST = null;
+        hideWcApproveBar();
         setWcStatus("Disconnected");
         showToast("WalletConnect disconnected");
       },
@@ -1914,18 +1985,34 @@ async function wcDisconnect() {
 }
 
 async function wcApprovePending() {
-  const proposal = WC_PENDING_PROPOSAL;
-  if (!proposal) {
-    closeWcProposalModal();
-    return;
-  }
   try {
     await ensureWalletConnect();
-    await GladiatorWC.approveProposal(proposal);
-    closeWcProposalModal();
-    if ($("wcUri")) $("wcUri").value = "";
-    paintWcSettings();
-    showToast("Connected");
+    // 1) Session connect
+    if (WC_PENDING_PROPOSAL) {
+      const proposal = WC_PENDING_PROPOSAL;
+      await GladiatorWC.approveProposal(proposal);
+      closeWcProposalModal();
+      if ($("wcUri")) $("wcUri").value = "";
+      setWcStatus("Connected — waiting for signature request…");
+      showToast("Connected — approve the next signature if asked");
+      paintWcSettings();
+      return;
+    }
+    // 2) Sign / tx request (pump.fun ownership proof)
+    if (WC_PENDING_REQUEST) {
+      const event = WC_PENDING_REQUEST;
+      WC_PENDING_REQUEST = null;
+      hideWcApproveBar();
+      setWcStatus("Signing…");
+      await GladiatorWC.handleRequest(event);
+      setWcStatus("Signature sent — check pump.fun");
+      showToast("Signed — check pump.fun");
+      paintWcSettings();
+      return;
+    }
+    hideWcApproveBar();
+    setWcStatus("Nothing to approve right now");
+    showToast("Nothing to approve — paste a fresh wc: link");
   } catch (err) {
     const msg = String(err && err.message ? err.message : err);
     setWcStatus("Approve failed: " + msg);
@@ -1934,14 +2021,18 @@ async function wcApprovePending() {
 }
 
 async function wcRejectPending() {
-  const proposal = WC_PENDING_PROPOSAL;
   try {
-    if (proposal && window.GladiatorWC) {
-      await GladiatorWC.rejectProposal(proposal, "User rejected");
+    if (WC_PENDING_PROPOSAL && window.GladiatorWC) {
+      await GladiatorWC.rejectProposal(WC_PENDING_PROPOSAL, "User rejected");
+    }
+    if (WC_PENDING_REQUEST && window.GladiatorWC && GladiatorWC.rejectRequest) {
+      await GladiatorWC.rejectRequest(WC_PENDING_REQUEST, "User rejected");
     }
   } catch (_) {}
+  WC_PENDING_REQUEST = null;
   closeWcProposalModal();
-  setWcStatus("Connection rejected");
+  hideWcApproveBar();
+  setWcStatus("Rejected");
 }
 
 function friendlySendError(err) {

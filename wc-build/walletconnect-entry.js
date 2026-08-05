@@ -185,15 +185,37 @@ async function rejectProposal(proposal, message) {
   status("Connection rejected");
 }
 
+function normalizeRequestParams(raw) {
+  if (raw == null) return {};
+  if (Array.isArray(raw)) {
+    if (!raw.length) return {};
+    if (raw.length === 1) {
+      const only = raw[0];
+      if (only && typeof only === "object" && !Array.isArray(only)) return only;
+      if (typeof only === "string") return { message: only, transaction: only };
+    }
+    // Some clients send [message, pubkey]
+    if (typeof raw[0] === "string") {
+      return { message: raw[0], pubkey: typeof raw[1] === "string" ? raw[1] : undefined };
+    }
+    return raw[0] || {};
+  }
+  return raw;
+}
+
 async function handleRequest(event) {
   const { topic, params, id } = event;
   const method = params && params.request && params.request.method;
-  const reqParams = (params && params.request && params.request.params) || {};
+  const reqParams = normalizeRequestParams(
+    params && params.request && params.request.params
+  );
   try {
     let result;
     if (method === "solana_getAccounts" || method === "solana_requestAccounts") {
       const pubkey = await handlers.getSolanaPublicKey();
-      result = [{ pubkey }];
+      result = { pubkey };
+      // Also support array form some dApps expect
+      if (method === "solana_getAccounts") result = [{ pubkey }];
     } else if (method === "solana_signMessage") {
       result = await handlers.signSolanaMessage(reqParams);
     } else if (method === "solana_signTransaction") {
@@ -212,14 +234,16 @@ async function handleRequest(event) {
     status("Signed: " + method);
   } catch (err) {
     const msg = String(err && err.message ? err.message : err);
-    await walletKit.respondSessionRequest({
-      topic,
-      response: {
-        id,
-        jsonrpc: "2.0",
-        error: { code: 5000, message: msg },
-      },
-    });
+    try {
+      await walletKit.respondSessionRequest({
+        topic,
+        response: {
+          id,
+          jsonrpc: "2.0",
+          error: { code: 5000, message: msg },
+        },
+      });
+    } catch (_) {}
     status("Request failed: " + msg);
     throw err;
   }
@@ -237,6 +261,21 @@ async function pair(uri) {
 function getActiveSessions() {
   if (!walletKit) return {};
   return walletKit.getActiveSessions() || {};
+}
+
+async function rejectRequest(event, message) {
+  if (!walletKit || !event) return;
+  const topic = event.topic;
+  const id = event.id;
+  await walletKit.respondSessionRequest({
+    topic,
+    response: {
+      id,
+      jsonrpc: "2.0",
+      error: { code: 5000, message: message || "User rejected" },
+    },
+  });
+  status("Request rejected");
 }
 
 async function disconnectAll() {
@@ -263,6 +302,7 @@ const api = {
   approveProposal,
   rejectProposal,
   handleRequest,
+  rejectRequest,
   getActiveSessions,
   disconnectAll,
   setHandlers,
