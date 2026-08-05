@@ -447,6 +447,9 @@
           if (registered) return;
           api.register(wallet);
           registered = true;
+          try {
+            console.info("[Gladiator] Wallet Standard: registered");
+          } catch (_) {}
         } catch (_) {}
       };
       try {
@@ -461,6 +464,31 @@
           } catch (_) {}
         });
       } catch (_) {}
+      // Late inject: re-announce a couple times so Jupiter's picker picks us up
+      [800, 2000, 4000].forEach((ms) => {
+        setTimeout(() => {
+          if (registered) {
+            // Still announce — some apps only listen for the event, not a one-time list
+            try {
+              window.dispatchEvent(
+                new CustomEvent("wallet-standard:register-wallet", {
+                  detail: (api) => {
+                    try {
+                      if (api && typeof api.register === "function") api.register(wallet);
+                    } catch (_) {}
+                  },
+                })
+              );
+            } catch (_) {}
+            return;
+          }
+          try {
+            window.dispatchEvent(
+              new CustomEvent("wallet-standard:register-wallet", { detail: callback })
+            );
+          } catch (_) {}
+        }, ms);
+      });
     }
 
     // Never touch window.solana — that fights Phantom/Jupiter and can blank the page.
