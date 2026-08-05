@@ -319,9 +319,15 @@
 
   async function disconnect() {
     try {
-      if (window.GladiatorWC && GladiatorWC.isReady()) await GladiatorWC.disconnectAll();
-      await storageSet({ [PENDING_KEY]: null });
-      setStatus("Disconnected", "bad");
+      // Wallet-initiated WC session delete — relay notifies pump.fun / the dApp.
+      if (window.GladiatorWC && GladiatorWC.isReady()) {
+        await GladiatorWC.disconnectAll();
+      }
+      await storageSet({
+        [PENDING_KEY]: null,
+        gladiator_wc_cmd: { type: "disconnected", at: Date.now() },
+      });
+      setStatus("Disconnected — session end sent to dApp (pump.fun)", "bad");
     } catch (err) {
       setStatus(String(err && err.message ? err.message : err), "bad");
     }
@@ -331,11 +337,20 @@
   disconnectBtn?.addEventListener("click", () => disconnect());
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== "local" || !changes[PENDING_KEY]) return;
-    const next = changes[PENDING_KEY].newValue;
-    if (next && next.uri && String(next.uri).startsWith("wc:")) {
-      setStatus("New wc: link received — connecting…");
-      connectPending();
+    if (area !== "local") return;
+    if (changes[PENDING_KEY]) {
+      const next = changes[PENDING_KEY].newValue;
+      if (next && next.uri && String(next.uri).startsWith("wc:")) {
+        setStatus("New wc: link received — connecting…");
+        connectPending();
+      }
+    }
+    if (changes.gladiator_wc_cmd) {
+      const cmd = changes.gladiator_wc_cmd.newValue;
+      if (cmd && cmd.type === "disconnect") {
+        setStatus("Disconnect requested from Gladiator…");
+        disconnect();
+      }
     }
   });
 

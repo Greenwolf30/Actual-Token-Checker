@@ -2054,11 +2054,30 @@ async function wcConnectFromUri() {
 
 async function wcDisconnect() {
   try {
+    // Live WC session usually lives in the bridge window, not this popup.
+    if (IS_EXTENSION && typeof chrome !== "undefined" && chrome.storage) {
+      await new Promise((resolve, reject) => {
+        chrome.storage.local.set(
+          {
+            gladiator_wc_cmd: { type: "disconnect", at: Date.now() },
+            gladiator_wc_pending: null,
+          },
+          () => {
+            const err = chrome.runtime.lastError;
+            if (err) reject(err);
+            else resolve();
+          }
+        );
+      });
+      try {
+        chrome.runtime.sendMessage({ type: "wc-open-bridge" }, () => void chrome.runtime.lastError);
+      } catch (_) {}
+    }
     if (window.GladiatorWC && GladiatorWC.isReady()) {
       await GladiatorWC.disconnectAll();
     }
-    setWcStatus("Disconnected");
-    showToast("WalletConnect disconnected");
+    setWcStatus("Disconnect sent — pump.fun should drop the session");
+    showToast("Disconnected");
   } catch (err) {
     showToast(String(err && err.message ? err.message : err));
   }
