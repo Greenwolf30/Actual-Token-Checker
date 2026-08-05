@@ -2814,6 +2814,26 @@ body.is-local .dock {
   white-space: nowrap;
 }
 
+.ledger-balance-tag {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(61, 214, 140, 0.45);
+  background: rgba(61, 214, 140, 0.14);
+  color: #3dd68c;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+.ledger-balance-tag[hidden] {
+  display: none !important;
+}
+
 .acct-drawer-meta strong .ledger-badge,
 .photon-name .ledger-badge,
 .settings-wallet-meta .ledger-badge {

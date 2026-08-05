@@ -989,7 +989,9 @@ async function connectLedgerAccount(opts) {
         accountIndex,
       };
     }
+    STATE.activeChainId = "solana";
     await storageSet(STATE);
+    await ensureLedgerUsesSolana(dup);
     await refreshAll();
     showToast("Ledger already linked · " + (dup.name || shortAddr(publicKey)));
     setStatus("Connected · " + (dup.name || shortAddr(publicKey)));
@@ -1013,7 +1015,9 @@ async function connectLedgerAccount(opts) {
   };
   STATE.accounts.push(acc);
   STATE.activeAccountId = acc.id;
+  STATE.activeChainId = "solana";
   await storageSet(STATE);
+  await ensureLedgerUsesSolana(acc);
   await refreshAll();
   hideBackup();
   showToast("Ledger connected · " + acc.name);
@@ -2526,6 +2530,9 @@ function paintBalances() {
   const badge = $("chainBadge");
   const delta = $("dayDelta");
   const solLogo = $("solBalanceLogo");
+  const ledgerTag = $("ledgerBalanceTag");
+  const acc = activeAccount(STATE);
+  if (ledgerTag) ledgerTag.hidden = !isLedgerAccount(acc);
   if (badge) badge.textContent = chain.name;
   if (sym) sym.textContent = chain.symbol;
   if (solLogo) {
@@ -2540,7 +2547,6 @@ function paintBalances() {
   const digits =
     chain.kind === "bitcoin" ? 8 : chain.kind === "solana" || chain.kind === "sui" ? 4 : 5;
   if (native) native.textContent = Number(BALANCE.native || 0).toFixed(digits);
-  const acc = activeAccount(STATE);
   const alertActive =
     RECEIVE_ALERT &&
     acc &&
@@ -6785,12 +6791,18 @@ function renderAcctDrawerList() {
     btn.addEventListener("click", async () => {
       if (a.id !== STATE.activeAccountId) {
         STATE.activeAccountId = a.id;
+        if (isLedgerAccount(a)) STATE.activeChainId = "solana";
         clearHistoryForSwitch("Loading history for " + (a.name || "wallet") + "…");
         RECEIVE_ALERT = null;
         paintReceiveAlert();
         await storageSet(STATE);
+        await ensureLedgerUsesSolana(a);
         await refreshAll();
-        showToast("Active · " + (a.name || "Wallet"));
+        showToast(
+          "Active · " +
+            (a.name || "Wallet") +
+            (isLedgerAccount(a) ? " · Ledger" : "")
+        );
       }
       closeAcctDrawer();
       go("home");
@@ -7290,12 +7302,18 @@ function renderAccountsPanel() {
       }
       if (a.id === STATE.activeAccountId) return;
       STATE.activeAccountId = a.id;
+      if (isLedgerAccount(a)) STATE.activeChainId = "solana";
       clearHistoryForSwitch("Loading history for " + (a.name || "wallet") + "…");
       RECEIVE_ALERT = null;
       paintReceiveAlert();
       await storageSet(STATE);
+      await ensureLedgerUsesSolana(a);
       await refreshAll();
-      showToast("Active · " + a.name);
+      showToast(
+        "Active · " +
+          a.name +
+          (isLedgerAccount(a) ? " · Ledger (Solana)" : "")
+      );
       go("activity");
     });
     list.appendChild(li);
@@ -8161,6 +8179,24 @@ const DAPP_APPROVE_RES_KEY = "gladiator_dapp_approve_res";
 let ledgerSignBusy = false;
 let dappApproveBusy = false;
 let pendingDappApproveId = null;
+let pendingLedgerSignReq = null;
+
+/** Ledger accounts are Solana-only for dApps — keep chain on Solana when active. */
+async function ensureLedgerUsesSolana(account) {
+  const acc = account || activeAccount(STATE);
+  if (!isLedgerAccount(acc)) return false;
+  if (STATE && STATE.activeChainId === "solana") return false;
+  STATE.activeChainId = "solana";
+  const sel = $("chainSelect");
+  if (sel) sel.value = "solana";
+  try {
+    await storageSet(STATE);
+  } catch (_) {}
+  paintActiveChainAddress();
+  paintChainPicker();
+  paintBalances();
+  return true;
+}
 
 function openDappApproveModal(req) {
   const modal = $("dappApproveModal");
@@ -8251,22 +8287,77 @@ function wireDappApproveBridge() {
   });
 }
 
-async function processLedgerSignRequest(req) {
+function openLedgerSignModal(req) {
+  const modal = $("ledgerSignModal");
+  const body = $("ledgerSignBody");
+  if (body) {
+    const method = (req && req.method) || "signTransaction";
+    body.textContent =
+      "Jupiter / dApp needs a Ledger " +
+      (method === "signMessage" ? "message" : "transaction") +
+      " signature. Unlock the Nano, open the Solana app, then tap Sign on Ledger.";
+  }
+  pendingLedgerSignReq = req || null;
+  if (modal) modal.hidden = false;
+  try {
+    if (typeof go === "function") go("home", { skipScroll: true });
+  } catch (_) {}
+  showToast("Tap Sign on Ledger");
+}
+
+function closeLedgerSignModal() {
+  const modal = $("ledgerSignModal");
+  if (modal) modal.hidden = true;
+}
+
+async function rejectPendingLedgerSign(error) {
+  const req = pendingLedgerSignReq;
+  pendingLedgerSignReq = null;
+  closeLedgerSignModal();
+  if (!req || !req.id) return;
+  try {
+    await new Promise((resolve) => {
+      chrome.storage.local.set(
+        {
+          [LEDGER_RES_KEY]: {
+            id: req.id,
+            error: error || "User rejected Ledger sign",
+          },
+          [LEDGER_REQ_KEY]: null,
+        },
+        () => resolve()
+      );
+    });
+  } catch (_) {}
+  showToast("Ledger sign rejected");
+}
+
+async function confirmPendingLedgerSign() {
+  const req = pendingLedgerSignReq;
   if (!req || !req.id || ledgerSignBusy) return;
   ledgerSignBusy = true;
+  const approveBtn = $("ledgerSignApprove");
+  if (approveBtn) {
+    approveBtn.disabled = true;
+    approveBtn.textContent = "Signing…";
+  }
   try {
-    showToast("Ledger sign request · approve on device");
+    showToast("Approve on Ledger device…");
     // Prefer the Ledger account matching the request pubkey.
     if (req.publicKey && STATE && Array.isArray(STATE.accounts)) {
       const match = STATE.accounts.find(
         (a) => a.solana && a.solana.publicKey === req.publicKey
       );
-      if (match && match.id !== STATE.activeAccountId) {
-        STATE.activeAccountId = match.id;
-        await storageSet(STATE);
-        paintSwitchers();
+      if (match) {
+        if (match.id !== STATE.activeAccountId) {
+          STATE.activeAccountId = match.id;
+          await storageSet(STATE);
+          paintSwitchers();
+        }
+        await ensureLedgerUsesSolana(match);
       }
     }
+    // Must run from this button click so WebHID has a user gesture.
     const result = await handleProviderSignRequest(req.method, req.params || {});
     await new Promise((resolve, reject) => {
       chrome.storage.local.set(
@@ -8278,26 +8369,45 @@ async function processLedgerSignRequest(req) {
         }
       );
     });
-    showToast("Ledger signed");
+    pendingLedgerSignReq = null;
+    closeLedgerSignModal();
+    showToast("Ledger signed — return to Jupiter");
   } catch (err) {
+    const msg = String(err && err.message ? err.message : err);
     try {
       await new Promise((resolve) => {
         chrome.storage.local.set(
           {
-            [LEDGER_RES_KEY]: {
-              id: req.id,
-              error: String(err && err.message ? err.message : err),
-            },
+            [LEDGER_RES_KEY]: { id: req.id, error: msg },
             [LEDGER_REQ_KEY]: null,
           },
           () => resolve()
         );
       });
     } catch (_) {}
-    showToast(String(err && err.message ? err.message : err));
+    pendingLedgerSignReq = null;
+    closeLedgerSignModal();
+    showToast(msg);
   } finally {
     ledgerSignBusy = false;
+    if (approveBtn) {
+      approveBtn.disabled = false;
+      approveBtn.textContent = "Sign on Ledger";
+    }
   }
+}
+
+async function processLedgerSignRequest(req) {
+  if (!req || !req.id) return;
+  // Ignore stale requests.
+  if (req.at && Date.now() - Number(req.at) > 3 * 60 * 1000) {
+    try {
+      chrome.storage.local.set({ [LEDGER_REQ_KEY]: null });
+    } catch (_) {}
+    return;
+  }
+  // Do NOT auto-sign — WebHID / Ledger needs a real click.
+  openLedgerSignModal(req);
 }
 
 function wireLedgerSignBridge() {
@@ -8306,6 +8416,12 @@ function wireLedgerSignBridge() {
   }
   if (wireLedgerSignBridge._wired) return;
   wireLedgerSignBridge._wired = true;
+  $("ledgerSignApprove")?.addEventListener("click", () => {
+    confirmPendingLedgerSign().catch((err) => console.warn("[ledger-sign]", err));
+  });
+  $("ledgerSignReject")?.addEventListener("click", () => {
+    rejectPendingLedgerSign("User rejected Ledger sign");
+  });
   chrome.storage.local.get([LEDGER_REQ_KEY], (bag) => {
     if (bag && bag[LEDGER_REQ_KEY]) processLedgerSignRequest(bag[LEDGER_REQ_KEY]);
   });
@@ -8898,6 +9014,17 @@ async function boot() {
             // Ensure the Ledger section is expanded.
             const details = btn && btn.closest("details");
             if (details) details.open = true;
+          } catch (_) {}
+        }
+        if (q.get("ledgerSign") === "1") {
+          go("home", { skipScroll: true });
+          await ensureLedgerUsesSolana();
+          showToast("Ledger sign ready — tap Sign on Ledger when prompted");
+          try {
+            const bag = await chromeLocalGet([LEDGER_REQ_KEY]);
+            if (bag && bag[LEDGER_REQ_KEY]) {
+              processLedgerSignRequest(bag[LEDGER_REQ_KEY]);
+            }
           } catch (_) {}
         }
       } catch (_) {}

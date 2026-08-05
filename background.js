@@ -344,23 +344,27 @@ async function focusOrOpenWcWallet(opts) {
   const openSettings = !opts || opts.settings !== false;
   const restore = !!(opts && opts.restore);
   const ledger = !!(opts && opts.ledger);
+  const ledgerSign = !!(opts && opts.ledgerSign);
   const base = chrome.runtime.getURL(WC_WALLET_PATH);
   let url = base;
-  if (ledger) url = base + "?ledger=1";
+  if (ledgerSign) url = base + "?ledgerSign=1";
+  else if (ledger) url = base + "?ledger=1";
   else if (restore) url = base + "?restore=1";
   else if (openSettings) url = base + "?wc=1";
 
-  // Ledger WebHID chooser is unreliable in extension popup windows — use a
-  // normal browser tab (same approach as Sui / other wallets).
-  if (ledger) {
+  // Ledger WebHID is unreliable in extension popup windows — use a normal tab.
+  if (ledger || ledgerSign) {
     try {
       const existing = await chrome.tabs.query({
         url: [base, base + "?*"],
       });
+      const want = ledgerSign ? "ledgerSign=1" : "ledger=1";
       const ledgerTab =
         (existing || []).find(
-          (t) => t.url && /[?&]ledger=1(?:&|$)/.test(String(t.url))
-        ) || null;
+          (t) => t.url && new RegExp("[?&]" + want + "(?:&|$)").test(String(t.url))
+        ) ||
+        (existing || []).find((t) => t.url && /index\.html/i.test(String(t.url))) ||
+        null;
       if (ledgerTab && ledgerTab.id != null) {
         await chrome.tabs.update(ledgerTab.id, { url, active: focus });
         if (ledgerTab.windowId != null && focus) {
@@ -686,11 +690,16 @@ async function signViaWalletWindow(method, params, acc) {
     [LEDGER_RES]: null,
   });
   try {
-    await focusOrOpenWcWallet({ focus: true, settings: false, restore: true });
+    // Full tab + click-to-sign modal (WebHID needs a real user gesture).
+    await focusOrOpenWcWallet({
+      focus: true,
+      settings: false,
+      ledgerSign: true,
+    });
   } catch (_) {
     await nudgeWalletPopup();
   }
-  for (let i = 0; i < 180; i++) {
+  for (let i = 0; i < 240; i++) {
     await sleep(500);
     const bag = await storageGet([LEDGER_RES]);
     const res = bag[LEDGER_RES];
@@ -701,7 +710,7 @@ async function signViaWalletWindow(method, params, acc) {
   }
   await storageSet({ [LEDGER_REQ]: null, [LEDGER_RES]: null });
   throw new Error(
-    "Ledger sign timed out — keep Gladiator open and approve on the device"
+    "Ledger sign timed out — keep the Gladiator tab open, tap Sign on Ledger, then approve on the device"
   );
 }
 
@@ -1469,9 +1478,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "wc-open-wallet" || msg.type === "wc-open-bridge") {
     focusOrOpenWcWallet({
       focus: msg.focus !== false,
-      settings: msg.ledger ? false : msg.settings !== false,
+      settings: msg.ledger || msg.ledgerSign ? false : msg.settings !== false,
       restore: !!msg.restore,
       ledger: !!msg.ledger,
+      ledgerSign: !!msg.ledgerSign,
     })
       .then((r) => sendResponse(r))
       .catch((err) =>

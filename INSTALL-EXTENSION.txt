@@ -7,8 +7,9 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
-v0.5.99:
-- Ledger connect opens a normal browser tab (fixes HID “No Ledger selected”)
-- USB only — quit Ledger Live, pick Nano in the Chrome list
+v0.6.0:
+- Ledger + Jupiter: sign opens a tab with “Sign on Ledger” click (fixes HID)
+- Green Ledger tag next to Total balance for Ledger wallets
+- Selecting a Ledger wallet switches to Solana automatically
 
 Version: see manifest.json
