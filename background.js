@@ -6,6 +6,49 @@ const OFFSCREEN_URL = "offscreen.html";
 
 let walletWindowId = null;
 let offscreenCreating = null;
+/** In-memory signer so Jupiter can sign even if chrome.storage lags. */
+let cachedSigner = null; // { publicKey, secretKey, mnemonic }
+let persistWaiters = [];
+
+function notifyPersistWaiters() {
+  const list = persistWaiters.slice();
+  persistWaiters = [];
+  for (const fn of list) {
+    try {
+      fn(true);
+    } catch (_) {}
+  }
+}
+
+function waitForPersist(timeoutMs) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      persistWaiters = persistWaiters.filter((fn) => fn !== onPersist);
+      resolve(false);
+    }, timeoutMs);
+    function onPersist() {
+      clearTimeout(timer);
+      resolve(true);
+    }
+    persistWaiters.push(onPersist);
+  });
+}
+
+function cacheSignerFromState(state) {
+  if (!state || !Array.isArray(state.accounts) || !state.accounts.length) {
+    return null;
+  }
+  const acc =
+    state.accounts.find((a) => a.id === state.activeAccountId) || state.accounts[0];
+  if (!acc || !acc.solana) return null;
+  const publicKey = acc.solana.publicKey || "";
+  const secretKey = acc.solana.secretKey || "";
+  const mnemonic = acc.mnemonic || "";
+  if (!publicKey) return null;
+  if (!secretKey && !mnemonic) return null;
+  cachedSigner = { publicKey, secretKey, mnemonic };
+  return cachedSigner;
+}
 
 async function focusOrOpenWcWallet(opts) {
   const focus = !opts || opts.focus !== false;
@@ -194,29 +237,47 @@ function sleep(ms) {
 }
 
 async function getActiveSolanaAccount() {
+  if (cachedSigner && (cachedSigner.secretKey || cachedSigner.mnemonic)) {
+    return {
+      publicKey: cachedSigner.publicKey,
+      secretKey: cachedSigner.secretKey || "",
+      mnemonic: cachedSigner.mnemonic || "",
+      needsMigrate: false,
+      hasSigner: true,
+      accountId: null,
+      fromCache: true,
+    };
+  }
   const bag = await storageGet([STORE_KEY]);
   const state = bag[STORE_KEY];
-  if (!state || !state.accounts || !state.accounts.length) {
-    return null;
+  const cached = cacheSignerFromState(state);
+  if (cached) {
+    return {
+      publicKey: cached.publicKey,
+      secretKey: cached.secretKey || "",
+      mnemonic: cached.mnemonic || "",
+      needsMigrate: false,
+      hasSigner: true,
+      accountId: null,
+      fromCache: false,
+    };
   }
+  if (!state || !state.accounts || !state.accounts.length) return null;
   const acc =
     state.accounts.find((a) => a.id === state.activeAccountId) || state.accounts[0];
   const pk = acc && acc.solana && acc.solana.publicKey;
   if (!pk) return null;
-  const secretKey = acc && acc.solana && acc.solana.secretKey;
-  const mnemonic = acc && acc.mnemonic;
-  const needsMigrate = !!(state.vault && state.vault.data && !secretKey && !mnemonic);
+  const needsMigrate = !!(state.vault && state.vault.data);
   return {
     publicKey: pk,
-    secretKey: secretKey || "",
-    mnemonic: mnemonic || "",
+    secretKey: "",
+    mnemonic: "",
     needsMigrate,
-    hasSigner: !!(secretKey || mnemonic),
+    hasSigner: false,
     accountId: acc && acc.id,
   };
 }
 
-/** Open the toolbar popup (not a side window) so the user can unlock/import/sync once. */
 async function nudgeWalletPopup() {
   try {
     if (chrome.action && typeof chrome.action.openPopup === "function") {
@@ -225,38 +286,27 @@ async function nudgeWalletPopup() {
   } catch (_) {}
 }
 
-async function waitForSigner(timeoutMs) {
-  const start = Date.now();
-  let last = null;
-  while (Date.now() - start < timeoutMs) {
-    last = await getActiveSolanaAccount();
-    if (last && last.hasSigner) return last;
-    await sleep(300);
-  }
-  return last;
-}
-
 async function requireSignerReady() {
   let acc = await getActiveSolanaAccount();
   if (acc && acc.hasSigner) return acc;
 
-  // Popup may still be syncing localStorage → chrome.storage.
   await nudgeWalletPopup();
-  acc = await waitForSigner(8000);
+  await waitForPersist(10000);
+  acc = await getActiveSolanaAccount();
   if (acc && acc.hasSigner) return acc;
 
   if (!acc) {
     throw new Error(
-      "No wallet in extension storage — click the Gladiator toolbar icon once to sync, then retry"
+      "No wallet synced — click the Gladiator toolbar icon once, then retry the swap"
     );
   }
   if (acc.needsMigrate) {
     throw new Error(
-      "Keys still locked — open the Gladiator extension icon and enter your old password once"
+      "Keys locked — open Gladiator toolbar icon and enter your old password once"
     );
   }
   throw new Error(
-    "No Solana key — open the Gladiator extension icon and create/import a wallet"
+    "No Solana key — open Gladiator toolbar icon and create/import a wallet"
   );
 }
 
@@ -274,11 +324,10 @@ async function handleProviderRequest(msg, sender) {
     const onlyIfTrusted = !!params.onlyIfTrusted;
     const trusted = await readTrustedOrigins();
     if (onlyIfTrusted && origin && !trusted.includes(origin)) {
-      return null; // silent fail for onlyIfTrusted
+      return null;
     }
     const publicKey = await getActivePublicKey();
     if (origin) await trustOrigin(origin);
-    callOffscreen("getPubkey", {}).catch(() => {});
     return { publicKey };
   }
 
@@ -292,19 +341,15 @@ async function handleProviderRequest(msg, sender) {
     method === "signAndSendTransaction" ||
     method === "signMessage"
   ) {
-    await requireSignerReady();
-    try {
-      return await callOffscreen(method, params);
-    } catch (err) {
-      const msgText = String(err && err.message ? err.message : err);
-      // If offscreen still can't see the wallet, nudge popup sync and retry once.
-      if (/No wallet|No Solana key|locked/i.test(msgText)) {
-        await nudgeWalletPopup();
-        await waitForSigner(8000);
-        return await callOffscreen(method, params);
-      }
-      throw err;
-    }
+    const acc = await requireSignerReady();
+    // Pass keys to offscreen so signing does not depend on storage races.
+    const enriched = {
+      ...params,
+      _publicKey: acc.publicKey,
+      _secretKey: acc.secretKey || "",
+      _mnemonic: acc.mnemonic || "",
+    };
+    return await callOffscreen(method, enriched);
   }
 
   throw new Error("Unsupported provider method: " + method);
@@ -438,11 +483,34 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       delete toStore.vault;
       delete toStore.vaultEnabled;
     }
+    const cached = cacheSignerFromState(toStore);
     storageSet({ [STORE_KEY]: toStore })
-      .then(() => sendResponse({ ok: true, accounts: toStore.accounts.length }))
+      .then(() => {
+        notifyPersistWaiters();
+        sendResponse({
+          ok: true,
+          accounts: toStore.accounts.length,
+          signerReady: !!cached,
+          publicKey: cached && cached.publicKey,
+        });
+      })
       .catch((err) =>
         sendResponse({ ok: false, error: String(err && err.message ? err.message : err) })
       );
+    return true;
+  }
+
+  if (msg.type === "gladiator-signer-status") {
+    getActiveSolanaAccount()
+      .then((acc) =>
+        sendResponse({
+          ok: true,
+          ready: !!(acc && acc.hasSigner),
+          publicKey: acc && acc.publicKey,
+          needsMigrate: !!(acc && acc.needsMigrate),
+        })
+      )
+      .catch(() => sendResponse({ ok: true, ready: false }));
     return true;
   }
 

@@ -5034,15 +5034,28 @@ async function boot() {
   }
   STATE = await ensureState();
   wireProviderSignBridge();
-  // Always push wallet into chrome.storage so invisible offscreen signing can see it.
+  // Always push wallet into chrome.storage + SW memory so Jupiter signing works.
   try {
     if (!isVaultLocked()) {
       await repairAllExtraKeys(STATE);
     }
     await storageSet(STATE);
+    const synced = await new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage(
+          { type: "gladiator-persist-wallet", state: STATE },
+          (response) => resolve(response || null)
+        );
+      } catch (_) {
+        resolve(null);
+      }
+    });
     const acc = activeAccount(STATE);
-    if (acc && acc.solana && (acc.solana.secretKey || acc.mnemonic)) {
-      console.info("[Gladiator] wallet synced for in-page signing");
+    if (synced && synced.signerReady) {
+      showToast("Jupiter signing ready");
+      console.info("[Gladiator] signer ready", synced.publicKey);
+    } else if (acc && acc.solana && (acc.solana.secretKey || acc.mnemonic)) {
+      showToast("Wallet synced — retry Jupiter if needed");
     } else if (isVaultLocked()) {
       showToast("Enter old password once — then Jupiter swaps work");
     } else {

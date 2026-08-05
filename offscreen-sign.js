@@ -217,16 +217,45 @@
     }
   }
 
-  async function getPubkey() {
+  async function resolveAccount(params) {
+    // Prefer keys passed from the service worker (avoids chrome.storage races).
+    if (params && params._secretKey) {
+      return {
+        state: null,
+        acc: {
+          solana: {
+            publicKey: params._publicKey || "",
+            secretKey: params._secretKey,
+          },
+          mnemonic: params._mnemonic || "",
+        },
+      };
+    }
+    if (params && params._mnemonic) {
+      const state = (await storageGet()) || { accounts: [], activeAccountId: "tmp" };
+      const derived = await deriveSolanaFromMnemonic(params._mnemonic);
+      const acc = {
+        id: "tmp",
+        mnemonic: params._mnemonic,
+        solana: {
+          publicKey: params._publicKey || derived.publicKey,
+          secretKey: derived.secretKey,
+        },
+      };
+      return { state, acc };
+    }
     const state = await storageGet();
-    const { acc } = await ensureAccountWithSecret(state || {});
+    return await ensureAccountWithSecret(state || {});
+  }
+
+  async function getPubkey(params) {
+    const { acc } = await resolveAccount(params || {});
     keypairFromAccount(acc);
     return acc.solana.publicKey;
   }
 
   async function signTransaction(params) {
-    const state = await storageGet();
-    const { acc } = await ensureAccountWithSecret(state || {});
+    const { acc } = await resolveAccount(params || {});
     const kp = keypairFromAccount(acc);
     const u8 = decodeTx(params && params.transaction);
     if (!canDeserialize(u8)) {
@@ -236,8 +265,7 @@
   }
 
   async function signAllTransactions(params) {
-    const state = await storageGet();
-    const { acc } = await ensureAccountWithSecret(state || {});
+    const { acc } = await resolveAccount(params || {});
     const kp = keypairFromAccount(acc);
     const list = (params && params.transactions) || [];
     if (!list.length) throw new Error("No transactions to sign");
@@ -251,14 +279,14 @@
   }
 
   async function signAndSendTransaction(params) {
-    const state = await storageGet();
-    const { acc } = await ensureAccountWithSecret(state || {});
+    const { state, acc } = await resolveAccount(params || {});
     const kp = keypairFromAccount(acc);
     const u8 = decodeTx(params && params.transaction);
     if (!canDeserialize(u8)) throw new Error("Could not decode Solana transaction");
     const signedB64 = signTxBytes(u8, kp);
+    const bag = state || (await storageGet()) || {};
     const rpcs = [
-      (state && state.solRpc) || "",
+      bag.solRpc || "",
       "https://api.mainnet-beta.solana.com",
       "https://solana-rpc.publicnode.com",
       "https://solana.drpc.org",
@@ -298,8 +326,7 @@
   }
 
   async function signMessage(params) {
-    const state = await storageGet();
-    const { acc } = await ensureAccountWithSecret(state || {});
+    const { acc } = await resolveAccount(params || {});
     const kp = keypairFromAccount(acc);
     const naclApi = getNacl();
     if (!naclApi || !naclApi.sign || !naclApi.sign.detached) {
@@ -315,7 +342,7 @@
     (async () => {
       switch (msg.method) {
         case "getPubkey":
-          return { publicKey: await getPubkey() };
+          return { publicKey: await getPubkey(msg.params || {}) };
         case "signTransaction":
           return await signTransaction(msg.params || {});
         case "signAllTransactions":
@@ -328,8 +355,8 @@
           return {
             ok: true,
             solanaWeb3: !!window.solanaWeb3,
-            Base58: !!(window.Base58 && window.Base58.decode),
-            nacl: !!(window.nacl && window.nacl.sign),
+            Base58: !!(getBase58() && getBase58().decode),
+            nacl: !!(getNacl() && getNacl().sign),
             Buffer: typeof Buffer !== "undefined",
           };
         default:
