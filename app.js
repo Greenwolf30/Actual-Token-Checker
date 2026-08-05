@@ -8600,10 +8600,23 @@ function openLedgerSignModal(req) {
   const body = $("ledgerSignBody");
   if (body) {
     const method = (req && req.method) || "signTransaction";
+    const isEvm =
+      (req && req.chain === "evm") ||
+      /personal_sign|eth_sign|eth_sendTransaction|eth_signTypedData/i.test(
+        String(method)
+      );
+    const appName = isEvm ? "Ethereum" : "Solana";
+    const kind = /personal_sign|eth_sign|signMessage|TypedData/i.test(
+      String(method)
+    )
+      ? "message"
+      : "transaction";
     body.textContent =
       "A dApp needs a Ledger " +
-      (method === "signMessage" ? "message" : "transaction") +
-      " signature. Unlock the Nano, open the Solana app, tap Sign on Ledger, then approve on the device — keep this wallet popup open.";
+      kind +
+      " signature. Unlock the Nano, open the " +
+      appName +
+      " app, tap Sign on Ledger, then approve on the device — keep this wallet popup open.";
   }
   pendingLedgerSignReq = req || null;
   if (modal) modal.hidden = false;
@@ -8611,6 +8624,129 @@ function openLedgerSignModal(req) {
     if (typeof go === "function") go("home", { skipScroll: true });
   } catch (_) {}
   showToast("Tap Sign on Ledger in Gladiator");
+}
+
+function ledgerEvmSigToHex(sig) {
+  const r = String(sig.r || "")
+    .replace(/^0x/i, "")
+    .padStart(64, "0");
+  const s = String(sig.s || "")
+    .replace(/^0x/i, "")
+    .padStart(64, "0");
+  let v = sig.v;
+  if (typeof v === "string") {
+    v = v.startsWith("0x") ? parseInt(v, 16) : parseInt(v, 10);
+  }
+  v = Number(v);
+  if (!Number.isFinite(v)) v = 27;
+  if (v < 27) v += 27;
+  return "0x" + r + s + v.toString(16).padStart(2, "0");
+}
+
+function personalSignMessageToHex(message) {
+  if (typeof message === "string" && /^0x[0-9a-fA-F]+$/.test(message)) {
+    return message.slice(2);
+  }
+  const str = String(message || "");
+  if (window.ethers && ethers.toUtf8Bytes) {
+    return Array.from(ethers.toUtf8Bytes(str))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  }
+  let hex = "";
+  for (let i = 0; i < str.length; i++) {
+    hex += str.charCodeAt(i).toString(16).padStart(2, "0");
+  }
+  return hex;
+}
+
+async function handleLedgerEvmSignRequest(method, params) {
+  const ethApi = await ensureLedgerEthSupported();
+  const acc = activeAccount(STATE);
+  if (!acc || !isLedgerAccount(acc) || !ledgerHasEvm(acc)) {
+    throw new Error("Ledger EVM not linked — open Ethereum app and Link EVM");
+  }
+  const idx = ledgerAccountIndex(acc);
+  const args = (params && params.args) || [];
+  const m = String(method || (params && params.method) || "");
+
+  if (m === "personal_sign" || m === "eth_sign") {
+    let message = args[0];
+    if (m === "eth_sign") message = args[1];
+    else if (
+      typeof args[0] === "string" &&
+      args[0].startsWith("0x") &&
+      args[0].length === 42 &&
+      typeof args[1] === "string"
+    ) {
+      message = args[1];
+    }
+    const hex = personalSignMessageToHex(message);
+    showToast("Approve message on Ledger (Ethereum app)…");
+    const sig = await ethApi.signPersonalMessage(idx, hex);
+    return { signature: ledgerEvmSigToHex(sig) };
+  }
+
+  if (
+    m === "eth_signTypedData" ||
+    m === "eth_signTypedData_v3" ||
+    m === "eth_signTypedData_v4"
+  ) {
+    if (typeof ethApi.signEIP712Message !== "function") {
+      throw new Error("Ledger EIP-712 missing — reload Gladiator pack");
+    }
+    let typed = args[1];
+    let address = args[0];
+    if (typed == null && address && typeof address === "object") {
+      typed = address;
+    }
+    if (typeof typed === "string") {
+      try {
+        typed = JSON.parse(typed);
+      } catch (_) {
+        throw new Error("Invalid typed data JSON");
+      }
+    }
+    showToast("Approve typed data on Ledger (Ethereum app)…");
+    const sig = await ethApi.signEIP712Message(idx, typed);
+    return { signature: ledgerEvmSigToHex(sig) };
+  }
+
+  if (m === "eth_sendTransaction") {
+    if (!window.ethers) throw new Error("ethers missing");
+    const txReq = args[0] || {};
+    const chainId = Number((params && params.chainId) || 1);
+    const rpcs =
+      Array.isArray(params && params.rpcs) && params.rpcs.length
+        ? params.rpcs
+        : params && params.rpcUrl
+          ? [params.rpcUrl]
+          : [];
+    if (!rpcs.length) throw new Error("No EVM RPC for Ledger send");
+    let lastErr = null;
+    for (const rpc of rpcs) {
+      try {
+        const provider = new ethers.JsonRpcProvider(rpc, chainId || undefined);
+        const hash = await signAndBroadcastEvmLedger(acc, { chainId, decimals: 18 }, provider, {
+          to: txReq.to,
+          data: txReq.data || "0x",
+          value:
+            txReq.value != null
+              ? typeof txReq.value === "bigint"
+                ? txReq.value
+                : BigInt(txReq.value)
+              : 0n,
+          gasLimit: txReq.gasLimit || txReq.gas || undefined,
+        });
+        return { hash };
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw lastErr || new Error("Ledger eth_sendTransaction failed");
+  }
+
+  throw new Error("Unsupported Ledger EVM method: " + m);
 }
 
 function closeLedgerSignModal() {
@@ -8651,22 +8787,41 @@ async function confirmPendingLedgerSign() {
   }
   try {
     showToast("Approve on Ledger device…");
-    // Prefer the Ledger account matching the request pubkey.
-    if (req.publicKey && STATE && Array.isArray(STATE.accounts)) {
-      const match = STATE.accounts.find(
-        (a) => a.solana && a.solana.publicKey === req.publicKey
+    const isEvm =
+      req.chain === "evm" ||
+      /personal_sign|eth_sign|eth_sendTransaction|eth_signTypedData/i.test(
+        String(req.method || "")
       );
+    // Prefer the Ledger account matching the request address/pubkey.
+    if (STATE && Array.isArray(STATE.accounts)) {
+      let match = null;
+      if (isEvm && req.address) {
+        match = STATE.accounts.find(
+          (a) =>
+            a.evm &&
+            a.evm.address &&
+            String(a.evm.address).toLowerCase() ===
+              String(req.address).toLowerCase()
+        );
+      }
+      if (!match && req.publicKey) {
+        match = STATE.accounts.find(
+          (a) => a.solana && a.solana.publicKey === req.publicKey
+        );
+      }
       if (match) {
         if (match.id !== STATE.activeAccountId) {
           STATE.activeAccountId = match.id;
           await storageSet(STATE);
           paintSwitchers();
         }
-        await ensureLedgerUsesSolana(match);
+        if (!isEvm) await ensureLedgerUsesSolana(match);
       }
     }
     // Must run from this button click so WebHID has a user gesture.
-    const result = await handleProviderSignRequest(req.method, req.params || {});
+    const result = isEvm
+      ? await handleLedgerEvmSignRequest(req.method, req.params || {})
+      : await handleProviderSignRequest(req.method, req.params || {});
     await new Promise((resolve, reject) => {
       chrome.storage.local.set(
         { [LEDGER_RES_KEY]: { id: req.id, result }, [LEDGER_REQ_KEY]: null },

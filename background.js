@@ -126,11 +126,16 @@ async function getActiveEvmAccount() {
   const state = bag[STORE_KEY];
   cacheSignerFromState(state);
   if (cachedSigner && cachedSigner.evmAddress) {
+    const ledger = !!cachedSigner.ledger;
+    const pk = cachedSigner.evmPrivateKey || "";
     return {
       address: cachedSigner.evmAddress,
-      privateKey: cachedSigner.evmPrivateKey || "",
+      privateKey: pk,
       accountId: cachedSigner.accountId || null,
-      hasSigner: !!cachedSigner.evmPrivateKey,
+      ledger,
+      accountIndex: cachedSigner.accountIndex || 0,
+      // Software key OR Ledger with linked EVM address can serve dApps.
+      hasSigner: !!pk || ledger,
     };
   }
   if (!state || !state.accounts || !state.accounts.length) return null;
@@ -138,11 +143,18 @@ async function getActiveEvmAccount() {
     state.accounts.find((a) => a.id === state.activeAccountId) || state.accounts[0];
   const address = acc && acc.evm && acc.evm.address;
   if (!address) return null;
+  const ledger = isLedgerAccount(acc);
+  const pk = (acc.evm && acc.evm.privateKey) || "";
   return {
     address,
-    privateKey: (acc.evm && acc.evm.privateKey) || "",
+    privateKey: pk,
     accountId: acc.id || null,
-    hasSigner: !!(acc.evm && acc.evm.privateKey),
+    ledger,
+    accountIndex:
+      acc.ledger && acc.ledger.accountIndex != null
+        ? Number(acc.ledger.accountIndex) || 0
+        : 0,
+    hasSigner: !!pk || ledger,
   };
 }
 
@@ -195,7 +207,20 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
   if (method === "eth_requestAccounts") {
     const acc = await getActiveEvmAccount();
     if (!acc || !acc.address) {
-      throw new Error("No EVM address — open Gladiator and use a seed wallet (not Ledger-only)");
+      const bag = await storageGet([STORE_KEY]);
+      const st = bag[STORE_KEY];
+      const active =
+        st &&
+        Array.isArray(st.accounts) &&
+        (st.accounts.find((a) => a.id === st.activeAccountId) || st.accounts[0]);
+      if (active && isLedgerAccount(active)) {
+        throw new Error(
+          "Ledger EVM not linked — open Gladiator, open the Ethereum app on your Nano, tap Link EVM, then retry Uniswap"
+        );
+      }
+      throw new Error(
+        "No EVM address — open Gladiator, select an Ethereum wallet (or Link EVM on Ledger), then retry"
+      );
     }
     const trusted = await readTrustedOrigins();
     const isTrusted = !!(origin && trusted.includes(origin));
@@ -206,7 +231,8 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
         title: "Connect wallet?",
         body:
           shortOriginHost(origin) +
-          " wants to connect to your EVM wallet.",
+          " wants to connect to your EVM wallet" +
+          (acc.ledger ? " (Ledger — keep Ethereum app open for signs)." : "."),
         chain: "evm",
         tabId,
       });
@@ -243,7 +269,7 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
   }
   if (method === "personal_sign" || method === "eth_sign") {
     const acc = await getActiveEvmAccount();
-    if (!acc || !acc.privateKey) throw new Error("No EVM key to sign with");
+    if (!acc || !acc.hasSigner) throw new Error("No EVM key to sign with");
     await requestUserApproval({
       origin,
       method,
@@ -252,6 +278,20 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
       chain: "evm",
       tabId,
     });
+    if (acc.ledger && !acc.privateKey) {
+      const raw = await signViaWalletWindow(
+        method,
+        {
+          _ledgerChain: "evm",
+          _evmAddress: acc.address,
+          method,
+          args,
+          chainId: dappEvmChainId,
+        },
+        acc
+      );
+      return { result: { signature: raw && raw.signature ? raw.signature : raw } };
+    }
     const raw = await callOffscreen("ethPersonalSign", {
       _evmPrivateKey: acc.privateKey,
       _evmAddress: acc.address,
@@ -266,7 +306,7 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
     method === "eth_signTypedData_v4"
   ) {
     const acc = await getActiveEvmAccount();
-    if (!acc || !acc.privateKey) throw new Error("No EVM key to sign with");
+    if (!acc || !acc.hasSigner) throw new Error("No EVM key to sign with");
     await requestUserApproval({
       origin,
       method,
@@ -275,6 +315,20 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
       chain: "evm",
       tabId,
     });
+    if (acc.ledger && !acc.privateKey) {
+      const raw = await signViaWalletWindow(
+        method,
+        {
+          _ledgerChain: "evm",
+          _evmAddress: acc.address,
+          method,
+          args,
+          chainId: dappEvmChainId,
+        },
+        acc
+      );
+      return { result: { signature: raw && raw.signature ? raw.signature : raw } };
+    }
     const raw = await callOffscreen("ethSignTypedData", {
       _evmPrivateKey: acc.privateKey,
       _evmAddress: acc.address,
@@ -285,7 +339,7 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
   }
   if (method === "eth_sendTransaction") {
     const acc = await getActiveEvmAccount();
-    if (!acc || !acc.privateKey) throw new Error("No EVM key to send with");
+    if (!acc || !acc.hasSigner) throw new Error("No EVM key to send with");
     const net = EVM_NETWORKS[dappEvmChainId] || EVM_NETWORKS[1];
     const tx = (args && args[0]) || {};
     await requestUserApproval({
@@ -302,6 +356,22 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
       chain: "evm",
       tabId,
     });
+    if (acc.ledger && !acc.privateKey) {
+      const raw = await signViaWalletWindow(
+        "eth_sendTransaction",
+        {
+          _ledgerChain: "evm",
+          _evmAddress: acc.address,
+          method: "eth_sendTransaction",
+          args,
+          rpcUrl: (net.rpcs && net.rpcs[0]) || "",
+          rpcs: net.rpcs || [],
+          chainId: dappEvmChainId,
+        },
+        acc
+      );
+      return { result: { hash: raw && raw.hash ? raw.hash : raw } };
+    }
     const raw = await callOffscreen("ethSendTransaction", {
       _evmPrivateKey: acc.privateKey,
       _evmAddress: acc.address,
@@ -678,12 +748,15 @@ async function signViaWalletWindow(method, params, acc) {
   const reqId = "led_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
   const LEDGER_REQ = "gladiator_ledger_sign_req";
   const LEDGER_RES = "gladiator_ledger_sign_res";
+  const chain = (params && params._ledgerChain) || (acc && acc.ledgerChain) || "solana";
   await storageSet({
     [LEDGER_REQ]: {
       id: reqId,
       method,
       params: params || {},
-      publicKey: acc.publicKey,
+      chain,
+      publicKey: acc.publicKey || "",
+      address: acc.address || acc.evmAddress || "",
       accountIndex: acc.accountIndex || 0,
       at: Date.now(),
     },
