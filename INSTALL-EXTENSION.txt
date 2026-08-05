@@ -7,8 +7,7 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
-v0.5.94:
-- More professional wallet UI (cleaner home, holdings list, token page)
-- Token page layout closer to Phantom / Solflare
+v0.5.95:
+- Slightly wider extension popup (360px)
 
 Version: see manifest.json
