@@ -1117,7 +1117,7 @@ async function copyText(text) {
   }
 }
 
-function go(panel) {
+function go(panel, opts) {
   document.querySelectorAll(".panel").forEach((p) => {
     const on = p.dataset.panel === panel;
     p.hidden = !on;
@@ -1126,9 +1126,12 @@ function go(panel) {
   document.querySelectorAll(".dock-item").forEach((btn) => {
     btn.classList.toggle("is-active", btn.dataset.go === panel);
   });
-  const stage = document.querySelector("body.is-extension .stage");
-  if (stage) stage.scrollTo({ top: 0, behavior: "smooth" });
-  else window.scrollTo({ top: 0, behavior: "smooth" });
+  const skipScroll = !!(opts && opts.skipScroll);
+  if (!skipScroll) {
+    const stage = document.querySelector("body.is-extension .stage");
+    if (stage) stage.scrollTo({ top: 0, behavior: "smooth" });
+    else window.scrollTo({ top: 0, behavior: "smooth" });
+  }
   if (panel === "receive") renderReceive();
   if (panel === "activity") {
     renderAccountsPanel();
@@ -1145,6 +1148,24 @@ function go(panel) {
   if (panel === "settings") {
     paintSettings();
   }
+}
+
+function scrollSettingsTo(id) {
+  const block = $(id);
+  if (!block) return;
+  const stage = document.querySelector("body.is-extension .stage");
+  const run = () => {
+    if (stage) {
+      const blockTop = block.getBoundingClientRect().top;
+      const stageTop = stage.getBoundingClientRect().top;
+      const next = stage.scrollTop + (blockTop - stageTop) - 10;
+      stage.scrollTo({ top: Math.max(0, next), behavior: "smooth" });
+    } else if (block.scrollIntoView) {
+      block.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  };
+  // Wait a tick so the settings panel is visible after go().
+  requestAnimationFrame(() => setTimeout(run, 40));
 }
 
 function renderQR(text) {
@@ -4958,6 +4979,116 @@ function paintHistory() {
   }
 }
 
+function parseBlockscoutTime(ts) {
+  if (ts == null || ts === "") return 0;
+  if (typeof ts === "number") {
+    return ts > 1e12 ? Math.floor(ts / 1000) : Math.floor(ts);
+  }
+  const ms = Date.parse(String(ts));
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : 0;
+}
+
+/** Native + ERC-20 activity via Blockscout (ETH / Base / Polygon / Robinhood). */
+async function fetchEvmHistoryForOwner(owner, chain) {
+  const base = String((chain && chain.blockscout) || "").replace(/\/$/, "");
+  if (!base || !owner) return [];
+  const addr = String(owner).toLowerCase();
+  const out = [];
+  const seen = new Set();
+
+  try {
+    const res = await fetch(
+      base + "/api/v2/addresses/" + encodeURIComponent(owner) + "/transactions"
+    );
+    if (res.ok) {
+      const j = await res.json();
+      const items = Array.isArray(j.items) ? j.items : [];
+      for (const item of items) {
+        const hash = String(item.hash || "");
+        if (!hash || seen.has("tx:" + hash)) continue;
+        const from = String((item.from && item.from.hash) || "").toLowerCase();
+        const to = String((item.to && item.to.hash) || "").toLowerCase();
+        const amount = formatTokenRawAmount(item.value || "0", 18);
+        // Skip pure contract calls with zero value (token transfers covered below).
+        if (!(amount > 0)) continue;
+        seen.add("tx:" + hash);
+        const direction = to === addr && from !== addr ? "in" : "out";
+        const ok =
+          item.status === "ok" ||
+          item.result === "success" ||
+          item.result == null;
+        out.push({
+          sig: hash,
+          type: direction === "in" ? "receive" : "send",
+          direction,
+          amount,
+          symbol: chain.symbol || "ETH",
+          when: parseBlockscoutTime(item.timestamp),
+          status: ok ? "confirmed" : "failed",
+          chainId: chain.id,
+        });
+      }
+    }
+  } catch (err) {
+    console.warn("[evm-history txs]", chain && chain.id, err);
+  }
+
+  try {
+    const res = await fetch(
+      base +
+        "/api/v2/addresses/" +
+        encodeURIComponent(owner) +
+        "/token-transfers?type=ERC-20"
+    );
+    if (res.ok) {
+      const j = await res.json();
+      const items = Array.isArray(j.items) ? j.items : [];
+      for (const item of items) {
+        const hash = String(item.transaction_hash || item.tx_hash || "");
+        const tok = item.token || {};
+        const mint = String(tok.address_hash || tok.address || "").toLowerCase();
+        const key = "tt:" + hash + ":" + mint + ":" + (item.log_index || "");
+        if (!hash || seen.has(key)) continue;
+        seen.add(key);
+        const from = String((item.from && item.from.hash) || "").toLowerCase();
+        const to = String((item.to && item.to.hash) || "").toLowerCase();
+        const decimals = Number(
+          (item.total && item.total.decimals) != null
+            ? item.total.decimals
+            : tok.decimals != null
+              ? tok.decimals
+              : 18
+        );
+        const raw =
+          (item.total && (item.total.value || item.total.raw)) ||
+          item.total ||
+          "0";
+        const amount = formatTokenRawAmount(
+          typeof raw === "object" ? raw.value || "0" : raw,
+          decimals
+        );
+        if (!(amount > 0)) continue;
+        const direction = to === addr && from !== addr ? "in" : "out";
+        out.push({
+          sig: hash,
+          type: direction === "in" ? "receive" : "send",
+          direction,
+          amount,
+          symbol: tok.symbol || "TOKEN",
+          mint: mint || null,
+          when: parseBlockscoutTime(item.timestamp),
+          status: "confirmed",
+          chainId: chain.id,
+        });
+      }
+    }
+  } catch (err) {
+    console.warn("[evm-history transfers]", chain && chain.id, err);
+  }
+
+  return out.sort((a, b) => (b.when || 0) - (a.when || 0)).slice(0, 40);
+}
+
 async function refreshHistory() {
   const status = $("historyStatus");
   const acc = activeAccount(STATE);
@@ -4995,7 +5126,54 @@ async function refreshHistory() {
       chainId: t.chainId || chain.id,
     }));
 
-  // Non-Solana: show only this wallet+chain local history (no cross-chain bleed).
+  const mergeLocal = (remote) => {
+    const byKey = {};
+    (remote || []).forEach((t) => {
+      const k = (t.sig || "") + ":" + (t.mint || t.symbol || "");
+      byKey[k] = t;
+    });
+    local.forEach((t) => {
+      const k = (t.sig || "") + ":" + (t.mint || t.symbol || "");
+      if (!byKey[k]) byKey[k] = t;
+    });
+    return Object.values(byKey).sort((a, b) => (b.when || 0) - (a.when || 0));
+  };
+
+  // EVM: Blockscout native + ERC-20 history for this wallet/chain only.
+  if (chain.kind === "evm") {
+    const owner = acc.evm && acc.evm.address;
+    if (!owner) {
+      if (seq !== historySeq) return;
+      TX_HISTORY = local;
+      paintHistory();
+      if (status) status.textContent = "No EVM address on this wallet.";
+      return;
+    }
+    try {
+      const remote = await fetchEvmHistoryForOwner(owner, chain);
+      if (seq !== historySeq) return;
+      TX_HISTORY = mergeLocal(remote);
+      paintHistory();
+      if (status && !TX_HISTORY.length) {
+        status.textContent =
+          "No " + chain.name + " activity yet for this wallet.";
+      }
+    } catch (err) {
+      console.warn("[history-evm]", err);
+      if (seq !== historySeq) return;
+      TX_HISTORY = local.sort((a, b) => (b.when || 0) - (a.when || 0));
+      paintHistory();
+      if (status) {
+        status.textContent =
+          "History sync failed: " +
+          (err && err.message ? err.message : "explorer error") +
+          (local.length ? " · showing local sends" : "");
+      }
+    }
+    return;
+  }
+
+  // Other non-Solana chains: local sends for now.
   if (chain.kind !== "solana") {
     if (seq !== historySeq) return;
     TX_HISTORY = local.sort((a, b) => (b.when || 0) - (a.when || 0));
@@ -6168,24 +6346,19 @@ function paintSettings() {
 
 function openSettings(opts) {
   closeAddrMenu();
-  go("settings");
+  const focus =
+    opts && (opts.focusWc || opts.focusManageTokens) ? true : false;
+  go("settings", { skipScroll: focus });
   paintSettings();
-  if (opts && opts.focusWc) {
-    requestAnimationFrame(() => {
-      const block = $("wcSettingsBlock");
-      if (block && typeof block.scrollIntoView === "function") {
-        block.scrollIntoView({ behavior: "smooth", block: "start" });
-      }
+  if (opts && opts.focusManageTokens) {
+    scrollSettingsTo("manageTokensBlock");
+    showToast("Manage tokens");
+  } else if (opts && opts.focusWc) {
+    scrollSettingsTo("wcSettingsBlock");
+    setTimeout(() => {
       const uri = $("wcUri");
       if (uri) uri.focus();
-    });
-  } else if (opts && opts.focusManageTokens) {
-    requestAnimationFrame(() => {
-      const block = $("manageTokensBlock");
-      if (block && typeof block.scrollIntoView === "function") {
-        block.scrollIntoView({ behavior: "smooth", block: "start" });
-      }
-    });
+    }, 80);
   }
 }
 
@@ -6498,6 +6671,7 @@ function wire() {
     e.preventDefault();
     const act = item.getAttribute("data-menu");
     if (act === "connect") openSettings({ focusWc: true });
+    else if (act === "manage-tokens") openSettings({ focusManageTokens: true });
     else if (act === "settings") openSettings();
   });
   $("wcConnectBtn")?.addEventListener("click", () => {
@@ -6795,10 +6969,6 @@ function wire() {
             ? " — paste API key or full Helius URL, Save, stay on Solana, and import your seed if balances are on another wallet."
             : "");
     }
-  });
-  $("balanceReceiveDismiss")?.addEventListener("click", (e) => {
-    e.preventDefault();
-    dismissReceiveAlert();
   });
   $("settingsSyncBtn")?.addEventListener("click", async () => {
     showToast("Syncing…");
