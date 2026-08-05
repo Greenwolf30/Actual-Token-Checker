@@ -8491,6 +8491,7 @@ function wire() {
       if (ledgerStatus) ledgerStatus.textContent = msg;
     }
   };
+  $("acctDrawerLedger")?.addEventListener("click", onConnectLedger);
   $("connectLedgerBtn")?.addEventListener("click", onConnectLedger);
   $("acctDrawerManage")?.addEventListener("click", () => {
     closeAcctDrawer();
