@@ -517,13 +517,19 @@
     }
 
     function registerWalletStandard() {
+      const callback = function ({ register }) {
+        registerCallback({ register });
+      };
       try {
-        window.dispatchEvent(
-          new RegisterWalletEvent(function ({ register }) {
-            registerCallback({ register });
-          })
-        );
-      } catch (_) {}
+        window.dispatchEvent(new RegisterWalletEvent(callback));
+      } catch (_) {
+        // Fallback for environments that reject custom Event subclasses.
+        try {
+          window.dispatchEvent(
+            new CustomEvent("wallet-standard:register-wallet", { detail: callback })
+          );
+        } catch (_) {}
+      }
       try {
         window.addEventListener("wallet-standard:app-ready", function (event) {
           try {
