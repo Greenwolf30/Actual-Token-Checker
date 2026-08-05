@@ -3391,6 +3391,30 @@ function drawTokenChart(canvas, points, up) {
   return true;
 }
 
+function paintTokenDetailMint(holding, chain) {
+  const btn = $("tokenDetailMint");
+  const text = $("tokenDetailMintText");
+  if (!btn || !text) return;
+  const mint = holding && holding.mint ? String(holding.mint).trim() : "";
+  const isNative = !mint || holding.kind === "native" || mint === "native";
+  if (isNative) {
+    btn.hidden = true;
+    btn.dataset.mint = "";
+    text.textContent = "—";
+    btn.title = "Native asset — no mint / contract";
+    return;
+  }
+  btn.hidden = false;
+  btn.dataset.mint = mint;
+  text.textContent = mint;
+  text.title = mint;
+  const label =
+    chain && chain.kind === "evm" ? "Contract" : "Mint";
+  const labelEl = btn.querySelector(".token-detail-mint-label");
+  if (labelEl) labelEl.textContent = label;
+  btn.title = "Copy " + label.toLowerCase() + " address";
+}
+
 function paintTokenDetailSkeleton() {
   if (!TOKEN_DETAIL || !TOKEN_DETAIL.holding) return;
   const chain = activeChain(STATE);
@@ -3409,6 +3433,7 @@ function paintTokenDetailSkeleton() {
       (symbol && symbol !== "TOKEN" ? symbol : name) +
       (chain ? " · " + chain.name : "");
   }
+  paintTokenDetailMint(h, chain);
   const qty =
     Number(h.amount) >= 1
       ? Number(h.amount).toLocaleString(undefined, { maximumFractionDigits: 6 })
@@ -3530,6 +3555,22 @@ function wireTokenDetailControls() {
   });
   $("tokenDetailReceiveBtn")?.addEventListener("click", () => {
     go("receive");
+  });
+  $("tokenDetailMint")?.addEventListener("click", async () => {
+    const btn = $("tokenDetailMint");
+    const mint = (btn && btn.dataset.mint) || "";
+    if (!mint) return;
+    try {
+      await navigator.clipboard.writeText(mint);
+      showToast("Mint copied");
+    } catch (_) {
+      try {
+        copyText(mint);
+        showToast("Mint copied");
+      } catch (err) {
+        showToast("Copy failed");
+      }
+    }
   });
   window.addEventListener("resize", () => {
     const panel = $("panel-token");

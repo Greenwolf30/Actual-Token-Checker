@@ -1656,6 +1656,56 @@ body.is-extension .acct-drawer {
   letter-spacing: 0.02em;
 }
 
+.token-detail-mint {
+  margin: 6px 0 0;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(184, 167, 207, 0.22);
+  background: rgba(0, 0, 0, 0.22);
+  color: rgba(232, 238, 252, 0.88);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.token-detail-mint[hidden] {
+  display: none !important;
+}
+
+.token-detail-mint:hover {
+  border-color: rgba(184, 167, 207, 0.45);
+  background: rgba(184, 167, 207, 0.1);
+}
+
+.token-detail-mint-label {
+  flex: 0 0 auto;
+  color: rgba(184, 167, 207, 0.9);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.62rem;
+}
+
+.token-detail-mint-addr {
+  min-width: 0;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.token-detail-mint-copy {
+  flex: 0 0 auto;
+  opacity: 0.7;
+}
+
 .token-detail-price-block {
   margin-top: 18px;
   display: flex;

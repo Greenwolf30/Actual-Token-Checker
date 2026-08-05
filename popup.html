@@ -12,7 +12,7 @@
       href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=0.6.8" />
+    <link rel="stylesheet" href="./styles.css?v=0.6.9" />
   </head>
   <body class="is-extension">
     <div class="atmosphere" aria-hidden="true">
@@ -164,6 +164,17 @@
               <div class="token-detail-titles">
                 <h2 class="token-detail-name" id="tokenDetailName">Token</h2>
                 <p class="token-detail-symbol" id="tokenDetailSymbol">—</p>
+                <button
+                  type="button"
+                  class="token-detail-mint"
+                  id="tokenDetailMint"
+                  title="Copy mint / contract address"
+                  hidden
+                >
+                  <span class="token-detail-mint-label">Mint</span>
+                  <span class="token-detail-mint-addr" id="tokenDetailMintText">—</span>
+                  <span class="token-detail-mint-copy" aria-hidden="true">⧉</span>
+                </button>
               </div>
             </div>
           </div>
@@ -710,6 +721,6 @@
     <script src="./lib/ledger-solana.bundle.js?v=0.6.6"></script>
     <script src="./lib/ledger-eth.bundle.js?v=0.6.7"></script>
     <script src="./config.js"></script>
-    <script src="./app.js?v=0.6.8"></script>
+    <script src="./app.js?v=0.6.9"></script>
   </body>
 </html>
