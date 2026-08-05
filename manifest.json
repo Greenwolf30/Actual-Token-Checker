@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Gladiator Wallet",
   "short_name": "Gladiator",
-  "version": "0.5.71",
+  "version": "0.5.72",
   "description": "Gladiator multi-chain wallet \u2014 Wallet Standard Solana provider + WalletConnect for dApps + Ledger.",
   "action": {
     "default_title": "Gladiator",

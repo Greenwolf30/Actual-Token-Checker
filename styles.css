@@ -330,7 +330,7 @@ img.brand-mark {
   font-weight: 400;
   letter-spacing: -0.03em;
   line-height: 1;
-  color: #ff6a3d;
+  color: #e53935;
 }
 
 .brand-acct {
@@ -893,10 +893,11 @@ body.is-extension .acct-drawer {
   letter-spacing: 0.02em;
   text-transform: uppercase;
   line-height: 0.95;
-  background: linear-gradient(180deg, #ffb347 8%, #ff5a1f 48%, #d62828 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  color: #e53935;
+  background: none;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  -webkit-text-fill-color: #e53935;
 }
 
 .lede {
@@ -2055,7 +2056,7 @@ body.is-extension .brand-chip-sm .brand-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #ff6a3d;
+  color: #e53935;
 }
 
 body.is-extension .brand-chip-sm .brand-acct {
@@ -2232,6 +2233,9 @@ body.is-extension .stage {
 
 body.is-extension .brand-hero {
   font-size: 2.2rem;
+  color: #e53935;
+  -webkit-text-fill-color: #e53935;
+  background: none;
 }
 
 body.is-extension .lede {

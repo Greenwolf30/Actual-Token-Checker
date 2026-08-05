@@ -4,12 +4,16 @@ PREFERRED UPDATE (keeps seed / accounts):
 1. Unzip the new pack
 2. Copy everything INSIDE the new folder into your EXISTING Gladiator folder (overwrite)
 3. chrome://extensions → Gladiator → Reload (do NOT Remove)
-4. If Chrome asks for new permissions (HID / Ledger), Allow
+4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
-v0.5.71:
-- Gladiator brand text is orange/red
-- Clearer Ledger connect panel (Account # + Connect Ledger)
-- Popup opens the wallet window for reliable Ledger HID connect
+v0.5.72:
+- Both Gladiator titles are solid red
+- Fix Ledger connect: WebHID must run from a real button click (no auto-connect delay)
+
+Ledger:
+1. Unlock Nano → open Solana app
+2. Wallets → Ledger → Connect Ledger
+3. Pick the device in the browser prompt and approve
 
 Version: see manifest.json
