@@ -1986,12 +1986,65 @@ async function wcConnectFromUri() {
       return;
     }
   } catch (_) {}
+
+  const projectId = (
+    ($("wcProjectId") && $("wcProjectId").value) ||
+    (STATE && STATE.wcProjectId) ||
+    (window.GLADIATOR_CONFIG && window.GLADIATOR_CONFIG.wcProjectId) ||
+    ""
+  ).trim();
+  if (!projectId) {
+    setWcStatus("Paste a WalletConnect Project ID first");
+    showToast("Project ID required");
+    return;
+  }
+  if (STATE) {
+    STATE.wcProjectId = projectId;
+    await storageSet(STATE);
+  }
+
+  // Extension popup dies when you click away — open a persistent bridge window
+  // so pump.fun can deliver "approve/sign" requests into the wallet.
+  if (IS_EXTENSION && typeof chrome !== "undefined" && chrome.runtime && chrome.storage) {
+    try {
+      await new Promise((resolve, reject) => {
+        chrome.storage.local.set(
+          {
+            gladiator_wc_pending: {
+              uri,
+              projectId,
+              at: Date.now(),
+            },
+          },
+          () => {
+            const err = chrome.runtime.lastError;
+            if (err) reject(err);
+            else resolve();
+          }
+        );
+      });
+      const res = await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: "wc-open-bridge" }, (r) => resolve(r || {}));
+      });
+      if (res && res.ok === false) throw new Error(res.error || "Could not open bridge");
+      setWcStatus(
+        "Opened WalletConnect window — keep THAT window open. pump.fun sends approve there."
+      );
+      showToast("Keep the WalletConnect window open");
+      if ($("wcUri")) $("wcUri").value = "";
+      return;
+    } catch (err) {
+      const msg = String(err && err.message ? err.message : err);
+      setWcStatus("Bridge open failed: " + msg + " — trying in popup");
+    }
+  }
+
   setWcStatus("Connecting… keep this window open");
   showToast("Connecting…");
   try {
     await ensureWalletConnect();
     await GladiatorWC.pair(uri);
-    setWcStatus("Paired — approve the session if prompted");
+    setWcStatus("Paired — keep this page open for pump.fun approve/sign");
   } catch (err) {
     const msg = String(err && err.message ? err.message : err);
     setWcStatus("Connect failed: " + msg);

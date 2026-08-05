@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gladiator · WalletConnect</title>
+    <link rel="icon" type="image/png" href="./icons/gladiator.png" />
+    <style>
+      :root {
+        --bg: #070d1a;
+        --ink: #f2eef8;
+        --muted: #9aa3b5;
+        --ok: #14f195;
+        --bad: #ff6b6b;
+        --line: rgba(255, 255, 255, 0.12);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        background:
+          radial-gradient(700px 400px at 10% -10%, rgba(20, 241, 149, 0.14), transparent 55%),
+          radial-gradient(600px 360px at 100% 0%, rgba(184, 167, 207, 0.16), transparent 50%),
+          var(--bg);
+        color: var(--ink);
+        padding: 18px;
+      }
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: rgba(16, 28, 52, 0.92);
+        padding: 16px;
+      }
+      h1 {
+        margin: 0 0 6px;
+        font-size: 1.15rem;
+        font-weight: 700;
+      }
+      .sub {
+        margin: 0 0 14px;
+        color: var(--muted);
+        font-size: 0.86rem;
+        line-height: 1.4;
+      }
+      #status {
+        margin: 0 0 12px;
+        padding: 12px;
+        border-radius: 10px;
+        background: rgba(0, 0, 0, 0.28);
+        border: 1px solid var(--line);
+        font-size: 0.9rem;
+        font-weight: 600;
+        line-height: 1.35;
+        min-height: 52px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      #status.ok { border-color: rgba(20, 241, 149, 0.45); color: var(--ok); }
+      #status.bad { border-color: rgba(255, 107, 107, 0.45); color: #ffb4b4; }
+      .row { display: flex; gap: 8px; flex-wrap: wrap; }
+      button {
+        flex: 1 1 120px;
+        min-height: 42px;
+        border: 0;
+        border-radius: 10px;
+        font-weight: 700;
+        cursor: pointer;
+        font-size: 0.9rem;
+      }
+      #disconnectBtn {
+        background: rgba(255, 255, 255, 0.08);
+        color: var(--ink);
+        border: 1px solid var(--line);
+      }
+      #retryBtn {
+        background: var(--ok);
+        color: #04140c;
+      }
+      .hint {
+        margin-top: 14px;
+        font-size: 0.8rem;
+        color: var(--muted);
+        line-height: 1.4;
+      }
+      code { color: #9fdfff; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>WalletConnect bridge</h1>
+      <p class="sub">
+        Keep this window open. pump.fun sends approve/sign requests here over WalletConnect.
+      </p>
+      <p id="status">Starting…</p>
+      <div class="row">
+        <button type="button" id="retryBtn">Connect pending link</button>
+        <button type="button" id="disconnectBtn">Disconnect</button>
+      </div>
+      <p class="hint">
+        If pump.fun still says “approve in wallet”, leave this window open and click
+        <strong>Connect pending link</strong> after pasting a fresh <code>wc:</code> URI in Gladiator.
+      </p>
+    </div>
+
+    <script src="./lib/nacl-fast.min.js"></script>
+    <script src="./lib/base58.js"></script>
+    <script src="./lib/buffer.min.js"></script>
+    <script src="./lib/solana-tx.bundle.js"></script>
+    <script src="./lib/walletconnect.bundle.js"></script>
+    <script src="./wc-bridge.js"></script>
+  </body>
+</html>
