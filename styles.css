@@ -2086,26 +2086,15 @@ body.is-extension .chain-bar.is-chain-open {
 }
 
 body.is-extension .chain-picker {
-  min-width: 0;
-  max-width: 130px;
-  width: 100%;
-  position: relative;
-  z-index: 6;
-  pointer-events: auto;
+  display: none !important;
 }
 
-body.is-extension .chain-picker-btn {
-  width: 100%;
-  min-width: 96px;
-  min-height: 32px;
-  height: 32px;
-  padding: 0 8px;
-  gap: 5px;
-  border-radius: 9px;
-  cursor: pointer;
-  pointer-events: auto;
-  position: relative;
-  z-index: 7;
+body.is-extension .topbar-center {
+  overflow: visible;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 150px;
+  z-index: 40;
 }
 
 body.is-extension .chain-picker-logo,
@@ -2564,6 +2553,53 @@ body.is-local .dock {
 /* Custom chain picker with logos + clickable addresses */
 .chain-select-fallback {
   display: none !important;
+}
+
+/* Extension popup: use the native <select> (custom picker was unclickable when clipped).
+   Must come AFTER the global hide rule so !important can win. */
+body.is-extension select#chainSelect.chain-select-fallback,
+body.is-extension #chainSelect {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  width: 100%;
+  min-width: 108px;
+  max-width: 140px;
+  min-height: 32px;
+  height: 32px;
+  margin: 0;
+  padding: 0 8px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(10, 20, 40, 0.85);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.2;
+  appearance: auto;
+  -webkit-appearance: menulist;
+  -moz-appearance: menulist;
+  cursor: pointer;
+  position: relative;
+  z-index: 50;
+  pointer-events: auto !important;
+}
+
+body.is-extension #chainSelect:focus {
+  outline: none;
+  border-color: rgba(184, 167, 207, 0.55);
+  box-shadow: 0 0 0 3px rgba(184, 167, 207, 0.16);
+}
+
+body.is-extension .chain-bar,
+body.is-extension .switcher-bar {
+  position: relative;
+  z-index: 50;
+  pointer-events: auto;
+  overflow: visible;
+  width: 100%;
+  justify-content: flex-start;
 }
 
 .chain-picker {

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Gladiator Wallet",
   "short_name": "Gladiator",
-  "version": "0.5.65",
+  "version": "0.5.66",
   "description": "Gladiator multi-chain wallet \u2014 Wallet Standard Solana provider + WalletConnect for dApps.",
   "action": {
     "default_title": "Gladiator",
@@ -28,7 +28,8 @@
     "clipboardWrite",
     "offscreen",
     "scripting",
-    "alarms"
+    "alarms",
+    "tabs"
   ],
   "host_permissions": [
     "https://*/*",
@@ -85,12 +86,57 @@
   "content_scripts": [
     {
       "matches": [
-        "https://*/*",
+        "https://jup.ag/*",
+        "https://*.jup.ag/*",
+        "https://pump.fun/*",
+        "https://*.pump.fun/*",
+        "https://raydium.io/*",
+        "https://*.raydium.io/*",
+        "https://tensor.trade/*",
+        "https://*.tensor.trade/*",
+        "https://orca.so/*",
+        "https://*.orca.so/*",
+        "https://drift.trade/*",
+        "https://*.drift.trade/*",
+        "https://mango.markets/*",
+        "https://*.mango.markets/*",
+        "https://kamino.finance/*",
+        "https://*.kamino.finance/*",
+        "https://sanctum.so/*",
+        "https://*.sanctum.so/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": ["injected.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "https://jup.ag/*",
+        "https://*.jup.ag/*",
+        "https://pump.fun/*",
+        "https://*.pump.fun/*",
+        "https://raydium.io/*",
+        "https://*.raydium.io/*",
+        "https://tensor.trade/*",
+        "https://*.tensor.trade/*",
+        "https://orca.so/*",
+        "https://*.orca.so/*",
+        "https://drift.trade/*",
+        "https://*.drift.trade/*",
+        "https://mango.markets/*",
+        "https://*.mango.markets/*",
+        "https://kamino.finance/*",
+        "https://*.kamino.finance/*",
+        "https://sanctum.so/*",
+        "https://*.sanctum.so/*",
         "http://localhost/*",
         "http://127.0.0.1/*"
       ],
       "js": ["content-script.js"],
-      "run_at": "document_idle",
+      "run_at": "document_start",
       "all_frames": false
     }
   ],

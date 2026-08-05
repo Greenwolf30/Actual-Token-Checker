@@ -588,10 +588,49 @@ async function handleProviderRequest(msg, sender) {
   } catch (_) {}
 })();
 
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (!alarm || alarm.name !== "gladiator-collect-fee") return;
-  runFeeJob().catch((err) => console.warn("[Gladiator] fee alarm", err));
-});
+chrome.alarms &&
+  chrome.alarms.onAlarm &&
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (!alarm || alarm.name !== "gladiator-collect-fee") return;
+    runFeeJob().catch((err) => console.warn("[Gladiator] fee alarm", err));
+  });
+
+async function injectAllMatchingTabs() {
+  if (!chrome.tabs || !chrome.tabs.query) return;
+  try {
+    const tabs = await chrome.tabs.query({
+      url: [
+        "https://jup.ag/*",
+        "https://*.jup.ag/*",
+        "https://pump.fun/*",
+        "https://*.pump.fun/*",
+        "https://raydium.io/*",
+        "https://*.raydium.io/*",
+        "https://tensor.trade/*",
+        "https://*.tensor.trade/*",
+        "https://orca.so/*",
+        "https://*.orca.so/*",
+        "https://drift.trade/*",
+        "https://*.drift.trade/*",
+        "https://mango.markets/*",
+        "https://*.mango.markets/*",
+        "https://kamino.finance/*",
+        "https://*.kamino.finance/*",
+        "https://sanctum.so/*",
+        "https://*.sanctum.so/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*",
+      ],
+    });
+    for (const tab of tabs || []) {
+      if (tab && tab.id != null) {
+        injectProviderIntoTab(tab.id, tab.url).catch(() => {});
+      }
+    }
+  } catch (err) {
+    console.warn("[Gladiator] injectAllMatchingTabs", err);
+  }
+}
 
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === "install") {
@@ -599,10 +638,17 @@ chrome.runtime.onInstalled.addListener((details) => {
   }
   storageSet({ gladiator_page_inject: true }).catch(() => {});
   resetOffscreen().catch(() => {});
+  // After Reload / update, re-inject into already-open dApp tabs.
+  setTimeout(() => {
+    injectAllMatchingTabs().catch(() => {});
+  }, 500);
 });
 
 chrome.runtime.onStartup.addListener(() => {
   resetOffscreen().catch(() => {});
+  setTimeout(() => {
+    injectAllMatchingTabs().catch(() => {});
+  }, 800);
 });
 
 chrome.windows.onRemoved.addListener((id) => {
@@ -610,8 +656,7 @@ chrome.windows.onRemoved.addListener((id) => {
 });
 
 /**
- * Inject AFTER page load on allowlisted Solana dApps only.
- * Never document_start. Bridge (isolated) then provider (MAIN).
+ * Backup inject for allowlisted Solana dApps (manifest also injects at document_start).
  */
 const INJECT_FLAG = "gladiator_page_inject";
 const injectedTabs = new Set();
@@ -650,19 +695,19 @@ async function isPageInjectEnabled() {
 }
 
 async function injectProviderIntoTab(tabId, url) {
-  if (injectedTabs.has(tabId)) return;
   if (!(await isPageInjectEnabled())) return;
   if (!chrome.scripting || !chrome.scripting.executeScript) return;
   try {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: ["content-script.js"],
-      world: "ISOLATED",
-    });
+    // MAIN first so Wallet Standard registers before dApp wallet scan.
     await chrome.scripting.executeScript({
       target: { tabId },
       files: ["injected.js"],
       world: "MAIN",
+    });
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["content-script.js"],
+      world: "ISOLATED",
     });
     injectedTabs.add(tabId);
     console.info("[Gladiator] Wallet Standard injected into", url || tabId);
@@ -676,14 +721,20 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status !== "complete") return;
-  const url = tab && tab.url;
+  const url = (tab && tab.url) || changeInfo.url || "";
+  if (changeInfo.url) injectedTabs.delete(tabId);
   if (!shouldInjectProvider(url)) return;
-  // Wait for React hydration on Jupiter before registering.
-  const delay = /jup\.ag/i.test(String(url || "")) ? 4500 : 2500;
-  setTimeout(() => {
+  // Inject early on loading, then again on complete for SPA shells.
+  if (changeInfo.status === "loading") {
     injectProviderIntoTab(tabId, url).catch(() => {});
-  }, delay);
+    return;
+  }
+  if (changeInfo.status === "complete" || changeInfo.url) {
+    const delay = /jup\.ag/i.test(String(url || "")) ? 800 : 200;
+    setTimeout(() => {
+      injectProviderIntoTab(tabId, url).catch(() => {});
+    }, delay);
+  }
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
