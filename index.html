@@ -12,7 +12,7 @@
       href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=0.5.75" />
+    <link rel="stylesheet" href="./styles.css?v=0.5.76" />
   </head>
   <body class="is-local">
     <div class="atmosphere" aria-hidden="true">
@@ -404,6 +404,18 @@
             <ul class="settings-wallets" id="walletRenameList"></ul>
           </div>
 
+          <div class="settings-block">
+            <h3 class="settings-block-title">Manage tokens</h3>
+            <p class="photon-sub">
+              Toggle tokens on or off for the Home list. Everything stays shown until you hide it.
+              Sync a chain first so its tokens appear here.
+            </p>
+            <ul class="settings-tokens" id="manageTokenList"></ul>
+            <p class="photon-sub" id="manageTokenEmpty" style="margin-top: 10px">
+              No tokens discovered yet — open Home and Sync on each chain.
+            </p>
+          </div>
+
           <div class="settings-block" id="wcSettingsBlock">
             <h3 class="settings-block-title">WalletConnect</h3>
             <p class="photon-sub">
@@ -567,11 +579,11 @@
     <script src="./lib/solana-hd.js"></script>
     <script src="./lib/multi-hd.js"></script>
     <script src="./lib/buffer.min.js"></script>
-    <script src="./lib/solana-tx.bundle.js?v=0.5.75"></script>
+    <script src="./lib/solana-tx.bundle.js?v=0.5.76"></script>
     <script src="./lib/qrcode.min.js"></script>
-    <script src="./lib/walletconnect.bundle.js?v=0.5.75"></script>
-    <script src="./lib/ledger-solana.bundle.js?v=0.5.75"></script>
+    <script src="./lib/walletconnect.bundle.js?v=0.5.76"></script>
+    <script src="./lib/ledger-solana.bundle.js?v=0.5.76"></script>
     <script src="./config.js"></script>
-    <script src="./app.js?v=0.5.75"></script>
+    <script src="./app.js?v=0.5.76"></script>
   </body>
 </html>

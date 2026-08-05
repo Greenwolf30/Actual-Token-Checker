@@ -7,25 +7,16 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.5.76:
+- Show ERC-20 tokens on Ethereum / Base / Polygon / Robinhood (via Blockscout)
+- Settings → Manage tokens: toggle tokens shown/hidden (default: all shown)
+
 v0.5.75:
-- Uniswap inject: Gladiator appears via EIP-6963 / window.ethereum (connect on app.uniswap.org)
-- History clears when you switch wallet or chain; only shows that wallet+chain
+- Uniswap inject (EIP-6963 / window.ethereum)
+- History clears on wallet/chain switch
 
-v0.5.74:
-- Dim total USD balance yellow (muted gold, less bright)
-
-v0.5.73:
-- Gladiator titles back to original lavender (not red/orange)
-- Ledger connects in-place from Wallets → Connect Ledger (no relay/wallet window)
-
-Uniswap:
-1. Use a seed wallet (needs EVM key — Ledger-only accounts have no EVM key yet)
-2. Open app.uniswap.org → Connect → choose Gladiator
-3. Approve eth_requestAccounts; switch Ethereum/Base/Polygon in Uniswap as needed
-
-Ledger:
-1. Unlock Nano → open Solana app
-2. Open Gladiator → Wallets → Ledger → Connect Ledger
-3. Pick the device in the browser HID prompt and approve
+Manage tokens:
+1. Sync Home on each chain so tokens are discovered
+2. Settings → Manage tokens → uncheck to hide, check to show
 
 Version: see manifest.json

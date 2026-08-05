@@ -3105,12 +3105,81 @@ body.is-extension #chainSelect {
 }
 
 .settings-contacts,
-.settings-wallets {
+.settings-wallets,
+.settings-tokens {
   list-style: none;
   margin: 12px 0 0;
   padding: 0;
   display: grid;
   gap: 8px;
+}
+
+.settings-token {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.settings-token.is-hidden-token {
+  opacity: 0.72;
+}
+
+.settings-token-logo {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+}
+
+.settings-token-logo .token-logo-img,
+.settings-token-logo .token-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+}
+
+.settings-token-meta {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  gap: 2px;
+}
+
+.settings-token-meta strong {
+  font-size: 0.84rem;
+}
+
+.settings-token-meta span {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.token-toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  cursor: pointer;
+  user-select: none;
+}
+
+.token-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: #b8a7cf;
+  cursor: pointer;
 }
 
 .settings-contact,

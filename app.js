@@ -40,6 +40,7 @@ const CHAINS = [
     ],
     priceId: "ethereum",
     chainId: 1,
+    blockscout: "https://eth.blockscout.com",
   },
   {
     id: "bitcoin",
@@ -68,6 +69,7 @@ const CHAINS = [
     ],
     priceId: "matic-network",
     chainId: 137,
+    blockscout: "https://polygon.blockscout.com",
   },
   {
     id: "sui",
@@ -93,8 +95,10 @@ const CHAINS = [
     logo: "robinhood",
     explorer: (a) => `https://robinhoodchain.blockscout.com/address/${a}`,
     rpc: "https://rpc.mainnet.chain.robinhood.com",
+    rpcs: ["https://rpc.mainnet.chain.robinhood.com"],
     priceId: "ethereum",
     chainId: 4663,
+    blockscout: "https://robinhoodchain.blockscout.com",
   },
   {
     id: "base",
@@ -112,6 +116,7 @@ const CHAINS = [
     ],
     priceId: "ethereum",
     chainId: 8453,
+    blockscout: "https://base.blockscout.com",
   },
 ];
 
@@ -790,6 +795,13 @@ async function ensureState() {
   if (typeof state.solRpc !== "string") state.solRpc = "";
   if (typeof state.wcProjectId !== "string") state.wcProjectId = "";
   if (!Array.isArray(state.addressBook)) state.addressBook = [];
+  // hiddenTokens keys are "chainId:mint" — absent means shown (default).
+  if (!state.hiddenTokens || typeof state.hiddenTokens !== "object") {
+    state.hiddenTokens = {};
+  }
+  if (!state.tokenCatalog || typeof state.tokenCatalog !== "object") {
+    state.tokenCatalog = {};
+  }
 
   // Legacy encrypted vault: require one-time password migrate, then plaintext.
   if (state.vault && state.vault.data && !stateHasPlainSecrets(state)) {
@@ -1485,6 +1497,184 @@ async function fetchEvmBalance(address, rpcOrList) {
   throw lastErr || new Error("All EVM RPCs failed");
 }
 
+function tokenVisibilityKey(chainId, mint) {
+  return String(chainId || "") + ":" + String(mint || "").toLowerCase();
+}
+
+function isTokenHidden(chainId, mint) {
+  if (!mint) return false;
+  const map = (STATE && STATE.hiddenTokens) || {};
+  return !!map[tokenVisibilityKey(chainId, mint)];
+}
+
+async function setTokenHidden(chainId, mint, hidden) {
+  if (!mint || !STATE) return;
+  if (!STATE.hiddenTokens || typeof STATE.hiddenTokens !== "object") {
+    STATE.hiddenTokens = {};
+  }
+  const key = tokenVisibilityKey(chainId, mint);
+  if (hidden) STATE.hiddenTokens[key] = true;
+  else delete STATE.hiddenTokens[key];
+  await storageSet(STATE);
+}
+
+function mergeTokenCatalog(holdings) {
+  if (!STATE) return;
+  if (!STATE.tokenCatalog || typeof STATE.tokenCatalog !== "object") {
+    STATE.tokenCatalog = {};
+  }
+  let changed = false;
+  for (const h of holdings || []) {
+    if (!h || h.kind === "native" || !h.mint) continue;
+    const chainId = h.chainId || (STATE && STATE.activeChainId) || "";
+    const key = tokenVisibilityKey(chainId, h.mint);
+    const next = {
+      chainId,
+      mint: h.mint,
+      symbol: h.symbol || "TOKEN",
+      name: h.name || h.symbol || "Token",
+      kind: h.kind || "erc20",
+      logo: h.logo || null,
+      decimals: h.decimals != null ? h.decimals : 18,
+    };
+    const prev = STATE.tokenCatalog[key];
+    if (
+      !prev ||
+      prev.symbol !== next.symbol ||
+      prev.name !== next.name ||
+      prev.logo !== next.logo
+    ) {
+      STATE.tokenCatalog[key] = next;
+      changed = true;
+    }
+  }
+  if (changed) storageSet(STATE).catch(() => {});
+}
+
+function formatTokenRawAmount(raw, decimals) {
+  try {
+    if (window.ethers && ethers.formatUnits) {
+      return Number(ethers.formatUnits(String(raw || "0"), Number(decimals) || 18));
+    }
+  } catch (_) {}
+  try {
+    const d = Math.max(0, Math.min(36, Number(decimals) || 18));
+    const s = String(raw || "0").replace(/^0x/i, "");
+    const bi = BigInt(s.startsWith("-") ? s : s || "0");
+    const base = 10n ** BigInt(d);
+    const whole = bi / base;
+    const frac = bi % base;
+    return Number(whole) + Number(frac) / Number(base);
+  } catch (_) {
+    return 0;
+  }
+}
+
+/** ERC-20 balances via Blockscout (Robinhood / ETH / Base / Polygon). */
+async function fetchEvmTokenHoldings(address, chain) {
+  const base = String((chain && chain.blockscout) || "").replace(/\/$/, "");
+  if (!base || !address) return [];
+  const out = [];
+  const seen = new Set();
+
+  // Prefer REST v2 (richer metadata), fall back to legacy tokenlist.
+  let url =
+    base + "/api/v2/addresses/" + encodeURIComponent(address) + "/tokens?type=ERC-20";
+  try {
+    for (let page = 0; page < 4 && url; page++) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("blockscout http " + res.status);
+      const j = await res.json();
+      const items = Array.isArray(j.items) ? j.items : [];
+      for (const item of items) {
+        const tok = (item && item.token) || {};
+        const mint = String(
+          tok.address_hash || tok.address || item.token_address || ""
+        ).toLowerCase();
+        if (!mint || !/^0x[a-f0-9]{40}$/.test(mint) || seen.has(mint)) continue;
+        seen.add(mint);
+        const decimals = Number(tok.decimals != null ? tok.decimals : 18) || 18;
+        const amount = formatTokenRawAmount(item.value || "0", decimals);
+        if (!(amount > 0)) continue;
+        const px = tok.exchange_rate != null ? Number(tok.exchange_rate) : null;
+        out.push({
+          chainId: chain.id,
+          mint,
+          amount,
+          decimals,
+          symbol: tok.symbol || "TOKEN",
+          name: tok.name || tok.symbol || "Token",
+          logo: tok.icon_url || null,
+          usd: px != null && !Number.isNaN(px) ? amount * px : null,
+          kind: "erc20",
+        });
+      }
+      const next = j.next_page_params;
+      if (!next || typeof next !== "object") {
+        url = "";
+        break;
+      }
+      const qs = Object.keys(next)
+        .map((k) => encodeURIComponent(k) + "=" + encodeURIComponent(next[k]))
+        .join("&");
+      url =
+        base +
+        "/api/v2/addresses/" +
+        encodeURIComponent(address) +
+        "/tokens?type=ERC-20&" +
+        qs;
+    }
+    if (out.length) return out;
+  } catch (err) {
+    console.warn("[evm-tokens v2]", chain && chain.id, err && err.message ? err.message : err);
+  }
+
+  try {
+    const legacy =
+      base +
+      "/api?module=account&action=tokenlist&address=" +
+      encodeURIComponent(address);
+    const res = await fetch(legacy);
+    if (!res.ok) throw new Error("tokenlist http " + res.status);
+    const j = await res.json();
+    const list = Array.isArray(j.result) ? j.result : [];
+    for (const row of list) {
+      const mint = String(row.contractAddress || row.contractaddress || "")
+        .toLowerCase();
+      if (!mint || !/^0x[a-f0-9]{40}$/.test(mint) || seen.has(mint)) continue;
+      seen.add(mint);
+      const decimals = Number(row.decimals != null ? row.decimals : 18) || 18;
+      const amount = formatTokenRawAmount(row.balance || row.value || "0", decimals);
+      if (!(amount > 0)) continue;
+      out.push({
+        chainId: chain.id,
+        mint,
+        amount,
+        decimals,
+        symbol: row.symbol || "TOKEN",
+        name: row.name || row.symbol || "Token",
+        logo: null,
+        usd: null,
+        kind: "erc20",
+      });
+    }
+  } catch (err) {
+    console.warn("[evm-tokens legacy]", chain && chain.id, err && err.message ? err.message : err);
+  }
+  return out;
+}
+
+function visibleHoldings(holdings, chain) {
+  const c = chain || activeChain(STATE);
+  const cid = c && c.id;
+  return (holdings || HOLDINGS || []).filter((h) => {
+    if (!h) return false;
+    if (h.chainId && cid && h.chainId !== cid) return false;
+    if (h.kind === "native" || !h.mint) return true;
+    return !isTokenHidden(h.chainId || cid, h.mint);
+  });
+}
+
 async function fetchBtcBalance(address, apiBase) {
   const base = (apiBase || "https://blockstream.info/api").replace(/\/$/, "");
   const urls = [
@@ -1687,10 +1877,37 @@ async function refreshBalance() {
       if (!addr) throw new Error("No EVM address on this account.");
       native = await fetchEvmBalance(addr, chain.rpcs || [chain.rpc]);
       if (!stillCurrent()) return;
+      let erc20 = [];
+      try {
+        erc20 = await fetchEvmTokenHoldings(addr, chain);
+      } catch (err) {
+        console.warn("[evm-tokens]", err);
+        erc20 = [];
+      }
+      if (!stillCurrent()) return;
+      erc20 = (erc20 || [])
+        .filter((row) => Number(row.amount) > 0)
+        .sort((a, b) => (Number(b.usd) || 0) - (Number(a.usd) || 0));
       const px = PRICES[chain.priceId] || 0;
-      nextBalance = { native, usd: native * px, ok: true, error: "", chainId: chain.id };
-      nextHoldings = [nativeHoldingRow(chain, native, native * px)];
+      const tokenUsd = erc20.reduce((s, row) => s + (Number(row.usd) || 0), 0);
+      nextBalance = {
+        native,
+        usd: native * px + tokenUsd,
+        ok: true,
+        error: "",
+        chainId: chain.id,
+      };
+      nextHoldings = [nativeHoldingRow(chain, native, native * px), ...erc20];
     }
+
+    mergeTokenCatalog(nextHoldings);
+
+    const shown = visibleHoldings(nextHoldings, chain);
+    const shownUsd = shown.reduce((s, row) => s + (Number(row.usd) || 0), 0);
+    nextBalance = {
+      ...nextBalance,
+      usd: shownUsd,
+    };
 
     const statusText =
       "Synced · " +
@@ -1698,12 +1915,13 @@ async function refreshBalance() {
       " " +
       shortAddr(addr || displayAddr) +
       " · " +
-      nextHoldings.length +
+      shown.length +
       " assets";
     if (commit(nextBalance, nextHoldings, statusText)) {
       if (acc && chain.kind === "solana" && nextBalance.ok) {
         ACCOUNT_SOL[acc.id] = { sol: Number(nextBalance.native) || 0, loading: false, error: "" };
       }
+      paintManageTokens();
     }
   } catch (err) {
     if (!stillCurrent()) return;
@@ -1754,15 +1972,19 @@ function paintBalances() {
     solLogo.src = "./icons/" + logo + ".png?v=" + LOGO_ICON_VER;
     solLogo.alt = chain.symbol || "";
   }
-  if (fiat) fiat.textContent = BALANCE.usd.toFixed(2);
+  const vis = visibleHoldings(HOLDINGS, chain);
+  const usd = vis.reduce((s, h) => s + (Number(h.usd) || 0), 0);
+  if (fiat) fiat.textContent = (BALANCE.ok ? usd : BALANCE.usd || 0).toFixed(2);
   const digits =
     chain.kind === "bitcoin" ? 8 : chain.kind === "solana" || chain.kind === "sui" ? 4 : 5;
   if (native) native.textContent = Number(BALANCE.native || 0).toFixed(digits);
   if (delta) {
-    const splN = HOLDINGS.filter((h) => h.kind === "spl" && h.amount > 0).length;
+    const tokN = vis.filter(
+      (h) => (h.kind === "spl" || h.kind === "erc20") && Number(h.amount) > 0
+    ).length;
     delta.textContent = BALANCE.ok
-      ? splN
-        ? "on-chain · " + splN + " SPL"
+      ? tokN
+        ? "on-chain · " + tokN + " token" + (tokN === 1 ? "" : "s")
         : "on-chain"
       : chain.kind === "solana"
         ? "Solana sync failed — check Helius in Advanced · RPC"
@@ -1834,10 +2056,8 @@ function paintHoldings() {
   if (!list) return;
   list.innerHTML = "";
 
-  // Never paint another chain's leftovers while switching.
-  let rows = (HOLDINGS || []).filter(
-    (h) => !h.chainId || h.chainId === chain.id
-  );
+  // Never paint another chain's leftovers while switching; respect Manage tokens hides.
+  let rows = visibleHoldings(HOLDINGS, chain);
   if (!rows.length) {
     if (chain.kind === "solana") {
       rows = [
@@ -1850,7 +2070,10 @@ function paintHoldings() {
           kind: "native",
           logo: "solana",
         },
-        {
+      ];
+      // Keep zero USDC placeholder only when not hidden.
+      if (!isTokenHidden(chain.id, USDC_MINT)) {
+        rows.push({
           chainId: chain.id,
           symbol: "USDC",
           name: "USD Coin",
@@ -1859,8 +2082,8 @@ function paintHoldings() {
           kind: "spl",
           logo: "usdc",
           mint: USDC_MINT,
-        },
-      ];
+        });
+      }
     } else {
       rows = [nativeHoldingRow(chain, 0, 0)];
     }
@@ -1871,13 +2094,19 @@ function paintHoldings() {
     // Always show THIS wallet's address (not the token mint — mint looks like another wallet).
     const chainAddr = chainKeyAddress(acc, chain) || addr;
     const sub =
-      t.kind === "spl"
-        ? (t.name && t.name !== t.symbol ? t.name : "SPL token") +
+      t.kind === "spl" || t.kind === "erc20"
+        ? (t.name && t.name !== t.symbol
+            ? t.name
+            : t.kind === "erc20"
+              ? "ERC-20 token"
+              : "SPL token") +
           " · " +
           shortAddr(addr)
         : chain.name + " · " + shortAddr(chainAddr);
     const mintTitle =
-      t.kind === "spl" && t.mint ? " title=\"Mint " + t.mint + "\"" : "";
+      (t.kind === "spl" || t.kind === "erc20") && t.mint
+        ? ' title="Contract ' + t.mint + '"'
+        : "";
     const usdLabel =
       t.usd != null && !Number.isNaN(Number(t.usd))
         ? "$" +
@@ -1930,9 +2159,11 @@ function paintHoldings() {
 
   const count = $("tokenCount");
   if (count) {
-    const splN = rows.filter((h) => h.kind === "spl" && Number(h.amount) > 0).length;
-    count.textContent = splN
-      ? rows.length + " assets · " + splN + " token" + (splN === 1 ? "" : "s")
+    const tokN = rows.filter(
+      (h) => (h.kind === "spl" || h.kind === "erc20") && Number(h.amount) > 0
+    ).length;
+    count.textContent = tokN
+      ? rows.length + " assets · " + tokN + " token" + (tokN === 1 ? "" : "s")
       : rows.length + " assets";
   }
 
@@ -3614,7 +3845,11 @@ async function executeSend() {
       );
     } else {
       if (assetVal !== "native") {
-        throw new Error("Token sends on Solana only — switch to Solana for SPL");
+        throw new Error(
+          "ERC-20 send not enabled yet — tokens are visible; native " +
+            (chain.symbol || "ETH") +
+            " send works"
+        );
       }
       sig = await sendEvmNative(acc, chain, to, amountRaw);
       const explorers = {
@@ -5229,9 +5464,89 @@ async function renameWallet(accountId) {
   showToast("Renamed to " + acc.name);
 }
 
+function paintManageTokens() {
+  const list = $("manageTokenList");
+  const empty = $("manageTokenEmpty");
+  if (!list) return;
+  list.innerHTML = "";
+  const catalog = (STATE && STATE.tokenCatalog) || {};
+  // Prefer live holdings for active chain amounts, plus catalog for all chains.
+  const liveByKey = {};
+  (HOLDINGS || []).forEach((h) => {
+    if (!h || !h.mint) return;
+    liveByKey[tokenVisibilityKey(h.chainId || STATE.activeChainId, h.mint)] = h;
+  });
+  const rows = Object.keys(catalog)
+    .map((key) => {
+      const c = catalog[key] || {};
+      const live = liveByKey[key];
+      return {
+        key,
+        chainId: c.chainId || (live && live.chainId) || "",
+        mint: c.mint || (live && live.mint) || "",
+        symbol: (live && live.symbol) || c.symbol || "TOKEN",
+        name: (live && live.name) || c.name || "Token",
+        kind: (live && live.kind) || c.kind || "token",
+        logo: (live && live.logo) || c.logo || null,
+        amount: live ? Number(live.amount) || 0 : null,
+      };
+    })
+    .filter((r) => r.mint)
+    .sort((a, b) => {
+      const ca = String(a.chainId).localeCompare(String(b.chainId));
+      if (ca) return ca;
+      return String(a.symbol).localeCompare(String(b.symbol));
+    });
+
+  if (empty) empty.hidden = rows.length > 0;
+  if (!rows.length) return;
+
+  rows.forEach((t) => {
+    const chain = CHAINS.find((c) => c.id === t.chainId);
+    const shown = !isTokenHidden(t.chainId, t.mint);
+    const li = document.createElement("li");
+    li.className = "settings-token" + (shown ? "" : " is-hidden-token");
+    const amt =
+      t.amount != null
+        ? (t.amount >= 1
+            ? t.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })
+            : t.amount.toFixed(6)) +
+          " " +
+          t.symbol
+        : t.symbol;
+    li.innerHTML =
+      '<span class="settings-token-logo">' +
+      tokenLogoHtml(t) +
+      "</span>" +
+      '<span class="settings-token-meta"><strong>' +
+      (t.symbol || "TOKEN") +
+      "</strong><span>" +
+      ((chain && chain.name) || t.chainId || "chain") +
+      " · " +
+      shortAddr(t.mint) +
+      (t.amount != null ? " · " + amt : "") +
+      "</span></span>" +
+      '<label class="token-toggle" title="' +
+      (shown ? "Hide from wallet" : "Show in wallet") +
+      '">' +
+      '<input type="checkbox" data-token-toggle="1" data-chain="' +
+      String(t.chainId).replace(/"/g, "") +
+      '" data-mint="' +
+      String(t.mint).replace(/"/g, "") +
+      '"' +
+      (shown ? " checked" : "") +
+      " />" +
+      "<span>" +
+      (shown ? "Shown" : "Hidden") +
+      "</span></label>";
+    list.appendChild(li);
+  });
+}
+
 function paintSettings() {
   paintAddressBook();
   paintWalletRenameList();
+  paintManageTokens();
   paintWcSettings();
 }
 
@@ -5730,6 +6045,26 @@ function wire() {
     const btn = e.target.closest("[data-ab-del]");
     if (!btn) return;
     removeAddressBookEntry(btn.getAttribute("data-ab-del"));
+  });
+  $("manageTokenList")?.addEventListener("change", async (e) => {
+    const input = e.target && e.target.closest("input[data-token-toggle]");
+    if (!input) return;
+    const chainId = input.getAttribute("data-chain") || "";
+    const mint = input.getAttribute("data-mint") || "";
+    if (!chainId || !mint) return;
+    const show = !!input.checked;
+    try {
+      await setTokenHidden(chainId, mint, !show);
+      paintHoldings();
+      paintBalances();
+      paintManageTokens();
+      const labelEl = input.closest("li") && input.closest("li").querySelector("strong");
+      showToast((show ? "Showing " : "Hidden ") + ((labelEl && labelEl.textContent) || "token"));
+    } catch (err) {
+      console.warn(err);
+      showToast("Could not update token visibility");
+      paintManageTokens();
+    }
   });
   $("walletRenameList")?.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-rename-save]");
