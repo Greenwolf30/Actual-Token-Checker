@@ -2,15 +2,13 @@ Gladiator Wallet — load as unpacked Chrome/Opera extension
 
 1. chrome://extensions → Developer mode ON
 2. Load unpacked → select THIS folder (Gladiator-Wallet-Extension)
-3. Reload extension after updates
 
-Jupiter in-page wallet (v0.5.46+):
-- Open jup.ag and wait ~3 seconds after load (Gladiator injects after the page is ready)
-- Connect wallet → look for "Gladiator" (Detected / More)
-- If the site ever blanks again, disable inject in DevTools:
-  chrome.storage.local.set({ gladiator_page_inject: false })
+v0.5.47:
+- In-page Jupiter inject is FULLY OFF (it kept crashing jup.ag)
+- Use WalletConnect only for Jupiter/pump.fun right now
 
-WalletConnect backup:
-- Settings → Project ID + wc: URI → Connect → keep wallet window open
+WalletConnect:
+- Settings → Project ID + wc: URI → Connect
+- Keep the Gladiator wallet window open while swapping
 
 Version: see manifest.json
