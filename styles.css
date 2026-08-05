@@ -2990,6 +2990,42 @@ body.is-local .dock {
   box-shadow: 0 0 0 3px rgba(184, 167, 207, 0.18);
   outline: none;
 }
+
+.vault-field {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0 0;
+  text-align: left;
+}
+
+.vault-field span {
+  font-size: 0.78rem;
+  color: #9aa3b5;
+}
+
+.vault-field input {
+  min-height: 40px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(0, 0, 0, 0.28);
+  color: #f2eef8;
+  padding: 8px 12px;
+  font-size: 0.95rem;
+}
+
+.vault-error {
+  min-height: 1.2em;
+  margin: 8px 0 0;
+  color: #ffb4b4;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+#vaultSettingsBlock #vaultStatus {
+  color: #e8eefc;
+  margin: 8px 0 10px;
+}
+
 .chain-picker-menu {
   pointer-events: auto;
 }

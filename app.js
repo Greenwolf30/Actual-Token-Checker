@@ -124,6 +124,180 @@ const IS_EXTENSION = !!(
   chrome.runtime.id
 );
 
+/** In-memory only — never written to disk. */
+let VAULT_PASS = null;
+let VAULT_UNLOCKED = true;
+const VAULT_ITERATIONS = 310000;
+
+function bufToB64(buf) {
+  const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  let s = "";
+  for (let i = 0; i < u8.length; i += 0x8000) {
+    s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  }
+  return btoa(s);
+}
+
+function b64ToBuf(b64) {
+  const bin = atob(String(b64 || ""));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function accountHasPlainSecrets(a) {
+  if (!a) return false;
+  if (a.mnemonic) return true;
+  if (a.solana && a.solana.secretKey) return true;
+  if (a.evm && a.evm.privateKey) return true;
+  if (a.bitcoin && a.bitcoin.privateKey) return true;
+  if (a.sui && a.sui.secretKey) return true;
+  return false;
+}
+
+function stateHasPlainSecrets(state) {
+  return !!(state && Array.isArray(state.accounts) && state.accounts.some(accountHasPlainSecrets));
+}
+
+function publicAccountView(a) {
+  if (!a) return a;
+  return {
+    id: a.id,
+    name: a.name,
+    createdAt: a.createdAt,
+    solana: a.solana ? { publicKey: a.solana.publicKey } : null,
+    evm: a.evm ? { address: a.evm.address } : null,
+    bitcoin: a.bitcoin
+      ? { address: a.bitcoin.address, publicKey: a.bitcoin.publicKey }
+      : null,
+    sui: a.sui ? { address: a.sui.address, publicKey: a.sui.publicKey } : null,
+  };
+}
+
+function extractAccountSecrets(accounts) {
+  const out = {};
+  for (const a of accounts || []) {
+    if (!a || !a.id) continue;
+    out[a.id] = {
+      mnemonic: a.mnemonic || "",
+      solanaSecretKey: (a.solana && a.solana.secretKey) || "",
+      evmPrivateKey: (a.evm && a.evm.privateKey) || "",
+      bitcoinPrivateKey: (a.bitcoin && a.bitcoin.privateKey) || "",
+      suiSecretKey: (a.sui && a.sui.secretKey) || "",
+    };
+  }
+  return out;
+}
+
+function applyAccountSecrets(accounts, secretsMap) {
+  return (accounts || []).map((a) => {
+    const s = secretsMap && secretsMap[a.id];
+    if (!s) return { ...a };
+    const next = { ...a };
+    next.mnemonic = s.mnemonic || "";
+    if (next.solana || s.solanaSecretKey) {
+      next.solana = { ...(next.solana || {}), secretKey: s.solanaSecretKey || "" };
+    }
+    if (next.evm || s.evmPrivateKey) {
+      next.evm = { ...(next.evm || {}), privateKey: s.evmPrivateKey || "" };
+    }
+    if (next.bitcoin || s.bitcoinPrivateKey) {
+      next.bitcoin = { ...(next.bitcoin || {}), privateKey: s.bitcoinPrivateKey || "" };
+    }
+    if (next.sui || s.suiSecretKey) {
+      next.sui = { ...(next.sui || {}), secretKey: s.suiSecretKey || "" };
+    }
+    return next;
+  });
+}
+
+async function deriveVaultKey(password, saltBytes) {
+  const baseKey = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(String(password)),
+    "PBKDF2",
+    false,
+    ["deriveKey"]
+  );
+  return crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      salt: saltBytes,
+      iterations: VAULT_ITERATIONS,
+      hash: "SHA-256",
+    },
+    baseKey,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+
+async function encryptVaultPayload(password, payload) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveVaultKey(password, salt);
+  const plain = new TextEncoder().encode(JSON.stringify(payload));
+  const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plain);
+  return {
+    v: 1,
+    salt: bufToB64(salt),
+    iv: bufToB64(iv),
+    data: bufToB64(cipher),
+    iterations: VAULT_ITERATIONS,
+  };
+}
+
+async function decryptVaultPayload(password, vault) {
+  if (!vault || !vault.data || !vault.salt || !vault.iv) {
+    throw new Error("No encrypted vault");
+  }
+  const salt = b64ToBuf(vault.salt);
+  const iv = b64ToBuf(vault.iv);
+  const key = await deriveVaultKey(password, salt);
+  const plainBuf = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv },
+    key,
+    b64ToBuf(vault.data)
+  );
+  return JSON.parse(new TextDecoder().decode(plainBuf));
+}
+
+async function sealStateForDisk(state, password) {
+  const secrets = extractAccountSecrets(state.accounts);
+  const vault = await encryptVaultPayload(password, { secrets, at: Date.now() });
+  return {
+    activeAccountId: state.activeAccountId,
+    activeChainId: state.activeChainId,
+    solRpc: state.solRpc || "",
+    addressBook: Array.isArray(state.addressBook) ? state.addressBook : [],
+    wcProjectId: state.wcProjectId || "",
+    accounts: (state.accounts || []).map(publicAccountView),
+    vault,
+    vaultEnabled: true,
+  };
+}
+
+function isVaultLocked() {
+  return !!(STATE && STATE.vaultEnabled && !VAULT_UNLOCKED);
+}
+
+function paintVaultStatus() {
+  const el = $("vaultStatus");
+  if (!el) return;
+  if (STATE && STATE.vaultEnabled && VAULT_UNLOCKED) {
+    el.textContent = "Seed & keys encrypted — wallet unlocked";
+  } else if (STATE && STATE.vaultEnabled) {
+    el.textContent = "Locked — enter password to use keys";
+  } else if (stateHasPlainSecrets(STATE)) {
+    el.textContent = "Not encrypted yet — set a password below";
+  } else {
+    el.textContent = "Set a password to encrypt your seed phrase";
+  }
+  const lockBtn = $("vaultLockBtn");
+  if (lockBtn) lockBtn.hidden = !(STATE && STATE.vaultEnabled && VAULT_UNLOCKED);
+}
+
 function gladiatorConfig() {
   return (typeof window !== "undefined" && window.GLADIATOR_CONFIG) || {};
 }
@@ -274,7 +448,22 @@ async function storageGet() {
 }
 
 async function storageSet(data) {
-  const raw = JSON.stringify(data);
+  let toStore = data;
+  try {
+    // While unlocked with a password, always write encrypted secrets (never plaintext).
+    if (VAULT_PASS && VAULT_UNLOCKED && data && Array.isArray(data.accounts)) {
+      toStore = await sealStateForDisk(data, VAULT_PASS);
+      // Keep vault blob on live STATE so lock can re-use it without another read.
+      if (STATE && data === STATE) {
+        STATE.vault = toStore.vault;
+        STATE.vaultEnabled = true;
+      }
+    }
+  } catch (err) {
+    console.warn("[vault-seal]", err);
+    throw err;
+  }
+  const raw = JSON.stringify(toStore);
   let localOk = false;
   try {
     localStorage.setItem(STORE_KEY, raw);
@@ -286,7 +475,7 @@ async function storageSet(data) {
     try {
       await new Promise((resolve, reject) => {
         try {
-          chrome.storage.local.set({ [STORE_KEY]: data }, () => {
+          chrome.storage.local.set({ [STORE_KEY]: toStore }, () => {
             const err = chrome.runtime && chrome.runtime.lastError;
             if (err) reject(err);
             else resolve();
@@ -299,6 +488,8 @@ async function storageSet(data) {
       console.warn("[storage chrome]", err);
       if (!localOk) throw err;
     }
+  } else if (!localOk) {
+    throw new Error("Could not save wallet");
   }
 }
 
@@ -481,6 +672,7 @@ async function ensureState() {
       addressBook: [],
       wcProjectId: "",
     };
+    // New wallets stay plaintext until the user sets a password (prompted on boot).
     await storageSet(state);
   }
   if (!CHAINS.some((c) => c.id === state.activeChainId)) state.activeChainId = "solana";
@@ -490,13 +682,171 @@ async function ensureState() {
   if (typeof state.solRpc !== "string") state.solRpc = "";
   if (typeof state.wcProjectId !== "string") state.wcProjectId = "";
   if (!Array.isArray(state.addressBook)) state.addressBook = [];
-  let repaired = false;
-  for (const a of state.accounts) {
-    if (repairAccountSolanaKeys(a)) repaired = true;
+
+  // Encrypted vault on disk: load public addresses only until unlock.
+  if (state.vault && state.vault.data) {
+    state.vaultEnabled = true;
+    state.accounts = (state.accounts || []).map(publicAccountView);
+    VAULT_UNLOCKED = false;
+    VAULT_PASS = null;
+  } else {
+    state.vaultEnabled = false;
+    VAULT_UNLOCKED = true;
+    let repaired = false;
+    for (const a of state.accounts) {
+      if (repairAccountSolanaKeys(a)) repaired = true;
+    }
+    if (await repairAllExtraKeys(state)) repaired = true;
+    if (repaired) await storageSet(state);
   }
-  if (await repairAllExtraKeys(state)) repaired = true;
-  if (repaired) await storageSet(state);
   return state;
+}
+
+function openVaultModal(mode) {
+  const modal = $("vaultModal");
+  if (!modal) return;
+  modal.hidden = false;
+  modal.dataset.mode = mode || "unlock";
+  const title = $("vaultModalTitle");
+  const body = $("vaultModalBody");
+  const pass2Wrap = $("vaultPass2Wrap");
+  const err = $("vaultModalError");
+  const pass1 = $("vaultPass1");
+  const pass2 = $("vaultPass2");
+  if (err) err.textContent = "";
+  if (pass1) pass1.value = "";
+  if (pass2) pass2.value = "";
+  if (mode === "setup" || mode === "change") {
+    if (title) title.textContent = mode === "change" ? "Change password" : "Protect your wallet";
+    if (body) {
+      body.textContent =
+        mode === "change"
+          ? "Choose a new password. Your seed stays encrypted on this device."
+          : "Create a password to encrypt your seed phrase and private keys. You’ll need it to unlock Gladiator.";
+    }
+    if (pass2Wrap) pass2Wrap.hidden = false;
+  } else {
+    if (title) title.textContent = "Unlock wallet";
+    if (body) body.textContent = "Enter your password to decrypt keys for this session.";
+    if (pass2Wrap) pass2Wrap.hidden = true;
+  }
+  requestAnimationFrame(() => {
+    if (pass1) pass1.focus();
+  });
+}
+
+function closeVaultModal() {
+  const modal = $("vaultModal");
+  if (modal) modal.hidden = true;
+  const pass1 = $("vaultPass1");
+  const pass2 = $("vaultPass2");
+  if (pass1) pass1.value = "";
+  if (pass2) pass2.value = "";
+}
+
+async function unlockVaultWithPassword(password) {
+  const disk = await storageGet();
+  if (!disk || !disk.vault) throw new Error("No encrypted vault found");
+  const payload = await decryptVaultPayload(password, disk.vault);
+  const secrets = payload && payload.secrets;
+  if (!secrets) throw new Error("Vault is empty");
+  STATE.accounts = applyAccountSecrets(disk.accounts || STATE.accounts, secrets);
+  STATE.vault = disk.vault;
+  STATE.vaultEnabled = true;
+  STATE.activeAccountId = disk.activeAccountId || STATE.activeAccountId;
+  VAULT_PASS = password;
+  VAULT_UNLOCKED = true;
+  // Re-seal with fresh IV so disk stays current after repairs.
+  if (await repairAllExtraKeys(STATE)) {
+    await storageSet(STATE);
+  }
+  paintVaultStatus();
+  return true;
+}
+
+async function setupVaultPassword(password) {
+  if (!password || String(password).length < 6) {
+    throw new Error("Password must be at least 6 characters");
+  }
+  if (!STATE || !Array.isArray(STATE.accounts)) throw new Error("No wallet loaded");
+  // If already vaulted, must be unlocked with secrets in memory.
+  if (STATE.vaultEnabled && !VAULT_UNLOCKED) {
+    throw new Error("Unlock the wallet first");
+  }
+  if (!stateHasPlainSecrets(STATE) && !(STATE.vaultEnabled && VAULT_UNLOCKED)) {
+    throw new Error("No keys in memory to encrypt");
+  }
+  VAULT_PASS = String(password);
+  VAULT_UNLOCKED = true;
+  await storageSet(STATE);
+  // Drop plaintext secrets from memory? Keep unlocked for session — user needs them.
+  // Disk is sealed. Memory stays unlocked until Lock / popup close.
+  paintVaultStatus();
+}
+
+async function lockVault() {
+  if (!(STATE && STATE.vaultEnabled)) return;
+  // Ensure latest secrets are sealed before wiping memory.
+  if (VAULT_PASS && VAULT_UNLOCKED && stateHasPlainSecrets(STATE)) {
+    await storageSet(STATE);
+  }
+  VAULT_PASS = null;
+  VAULT_UNLOCKED = false;
+  hideBackup();
+  STATE.accounts = (STATE.accounts || []).map(publicAccountView);
+  paintVaultStatus();
+  paintSwitchers();
+  showToast("Wallet locked");
+  openVaultModal("unlock");
+}
+
+async function requireUnlocked(reason) {
+  if (!isVaultLocked()) {
+    // Plaintext legacy: require setup before revealing seed.
+    if (!STATE.vaultEnabled && stateHasPlainSecrets(STATE) && reason === "backup") {
+      openVaultModal("setup");
+      throw new Error("Set a password to protect your seed before viewing it");
+    }
+    return true;
+  }
+  openVaultModal("unlock");
+  throw new Error("Unlock wallet first");
+}
+
+async function submitVaultModal() {
+  const modal = $("vaultModal");
+  const mode = (modal && modal.dataset.mode) || "unlock";
+  const pass1 = (($("vaultPass1") && $("vaultPass1").value) || "").trim();
+  const pass2 = (($("vaultPass2") && $("vaultPass2").value) || "").trim();
+  const errEl = $("vaultModalError");
+  if (errEl) errEl.textContent = "";
+  if (!pass1) throw new Error("Enter a password");
+
+  if (mode === "unlock") {
+    try {
+      await unlockVaultWithPassword(pass1);
+    } catch (_) {
+      throw new Error("Wrong password");
+    }
+    closeVaultModal();
+    showToast("Wallet unlocked");
+    paintSwitchers();
+    renderAccountsPanel();
+    await refreshBalance();
+    return;
+  }
+
+  if (mode === "setup" || mode === "change") {
+    if (pass1.length < 6) throw new Error("Password must be at least 6 characters");
+    if (pass1 !== pass2) throw new Error("Passwords do not match");
+    if (mode === "change" && isVaultLocked()) {
+      throw new Error("Unlock first");
+    }
+    await setupVaultPassword(pass1);
+    closeVaultModal();
+    showToast(mode === "change" ? "Password updated" : "Seed encrypted");
+    paintVaultStatus();
+  }
 }
 
 function solRpcList(chain) {
@@ -1586,6 +1936,7 @@ function selectedSendHolding() {
 }
 
 function solanaKeypairFromAccount(acc) {
+  if (isVaultLocked()) throw new Error("Unlock wallet first");
   if (!window.solanaWeb3) throw new Error("Solana tx library missing — restart with start.ps1 from the latest wallet folder");
   if (!acc || !acc.solana || !acc.solana.secretKey) throw new Error("No Solana key on this account");
   const sk = Base58.decode(acc.solana.secretKey);
@@ -2054,6 +2405,10 @@ function openWcSignRequest(event) {
 }
 
 async function ensureWalletConnect() {
+  if (isVaultLocked()) {
+    openVaultModal("unlock");
+    throw new Error("Unlock wallet first");
+  }
   if (!window.GladiatorWC) {
     throw new Error("WalletConnect bundle missing — reload the extension");
   }
@@ -3805,6 +4160,12 @@ async function ensureActiveSeededAccount() {
 }
 
 async function showBackup() {
+  try {
+    await requireUnlocked("backup");
+  } catch (err) {
+    showToast(String(err && err.message ? err.message : err));
+    return;
+  }
   const acc = await ensureActiveSeededAccount();
   paintSwitchers();
   renderAccountsPanel();
@@ -4154,6 +4515,55 @@ function wire() {
     await storageSet(STATE);
     paintWcSettings();
   });
+  $("vaultUnlockBtn")?.addEventListener("click", () => {
+    openVaultModal(STATE && STATE.vaultEnabled ? "unlock" : "setup");
+  });
+  $("vaultLockBtn")?.addEventListener("click", () => {
+    lockVault().catch((err) => showToast(String(err && err.message ? err.message : err)));
+  });
+  $("vaultChangeBtn")?.addEventListener("click", async () => {
+    try {
+      if (isVaultLocked()) {
+        openVaultModal("unlock");
+        return;
+      }
+      if (!STATE.vaultEnabled) {
+        openVaultModal("setup");
+        return;
+      }
+      openVaultModal("change");
+    } catch (err) {
+      showToast(String(err && err.message ? err.message : err));
+    }
+  });
+  $("vaultModalSubmit")?.addEventListener("click", () => {
+    submitVaultModal().catch((err) => {
+      const el = $("vaultModalError");
+      if (el) el.textContent = String(err && err.message ? err.message : err);
+    });
+  });
+  $("vaultModalCancel")?.addEventListener("click", () => {
+    // Allow cancel only if not forcing first-time setup / unlock for vaulted wallets.
+    if (isVaultLocked()) {
+      showToast("Unlock required to use keys");
+      return;
+    }
+    closeVaultModal();
+  });
+  $("vaultPass1")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const mode = ($("vaultModal") && $("vaultModal").dataset.mode) || "unlock";
+      if (mode === "unlock") $("vaultModalSubmit")?.click();
+      else $("vaultPass2")?.focus();
+    }
+  });
+  $("vaultPass2")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      $("vaultModalSubmit")?.click();
+    }
+  });
   document.addEventListener("click", (e) => {
     const wrap = $("addrMenuWrap");
     if (wrap && !wrap.contains(e.target)) closeAddrMenu();
@@ -4398,8 +4808,8 @@ async function boot() {
     console.error("solana-tx.bundle missing");
   }
   STATE = await ensureState();
-  // Second pass: always try to materialize BTC/Sui before first paint.
-  if (await repairAllExtraKeys(STATE)) {
+  // Second pass: always try to materialize BTC/Sui before first paint (unlocked only).
+  if (VAULT_UNLOCKED && (await repairAllExtraKeys(STATE))) {
     try {
       await storageSet(STATE);
     } catch (err) {
@@ -4411,7 +4821,13 @@ async function boot() {
   paintSwitchers();
   paintBalances();
   paintHoldings();
+  paintVaultStatus();
   go("home");
+  if (isVaultLocked()) {
+    openVaultModal("unlock");
+  } else if (!STATE.vaultEnabled && stateHasPlainSecrets(STATE)) {
+    openVaultModal("setup");
+  }
   const bootAcc = activeAccount(STATE);
   if (bootAcc && bootAcc.mnemonic && window.MultiHD) {
     const missing = [];
