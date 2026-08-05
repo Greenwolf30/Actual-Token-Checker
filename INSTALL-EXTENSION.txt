@@ -7,6 +7,9 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.3:
+- Fix Accounts sidebar Generate Wallet button (was an empty green outline — CSS vars only lived on the Wallets panel)
+
 v0.6.2:
 - Clearer error + on-page banner when Gladiator was Reloaded while a dApp tab stayed open
 - After any Reload of the extension: refresh jup.ag (or other dApp), reconnect Gladiator, then swap again

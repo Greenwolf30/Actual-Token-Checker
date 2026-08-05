@@ -504,6 +504,11 @@ img.brand-mark {
 }
 
 .acct-drawer-foot {
+  --ph-green: #14f195;
+  --ph-green-dim: rgba(20, 241, 149, 0.16);
+  --ph-line: rgba(255, 255, 255, 0.08);
+  --ph-ink: #e8edf4;
+  --ph-muted: #7a8494;
   margin-top: 12px;
   display: grid;
   gap: 8px;
@@ -2746,10 +2751,11 @@ body.is-local .dock {
   flex: 0 0 auto;
   padding: 10px 14px;
   border-radius: 8px;
-  background: var(--ph-green);
+  /* Fallbacks: these vars are scoped under .photon-wallets; drawer buttons sit outside it */
+  background: var(--ph-green, #14f195);
   color: #04140c;
   font-size: 0.78rem;
-  font-weight: 400;
+  font-weight: 600;
   letter-spacing: 0.02em;
   box-shadow: 0 0 0 1px rgba(20, 241, 149, 0.35), 0 8px 24px rgba(20, 241, 149, 0.18);
   transition: transform 0.15s var(--ease), filter 0.15s ease;
@@ -3021,16 +3027,16 @@ body.is-local .dock {
 .photon-chip {
   padding: 9px 12px;
   border-radius: 8px;
-  border: 1px solid var(--ph-line);
+  border: 1px solid var(--ph-line, rgba(255, 255, 255, 0.08));
   background: rgba(255, 255, 255, 0.04);
-  color: var(--ph-ink);
+  color: var(--ph-ink, #e8edf4);
   font-size: 0.78rem;
   width: 100%;
 }
 
 .photon-chip:hover {
   border-color: rgba(20, 241, 149, 0.35);
-  color: var(--ph-green);
+  color: var(--ph-green, #14f195);
 }
 
 .photon-keypanel {
