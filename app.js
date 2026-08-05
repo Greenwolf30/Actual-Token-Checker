@@ -123,6 +123,13 @@ const IS_EXTENSION = !!(
   chrome.runtime &&
   chrome.runtime.id
 );
+/** Toolbar popup closes on blur — cannot host WalletConnect reliably. */
+const IS_EXTENSION_POPUP = !!(
+  IS_EXTENSION &&
+  /popup\.html$/i.test(String((location && location.pathname) || ""))
+);
+/** Full wallet page / detached wallet window owns the WC relay session. */
+const IS_WC_HOST = !IS_EXTENSION_POPUP;
 
 /** Legacy vault migrate: one-time decrypt if an old encrypted blob exists. */
 let VAULT_MIGRATE_MODE = false;
@@ -2063,9 +2070,9 @@ async function loadWcSessionMirror() {
 async function refreshWcConnections(opts) {
   const ensure = !opts || opts.ensure !== false;
   const poll = opts && typeof opts.poll === "number" ? opts.poll : 0;
-  // Extension: bridge owns live WC — popup only mirrors chrome.storage sessions.
+  // Toolbar popup only mirrors sessions; wallet window / web page owns WC.
   if (
-    !IS_EXTENSION &&
+    IS_WC_HOST &&
     ensure &&
     STATE &&
     STATE.wcProjectId &&
@@ -2212,22 +2219,11 @@ async function wcDisconnectTopic(topic) {
       paintWcSettings();
       return;
     }
-    if (IS_EXTENSION && typeof chrome !== "undefined" && chrome.storage) {
-      await new Promise((resolve, reject) => {
-        chrome.storage.local.set(
-          {
-            gladiator_wc_cmd: { type: "disconnect", topic: t, at: Date.now() },
-          },
-          () => {
-            const err = chrome.runtime.lastError;
-            if (err) reject(err);
-            else resolve();
-          }
-        );
+    if (IS_EXTENSION_POPUP) {
+      await chromeLocalSet({
+        [WC_CMD_KEY]: { type: "disconnect", topic: t, at: Date.now() },
       });
-      try {
-        chrome.runtime.sendMessage({ type: "wc-open-bridge" }, () => void chrome.runtime.lastError);
-      } catch (_) {}
+      await openWalletWindowForWc({ focus: false, settings: false });
       setWcStatus("Disconnect sent");
       showToast("Disconnected");
       paintWcSettings();
@@ -2322,6 +2318,127 @@ function openWcSignRequest(event) {
         ? "Approve transaction from the dApp."
         : "Approve WalletConnect request (" + method + ").";
   showWcApproveBar(label, "Tap Approve to sign");
+}
+
+
+const WC_PENDING_KEY = "gladiator_wc_pending";
+const WC_CMD_KEY = "gladiator_wc_cmd";
+let WC_PENDING_CONSUMING = false;
+
+async function chromeLocalGet(keys) {
+  if (!(typeof chrome !== "undefined" && chrome.storage && chrome.storage.local)) return {};
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.get(keys, (r) => resolve(r || {}));
+    } catch (_) {
+      resolve({});
+    }
+  });
+}
+
+async function chromeLocalSet(obj) {
+  if (!(typeof chrome !== "undefined" && chrome.storage && chrome.storage.local)) return;
+  return new Promise((resolve, reject) => {
+    try {
+      chrome.storage.local.set(obj, () => {
+        const err = chrome.runtime.lastError;
+        if (err) reject(err);
+        else resolve();
+      });
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+function openWalletWindowForWc(opts) {
+  if (!(IS_EXTENSION && typeof chrome !== "undefined" && chrome.runtime)) {
+    return Promise.resolve({ ok: false, error: "Not an extension" });
+  }
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(
+      {
+        type: "wc-open-wallet",
+        focus: !opts || opts.focus !== false,
+        settings: !opts || opts.settings !== false,
+      },
+      (r) => resolve(r || {})
+    );
+  });
+}
+
+async function consumePendingWcUri() {
+  if (!IS_WC_HOST || !IS_EXTENSION || WC_PENDING_CONSUMING) return false;
+  WC_PENDING_CONSUMING = true;
+  try {
+    const bag = await chromeLocalGet([WC_PENDING_KEY]);
+    const pending = bag[WC_PENDING_KEY];
+    const uri = pending && pending.uri;
+    if (!uri || !String(uri).startsWith("wc:")) return false;
+    const projectId = (
+      (pending && pending.projectId) ||
+      (STATE && STATE.wcProjectId) ||
+      ""
+    ).trim();
+    if (projectId && STATE && STATE.wcProjectId !== projectId) {
+      STATE.wcProjectId = projectId;
+      await storageSet(STATE);
+    }
+    setWcStatus("Connecting WalletConnect in wallet…");
+    showToast("Connecting…");
+    await ensureWalletConnect();
+    await GladiatorWC.pair(String(uri).trim());
+    await chromeLocalSet({
+      [WC_PENDING_KEY]: {
+        projectId: projectId || (STATE && STATE.wcProjectId) || "",
+        uri: "",
+        at: Date.now(),
+        paired: true,
+      },
+    });
+    if ($("wcUri")) $("wcUri").value = "";
+    try {
+      if (typeof GladiatorWC.processPendings === "function") {
+        await GladiatorWC.processPendings();
+      }
+    } catch (_) {}
+    await refreshWcConnections({ ensure: false, poll: 10 });
+    setWcStatus("Connected — keep this wallet window open for Jupiter swaps");
+    showToast("Keep this wallet open for swaps");
+    paintWcSettings();
+    return true;
+  } catch (err) {
+    const msg = String(err && err.message ? err.message : err);
+    setWcStatus("Connect failed: " + msg);
+    showToast(msg);
+    return false;
+  } finally {
+    WC_PENDING_CONSUMING = false;
+  }
+}
+
+async function handleWcHostCommand(cmd) {
+  if (!IS_WC_HOST || !cmd || !cmd.type) return;
+  if (cmd.type === "disconnect") {
+    try {
+      await ensureWalletConnect();
+      if (cmd.topic && typeof GladiatorWC.disconnectSession === "function") {
+        await GladiatorWC.disconnectSession(cmd.topic);
+      } else if (window.GladiatorWC && GladiatorWC.isReady()) {
+        await GladiatorWC.disconnectAll();
+      }
+      await persistWcSessions([]);
+      setWcStatus("Disconnected");
+      paintWcSettings();
+    } catch (err) {
+      console.warn("[wc-cmd]", err);
+    }
+  } else if (cmd.type === "publish") {
+    try {
+      await persistWcSessions();
+      await refreshWcConnections({ ensure: false });
+    } catch (_) {}
+  }
 }
 
 async function ensureWalletConnect() {
@@ -2562,49 +2679,34 @@ async function wcConnectFromUri() {
     await storageSet(STATE);
   }
 
-  // Extension popup dies when you click Jupiter — open persistent relay window.
-  if (IS_EXTENSION && typeof chrome !== "undefined" && chrome.runtime && chrome.storage) {
+  // Toolbar popup closes on blur — hand the URI to the full wallet window.
+  if (IS_EXTENSION_POPUP) {
     try {
-      await new Promise((resolve, reject) => {
-        chrome.storage.local.set(
-          {
-            gladiator_wc_pending: {
-              uri,
-              projectId,
-              at: Date.now(),
-            },
-          },
-          () => {
-            const err = chrome.runtime.lastError;
-            if (err) reject(err);
-            else resolve();
-          }
-        );
+      await chromeLocalSet({
+        [WC_PENDING_KEY]: { uri, projectId, at: Date.now() },
       });
-      const res = await new Promise((resolve) => {
-        chrome.runtime.sendMessage({ type: "wc-open-bridge" }, (r) => resolve(r || {}));
-      });
-      if (res && res.ok === false) throw new Error(res.error || "Could not open relay window");
+      const res = await openWalletWindowForWc({ focus: true, settings: true });
+      if (res && res.ok === false) throw new Error(res.error || "Could not open wallet");
       if ($("wcUri")) $("wcUri").value = "";
       setWcStatus(
-        "Opened session relay — keep THAT window open. Jupiter swap confirms are signed there."
+        "Opened Gladiator wallet window — keep it open. Jupiter swap confirms are signed there."
       );
-      showToast("Keep the session relay window open");
+      showToast("Keep the wallet window open");
       paintWcSettings();
       return;
     } catch (err) {
       const msg = String(err && err.message ? err.message : err);
-      setWcStatus("Relay open failed: " + msg + " — trying in popup");
+      setWcStatus("Wallet window failed: " + msg + " — trying here");
     }
   }
 
-  setWcStatus("Connecting… keep this window open");
+  setWcStatus("Connecting… keep this wallet open");
   showToast("Connecting…");
   try {
     await ensureWalletConnect();
     await GladiatorWC.pair(uri);
     if ($("wcUri")) $("wcUri").value = "";
-    setWcStatus("Paired — approving session / signature…");
+    setWcStatus("Paired — keep this wallet open for Jupiter swaps");
     try {
       if (typeof GladiatorWC.processPendings === "function") {
         await GladiatorWC.processPendings();
@@ -2621,30 +2723,26 @@ async function wcConnectFromUri() {
 
 async function wcDisconnect() {
   try {
-    if (IS_EXTENSION && typeof chrome !== "undefined" && chrome.storage) {
-      await new Promise((resolve, reject) => {
-        chrome.storage.local.set(
-          {
-            gladiator_wc_cmd: { type: "disconnect", at: Date.now() },
-            gladiator_wc_pending: null,
-            gladiator_wc_sessions: { at: Date.now(), items: [] },
-          },
-          () => {
-            const err = chrome.runtime.lastError;
-            if (err) reject(err);
-            else resolve();
-          }
-        );
+    if (IS_EXTENSION_POPUP) {
+      await chromeLocalSet({
+        [WC_CMD_KEY]: { type: "disconnect", at: Date.now() },
+        [WC_PENDING_KEY]: null,
+        gladiator_wc_sessions: { at: Date.now(), items: [] },
       });
-      try {
-        chrome.runtime.sendMessage({ type: "wc-open-bridge" }, () => void chrome.runtime.lastError);
-      } catch (_) {}
+      await openWalletWindowForWc({ focus: false, settings: false });
+      setWcStatus("Disconnect sent");
+      showToast("Disconnected");
+      paintWcSettings();
+      return;
     }
     if (window.GladiatorWC && GladiatorWC.isReady()) {
       await GladiatorWC.disconnectAll();
+    } else if (STATE && STATE.wcProjectId && window.GladiatorWC) {
+      await ensureWalletConnect();
+      await GladiatorWC.disconnectAll();
     }
     await persistWcSessions([]);
-    setWcStatus("Disconnect sent");
+    setWcStatus("Disconnected");
     showToast("Disconnected");
     paintWcSettings();
   } catch (err) {
@@ -4453,19 +4551,11 @@ function wire() {
     wcDisconnect().catch((err) => console.warn(err));
   });
   $("wcRefreshConnections")?.addEventListener("click", () => {
-    if (IS_EXTENSION && typeof chrome !== "undefined" && chrome.storage) {
-      try {
-        chrome.storage.local.set(
-          { gladiator_wc_cmd: { type: "publish", at: Date.now() } },
-          () => void chrome.runtime.lastError
-        );
-        chrome.runtime.sendMessage(
-          { type: "wc-open-bridge", focus: false },
-          () => void chrome.runtime.lastError
-        );
-      } catch (_) {}
+    if (IS_EXTENSION_POPUP) {
+      chromeLocalSet({ [WC_CMD_KEY]: { type: "publish", at: Date.now() } }).catch(() => {});
+      openWalletWindowForWc({ focus: false, settings: false }).catch(() => {});
     }
-    refreshWcConnections({ ensure: !IS_EXTENSION, poll: IS_EXTENSION ? 0 : 6 })
+    refreshWcConnections({ ensure: IS_WC_HOST, poll: IS_WC_HOST ? 6 : 0 })
       .then((items) => {
         showToast(
           items && items.length
@@ -4530,6 +4620,17 @@ function wire() {
       if (area !== "local") return;
       if (changes.gladiator_wc_sessions || changes.gladiator_wc_pending) {
         paintWcConnections().catch(() => {});
+      }
+      if (IS_WC_HOST && changes.gladiator_wc_pending) {
+        const next = changes.gladiator_wc_pending.newValue;
+        if (next && next.uri && String(next.uri).startsWith("wc:")) {
+          consumePendingWcUri().catch((err) => console.warn(err));
+        }
+      }
+      if (IS_WC_HOST && changes.gladiator_wc_cmd) {
+        handleWcHostCommand(changes.gladiator_wc_cmd.newValue).catch((err) =>
+          console.warn(err)
+        );
       }
     });
   }
@@ -4808,27 +4909,45 @@ async function boot() {
   await fetchPrices();
   updateSendUsdEstimate();
   await refreshBalance();
-  // Extension: bridge owns WalletConnect (popup closes during Jupiter swaps).
-  if (IS_EXTENSION) {
+  // Toolbar popup: mirror only. Wallet window / web page: own WC relay.
+  if (IS_EXTENSION_POPUP) {
     paintWcSettings();
     setWcStatus(
       STATE.wcProjectId
-        ? "Paste wc: URI → Connect (opens session relay window)"
+        ? "Paste wc: URI → Connect (opens Gladiator wallet window)"
         : "Add a WalletConnect Project ID, then paste a wc: URI"
     );
     await refreshWcConnections({ ensure: false });
-  } else if (STATE.wcProjectId && window.GladiatorWC) {
+  } else {
     try {
-      await ensureWalletConnect();
-      await refreshWcConnections({ ensure: false, poll: 4 });
-      paintWcSettings();
+      if (STATE.wcProjectId && window.GladiatorWC) {
+        await ensureWalletConnect();
+      }
+      // Deep-link from toolbar Connect (?wc=1) → Settings + pair pending URI
+      try {
+        const q = new URLSearchParams((location && location.search) || "");
+        if (q.get("wc") === "1") {
+          openSettings({ focusWc: true });
+        }
+      } catch (_) {}
+      const paired = await consumePendingWcUri();
+      if (!paired) {
+        await refreshWcConnections({ ensure: false, poll: 4 });
+        paintWcSettings();
+        if (STATE.wcProjectId) {
+          const items = collectLiveWcSessions();
+          setWcStatus(
+            items.length
+              ? "Connected — keep this wallet window open for Jupiter swaps"
+              : "Ready — paste a wc: URI, then Connect (keep this window open)"
+          );
+        }
+      }
     } catch (err) {
       console.warn("[wc-boot]", err);
       setWcStatus(String(err && err.message ? err.message : err));
       paintWcSettings();
     }
-  } else {
-    paintWcSettings();
   }
 }
 

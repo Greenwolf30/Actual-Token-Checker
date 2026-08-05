@@ -6,8 +6,9 @@ Gladiator Wallet — load as unpacked Chrome/Opera extension
 
 WalletConnect / Jupiter:
 - Paste Reown Project ID + wc: URI → Connect
-- A "Session relay" window opens — KEEP IT OPEN while swapping on Jupiter
-- Toolbar popup closes when you leave it; the relay window receives swap confirms
+- Gladiator opens as a wallet window (not a separate relay page)
+- KEEP THAT WALLET WINDOW OPEN while swapping on Jupiter
+- The tiny toolbar popup closes too fast to receive swap confirms
 
 If you previously set a wallet password: open Gladiator once and enter it to restore keys
 (encryption is paused for now).
