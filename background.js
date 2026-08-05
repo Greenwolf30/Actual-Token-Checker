@@ -387,7 +387,7 @@ async function focusOrOpenWcWallet(opts) {
   const win = await chrome.windows.create({
     url,
     type: "popup",
-    width: 380,
+    width: 400,
     height: 760,
     focused: focus,
   });
