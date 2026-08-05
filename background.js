@@ -10,8 +10,13 @@ let offscreenCreating = null;
 async function focusOrOpenWcWallet(opts) {
   const focus = !opts || opts.focus !== false;
   const openSettings = !opts || opts.settings !== false;
+  const restore = !!(opts && opts.restore);
   const base = chrome.runtime.getURL(WC_WALLET_PATH);
-  const url = openSettings ? base + "?wc=1" : base;
+  let url = base;
+  if (restore) url = base + "?restore=1";
+  else if (openSettings) url = base + "?wc=1";
+
+  const shouldNavigate = openSettings || restore;
 
   if (walletWindowId != null) {
     try {
@@ -19,7 +24,7 @@ async function focusOrOpenWcWallet(opts) {
       try {
         const tabs = await chrome.tabs.query({ windowId: walletWindowId });
         const tab = tabs && tabs[0];
-        if (tab && tab.id != null && openSettings) {
+        if (tab && tab.id != null && shouldNavigate) {
           await chrome.tabs.update(tab.id, { url });
         }
       } catch (_) {}
@@ -36,7 +41,7 @@ async function focusOrOpenWcWallet(opts) {
     if (tabs && tabs[0] && tabs[0].windowId != null) {
       walletWindowId = tabs[0].windowId;
       if (focus) await chrome.windows.update(walletWindowId, { focused: true });
-      if (tabs[0].id != null && openSettings) {
+      if (tabs[0].id != null && shouldNavigate) {
         try {
           await chrome.tabs.update(tabs[0].id, { url });
         } catch (_) {}
@@ -184,7 +189,7 @@ async function trustOrigin(origin) {
   await storageSet({ [TRUSTED_KEY]: list.slice(-100) });
 }
 
-async function getActivePublicKey() {
+async function getActiveSolanaAccount() {
   const bag = await storageGet([STORE_KEY]);
   const state = bag[STORE_KEY];
   if (!state || !state.accounts || !state.accounts.length) {
@@ -194,8 +199,38 @@ async function getActivePublicKey() {
     state.accounts.find((a) => a.id === state.activeAccountId) || state.accounts[0];
   const pk = acc && acc.solana && acc.solana.publicKey;
   if (!pk) throw new Error("No Solana address on active wallet");
-  // Connect only needs the public address. Signing still requires secretKey.
-  return pk;
+  const secretKey = acc && acc.solana && acc.solana.secretKey;
+  const mnemonic = acc && acc.mnemonic;
+  const needsMigrate = !!(state.vault && state.vault.data && !secretKey);
+  return {
+    publicKey: pk,
+    secretKey: secretKey || "",
+    mnemonic: mnemonic || "",
+    needsMigrate,
+    // Offscreen signing needs the raw Solana secretKey (mnemonic alone is not enough here).
+    hasSigner: !!secretKey,
+  };
+}
+
+async function requireSignerReady() {
+  const acc = await getActiveSolanaAccount();
+  if (acc.hasSigner) return acc;
+  try {
+    await focusOrOpenWcWallet({ focus: true, settings: false, restore: true });
+  } catch (_) {}
+  if (acc.needsMigrate) {
+    throw new Error(
+      "Keys still locked — open Gladiator and enter your old password once to restore signing"
+    );
+  }
+  throw new Error(
+    "No Solana key — open Gladiator and create/import a wallet (seed phrase or secret key)"
+  );
+}
+
+async function getActivePublicKey() {
+  const acc = await requireSignerReady();
+  return acc.publicKey;
 }
 
 async function handleProviderRequest(msg, sender) {
@@ -213,10 +248,6 @@ async function handleProviderRequest(msg, sender) {
     try {
       publicKey = await getActivePublicKey();
     } catch (err) {
-      // Wake the wallet UI so the user can create/import / unlock keys.
-      try {
-        await focusOrOpenWcWallet({ focus: true, settings: false });
-      } catch (_) {}
       throw err;
     }
     if (origin) await trustOrigin(origin);
@@ -229,17 +260,15 @@ async function handleProviderRequest(msg, sender) {
     return { ok: true };
   }
 
-  if (method === "signTransaction") {
-    return await callOffscreen("signTransaction", params);
-  }
-  if (method === "signAllTransactions") {
-    return await callOffscreen("signAllTransactions", params);
-  }
-  if (method === "signAndSendTransaction") {
-    return await callOffscreen("signAndSendTransaction", params);
-  }
-  if (method === "signMessage") {
-    return await callOffscreen("signMessage", params);
+  if (
+    method === "signTransaction" ||
+    method === "signAllTransactions" ||
+    method === "signAndSendTransaction" ||
+    method === "signMessage"
+  ) {
+    // Ensure keys exist (and open restore UI if not) before offscreen signing.
+    await requireSignerReady();
+    return await callOffscreen(method, params);
   }
 
   throw new Error("Unsupported provider method: " + method);

@@ -4,20 +4,15 @@ Gladiator Wallet — load as unpacked Chrome/Opera extension
 2. Load unpacked → select THIS folder (Gladiator-Wallet-Extension)
 3. Reload the extension after updates (manifest version must change)
 
-v0.5.50:
-- Fix Jupiter “wallet signing failed” on swap
-- Offscreen signer now matches WalletConnect signing (versioned txs +
-  partial serialize without requireAllSignatures)
-- Clearer sign error messages; offscreen boot retry
+v0.5.51:
+- Fix “No Solana key” on Jupiter swaps
+- If signing keys are missing/locked, Gladiator opens a restore prompt
+- Re-derives Solana secret from seed phrase when present
 
-v0.5.49:
-- Real Gladiator PNG logo + connect click fix
-
-If jup.ag ever blanks again:
-- chrome.storage.local set gladiator_page_inject = false
-
-WalletConnect still works as fallback:
-- Settings → Project ID + wc: URI → Connect
-- Keep the Gladiator wallet window open while swapping
+IMPORTANT if swaps fail with “No Solana key”:
+1. Open the Gladiator wallet window
+2. If asked for your old password — enter it once (restores keys)
+3. Or Settings → import your seed phrase / Solana secret key
+4. Retry the Jupiter swap
 
 Version: see manifest.json

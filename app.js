@@ -834,6 +834,7 @@ async function repairAllExtraKeys(state) {
   if (!state || !Array.isArray(state.accounts)) return false;
   let repaired = false;
   for (const a of state.accounts) {
+    if (await ensureAccountSolanaFromMnemonic(a)) repaired = true;
     if (await ensureAccountExtraKeys(a)) repaired = true;
   }
   return repaired;
@@ -870,6 +871,34 @@ function repairAccountSolanaKeys(account) {
     console.warn("[repair-sol]", err);
   }
   return false;
+}
+
+/** If seed phrase exists but Solana secretKey was stripped, re-derive it. */
+async function ensureAccountSolanaFromMnemonic(account) {
+  if (!account) return false;
+  if (account.solana && account.solana.secretKey) return false;
+  const mnemonic = String(account.mnemonic || "").trim();
+  if (!mnemonic) return false;
+  if (!window.ethers || !window.SolanaHD) {
+    console.warn("[ensure-sol-mnemonic] ethers/SolanaHD missing");
+    return false;
+  }
+  try {
+    const phrase = normalizeMnemonic(mnemonic);
+    const m = ethers.Mnemonic.fromPhrase(phrase);
+    const seed = ethers.getBytes(m.computeSeed());
+    const solKp = await SolanaHD.deriveSolanaKeypair(seed, 0);
+    if (!solKp || !solKp.secretKey) throw new Error("derive returned empty");
+    account.solana = {
+      ...(account.solana || {}),
+      publicKey: Base58.encode(solKp.publicKey),
+      secretKey: Base58.encode(solKp.secretKey),
+    };
+    return true;
+  } catch (err) {
+    console.warn("[ensure-sol-mnemonic]", err);
+    return false;
+  }
 }
 
 async function copyText(text) {
@@ -4897,6 +4926,24 @@ async function boot() {
   if (isVaultLocked()) {
     openVaultModal("migrate");
   }
+  try {
+    const q = new URLSearchParams((location && location.search) || "");
+    if (q.get("restore") === "1") {
+      if (isVaultLocked()) {
+        openVaultModal("migrate");
+        showToast("Enter your old password to restore signing keys");
+      } else {
+        const acc = activeAccount(STATE);
+        if (!(acc && acc.solana && acc.solana.secretKey)) {
+          go("settings");
+          showToast("Import your seed phrase or Solana secret key to enable swaps");
+        } else {
+          showToast("Signing keys ready — retry the Jupiter swap");
+        }
+      }
+    }
+  } catch (_) {}
+
   const bootAcc = activeAccount(STATE);
   if (bootAcc && bootAcc.mnemonic && window.MultiHD) {
     const missing = [];
