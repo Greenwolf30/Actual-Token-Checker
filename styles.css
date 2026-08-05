@@ -1122,19 +1122,19 @@ body.is-extension .acct-drawer {
 }
 
 .btn-send {
-  color: #1c140c;
-  background: linear-gradient(180deg, #d4923e 0%, #c06e12 48%, #a35408 100%);
-  border: 1px solid rgba(200, 150, 80, 0.32);
+  color: #241910;
+  background: linear-gradient(180deg, #b88842 0%, #9a6418 48%, #7f4a0e 100%);
+  border: 1px solid rgba(180, 140, 80, 0.28);
   box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.16) inset,
-    0 8px 22px rgba(160, 90, 20, 0.22);
+    0 1px 0 rgba(255, 255, 255, 0.1) inset,
+    0 6px 16px rgba(120, 70, 20, 0.16);
 }
 
 .btn-send:hover {
-  filter: brightness(1.04);
+  filter: brightness(1.05);
   box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.2) inset,
-    0 12px 28px rgba(160, 90, 20, 0.28);
+    0 1px 0 rgba(255, 255, 255, 0.14) inset,
+    0 8px 20px rgba(120, 70, 20, 0.2);
 }
 
 .btn-send:active {
@@ -1142,24 +1142,24 @@ body.is-extension .acct-drawer {
 }
 
 .btn-send:focus-visible {
-  outline: 2px solid #c07a28;
+  outline: 2px solid #a87a3a;
   outline-offset: 2px;
 }
 
 .btn-receive {
-  color: #081a10;
-  background: linear-gradient(180deg, #3fbf78 0%, #1a9a55 48%, #117a42 100%);
-  border: 1px solid rgba(100, 180, 130, 0.3);
+  color: #0c1a12;
+  background: linear-gradient(180deg, #3aa86c 0%, #1a8550 48%, #126a3d 100%);
+  border: 1px solid rgba(90, 160, 120, 0.26);
   box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.14) inset,
-    0 8px 22px rgba(20, 120, 70, 0.2);
+    0 1px 0 rgba(255, 255, 255, 0.1) inset,
+    0 6px 16px rgba(20, 100, 60, 0.14);
 }
 
 .btn-receive:hover {
-  filter: brightness(1.04);
+  filter: brightness(1.05);
   box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.18) inset,
-    0 12px 28px rgba(20, 120, 70, 0.26);
+    0 1px 0 rgba(255, 255, 255, 0.14) inset,
+    0 8px 20px rgba(20, 100, 60, 0.18);
 }
 
 .btn-receive:active {
