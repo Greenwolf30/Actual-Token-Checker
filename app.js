@@ -7334,6 +7334,10 @@ async function selectChain(chainId) {
   }
   paintImportFields();
   await refreshAll();
+  // Manage tokens list is wallet + chain scoped — refresh if Settings is open.
+  if ($("panel-settings") && !$("panel-settings").hidden) {
+    paintManageTokens();
+  }
 }
 
 
@@ -8187,40 +8191,55 @@ function paintManageTokens() {
   const empty = $("manageTokenEmpty");
   if (!list) return;
   list.innerHTML = "";
+  const chain = activeChain(STATE);
+  const acc = activeAccount(STATE);
+  const chainId = (chain && chain.id) || (STATE && STATE.activeChainId) || "";
   const catalog = (STATE && STATE.tokenCatalog) || {};
-  // Prefer live holdings for active chain amounts, plus catalog for all chains.
+
+  // Current wallet + current chain only (live HOLDINGS from last Sync).
   const liveByKey = {};
   (HOLDINGS || []).forEach((h) => {
-    if (!h || !h.mint) return;
-    liveByKey[tokenVisibilityKey(h.chainId || STATE.activeChainId, h.mint)] = h;
+    if (!h || !h.mint || h.kind === "native") return;
+    const cid = h.chainId || chainId;
+    if (cid !== chainId) return;
+    liveByKey[tokenVisibilityKey(cid, h.mint)] = h;
   });
-  const rows = Object.keys(catalog)
+
+  // Live HOLDINGS are already scoped to the active wallet + last Sync chain.
+  // Hidden tokens remain in HOLDINGS (only filtered on Home), so they still appear here.
+  const rows = Object.keys(liveByKey)
     .map((key) => {
-      const c = catalog[key] || {};
       const live = liveByKey[key];
+      const c = catalog[key] || {};
       return {
         key,
-        chainId: c.chainId || (live && live.chainId) || "",
-        mint: c.mint || (live && live.mint) || "",
-        symbol: (live && live.symbol) || c.symbol || "TOKEN",
-        name: (live && live.name) || c.name || "Token",
-        kind: (live && live.kind) || c.kind || "token",
-        logo: (live && live.logo) || c.logo || null,
-        amount: live ? Number(live.amount) || 0 : null,
+        chainId,
+        mint: live.mint,
+        symbol: live.symbol || c.symbol || "TOKEN",
+        name: live.name || c.name || "Token",
+        kind: live.kind || c.kind || "token",
+        logo: live.logo || c.logo || null,
+        amount: Number(live.amount) || 0,
       };
     })
     .filter((r) => r.mint)
-    .sort((a, b) => {
-      const ca = String(a.chainId).localeCompare(String(b.chainId));
-      if (ca) return ca;
-      return String(a.symbol).localeCompare(String(b.symbol));
-    });
+    .sort((a, b) => String(a.symbol).localeCompare(String(b.symbol)));
 
-  if (empty) empty.hidden = rows.length > 0;
+  if (empty) {
+    empty.hidden = rows.length > 0;
+    const walletName = (acc && acc.name) || "wallet";
+    const chainName = (chain && chain.name) || "chain";
+    empty.textContent = rows.length
+      ? ""
+      : "No tokens for " +
+        walletName +
+        " on " +
+        chainName +
+        " yet — open Home and Sync, then come back.";
+  }
   if (!rows.length) return;
 
   rows.forEach((t) => {
-    const chain = CHAINS.find((c) => c.id === t.chainId);
     const shown = !isTokenHidden(t.chainId, t.mint);
     const li = document.createElement("li");
     li.className = "settings-token" + (shown ? "" : " is-hidden-token");

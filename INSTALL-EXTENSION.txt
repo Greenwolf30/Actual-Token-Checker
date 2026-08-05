@@ -7,6 +7,9 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.10:
+- Manage tokens: only active wallet + currently selected chain
+
 v0.6.9:
 - Token detail: show mint / contract address (tap to copy)
 

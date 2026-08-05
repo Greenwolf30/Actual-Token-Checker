@@ -12,7 +12,7 @@
       href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=0.6.9" />
+    <link rel="stylesheet" href="./styles.css?v=0.6.10" />
   </head>
   <body class="is-extension">
     <div class="atmosphere" aria-hidden="true">
@@ -512,12 +512,12 @@
           <div class="settings-block" id="manageTokensBlock">
             <h3 class="settings-block-title">Manage tokens</h3>
             <p class="photon-sub">
-              Toggle tokens on or off for the Home list. Everything stays shown until you hide it.
-              Sync a chain first so its tokens appear here.
+              Toggle tokens on or off for the Home list. Shows only the active wallet on the
+              currently selected chain — Sync that chain first so its tokens appear here.
             </p>
             <ul class="settings-tokens" id="manageTokenList"></ul>
             <p class="photon-sub" id="manageTokenEmpty" style="margin-top: 10px">
-              No tokens discovered yet — open Home and Sync on each chain.
+              No tokens for this wallet on the selected chain yet — open Home and Sync.
             </p>
           </div>
 
@@ -721,6 +721,6 @@
     <script src="./lib/ledger-solana.bundle.js?v=0.6.6"></script>
     <script src="./lib/ledger-eth.bundle.js?v=0.6.7"></script>
     <script src="./config.js"></script>
-    <script src="./app.js?v=0.6.9"></script>
+    <script src="./app.js?v=0.6.10"></script>
   </body>
 </html>
