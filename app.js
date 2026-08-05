@@ -526,6 +526,112 @@ function importEvmFromPrivateKey(pk) {
   return { address: w.address, privateKey: w.privateKey };
 }
 
+function normalizeHexPrivateKey(pk) {
+  let h = String(pk || "").trim();
+  if (!h) throw new Error("Paste a private key");
+  if (h.startsWith("0x") || h.startsWith("0X")) h = h.slice(2);
+  if (!/^[0-9a-fA-F]+$/.test(h)) throw new Error("Private key must be hex");
+  if (h.length === 64) return "0x" + h.toLowerCase();
+  if (h.length === 128) return "0x" + h.slice(0, 64).toLowerCase(); // seed||pub → seed
+  throw new Error("Private key must be 32 bytes (64 hex chars)");
+}
+
+async function importBitcoinFromPrivateKey(pk) {
+  if (!window.MultiHD || !MultiHD.btcAddressFromPrivateKey) {
+    throw new Error("Bitcoin import lib missing");
+  }
+  const privateKey = normalizeHexPrivateKey(pk);
+  const address = await MultiHD.btcAddressFromPrivateKey(privateKey);
+  if (!isValidBtcAddress(address)) throw new Error("Could not derive Bitcoin address");
+  let publicKey = "";
+  try {
+    if (window.ethers) {
+      publicKey = new ethers.SigningKey(privateKey).compressedPublicKey || "";
+    }
+  } catch (_) {}
+  return { address, privateKey, publicKey };
+}
+
+function importSuiFromPrivateKey(pk) {
+  if (!window.nacl || !window.MultiHD || !MultiHD.suiAddressFromPubkey) {
+    throw new Error("Sui import lib missing");
+  }
+  let h = String(pk || "").trim();
+  if (!h) throw new Error("Paste a Sui private key");
+  if (h.startsWith("0x") || h.startsWith("0X")) h = h.slice(2);
+  if (!/^[0-9a-fA-F]+$/.test(h)) throw new Error("Sui private key must be hex");
+  const bytes = new Uint8Array(h.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16);
+  }
+  let kp;
+  if (bytes.length === 32) kp = nacl.sign.keyPair.fromSeed(bytes);
+  else if (bytes.length === 64) kp = nacl.sign.keyPair.fromSecretKey(bytes);
+  else throw new Error("Sui key must be 32-byte seed or 64-byte secret (hex)");
+  const toHex = (u8) =>
+    Array.from(u8)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  return {
+    address: MultiHD.suiAddressFromPubkey(kp.publicKey),
+    publicKey: toHex(kp.publicKey),
+    secretKey: toHex(kp.secretKey),
+  };
+}
+
+function emptyChainKeys() {
+  return {
+    solana: { publicKey: "", secretKey: "" },
+    evm: { address: "", privateKey: "" },
+    bitcoin: { address: "", privateKey: "", publicKey: "" },
+    sui: { address: "", publicKey: "", secretKey: "" },
+  };
+}
+
+/** Show only the private-key import field for the active chain. */
+function paintImportFields() {
+  const chain = activeChain(STATE);
+  const kind = (chain && chain.kind) || "solana";
+  const sol = $("importSolField");
+  const evm = $("importEvmField");
+  const btc = $("importBtcField");
+  const sui = $("importSuiField");
+  const note = $("importChainKeyNote");
+  const summary = $("importPanelSummary");
+  if (sol) sol.hidden = kind !== "solana";
+  if (evm) evm.hidden = kind !== "evm";
+  if (btc) btc.hidden = kind !== "bitcoin";
+  if (sui) sui.hidden = kind !== "sui";
+  // Clear hidden fields so a leftover key from another chain cannot be imported.
+  if (kind !== "solana" && $("importSolSecret")) $("importSolSecret").value = "";
+  if (kind !== "evm" && $("importEvmSecret")) $("importEvmSecret").value = "";
+  if (kind !== "bitcoin" && $("importBtcSecret")) $("importBtcSecret").value = "";
+  if (kind !== "sui" && $("importSuiSecret")) $("importSuiSecret").value = "";
+  const keyName =
+    kind === "solana"
+      ? "Solana secret"
+      : kind === "evm"
+        ? "EVM private key"
+        : kind === "bitcoin"
+          ? "Bitcoin private key"
+          : kind === "sui"
+            ? "Sui private key"
+            : "private key";
+  if (summary) {
+    summary.textContent =
+      "Import seed / " + ((chain && chain.name) || "chain") + " key";
+  }
+  if (note) {
+    note.hidden = false;
+    note.textContent =
+      "Private-key import is for " +
+      ((chain && chain.name) || "this chain") +
+      " only (" +
+      keyName +
+      "). Seed phrase still restores all chains.";
+  }
+}
+
 /** Normalize / validate BIP39 phrase. Supports 12 or 24 words (generate uses 24). */
 function normalizeMnemonic(phrase) {
   if (!window.ethers) throw new Error("ethers missing");
@@ -5833,6 +5939,7 @@ function paintSwitchers() {
   paintChainPicker();
   paintActiveChainAddress();
   paintBrandAccount();
+  paintImportFields();
   if ($("acctDrawerRoot") && !$("acctDrawerRoot").hidden) {
     renderAcctDrawerList();
   }
@@ -6024,6 +6131,7 @@ async function selectChain(chainId) {
   if (backup && !backup.hidden) {
     paintBackupChainKey(activeAccount(STATE));
   }
+  paintImportFields();
   await refreshAll();
 }
 
@@ -6373,11 +6481,23 @@ async function addAccount() {
 
 async function importAccountFromSecrets() {
   const status = $("accountStatus");
+  const chain = activeChain(STATE);
+  const kind = (chain && chain.kind) || "solana";
   const mnemonicIn = ($("importMnemonic")?.value || "").trim();
-  const solSecret = ($("importSolSecret")?.value || "").trim();
-  const evmPk = ($("importEvmSecret")?.value || "").trim();
-  if (!mnemonicIn && !solSecret && !evmPk) {
-    if (status) status.textContent = "Paste a 24-word seed phrase or a private key.";
+  const solSecret =
+    kind === "solana" ? ($("importSolSecret")?.value || "").trim() : "";
+  const evmPk = kind === "evm" ? ($("importEvmSecret")?.value || "").trim() : "";
+  const btcPk =
+    kind === "bitcoin" ? ($("importBtcSecret")?.value || "").trim() : "";
+  const suiPk = kind === "sui" ? ($("importSuiSecret")?.value || "").trim() : "";
+  const chainKey = solSecret || evmPk || btcPk || suiPk;
+  if (!mnemonicIn && !chainKey) {
+    if (status) {
+      status.textContent =
+        "Paste a seed phrase or the " +
+        ((chain && chain.name) || "chain") +
+        " private key.";
+    }
     return;
   }
   try {
@@ -6396,31 +6516,55 @@ async function importAccountFromSecrets() {
         sui: keys.sui,
       };
     } else {
-      const sol = solSecret ? importSolanaFromSecret(solSecret) : createSolanaKeys();
-      const evm = evmPk ? importEvmFromPrivateKey(evmPk) : createEvmKeys();
+      const empty = emptyChainKeys();
+      if (kind === "solana") {
+        empty.solana = importSolanaFromSecret(solSecret);
+      } else if (kind === "evm") {
+        empty.evm = importEvmFromPrivateKey(evmPk);
+      } else if (kind === "bitcoin") {
+        empty.bitcoin = await importBitcoinFromPrivateKey(btcPk);
+      } else if (kind === "sui") {
+        empty.sui = importSuiFromPrivateKey(suiPk);
+      } else {
+        throw new Error("Unsupported chain for key import");
+      }
       acc = {
         id: uid(),
         name: "Imported " + (STATE.accounts.length + 1),
         type: "software",
         createdAt: new Date().toISOString(),
         mnemonic: "",
-        solana: sol,
-        evm: evm,
+        solana: empty.solana,
+        evm: empty.evm,
+        bitcoin: empty.bitcoin,
+        sui: empty.sui,
       };
     }
     STATE.accounts.push(acc);
     STATE.activeAccountId = acc.id;
-    STATE.activeChainId = "solana";
+    // Stay on the chain the user imported for (seed still ok on any chain).
+    if (chain && chain.id) STATE.activeChainId = chain.id;
     await storageSet(STATE);
     if ($("importMnemonic")) $("importMnemonic").value = "";
     if ($("importSolSecret")) $("importSolSecret").value = "";
     if ($("importEvmSecret")) $("importEvmSecret").value = "";
+    if ($("importBtcSecret")) $("importBtcSecret").value = "";
+    if ($("importSuiSecret")) $("importSuiSecret").value = "";
     await refreshAll();
+    const addr = chainKeyAddress(acc, activeChain(STATE));
     if (status) {
-      status.textContent =
-        "Imported. Solana: " + shortAddr(acc.solana.publicKey) + " — kept in localStorage.";
+      status.textContent = mnemonicIn
+        ? "Seed imported — all chain addresses derived."
+        : "Imported " +
+          ((chain && chain.name) || "wallet") +
+          (addr ? ": " + shortAddr(addr) : "") +
+          " — kept in localStorage.";
     }
-    showToast(mnemonicIn ? "Seed phrase imported" : "Wallet imported");
+    showToast(
+      mnemonicIn
+        ? "Seed phrase imported"
+        : ((chain && chain.name) || "Wallet") + " key imported"
+    );
     go("activity");
   } catch (err) {
     console.error("[import]", err);

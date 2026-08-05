@@ -12,7 +12,7 @@
       href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=0.5.84" />
+    <link rel="stylesheet" href="./styles.css?v=0.5.85" />
   </head>
   <body class="is-local">
     <div class="atmosphere" aria-hidden="true">
@@ -314,7 +314,7 @@
           </details>
 
           <details class="photon-details" open>
-            <summary>Import seed phrase / key</summary>
+            <summary id="importPanelSummary">Import seed phrase / key</summary>
             <div class="photon-details-body">
               <label class="field">
                 <span>Seed phrase (12 or 24 words)</span>
@@ -327,7 +327,7 @@
                   autocomplete="off"
                 ></textarea>
               </label>
-              <label class="field">
+              <label class="field" id="importSolField" hidden>
                 <span>Or Solana secret (base58)</span>
                 <input
                   id="importSolSecret"
@@ -337,8 +337,8 @@
                   autocomplete="off"
                 />
               </label>
-              <label class="field">
-                <span>EVM private key (optional)</span>
+              <label class="field" id="importEvmField" hidden>
+                <span>Or EVM private key</span>
                 <input
                   id="importEvmSecret"
                   type="password"
@@ -347,6 +347,27 @@
                   autocomplete="off"
                 />
               </label>
+              <label class="field" id="importBtcField" hidden>
+                <span>Or Bitcoin private key</span>
+                <input
+                  id="importBtcSecret"
+                  type="password"
+                  spellcheck="false"
+                  placeholder="0x… hex private key"
+                  autocomplete="off"
+                />
+              </label>
+              <label class="field" id="importSuiField" hidden>
+                <span>Or Sui private key</span>
+                <input
+                  id="importSuiSecret"
+                  type="password"
+                  spellcheck="false"
+                  placeholder="0x… hex private key"
+                  autocomplete="off"
+                />
+              </label>
+              <p class="photon-sub" id="importChainKeyNote" hidden></p>
               <button type="button" class="photon-gen photon-gen-block" id="importAccountBtn">
                 Import Wallet
               </button>
@@ -580,13 +601,13 @@
     <script src="./lib/ethers.umd.min.js"></script>
     <script src="./lib/solana-hd.js"></script>
     <script src="./lib/multi-hd.js"></script>
-    <script src="./lib/btc-send.bundle.js?v=0.5.84"></script>
+    <script src="./lib/btc-send.bundle.js?v=0.5.85"></script>
     <script src="./lib/buffer.min.js"></script>
-    <script src="./lib/solana-tx.bundle.js?v=0.5.84"></script>
+    <script src="./lib/solana-tx.bundle.js?v=0.5.85"></script>
     <script src="./lib/qrcode.min.js"></script>
-    <script src="./lib/walletconnect.bundle.js?v=0.5.84"></script>
-    <script src="./lib/ledger-solana.bundle.js?v=0.5.84"></script>
+    <script src="./lib/walletconnect.bundle.js?v=0.5.85"></script>
+    <script src="./lib/ledger-solana.bundle.js?v=0.5.85"></script>
     <script src="./config.js"></script>
-    <script src="./app.js?v=0.5.84"></script>
+    <script src="./app.js?v=0.5.85"></script>
   </body>
 </html>
