@@ -958,13 +958,13 @@ body.is-extension .acct-drawer {
   letter-spacing: 0.01em;
   line-height: 1;
   font-variant-numeric: tabular-nums;
-  color: #f4d35e;
+  color: #b8a66a;
 }
 
 .balance-value .currency {
   font-size: 0.55em;
   margin-right: 2px;
-  color: #ffe27a;
+  color: #c4b278;
 }
 
 .balance-sol {
