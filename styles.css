@@ -1342,6 +1342,15 @@ body.is-extension .acct-drawer {
   border-top: 0;
 }
 
+/* Compact holdings so many tokens fit under SOL without endless scroll. */
+.token-list {
+  gap: 3px;
+  max-height: min(48vh, 380px);
+  overflow-y: auto;
+  padding-right: 2px;
+  scrollbar-width: thin;
+}
+
 .token-list > li,
 .activity-list > li {
   margin: 0;
@@ -1374,6 +1383,15 @@ body.is-extension .acct-drawer {
     border-color 0.16s ease,
     transform 0.16s var(--ease),
     box-shadow 0.16s ease;
+}
+
+.token-list .token-row {
+  grid-template-columns: 28px 1fr auto;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset;
+  animation-duration: 0.28s;
 }
 
 @keyframes rowIn {
@@ -1445,6 +1463,11 @@ body.is-extension .acct-drawer {
   place-items: center;
 }
 
+.token-list .token-logo {
+  width: 28px;
+  height: 28px;
+}
+
 .token-logo-img {
   width: 44px;
   height: 44px;
@@ -1457,6 +1480,17 @@ body.is-extension .acct-drawer {
   overflow: hidden;
 }
 
+.token-list .token-logo-img,
+.token-list .token-icon {
+  width: 28px;
+  height: 28px;
+  box-shadow: none;
+}
+
+.token-list .token-icon {
+  font-size: 0.58rem;
+}
+
 .token-meta strong,
 .activity-meta strong {
   display: block;
@@ -1464,6 +1498,18 @@ body.is-extension .acct-drawer {
   font-weight: 700;
   letter-spacing: -0.01em;
   color: var(--ink);
+}
+
+.token-list .token-meta {
+  min-width: 0;
+}
+
+.token-list .token-meta strong {
+  font-size: 0.8rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
 }
 
 .token-meta span,
@@ -1489,6 +1535,11 @@ body.is-extension .acct-drawer {
   color: var(--ink);
 }
 
+.token-list .token-vals strong {
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
 .token-vals span,
 .activity-vals span {
   display: block;
@@ -1496,6 +1547,16 @@ body.is-extension .acct-drawer {
   font-size: 0.74rem;
   color: var(--muted);
   font-family: var(--font-mono);
+}
+
+.token-list .token-vals span {
+  margin-top: 1px;
+  font-size: 0.66rem;
+}
+
+.holdings {
+  margin-top: 18px;
+  padding: 10px 10px 8px;
 }
 
 /* Forms / secondary panels */

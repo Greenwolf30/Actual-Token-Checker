@@ -7,8 +7,9 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
-v0.5.91:
-- Approve prompts show as Gladiator overlay ON the dApp page (no side window)
-- Connect until disconnect; Approve every transaction
+v0.5.92:
+- Holdings list shows token name, amount, and USD only (no wallet/mint addresses)
+- Denser holdings rows so multiple tokens fit under Solana
+
 
 Version: see manifest.json

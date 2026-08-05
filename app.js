@@ -384,6 +384,33 @@ function shortAddr(a) {
   return a.slice(0, 4) + "…" + a.slice(-4);
 }
 
+/** True when a string looks like a truncated or full chain address (not a ticker). */
+function looksLikeAddressLabel(s) {
+  const t = String(s || "").trim();
+  if (!t) return true;
+  if (t.includes("…") || t.includes("...")) return true;
+  if (/^0x[a-fA-F0-9]{6,}$/.test(t)) return true;
+  // Base58-ish Solana / Sui style blobs (no spaces, mostly alnum, long)
+  if (t.length >= 20 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(t)) return true;
+  return false;
+}
+
+function holdingDisplaySymbol(t) {
+  const sym = t && t.symbol != null ? String(t.symbol).trim() : "";
+  if (sym && !looksLikeAddressLabel(sym)) return sym;
+  if (t && t.kind === "native") return "TOKEN";
+  return "TOKEN";
+}
+
+function holdingDisplayName(t, chain) {
+  const name = t && t.name != null ? String(t.name).trim() : "";
+  if (name && !looksLikeAddressLabel(name)) return name;
+  const sym = holdingDisplaySymbol(t);
+  if (sym && sym !== "TOKEN") return sym;
+  if (t && t.kind === "native") return (chain && chain.name) || "Native";
+  return "Token";
+}
+
 function showToast(msg) {
   const el = $("toast");
   if (!el) return;
@@ -1639,7 +1666,7 @@ async function fetchSplHoldings(owner, rpcs) {
           mint,
           amount: amount || 0,
           decimals: Number(ta.decimals || 0),
-          symbol: meta.symbol || shortAddr(mint),
+          symbol: meta.symbol || "TOKEN",
           name: meta.name || "SPL Token",
           usd: mint === USDC_MINT ? amount || 0 : meta.usdPrice != null ? amount * Number(meta.usdPrice) : null,
           kind: "spl",
@@ -1685,7 +1712,7 @@ async function resolveMintMeta(mints) {
         if (!hit) {
           if (!MINT_META[mint]) {
             MINT_META[mint] = {
-              symbol: shortAddr(mint),
+              symbol: "TOKEN",
               name: "Unknown token",
               partial: true,
             };
@@ -1693,7 +1720,7 @@ async function resolveMintMeta(mints) {
           return;
         }
         MINT_META[mint] = {
-          symbol: hit.symbol || hit.ticker || shortAddr(mint),
+          symbol: hit.symbol || hit.ticker || "TOKEN",
           name: hit.name || "SPL Token",
           icon: hit.icon || hit.logoURI || hit.logo || "",
           usdPrice:
@@ -2566,24 +2593,9 @@ function paintHoldings() {
 
   rows.forEach((t) => {
     const li = document.createElement("li");
-    // Always show THIS wallet's address (not the token mint — mint looks like another wallet).
-    const chainAddr = chainKeyAddress(acc, chain) || addr;
-    const sub =
-      t.kind === "spl" || t.kind === "erc20" || t.kind === "sui_coin"
-        ? (t.name && t.name !== t.symbol
-            ? t.name
-            : t.kind === "erc20"
-              ? "ERC-20 token"
-              : t.kind === "sui_coin"
-                ? "Sui coin"
-                : "SPL token") +
-          " · " +
-          shortAddr(addr)
-        : chain.name + " · " + shortAddr(chainAddr);
-    const mintTitle =
-      (t.kind === "spl" || t.kind === "erc20" || t.kind === "sui_coin") && t.mint
-        ? ' title="Contract ' + t.mint + '"'
-        : "";
+    // Name + token amount + USD only — never wallet/mint addresses.
+    const displayName = holdingDisplayName(t, chain);
+    const symbol = holdingDisplaySymbol(t);
     const usdLabel =
       t.usd != null && !Number.isNaN(Number(t.usd))
         ? "$" +
@@ -2592,28 +2604,25 @@ function paintHoldings() {
             maximumFractionDigits: Number(t.usd) < 1 ? 4 : 2,
           })
         : "—";
-    const amtLabel =
-      (Number(t.amount) >= 1
+    const qty =
+      Number(t.amount) >= 1
         ? Number(t.amount).toLocaleString(undefined, { maximumFractionDigits: 4 })
-        : Number(t.amount).toFixed(6)) +
-      " " +
-      t.symbol;
+        : Number(t.amount).toFixed(6);
+    const amtLabel = qty + (symbol && symbol !== "TOKEN" ? " " + symbol : "");
     li.innerHTML =
       '<button type="button" class="token-row" data-mint="' +
       (t.mint || "native") +
-      '"' +
-      mintTitle +
-      ">" +
+      '" title="' +
+      escapeHtml(displayName) +
+      '">' +
       '<span class="token-logo">' +
       tokenLogoHtml(t) +
       "</span>" +
       '<span class="token-meta"><strong>' +
-      (t.symbol || "TOKEN") +
-      "</strong><span>" +
-      sub +
-      "</span></span>" +
+      escapeHtml(displayName) +
+      "</strong></span>" +
       '<span class="token-vals"><strong>' +
-      amtLabel +
+      escapeHtml(amtLabel) +
       "</strong><span>" +
       usdLabel +
       "</span></span></button>";
