@@ -1703,6 +1703,31 @@ function paintWcSettings() {
   setWcStatus(STATE && STATE.wcProjectId ? "Ready — paste a wc: URI" : "Add a Reown Project ID to start");
 }
 
+function showWcApproveBar(name) {
+  const bar = $("wcApproveBar");
+  const hint = $("wcApproveHint");
+  if (hint) {
+    hint.textContent =
+      (name || "dApp") + " is waiting — tap Approve to connect your Solana wallet.";
+  }
+  if (bar) {
+    bar.hidden = false;
+    bar.classList.add("is-open");
+    if (typeof bar.scrollIntoView === "function") {
+      bar.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }
+  setWcStatus("Waiting for Approve…");
+}
+
+function hideWcApproveBar() {
+  const bar = $("wcApproveBar");
+  if (bar) {
+    bar.hidden = true;
+    bar.classList.remove("is-open");
+  }
+}
+
 function openWcProposalModal(proposal) {
   WC_PENDING_PROPOSAL = proposal;
   const meta =
@@ -1722,6 +1747,8 @@ function openWcProposalModal(proposal) {
       (url ? " (" + url + ")" : "") +
       ". Uses your active Gladiator Solana address.";
   }
+  // Inline Approve is more reliable in the tiny extension popup.
+  showWcApproveBar(name);
   const modal = $("wcProposalModal");
   if (modal) modal.hidden = false;
 }
@@ -1729,6 +1756,7 @@ function openWcProposalModal(proposal) {
 function closeWcProposalModal() {
   const modal = $("wcProposalModal");
   if (modal) modal.hidden = true;
+  hideWcApproveBar();
   WC_PENDING_PROPOSAL = null;
 }
 
@@ -3662,6 +3690,12 @@ function wire() {
     wcApprovePending().catch((err) => console.error(err));
   });
   $("wcProposalReject")?.addEventListener("click", () => {
+    wcRejectPending().catch((err) => console.warn(err));
+  });
+  $("wcApproveInline")?.addEventListener("click", () => {
+    wcApprovePending().catch((err) => console.error(err));
+  });
+  $("wcRejectInline")?.addEventListener("click", () => {
     wcRejectPending().catch((err) => console.warn(err));
   });
   $("wcProjectId")?.addEventListener("change", async () => {

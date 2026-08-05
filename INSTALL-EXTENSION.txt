@@ -1,18 +1,21 @@
 Gladiator Wallet — Chrome / Opera extension (v0.5.25)
 
+IMPORTANT — __pycache__ error:
+Opera/Chrome cannot load a folder that contains __pycache__.
+If you unzip over your old Desktop\Gladiator-Wallet (the one used with serve.py),
+that old __pycache__ folder stays and Load unpacked fails.
+
+Fix (pick one):
+A) Delete the whole Desktop\Gladiator-Wallet folder, then unzip this zip fresh.
+B) Or double-click DELETE-PYCACHE.bat inside Gladiator-Wallet, then Reload.
+
 Load:
-1. Unzip this package to a folder (no __pycache__).
-2. opera://extensions or chrome://extensions → Developer mode → Load unpacked.
-3. Remove any older Gladiator folder first, then load this one.
+1. Unzip → you should get a Gladiator-Wallet folder with manifest.json inside it.
+2. opera://extensions (or chrome://extensions) → Developer mode → Remove old Gladiator.
+3. Load unpacked → select that Gladiator-Wallet folder (the one that contains manifest.json).
 
 WalletConnect (pump.fun):
-1. Create a free Project ID at https://cloud.reown.com
-2. Open Gladiator → ⋮ → WalletConnect
-3. Paste Project ID, then paste a fresh wc: URI from pump.fun
-4. Keep the extension popup open while connecting / signing
-5. Approve the session prompt
-
-Notes:
-- wc: URIs expire quickly — if connect fails, copy a new QR/URI from pump.fun.
-- Extension Advanced · RPC is Solana/Helius only (Ethereum uses built-in public RPCs).
-- If balances are 0, import the seed from your funded wallet.
+1. Free Project ID: https://cloud.reown.com
+2. Gladiator → ⋮ → WalletConnect
+3. Paste Project ID + a fresh wc: URI from pump.fun
+4. Keep the popup open while connecting / signing

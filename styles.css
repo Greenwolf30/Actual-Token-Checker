@@ -1889,7 +1889,7 @@ body.is-extension .acct-drawer {
 .confirm-modal {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: 200;
   display: grid;
   place-items: center;
   padding: 20px;
@@ -2673,8 +2673,103 @@ body.is-local .dock {
   margin-top: 0;
 }
 
+/* Settings is outside .photon-wallets — don't rely on --ph-* vars here */
+#wcConnectBtn,
+.wc-btn-connect {
+  flex: 1 1 120px;
+  min-height: 42px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(20, 241, 149, 0.55);
+  background: #14f195;
+  color: #04140c !important;
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+#wcDisconnectBtn,
+.wc-btn-disconnect {
+  flex: 1 1 120px;
+  min-height: 42px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.08);
+  color: #f2eef8 !important;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.wc-approve-bar {
+  display: none;
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(20, 241, 149, 0.45);
+  background: rgba(20, 241, 149, 0.1);
+  gap: 8px;
+}
+
+.wc-approve-bar.is-open {
+  display: grid;
+}
+
+.wc-approve-bar p {
+  margin: 0 0 8px;
+  font-size: 0.84rem;
+  color: #f2eef8;
+  line-height: 1.35;
+}
+
+.wc-approve-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+#wcApproveInline,
+.wc-btn-approve {
+  min-height: 44px;
+  border-radius: 10px;
+  border: 1px solid rgba(20, 241, 149, 0.6);
+  background: #14f195;
+  color: #04140c !important;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+#wcRejectInline,
+.wc-btn-reject {
+  min-height: 44px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 120, 120, 0.45);
+  background: rgba(196, 59, 78, 0.35);
+  color: #fff !important;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
 #wcSettingsBlock .photon-sub a {
-  color: var(--accent, #7dd3fc);
+  color: #9fdfff;
+  text-decoration: underline;
+}
+
+#wcSettingsBlock #wcStatus {
+  color: #e8eefc;
+  font-weight: 600;
+}
+
+#wcProposalModal .confirm-yes {
+  background: #14f195;
+  border-color: rgba(20, 241, 149, 0.7);
+  color: #04140c !important;
+  font-weight: 700;
+}
+
+#wcProposalModal .confirm-no {
+  color: #fff !important;
+  font-weight: 700;
 }
 
 .settings-contacts,

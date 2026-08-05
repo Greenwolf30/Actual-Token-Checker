@@ -12,7 +12,7 @@
       href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=0.5.25" />
+    <link rel="stylesheet" href="./styles.css?v=0.5.26" />
   </head>
   <body class="is-extension">
     <div class="atmosphere" aria-hidden="true">
@@ -400,8 +400,15 @@
               ></textarea>
             </label>
             <div class="wc-actions">
-              <button type="button" class="photon-gen" id="wcConnectBtn">Connect</button>
-              <button type="button" class="photon-chip" id="wcDisconnectBtn">Disconnect</button>
+              <button type="button" class="wc-btn-connect" id="wcConnectBtn">Connect</button>
+              <button type="button" class="wc-btn-disconnect" id="wcDisconnectBtn">Disconnect</button>
+            </div>
+            <div class="wc-approve-bar" id="wcApproveBar" hidden>
+              <p id="wcApproveHint">pump.fun is waiting — tap Approve to connect your Solana wallet.</p>
+              <div class="wc-approve-actions">
+                <button type="button" class="wc-btn-reject" id="wcRejectInline">Reject</button>
+                <button type="button" class="wc-btn-approve" id="wcApproveInline">Approve</button>
+              </div>
             </div>
             <p class="form-status" id="wcStatus" role="status" aria-live="polite">Not connected</p>
           </div>
@@ -495,10 +502,10 @@
     <script src="./lib/solana-hd.js"></script>
     <script src="./lib/multi-hd.js"></script>
     <script src="./lib/buffer.min.js"></script>
-    <script src="./lib/solana-tx.bundle.js?v=0.5.25"></script>
+    <script src="./lib/solana-tx.bundle.js?v=0.5.26"></script>
     <script src="./lib/qrcode.min.js"></script>
-    <script src="./lib/walletconnect.bundle.js?v=0.5.25"></script>
+    <script src="./lib/walletconnect.bundle.js?v=0.5.26"></script>
     <script src="./config.js"></script>
-    <script src="./app.js?v=0.5.25"></script>
+    <script src="./app.js?v=0.5.26"></script>
   </body>
 </html>
