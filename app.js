@@ -1414,6 +1414,9 @@ function go(panel, opts) {
   if (panel === "settings") {
     paintSettings();
   }
+  if (panel === "token") {
+    paintTokenDetail();
+  }
 }
 
 function scrollSettingsTo(id) {
@@ -1464,6 +1467,10 @@ let PRICES = { solana: 0, ethereum: 0, "matic-network": 0 };
 let BALANCE = { native: 0, usd: 0, ok: false, error: "" };
 let HOLDINGS = []; // [{symbol, name, mint, amount, decimals, usd, kind}]
 let MINT_META = {}; // mint -> {symbol, name}
+/** Currently open token detail page */
+let TOKEN_DETAIL = null; // { holding, chainId, range }
+let TOKEN_DETAIL_SEQ = 0;
+const TOKEN_CHART_CACHE = new Map();
 /** accountId -> { sol:number|null, loading:boolean, error:string } */
 let ACCOUNT_SOL = {};
 let accountBalSeq = 0;
@@ -2627,18 +2634,7 @@ function paintHoldings() {
       usdLabel +
       "</span></span></button>";
     li.querySelector("button")?.addEventListener("click", () => {
-      const sel = $("sendAsset");
-      if (sel) {
-        const val = t.mint || "native";
-        if (![...sel.options].some((o) => o.value === val)) {
-          // ensure option exists after paint
-        } else {
-          sel.value = val;
-        }
-      }
-      go("send");
-      if (sel) sel.value = t.mint || "native";
-      updateSendUsdEstimate();
+      openTokenDetail(t);
     });
     list.appendChild(li);
   });
@@ -2682,6 +2678,665 @@ function paintHoldings() {
   }
   updateSendUsdEstimate();
   paintSendAvailable();
+}
+
+function formatUsdMoney(n, opts) {
+  if (n == null || Number.isNaN(Number(n))) return "—";
+  const v = Number(n);
+  const abs = Math.abs(v);
+  const digits =
+    opts && opts.digits != null
+      ? opts.digits
+      : abs >= 1000
+        ? 2
+        : abs >= 1
+          ? 2
+          : abs >= 0.01
+            ? 4
+            : 6;
+  return (
+    "$" +
+    v.toLocaleString(undefined, {
+      minimumFractionDigits: Math.min(2, digits),
+      maximumFractionDigits: digits,
+    })
+  );
+}
+
+function formatTokenUnitPrice(n) {
+  if (n == null || !(Number(n) >= 0) || Number.isNaN(Number(n))) return "—";
+  const v = Number(n);
+  if (v === 0) return "$0.00";
+  if (v >= 1000) return formatUsdMoney(v, { digits: 2 });
+  if (v >= 1) return "$" + v.toFixed(4).replace(/\.?0+$/, "");
+  if (v >= 0.01) return "$" + v.toFixed(6).replace(/\.?0+$/, "");
+  return "$" + Number(v.toPrecision(4)).toString();
+}
+
+function formatCompactUsd(n) {
+  if (n == null || Number.isNaN(Number(n))) return "—";
+  const v = Number(n);
+  const abs = Math.abs(v);
+  if (abs >= 1e12) return "$" + (v / 1e12).toFixed(2) + "T";
+  if (abs >= 1e9) return "$" + (v / 1e9).toFixed(2) + "B";
+  if (abs >= 1e6) return "$" + (v / 1e6).toFixed(2) + "M";
+  if (abs >= 1e3) return "$" + (v / 1e3).toFixed(2) + "K";
+  return formatUsdMoney(v, { digits: 2 });
+}
+
+function geckoNetworkForChain(chain) {
+  if (!chain) return "";
+  if (chain.kind === "solana") return "solana";
+  if (chain.id === "ethereum") return "eth";
+  if (chain.id === "polygon") return "polygon_pos";
+  if (chain.id === "base") return "base";
+  if (chain.id === "robinhood") return "robinhood";
+  if (chain.kind === "sui") return "sui-network";
+  return "";
+}
+
+function coingeckoPlatformForChain(chain) {
+  if (!chain) return "";
+  if (chain.kind === "solana") return "solana";
+  if (chain.id === "ethereum" || chain.id === "robinhood") return "ethereum";
+  if (chain.id === "polygon") return "polygon-pos";
+  if (chain.id === "base") return "base";
+  if (chain.kind === "sui") return "sui";
+  return "";
+}
+
+function openTokenDetail(holding) {
+  const chain = activeChain(STATE);
+  if (!holding) return;
+  TOKEN_DETAIL = {
+    holding: { ...holding },
+    chainId: chain.id,
+    range: (TOKEN_DETAIL && TOKEN_DETAIL.range) || "1D",
+  };
+  go("token");
+}
+
+function selectSendAssetForHolding(holding) {
+  const sel = $("sendAsset");
+  if (!sel || !holding) return;
+  const val = holding.mint || "native";
+  if (![...sel.options].some((o) => o.value === val)) {
+    const opt = document.createElement("option");
+    opt.value = val;
+    opt.textContent =
+      (holding.symbol || "TOKEN") +
+      " · " +
+      Number(holding.amount || 0).toFixed(4) +
+      " available";
+    sel.appendChild(opt);
+  }
+  sel.value = val;
+  updateSendUsdEstimate();
+  paintSendAvailable();
+}
+
+function tokenDetailUnitPrice(holding, chain) {
+  if (!holding) return null;
+  if (holding.mint === USDC_MINT || holding.symbol === "USDC") return 1;
+  if (Number(holding.amount) > 0 && holding.usd != null && Number(holding.usd) >= 0) {
+    return Number(holding.usd) / Number(holding.amount);
+  }
+  if (holding.kind === "native" && chain) {
+    const px = Number(PRICES[chain.priceId]);
+    return px > 0 ? px : null;
+  }
+  const meta = holding.mint && MINT_META[holding.mint];
+  if (meta && meta.usdPrice != null) return Number(meta.usdPrice);
+  return null;
+}
+
+function pctChange(points) {
+  if (!points || points.length < 2) return null;
+  const a = Number(points[0].price);
+  const b = Number(points[points.length - 1].price);
+  if (!(a > 0) || !(b >= 0)) return null;
+  return ((b - a) / a) * 100;
+}
+
+function chartRangeConfig(range) {
+  const r = String(range || "1D").toUpperCase();
+  if (r === "1H") {
+    return {
+      key: "1H",
+      cgDays: 1,
+      sliceMs: 60 * 60 * 1000,
+      gtTimeframe: "minute",
+      gtAggregate: 5,
+      gtLimit: 24,
+    };
+  }
+  if (r === "1W") {
+    return {
+      key: "1W",
+      cgDays: 7,
+      sliceMs: 0,
+      gtTimeframe: "hour",
+      gtAggregate: 4,
+      gtLimit: 42,
+    };
+  }
+  if (r === "1M") {
+    return {
+      key: "1M",
+      cgDays: 30,
+      sliceMs: 0,
+      gtTimeframe: "day",
+      gtAggregate: 1,
+      gtLimit: 30,
+    };
+  }
+  return {
+    key: "1D",
+    cgDays: 1,
+    sliceMs: 0,
+    gtTimeframe: "hour",
+    gtAggregate: 1,
+    gtLimit: 24,
+  };
+}
+
+async function fetchJsonOk(url) {
+  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  return res.json();
+}
+
+function normalizePricePoints(rows, sliceMs) {
+  const out = [];
+  for (const row of rows || []) {
+    let t = Number(row[0]);
+    const p = Number(row[1]);
+    if (!(p >= 0) || Number.isNaN(p)) continue;
+    if (t > 0 && t < 1e12) t *= 1000;
+    if (!(t > 0)) continue;
+    out.push({ t, price: p });
+  }
+  out.sort((a, b) => a.t - b.t);
+  if (sliceMs > 0 && out.length) {
+    const cutoff = out[out.length - 1].t - sliceMs;
+    return out.filter((p) => p.t >= cutoff);
+  }
+  return out;
+}
+
+async function fetchCoinGeckoMarketChart(priceId, days, sliceMs) {
+  if (!priceId) return [];
+  const url =
+    "https://api.coingecko.com/api/v3/coins/" +
+    encodeURIComponent(priceId) +
+    "/market_chart?vs_currency=usd&days=" +
+    encodeURIComponent(String(days));
+  const data = await fetchJsonOk(url);
+  return normalizePricePoints(data && data.prices, sliceMs);
+}
+
+async function fetchCoinGeckoContractChart(platform, address, days, sliceMs) {
+  if (!platform || !address) return [];
+  const url =
+    "https://api.coingecko.com/api/v3/coins/" +
+    encodeURIComponent(platform) +
+    "/contract/" +
+    encodeURIComponent(address) +
+    "/market_chart/?vs_currency=usd&days=" +
+    encodeURIComponent(String(days));
+  const data = await fetchJsonOk(url);
+  return normalizePricePoints(data && data.prices, sliceMs);
+}
+
+async function fetchGeckoTerminalChart(network, tokenAddress, cfg) {
+  if (!network || !tokenAddress) return { points: [], meta: null };
+  const poolsUrl =
+    "https://api.geckoterminal.com/api/v2/networks/" +
+    encodeURIComponent(network) +
+    "/tokens/" +
+    encodeURIComponent(tokenAddress) +
+    "/pools?page=1";
+  const poolsJson = await fetchJsonOk(poolsUrl);
+  const pools = Array.isArray(poolsJson && poolsJson.data) ? poolsJson.data : [];
+  if (!pools.length) return { points: [], meta: null };
+
+  const ranked = pools
+    .map((p) => {
+      const a = (p && p.attributes) || {};
+      const reserve = Number(a.reserve_in_usd || 0);
+      const vol =
+        (a.volume_usd && (Number(a.volume_usd.h24) || Number(a.volume_usd.h6))) || 0;
+      return { pool: p, score: reserve * 2 + vol };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  let meta = null;
+  try {
+    const tokJson = await fetchJsonOk(
+      "https://api.geckoterminal.com/api/v2/networks/" +
+        encodeURIComponent(network) +
+        "/tokens/" +
+        encodeURIComponent(tokenAddress)
+    );
+    meta = (tokJson && tokJson.data && tokJson.data.attributes) || null;
+  } catch (_) {}
+
+  const want = String(tokenAddress).toLowerCase();
+  for (const item of ranked.slice(0, 4)) {
+    const pool = item.pool;
+    const poolAddr = pool && pool.attributes && pool.attributes.address;
+    if (!poolAddr) continue;
+    let side = "base";
+    const baseId =
+      pool.relationships &&
+      pool.relationships.base_token &&
+      pool.relationships.base_token.data &&
+      pool.relationships.base_token.data.id;
+    const quoteId =
+      pool.relationships &&
+      pool.relationships.quote_token &&
+      pool.relationships.quote_token.data &&
+      pool.relationships.quote_token.data.id;
+    if (quoteId && String(quoteId).toLowerCase().endsWith("_" + want)) side = "quote";
+    if (baseId && String(baseId).toLowerCase().endsWith("_" + want)) side = "base";
+
+    try {
+      const ohlcvUrl =
+        "https://api.geckoterminal.com/api/v2/networks/" +
+        encodeURIComponent(network) +
+        "/pools/" +
+        encodeURIComponent(poolAddr) +
+        "/ohlcv/" +
+        encodeURIComponent(cfg.gtTimeframe) +
+        "?aggregate=" +
+        encodeURIComponent(String(cfg.gtAggregate)) +
+        "&limit=" +
+        encodeURIComponent(String(cfg.gtLimit)) +
+        "&currency=usd&token=" +
+        encodeURIComponent(side);
+      const ohlcv = await fetchJsonOk(ohlcvUrl);
+      const list =
+        (ohlcv &&
+          ohlcv.data &&
+          ohlcv.data.attributes &&
+          ohlcv.data.attributes.ohlcv_list) ||
+        [];
+      // list entries: [ts, open, high, low, close, volume]
+      const closes = list
+        .map((row) => [row[0], row[4]])
+        .filter((row) => row[1] != null);
+      const points = normalizePricePoints(closes, cfg.sliceMs);
+      if (points.length >= 2) return { points, meta };
+    } catch (_) {}
+  }
+  return { points: [], meta };
+}
+
+async function fetchDexScreenerMeta(mint) {
+  if (!mint) return null;
+  try {
+    const data = await fetchJsonOk(
+      "https://api.dexscreener.com/latest/dex/tokens/" + encodeURIComponent(mint)
+    );
+    const pairs = Array.isArray(data && data.pairs) ? data.pairs.slice() : [];
+    pairs.sort(
+      (a, b) =>
+        Number((b.liquidity && b.liquidity.usd) || 0) -
+        Number((a.liquidity && a.liquidity.usd) || 0)
+    );
+    return pairs[0] || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function loadTokenChartBundle(holding, chain, range) {
+  const cfg = chartRangeConfig(range);
+  const mint = holding && holding.mint ? String(holding.mint) : "";
+  const isNative = !mint || holding.kind === "native";
+  const cacheKey = [
+    chain && chain.id,
+    isNative ? "native" : mint,
+    cfg.key,
+  ].join(":");
+  const cached = TOKEN_CHART_CACHE.get(cacheKey);
+  if (cached && Date.now() - cached.at < 60 * 1000) return cached;
+
+  let points = [];
+  let meta = {
+    priceUsd: tokenDetailUnitPrice(holding, chain),
+    changePct: null,
+    volume24: null,
+    mcap: null,
+  };
+
+  try {
+    if (isNative || mint === WSOL_MINT) {
+      points = await fetchCoinGeckoMarketChart(
+        chain.priceId,
+        cfg.cgDays,
+        cfg.sliceMs
+      );
+      if (points.length) {
+        meta.priceUsd = points[points.length - 1].price;
+        meta.changePct = pctChange(points);
+      }
+      try {
+        const coin = await fetchJsonOk(
+          "https://api.coingecko.com/api/v3/coins/" +
+            encodeURIComponent(chain.priceId) +
+            "?localization=false&tickers=false&market_data=true&community_data=false&developer_data=false"
+        );
+        const md = coin && coin.market_data;
+        if (md) {
+          if (md.total_volume && md.total_volume.usd != null) {
+            meta.volume24 = Number(md.total_volume.usd);
+          }
+          if (md.market_cap && md.market_cap.usd != null) {
+            meta.mcap = Number(md.market_cap.usd);
+          }
+          if (md.current_price && md.current_price.usd != null) {
+            meta.priceUsd = Number(md.current_price.usd);
+          }
+        }
+      } catch (_) {}
+    } else if (mint === USDC_MINT || (holding.symbol || "").toUpperCase() === "USDC") {
+      try {
+        points = await fetchCoinGeckoMarketChart("usd-coin", cfg.cgDays, cfg.sliceMs);
+      } catch (_) {
+        points = [];
+      }
+      meta.priceUsd = 1;
+      meta.changePct = pctChange(points);
+    } else {
+      const platform = coingeckoPlatformForChain(chain);
+      try {
+        points = await fetchCoinGeckoContractChart(
+          platform,
+          mint,
+          cfg.cgDays,
+          cfg.sliceMs
+        );
+      } catch (_) {
+        points = [];
+      }
+      if (points.length < 2) {
+        const network = geckoNetworkForChain(chain);
+        try {
+          const gt = await fetchGeckoTerminalChart(network, mint, cfg);
+          if (gt.points && gt.points.length >= 2) points = gt.points;
+          if (gt.meta) {
+            if (gt.meta.price_usd != null) meta.priceUsd = Number(gt.meta.price_usd);
+            if (gt.meta.volume_usd && gt.meta.volume_usd.h24 != null) {
+              meta.volume24 = Number(gt.meta.volume_usd.h24);
+            }
+            if (gt.meta.market_cap_usd != null) meta.mcap = Number(gt.meta.market_cap_usd);
+            else if (gt.meta.fdv_usd != null) meta.mcap = Number(gt.meta.fdv_usd);
+          }
+        } catch (_) {}
+      }
+      if (points.length >= 2) {
+        meta.priceUsd = points[points.length - 1].price;
+        meta.changePct = pctChange(points);
+      }
+      if (meta.volume24 == null || meta.mcap == null || meta.priceUsd == null) {
+        const pair = await fetchDexScreenerMeta(mint);
+        if (pair) {
+          if (meta.priceUsd == null && pair.priceUsd != null) {
+            meta.priceUsd = Number(pair.priceUsd);
+          }
+          if (meta.changePct == null && pair.priceChange && pair.priceChange.h24 != null) {
+            meta.changePct = Number(pair.priceChange.h24);
+          }
+          if (meta.volume24 == null && pair.volume && pair.volume.h24 != null) {
+            meta.volume24 = Number(pair.volume.h24);
+          }
+          if (meta.mcap == null && pair.marketCap != null) meta.mcap = Number(pair.marketCap);
+          else if (meta.mcap == null && pair.fdv != null) meta.mcap = Number(pair.fdv);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("[token-chart]", err);
+  }
+
+  const bundle = { at: Date.now(), points, meta };
+  TOKEN_CHART_CACHE.set(cacheKey, bundle);
+  return bundle;
+}
+
+function drawTokenChart(canvas, points, up) {
+  if (!canvas) return false;
+  const empty = $("tokenChartEmpty");
+  const wrap = canvas.parentElement;
+  const cssW = Math.max(280, (wrap && wrap.clientWidth) || canvas.clientWidth || 320);
+  const cssH = Math.max(140, (wrap && wrap.clientHeight) || 160);
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.floor(cssW * dpr);
+  canvas.height = Math.floor(cssH * dpr);
+  canvas.style.width = cssW + "px";
+  canvas.style.height = cssH + "px";
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return false;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  if (!points || points.length < 2) {
+    if (empty) empty.hidden = false;
+    return false;
+  }
+  if (empty) empty.hidden = true;
+
+  const padX = 6;
+  const padY = 10;
+  const prices = points.map((p) => p.price);
+  let min = Math.min.apply(null, prices);
+  let max = Math.max.apply(null, prices);
+  if (!(max > min)) {
+    min *= 0.999;
+    max *= 1.001;
+    if (min === max) {
+      min -= 1;
+      max += 1;
+    }
+  }
+  const span = max - min || 1;
+  const xAt = (i) => padX + (i / (points.length - 1)) * (cssW - padX * 2);
+  const yAt = (price) => padY + (1 - (price - min) / span) * (cssH - padY * 2);
+
+  const stroke = up ? "rgba(110, 210, 150, 0.95)" : "rgba(230, 120, 120, 0.95)";
+  const fillTop = up ? "rgba(110, 210, 150, 0.28)" : "rgba(230, 120, 120, 0.22)";
+
+  ctx.beginPath();
+  points.forEach((p, i) => {
+    const x = xAt(i);
+    const y = yAt(p.price);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.lineTo(xAt(points.length - 1), cssH - padY);
+  ctx.lineTo(xAt(0), cssH - padY);
+  ctx.closePath();
+  const grad = ctx.createLinearGradient(0, padY, 0, cssH - padY);
+  grad.addColorStop(0, fillTop);
+  grad.addColorStop(1, "rgba(8, 11, 18, 0)");
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  ctx.beginPath();
+  points.forEach((p, i) => {
+    const x = xAt(i);
+    const y = yAt(p.price);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = 2;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.stroke();
+
+  // end dot
+  const last = points[points.length - 1];
+  ctx.beginPath();
+  ctx.arc(xAt(points.length - 1), yAt(last.price), 3.2, 0, Math.PI * 2);
+  ctx.fillStyle = stroke;
+  ctx.fill();
+  return true;
+}
+
+function paintTokenDetailSkeleton() {
+  if (!TOKEN_DETAIL || !TOKEN_DETAIL.holding) return;
+  const chain = activeChain(STATE);
+  const h = TOKEN_DETAIL.holding;
+  const name = holdingDisplayName(h, chain);
+  const symbol = holdingDisplaySymbol(h);
+  const logo = $("tokenDetailLogo");
+  const nameEl = $("tokenDetailName");
+  const symEl = $("tokenDetailSymbol");
+  const balEl = $("tokenDetailBalance");
+  const usdEl = $("tokenDetailUsd");
+  if (logo) logo.innerHTML = tokenLogoHtml(h);
+  if (nameEl) nameEl.textContent = name;
+  if (symEl) symEl.textContent = symbol + (chain ? " · " + chain.name : "");
+  const qty =
+    Number(h.amount) >= 1
+      ? Number(h.amount).toLocaleString(undefined, { maximumFractionDigits: 6 })
+      : Number(h.amount || 0).toFixed(6);
+  if (balEl) balEl.textContent = qty + (symbol && symbol !== "TOKEN" ? " " + symbol : "");
+  if (usdEl) {
+    usdEl.textContent =
+      h.usd != null && !Number.isNaN(Number(h.usd))
+        ? formatUsdMoney(h.usd, { digits: 2 })
+        : "—";
+  }
+  const priceEl = $("tokenDetailPrice");
+  const changeEl = $("tokenDetailChange");
+  const px = tokenDetailUnitPrice(h, chain);
+  if (priceEl) priceEl.textContent = formatTokenUnitPrice(px);
+  if (changeEl) {
+    changeEl.textContent = "Loading…";
+    changeEl.className = "token-detail-change";
+  }
+  const volEl = $("tokenDetailVol");
+  const mcapEl = $("tokenDetailMcap");
+  if (volEl) volEl.textContent = "—";
+  if (mcapEl) mcapEl.textContent = "—";
+  document.querySelectorAll("#tokenChartRanges .token-chart-range").forEach((btn) => {
+    btn.classList.toggle("is-active", btn.dataset.range === (TOKEN_DETAIL.range || "1D"));
+  });
+  const empty = $("tokenChartEmpty");
+  if (empty) {
+    empty.hidden = false;
+    empty.textContent = "Loading chart…";
+  }
+  const canvas = $("tokenChartCanvas");
+  if (canvas) {
+    const ctx = canvas.getContext("2d");
+    if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
+}
+
+async function paintTokenDetail() {
+  if (!TOKEN_DETAIL || !TOKEN_DETAIL.holding) return;
+  const chain = activeChain(STATE);
+  if (TOKEN_DETAIL.chainId && TOKEN_DETAIL.chainId !== chain.id) {
+    // Chain switched under the page — bounce home.
+    TOKEN_DETAIL = null;
+    go("home");
+    return;
+  }
+  paintTokenDetailSkeleton();
+  const seq = ++TOKEN_DETAIL_SEQ;
+  const holding = TOKEN_DETAIL.holding;
+  const range = TOKEN_DETAIL.range || "1D";
+  let bundle;
+  try {
+    bundle = await loadTokenChartBundle(holding, chain, range);
+  } catch (err) {
+    console.warn("[token-detail]", err);
+    bundle = { points: [], meta: {} };
+  }
+  if (seq !== TOKEN_DETAIL_SEQ) return;
+
+  const meta = (bundle && bundle.meta) || {};
+  const points = (bundle && bundle.points) || [];
+  const priceEl = $("tokenDetailPrice");
+  const changeEl = $("tokenDetailChange");
+  const volEl = $("tokenDetailVol");
+  const mcapEl = $("tokenDetailMcap");
+  const usdEl = $("tokenDetailUsd");
+  if (priceEl) priceEl.textContent = formatTokenUnitPrice(meta.priceUsd);
+  const ch = meta.changePct;
+  if (changeEl) {
+    if (ch == null || Number.isNaN(Number(ch))) {
+      changeEl.textContent = "—";
+      changeEl.className = "token-detail-change";
+    } else {
+      const n = Number(ch);
+      const sign = n > 0 ? "+" : "";
+      changeEl.textContent = sign + n.toFixed(2) + "% · " + range;
+      changeEl.className =
+        "token-detail-change " + (n > 0 ? "is-up" : n < 0 ? "is-down" : "");
+    }
+  }
+  if (volEl) volEl.textContent = formatCompactUsd(meta.volume24);
+  if (mcapEl) mcapEl.textContent = formatCompactUsd(meta.mcap);
+  if (
+    usdEl &&
+    (holding.usd == null || Number.isNaN(Number(holding.usd))) &&
+    meta.priceUsd != null &&
+    Number(holding.amount) >= 0
+  ) {
+    usdEl.textContent = formatUsdMoney(Number(holding.amount) * Number(meta.priceUsd), {
+      digits: 2,
+    });
+  }
+
+  const up = !(ch < 0);
+  const drawn = drawTokenChart($("tokenChartCanvas"), points, up);
+  const empty = $("tokenChartEmpty");
+  if (empty && !drawn) {
+    empty.hidden = false;
+    empty.textContent = "Chart unavailable";
+  }
+}
+
+function wireTokenDetailControls() {
+  $("tokenChartRanges")?.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-range]");
+    if (!btn || !TOKEN_DETAIL) return;
+    const range = btn.getAttribute("data-range") || "1D";
+    TOKEN_DETAIL.range = range;
+    document.querySelectorAll("#tokenChartRanges .token-chart-range").forEach((el) => {
+      el.classList.toggle("is-active", el === btn);
+    });
+    paintTokenDetail();
+  });
+  $("tokenDetailSendBtn")?.addEventListener("click", () => {
+    if (!TOKEN_DETAIL || !TOKEN_DETAIL.holding) return;
+    selectSendAssetForHolding(TOKEN_DETAIL.holding);
+    go("send");
+  });
+  $("tokenDetailReceiveBtn")?.addEventListener("click", () => {
+    go("receive");
+  });
+  window.addEventListener("resize", () => {
+    const panel = $("panel-token");
+    if (!panel || panel.hidden || !TOKEN_DETAIL) return;
+    const cacheKeyHint = TOKEN_DETAIL.range || "1D";
+    // Redraw last cached points without refetch.
+    const chain = activeChain(STATE);
+    const h = TOKEN_DETAIL.holding;
+    const mint = h && h.mint ? String(h.mint) : "";
+    const isNative = !mint || h.kind === "native";
+    const key = [chain && chain.id, isNative ? "native" : mint, cacheKeyHint].join(":");
+    const cached = TOKEN_CHART_CACHE.get(key);
+    if (cached && cached.points) {
+      const up = !(cached.meta && cached.meta.changePct < 0);
+      drawTokenChart($("tokenChartCanvas"), cached.points, up);
+    }
+  });
 }
 
 function sendAssetUnitPriceUsd() {
@@ -6247,6 +6902,12 @@ async function selectChain(chainId) {
   STATE.activeChainId = chainId;
   const sel = $("chainSelect");
   if (sel) sel.value = chainId;
+  // Token detail is chain-scoped — leave it when switching networks.
+  if (TOKEN_DETAIL) {
+    TOKEN_DETAIL = null;
+    const tokenPanel = $("panel-token");
+    if (tokenPanel && !tokenPanel.hidden) go("home", { skipScroll: true });
+  }
   // Drop prior chain/wallet history immediately so it cannot bleed across.
   const nextChain = CHAINS.find((c) => c.id === chainId);
   clearHistoryForSwitch(
@@ -7594,6 +8255,7 @@ function wire() {
       go(el.dataset.go);
     });
   });
+  wireTokenDetailControls();
   $("brandAccountsBtn")?.addEventListener("click", (e) => {
     e.preventDefault();
     const root = $("acctDrawerRoot");

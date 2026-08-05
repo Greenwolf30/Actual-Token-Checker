@@ -7,9 +7,8 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
-v0.5.92:
-- Holdings list shows token name, amount, and USD only (no wallet/mint addresses)
-- Denser holdings rows so multiple tokens fit under Solana
-
+v0.5.93:
+- Tap a holding to open a token page with price, stats, and chart
+- Send / Receive from the token page
 
 Version: see manifest.json
