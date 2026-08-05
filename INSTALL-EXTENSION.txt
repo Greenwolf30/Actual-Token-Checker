@@ -7,16 +7,17 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.5.77:
+- Send tokens/native on all chains:
+  · Solana: SOL + SPL
+  · Ethereum / Base / Polygon / Robinhood: ETH/POL + ERC-20
+  · Bitcoin: BTC
+  · Sui: SUI + coins
+- Sui token balances shown on Home
+
 v0.5.76:
-- Show ERC-20 tokens on Ethereum / Base / Polygon / Robinhood (via Blockscout)
-- Settings → Manage tokens: toggle tokens shown/hidden (default: all shown)
+- Show ERC-20 tokens + Settings → Manage tokens toggles
 
-v0.5.75:
-- Uniswap inject (EIP-6963 / window.ethereum)
-- History clears on wallet/chain switch
-
-Manage tokens:
-1. Sync Home on each chain so tokens are discovered
-2. Settings → Manage tokens → uncheck to hide, check to show
+Receive: use the Receive address for the selected chain (tokens go to that same address).
 
 Version: see manifest.json

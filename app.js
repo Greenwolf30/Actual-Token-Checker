@@ -1870,9 +1870,20 @@ async function refreshBalance() {
       if (!addr) throw new Error("No Sui address on this account — re-open wallet to derive keys.");
       native = await fetchSuiBalance(addr, chain.rpcs || [chain.rpc]);
       if (!stillCurrent()) return;
+      let suiCoins = [];
+      try {
+        suiCoins = await fetchSuiTokenHoldings(addr, chain.rpcs || [chain.rpc]);
+      } catch (err) {
+        console.warn("[sui-tokens]", err);
+        suiCoins = [];
+      }
+      if (!stillCurrent()) return;
       const px = PRICES[chain.priceId] || 0;
       nextBalance = { native, usd: native * px, ok: true, error: "", chainId: chain.id };
-      nextHoldings = [nativeHoldingRow(chain, native, native * px)];
+      nextHoldings = [
+        nativeHoldingRow(chain, native, native * px),
+        ...(suiCoins || []),
+      ];
     } else {
       if (!addr) throw new Error("No EVM address on this account.");
       native = await fetchEvmBalance(addr, chain.rpcs || [chain.rpc]);
@@ -1980,7 +1991,9 @@ function paintBalances() {
   if (native) native.textContent = Number(BALANCE.native || 0).toFixed(digits);
   if (delta) {
     const tokN = vis.filter(
-      (h) => (h.kind === "spl" || h.kind === "erc20") && Number(h.amount) > 0
+      (h) =>
+        (h.kind === "spl" || h.kind === "erc20" || h.kind === "sui_coin") &&
+        Number(h.amount) > 0
     ).length;
     delta.textContent = BALANCE.ok
       ? tokN
@@ -2094,17 +2107,19 @@ function paintHoldings() {
     // Always show THIS wallet's address (not the token mint — mint looks like another wallet).
     const chainAddr = chainKeyAddress(acc, chain) || addr;
     const sub =
-      t.kind === "spl" || t.kind === "erc20"
+      t.kind === "spl" || t.kind === "erc20" || t.kind === "sui_coin"
         ? (t.name && t.name !== t.symbol
             ? t.name
             : t.kind === "erc20"
               ? "ERC-20 token"
-              : "SPL token") +
+              : t.kind === "sui_coin"
+                ? "Sui coin"
+                : "SPL token") +
           " · " +
           shortAddr(addr)
         : chain.name + " · " + shortAddr(chainAddr);
     const mintTitle =
-      (t.kind === "spl" || t.kind === "erc20") && t.mint
+      (t.kind === "spl" || t.kind === "erc20" || t.kind === "sui_coin") && t.mint
         ? ' title="Contract ' + t.mint + '"'
         : "";
     const usdLabel =
@@ -2160,7 +2175,9 @@ function paintHoldings() {
   const count = $("tokenCount");
   if (count) {
     const tokN = rows.filter(
-      (h) => (h.kind === "spl" || h.kind === "erc20") && Number(h.amount) > 0
+      (h) =>
+        (h.kind === "spl" || h.kind === "erc20" || h.kind === "sui_coin") &&
+        Number(h.amount) > 0
     ).length;
     count.textContent = tokN
       ? rows.length + " assets · " + tokN + " token" + (tokN === 1 ? "" : "s")
@@ -3773,17 +3790,384 @@ async function sendSplToken(acc, holding, toAddr, amountUi) {
   return sig;
 }
 
+const ERC20_ABI = [
+  "function transfer(address to, uint256 amount) returns (bool)",
+  "function balanceOf(address owner) view returns (uint256)",
+  "function decimals() view returns (uint8)",
+];
+
 async function sendEvmNative(acc, chain, toAddr, amount) {
   if (!window.ethers) throw new Error("ethers missing");
   if (!acc.evm || !acc.evm.privateKey) throw new Error("No EVM key");
   if (!ethers.isAddress(toAddr)) throw new Error("Invalid EVM recipient address");
-  const provider = new ethers.JsonRpcProvider(chain.rpc);
-  const wallet = new ethers.Wallet(acc.evm.privateKey, provider);
-  const value = ethers.parseUnits(String(amount), chain.decimals || 18);
-  const tx = await wallet.sendTransaction({ to: toAddr, value });
-  showToast("Submitted · waiting…");
-  await tx.wait(1);
-  return tx.hash;
+  const list = (chain.rpcs && chain.rpcs.length ? chain.rpcs : [chain.rpc]).filter(Boolean);
+  let lastErr = null;
+  for (const rpc of list) {
+    try {
+      const provider = new ethers.JsonRpcProvider(rpc, chain.chainId || undefined);
+      const wallet = new ethers.Wallet(acc.evm.privateKey, provider);
+      const value = ethers.parseUnits(String(amount), chain.decimals || 18);
+      const tx = await wallet.sendTransaction({ to: toAddr, value });
+      showToast("Submitted · waiting…");
+      await tx.wait(1);
+      return tx.hash;
+    } catch (err) {
+      lastErr = err;
+      console.warn("[evm-send]", rpc, err && err.message ? err.message : err);
+    }
+  }
+  throw lastErr || new Error("EVM send failed");
+}
+
+async function sendEvmToken(acc, chain, holding, toAddr, amountUi) {
+  if (!window.ethers) throw new Error("ethers missing");
+  if (!acc.evm || !acc.evm.privateKey) throw new Error("No EVM key");
+  if (!ethers.isAddress(toAddr)) throw new Error("Invalid EVM recipient address");
+  const mint = holding && holding.mint;
+  if (!mint || !ethers.isAddress(mint)) throw new Error("Invalid token contract");
+  const decimals =
+    holding.decimals != null ? Number(holding.decimals) : 18;
+  const value = ethers.parseUnits(String(amountUi), decimals);
+  const have = ethers.parseUnits(String(holding.amount || "0"), decimals);
+  if (value > have) throw new Error("Amount exceeds token balance");
+
+  const list = (chain.rpcs && chain.rpcs.length ? chain.rpcs : [chain.rpc]).filter(Boolean);
+  let lastErr = null;
+  for (const rpc of list) {
+    try {
+      const provider = new ethers.JsonRpcProvider(rpc, chain.chainId || undefined);
+      const wallet = new ethers.Wallet(acc.evm.privateKey, provider);
+      const contract = new ethers.Contract(mint, ERC20_ABI, wallet);
+      const tx = await contract.transfer(toAddr, value);
+      showToast("Submitted · waiting…");
+      await tx.wait(1);
+      return tx.hash;
+    } catch (err) {
+      lastErr = err;
+      console.warn("[erc20-send]", rpc, err && err.message ? err.message : err);
+    }
+  }
+  throw lastErr || new Error("Token send failed");
+}
+
+async function fetchBtcUtxos(address) {
+  const urls = [
+    "https://blockstream.info/api/address/" + address + "/utxo",
+    "https://mempool.space/api/address/" + address + "/utxo",
+  ];
+  let lastErr = null;
+  for (const url of urls) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("utxo http " + res.status);
+      const j = await res.json();
+      if (!Array.isArray(j)) throw new Error("bad utxo payload");
+      return j.map((u) => ({
+        txid: u.txid,
+        vout: u.vout,
+        value: Number(u.value) || 0,
+      }));
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr || new Error("Could not load Bitcoin UTXOs");
+}
+
+async function fetchBtcFeeSats(inputCount, outputCount) {
+  // ~vbytes for P2WPKH: 10.5 + 68*in + 31*out (approx)
+  const vbytes = Math.ceil(10.5 + 68 * inputCount + 31 * outputCount);
+  let satPerVb = 8;
+  try {
+    const res = await fetch("https://mempool.space/api/v1/fees/recommended");
+    if (res.ok) {
+      const j = await res.json();
+      satPerVb = Math.max(1, Number(j.halfHourFee || j.economyFee || j.fastestFee) || 8);
+    }
+  } catch (_) {}
+  return Math.max(200, Math.ceil(vbytes * satPerVb));
+}
+
+async function sendBtcNative(acc, toAddr, amountBtc) {
+  if (!window.GladiatorBtc || !GladiatorBtc.buildSignedP2wpkhTx) {
+    throw new Error("Bitcoin send library missing — reload extension");
+  }
+  if (!acc.bitcoin || !acc.bitcoin.privateKey || !acc.bitcoin.address) {
+    throw new Error("No Bitcoin key on this wallet");
+  }
+  if (!isValidBtcAddress(toAddr)) throw new Error("Invalid Bitcoin address");
+  const fromAddress = acc.bitcoin.address;
+  const amountSats = Math.round(Number(amountBtc) * 1e8);
+  if (!(amountSats > 0)) throw new Error("Amount too small");
+  const utxos = (await fetchBtcUtxos(fromAddress)).filter((u) => u.value > 0);
+  if (!utxos.length) throw new Error("No Bitcoin UTXOs to spend");
+  // Fee for worst-case inputs we'll likely need; recompute after selection below.
+  let feeSats = await fetchBtcFeeSats(Math.min(utxos.length, 3), 2);
+  let built;
+  try {
+    built = GladiatorBtc.buildSignedP2wpkhTx({
+      privKeyHex: acc.bitcoin.privateKey,
+      fromAddress,
+      toAddress: toAddr,
+      amountSats,
+      feeSats,
+      utxos,
+    });
+  } catch (err) {
+    // Retry with higher fee if selection failed oddly
+    feeSats = await fetchBtcFeeSats(utxos.length, 2);
+    built = GladiatorBtc.buildSignedP2wpkhTx({
+      privKeyHex: acc.bitcoin.privateKey,
+      fromAddress,
+      toAddress: toAddr,
+      amountSats,
+      feeSats,
+      utxos,
+    });
+  }
+  const posts = [
+    "https://blockstream.info/api/tx",
+    "https://mempool.space/api/tx",
+  ];
+  let lastErr = null;
+  for (const url of posts) {
+    try {
+      const res = await fetch(url, { method: "POST", body: built.hex });
+      const text = await res.text();
+      if (!res.ok) throw new Error(text || "broadcast http " + res.status);
+      return (text || built.txid || "").trim();
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr || new Error("Bitcoin broadcast failed");
+}
+
+async function suiRpcCall(method, params, rpcs) {
+  const list =
+    rpcs && rpcs.length
+      ? rpcs
+      : [
+          "https://rpc-mainnet.suiscan.xyz",
+          "https://sui-mainnet-endpoint.blockvision.org",
+        ];
+  let lastErr = null;
+  for (const rpc of list) {
+    try {
+      const res = await fetch(rpc, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const j = await res.json();
+      if (j.error) throw new Error(j.error.message || method + " failed");
+      return j.result;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr || new Error(method + " failed");
+}
+
+function b64ToBytes(b64) {
+  const bin = atob(String(b64 || ""));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function bytesToB64(u8) {
+  const bytes = u8 instanceof Uint8Array ? u8 : new Uint8Array(u8);
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(s);
+}
+
+function hexToBytesLocal(h) {
+  const s = String(h || "").replace(/^0x/i, "");
+  const out = new Uint8Array(s.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(s.substr(i * 2, 2), 16);
+  return out;
+}
+
+function signSuiTransactionBytes(txBytesB64, secretKeyHex) {
+  if (!window.nacl || !nacl.sign || !nacl.sign.detached) {
+    throw new Error("nacl missing for Sui signing");
+  }
+  if (!window.MultiHD || !MultiHD.blake2b256) {
+    throw new Error("MultiHD blake2b missing for Sui signing");
+  }
+  const txBytes = b64ToBytes(txBytesB64);
+  // Intent: scope=TransactionData(0), version=V0(0), app=Sui(0) — wait, IntentScope TransactionData = 0
+  // Actually Sui IntentScope::TransactionData = 0, but many docs use [0,0,0]. 
+  // Official: IntentMessage = Intent(scope, version, app_id) || BCS(tx)
+  // scope TransactionData = 0, version V0 = 0, app Sui = 0
+  const intent = new Uint8Array([0, 0, 0]);
+  const msg = new Uint8Array(intent.length + txBytes.length);
+  msg.set(intent, 0);
+  msg.set(txBytes, intent.length);
+  const digest = MultiHD.blake2b256(msg);
+  let sk = hexToBytesLocal(secretKeyHex);
+  // nacl secretKey is 64 bytes (seed||pub); accept 32-byte seed too
+  if (sk.length === 32) {
+    const kp = nacl.sign.keyPair.fromSeed(sk);
+    sk = kp.secretKey;
+  }
+  if (sk.length !== 64) throw new Error("Bad Sui secret key length");
+  const sig = nacl.sign.detached(digest, sk);
+  const pub = sk.slice(32);
+  const flagSigPub = new Uint8Array(1 + sig.length + pub.length);
+  flagSigPub[0] = 0x00; // ED25519
+  flagSigPub.set(sig, 1);
+  flagSigPub.set(pub, 1 + sig.length);
+  return bytesToB64(flagSigPub);
+}
+
+async function fetchSuiTokenHoldings(address, rpcs) {
+  const balances = await suiRpcCall("suix_getAllBalances", [address], rpcs);
+  const list = Array.isArray(balances) ? balances : [];
+  const out = [];
+  for (const row of list) {
+    const coinType = String(row.coinType || "");
+    if (!coinType || coinType === "0x2::sui::SUI") continue;
+    const raw = String(row.totalBalance || "0");
+    let meta = null;
+    try {
+      meta = await suiRpcCall("suix_getCoinMetadata", [coinType], rpcs);
+    } catch (_) {
+      meta = null;
+    }
+    const decimals = meta && meta.decimals != null ? Number(meta.decimals) : 9;
+    const amount = formatTokenRawAmount(raw, decimals);
+    if (!(amount > 0)) continue;
+    const symbol =
+      (meta && meta.symbol) ||
+      (coinType.split("::").pop() || "COIN").slice(0, 12);
+    out.push({
+      chainId: "sui",
+      mint: coinType,
+      amount,
+      decimals,
+      symbol,
+      name: (meta && meta.name) || symbol,
+      logo: (meta && meta.iconUrl) || null,
+      usd: null,
+      kind: "sui_coin",
+    });
+  }
+  return out.sort((a, b) => (Number(b.amount) || 0) - (Number(a.amount) || 0));
+}
+
+async function sendSuiNative(acc, toAddr, amountSui) {
+  if (!acc.sui || !acc.sui.secretKey || !acc.sui.address) {
+    throw new Error("No Sui key on this wallet");
+  }
+  if (!isValidSuiAddress(toAddr)) throw new Error("Invalid Sui address");
+  const from = acc.sui.address;
+  const rpcs = (CHAINS.find((c) => c.id === "sui") || {}).rpcs;
+  const amountMist = BigInt(Math.floor(Number(amountSui) * 1e9 + 1e-9));
+  if (!(amountMist > 0n)) throw new Error("Amount too small");
+  const coinsPage = await suiRpcCall(
+    "suix_getCoins",
+    [from, "0x2::sui::SUI"],
+    rpcs
+  );
+  const coins = (coinsPage && coinsPage.data) || [];
+  if (!coins.length) throw new Error("No SUI coins to spend");
+  // Prefer a single coin large enough; else paySui with several.
+  const gasBudget = "10000000";
+  let built;
+  const big = coins.find((c) => BigInt(c.balance || "0") > amountMist + 1000000n);
+  if (big) {
+    built = await suiRpcCall(
+      "unsafe_transferSui",
+      [from, big.coinObjectId, gasBudget, toAddr, amountMist.toString()],
+      rpcs
+    );
+  } else {
+    const ids = coins.map((c) => c.coinObjectId);
+    built = await suiRpcCall(
+      "unsafe_paySui",
+      [from, ids, [toAddr], [amountMist.toString()], gasBudget],
+      rpcs
+    );
+  }
+  const txBytes = built && built.txBytes;
+  if (!txBytes) throw new Error("Sui tx build returned empty");
+  const signature = signSuiTransactionBytes(txBytes, acc.sui.secretKey);
+  const executed = await suiRpcCall(
+    "sui_executeTransactionBlock",
+    [
+      txBytes,
+      [signature],
+      { showEffects: true, showInput: false },
+      "WaitForLocalExecution",
+    ],
+    rpcs
+  );
+  const digest =
+    (executed && executed.digest) ||
+    (executed && executed.effects && executed.effects.transactionDigest) ||
+    "";
+  if (!digest) throw new Error("Sui send returned no digest");
+  const status =
+    executed &&
+    executed.effects &&
+    executed.effects.status &&
+    executed.effects.status.status;
+  if (status && status !== "success") {
+    throw new Error(
+      "Sui tx " +
+        status +
+        ((executed.effects.status.error && ": " + executed.effects.status.error) || "")
+    );
+  }
+  return digest;
+}
+
+async function sendSuiCoin(acc, holding, toAddr, amountUi) {
+  if (!acc.sui || !acc.sui.secretKey || !acc.sui.address) {
+    throw new Error("No Sui key on this wallet");
+  }
+  if (!isValidSuiAddress(toAddr)) throw new Error("Invalid Sui address");
+  const coinType = holding && holding.mint;
+  if (!coinType) throw new Error("Missing Sui coin type");
+  const from = acc.sui.address;
+  const rpcs = (CHAINS.find((c) => c.id === "sui") || {}).rpcs;
+  const decimals = holding.decimals != null ? Number(holding.decimals) : 9;
+  const amountRaw = ethers.parseUnits
+    ? ethers.parseUnits(String(amountUi), decimals).toString()
+    : String(Math.floor(Number(amountUi) * 10 ** decimals));
+  const coinsPage = await suiRpcCall("suix_getCoins", [from, coinType], rpcs);
+  const coins = (coinsPage && coinsPage.data) || [];
+  if (!coins.length) throw new Error("No coins of this type to spend");
+  const ids = coins.map((c) => c.coinObjectId);
+  const gasBudget = "20000000";
+  // gas paid in SUI — omit gas object (node picks)
+  const built = await suiRpcCall(
+    "unsafe_pay",
+    [from, ids, [toAddr], [amountRaw], null, gasBudget],
+    rpcs
+  );
+  const txBytes = built && built.txBytes;
+  if (!txBytes) throw new Error("Sui token tx build returned empty");
+  const signature = signSuiTransactionBytes(txBytes, acc.sui.secretKey);
+  const executed = await suiRpcCall(
+    "sui_executeTransactionBlock",
+    [
+      txBytes,
+      [signature],
+      { showEffects: true },
+      "WaitForLocalExecution",
+    ],
+    rpcs
+  );
+  const digest = (executed && executed.digest) || "";
+  if (!digest) throw new Error("Sui token send returned no digest");
+  return digest;
 }
 
 async function executeSend() {
@@ -3838,20 +4222,36 @@ async function executeSend() {
         symbol = holding.symbol || "TOKEN";
       }
       explorer = "https://solscan.io/tx/" + sig;
-    } else if (chain.kind === "bitcoin" || chain.kind === "sui") {
-      throw new Error(
-        chain.name +
-          " send is not enabled yet — receive & balances work. Switch to Solana or an EVM chain to send."
-      );
-    } else {
+    } else if (chain.kind === "bitcoin") {
       if (assetVal !== "native") {
-        throw new Error(
-          "ERC-20 send not enabled yet — tokens are visible; native " +
-            (chain.symbol || "ETH") +
-            " send works"
-        );
+        throw new Error("Bitcoin only sends BTC (no tokens on this chain)");
       }
-      sig = await sendEvmNative(acc, chain, to, amountRaw);
+      sig = await sendBtcNative(acc, to, amountRaw);
+      symbol = "BTC";
+      explorer = "https://mempool.space/tx/" + sig;
+    } else if (chain.kind === "sui") {
+      if (assetVal === "native") {
+        sig = await sendSuiNative(acc, to, amountRaw);
+        symbol = "SUI";
+      } else {
+        if (!holding || holding.kind !== "sui_coin") {
+          throw new Error("Coin not in holdings");
+        }
+        sig = await sendSuiCoin(acc, holding, to, amountRaw);
+        symbol = holding.symbol || "COIN";
+      }
+      explorer = "https://suiscan.xyz/mainnet/tx/" + sig;
+    } else {
+      if (assetVal === "native") {
+        sig = await sendEvmNative(acc, chain, to, amountRaw);
+        symbol = chain.symbol || "ETH";
+      } else {
+        if (!holding || holding.kind !== "erc20") {
+          throw new Error("Token not in holdings");
+        }
+        sig = await sendEvmToken(acc, chain, holding, to, amountRaw);
+        symbol = holding.symbol || "TOKEN";
+      }
       const explorers = {
         ethereum: "https://etherscan.io/tx/",
         base: "https://basescan.org/tx/",
