@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "Gladiator Wallet",
   "short_name": "Gladiator",
-  "version": "0.5.41",
-  "description": "Gladiator multi-chain wallet with WalletConnect for Solana dApps (Jupiter, pump.fun).",
+  "version": "0.5.42",
+  "description": "Gladiator multi-chain wallet — in-page Solana provider + WalletConnect for dApps.",
   "action": {
     "default_title": "Gladiator",
     "default_popup": "popup.html",
@@ -25,9 +25,13 @@
   },
   "permissions": [
     "storage",
-    "clipboardWrite"
+    "clipboardWrite",
+    "offscreen"
   ],
   "host_permissions": [
+    "https://*/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*",
     "https://*.helius-rpc.com/*",
     "https://1rpc.io/*",
     "https://api.coingecko.com/*",
@@ -75,6 +79,35 @@
     "https://notify.walletconnect.com/*",
     "https://echo.walletconnect.com/*",
     "https://push.walletconnect.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": ["content-script.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "injected.js",
+        "icons/icon16.png",
+        "icons/icon32.png",
+        "icons/icon48.png",
+        "icons/icon128.png",
+        "icons/gladiator.png"
+      ],
+      "matches": [
+        "https://*/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ]
+    }
   ],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'"
