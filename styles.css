@@ -1858,6 +1858,15 @@ body.is-extension .acct-drawer {
   font-weight: 400;
 }
 
+.token-list .token-unit-price {
+  margin-top: 2px;
+  font-size: 0.72rem;
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+  color: rgba(212, 192, 122, 0.88);
+  letter-spacing: 0.01em;
+}
+
 .token-vals,
 .activity-vals {
   text-align: right;

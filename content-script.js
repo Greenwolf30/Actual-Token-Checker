@@ -23,8 +23,9 @@
     if (!req) return false;
     const here = pageOrigin();
     if (!here) return false;
-    if (req.origin && String(req.origin) !== here) return false;
-    return true;
+    // Fail closed: missing origin must not show on every allowlisted tab.
+    if (!req.origin) return false;
+    return String(req.origin) === here;
   }
 
   function allowHost(hostname) {

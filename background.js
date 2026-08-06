@@ -592,9 +592,22 @@ function callOffscreen(method, params) {
         );
       });
 
+    // Never retry methods that can broadcast — a lost reply after success
+    // would double-send on retry.
+    const noRetry = new Set([
+      "ethSendTransaction",
+      "signAndSendTransaction",
+      "signTransaction",
+      "signAllTransactions",
+    ]);
+
     try {
       resolve(await sendOnce());
     } catch (err) {
+      if (noRetry.has(String(method || ""))) {
+        reject(err);
+        return;
+      }
       // Retry once — offscreen may still be booting after createDocument.
       try {
         await new Promise((r) => setTimeout(r, 300));
@@ -1092,7 +1105,16 @@ async function signViaWalletWindow(method, params, acc) {
     if (res.error) throw new Error(res.error);
     return res.result;
   }
-  await storageSet({ [LEDGER_REQ]: null, [LEDGER_RES]: null });
+  // Mark cancelled so the popup will not broadcast after this timeout.
+  await storageSet({
+    [LEDGER_REQ]: null,
+    [LEDGER_RES]: {
+      id: reqId,
+      cancelled: true,
+      error:
+        "Ledger sign timed out — click the Gladiator icon, tap Sign on Ledger, then approve on the device",
+    },
+  });
   throw new Error(
     "Ledger sign timed out — click the Gladiator icon, tap Sign on Ledger, then approve on the device"
   );
@@ -1616,14 +1638,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       delete toStore.vault;
       delete toStore.vaultEnabled;
     }
-    const prevAccountId = lastPersistedAccountId || (cachedSigner && cachedSigner.accountId) || null;
+    const prevAccountId =
+      lastPersistedAccountId != null
+        ? lastPersistedAccountId
+        : cachedSigner && cachedSigner.accountId
+          ? cachedSigner.accountId
+          : null;
     const nextAccountId = toStore.activeAccountId || null;
     const cached = cacheSignerFromState(toStore);
+    // First persist after SW wake: seed lastPersistedAccountId without remapping.
+    const isFirstPersistAfterWake = lastPersistedAccountId == null;
     storageSet({ [STORE_KEY]: toStore })
       .then(async () => {
         lastPersistedAccountId = nextAccountId;
         // Active wallet changed → move all dApp connections to the new wallet and notify tabs.
-        if (nextAccountId && String(prevAccountId || "") !== String(nextAccountId)) {
+        if (
+          !isFirstPersistAfterWake &&
+          nextAccountId &&
+          prevAccountId &&
+          String(prevAccountId) !== String(nextAccountId)
+        ) {
           try {
             await remapTrustedOriginsToActiveAccount(nextAccountId, toStore);
           } catch (err) {

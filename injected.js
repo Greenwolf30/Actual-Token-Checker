@@ -635,13 +635,13 @@
     onAccountsChangedFromWallet = function (data) {
       try {
         const nextPk = data && data.publicKey ? String(data.publicKey) : "";
+        const prev =
+          publicKey && typeof publicKey.toBase58 === "function"
+            ? publicKey.toBase58()
+            : publicKey
+              ? String(publicKey)
+              : "";
         if (nextPk) {
-          const prev =
-            publicKey && typeof publicKey.toBase58 === "function"
-              ? publicKey.toBase58()
-              : publicKey
-                ? String(publicKey)
-                : "";
           publicKey = new PublicKey(nextPk);
           isConnected = true;
           if (String(prev || "") !== nextPk) {
@@ -652,6 +652,16 @@
               emitStandard("change", { accounts: getAccounts() });
             } catch (_) {}
           }
+        } else if (prev) {
+          // Active wallet has no Solana key — clear stale Jupiter identity.
+          publicKey = null;
+          isConnected = false;
+          try {
+            emit("accountChanged", null);
+          } catch (_) {}
+          try {
+            emitStandard("change", { accounts: [] });
+          } catch (_) {}
         }
         const evmAccounts = Array.isArray(data && data.accounts)
           ? data.accounts.filter(Boolean)

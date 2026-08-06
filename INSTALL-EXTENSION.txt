@@ -15,6 +15,12 @@ How to read Home numbers:
   (~+1 price API call when cache is cold). No extra Solana RPC for the chart.
   Full write-up: Gladiator-Wallet-Documentation/DOCUMENTATION.txt §6.1–6.2
 
+v0.6.53:
+- Live balance refresh every ~30s while Home is open
+- Holdings: show each token's unit USD price under the name
+- More bugfixes: clear stale Solana pubkey on switch; no offscreen send retry;
+  Ledger timeout cancel before broadcast; approve fail-closed; SW wake no false remap
+
 v0.6.52:
 - Bugfixes: dApp connection follows active wallet (accountChanged on switch);
   per-origin EVM chain id; approve overlay only on matching origin;

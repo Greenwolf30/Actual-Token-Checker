@@ -553,11 +553,21 @@ async function storageSet(data) {
           reject(e);
         }
       });
-      // Confirm background/offscreen can see the same wallet.
+      // Confirm background/offscreen can see the same wallet (await so account
+      // switch remap + dApp notify finish before UI continues).
       try {
-        chrome.runtime.sendMessage({
-          type: "gladiator-persist-wallet",
-          state: toStore,
+        await new Promise((resolve) => {
+          try {
+            chrome.runtime.sendMessage(
+              { type: "gladiator-persist-wallet", state: toStore },
+              () => {
+                void (chrome.runtime && chrome.runtime.lastError);
+                resolve();
+              }
+            );
+          } catch (_) {
+            resolve();
+          }
         });
       } catch (_) {}
     } catch (err) {
@@ -1749,6 +1759,8 @@ function go(panel, opts) {
     if (stage) stage.scrollTo({ top: 0, behavior: "smooth" });
     else window.scrollTo({ top: 0, behavior: "smooth" });
   }
+  if (panel === "home") startLiveBalanceRefresh();
+  else stopLiveBalanceRefresh();
   if (panel === "receive") renderReceive();
   if (panel === "activity") {
     renderAccountsPanel();
@@ -2714,6 +2726,40 @@ function setSyncButtonsBusy(busy) {
   });
 }
 
+/** Soft live balance refresh while Home is open (RPC — not the 5m CoinGecko chart cache). */
+const LIVE_BALANCE_MS = 30 * 1000;
+let liveBalanceTimer = null;
+let liveBalanceTicks = 0;
+
+function stopLiveBalanceRefresh() {
+  if (liveBalanceTimer) {
+    clearInterval(liveBalanceTimer);
+    liveBalanceTimer = null;
+  }
+}
+
+function startLiveBalanceRefresh() {
+  stopLiveBalanceRefresh();
+  liveBalanceTicks = 0;
+  liveBalanceTimer = setInterval(() => {
+    if (typeof document !== "undefined" && document.hidden) return;
+    if (syncBusy) return;
+    const home = $("panel-home");
+    if (home && !home.classList.contains("is-active")) return;
+    liveBalanceTicks += 1;
+    const tick = liveBalanceTicks;
+    (async () => {
+      try {
+        // Refresh USD quotes about once a minute; balances every 30s.
+        if (tick % 2 === 1) await fetchPrices();
+        await refreshBalance({ keepUi: true });
+      } catch (err) {
+        console.warn("[live-balance]", err);
+      }
+    })();
+  }, LIVE_BALANCE_MS);
+}
+
 async function runManualSync() {
   if (syncBusy) {
     showToast("Already syncing…");
@@ -3675,6 +3721,36 @@ function tokenLogoHtml(t) {
   return '<span class="token-icon usdc">' + letters + "</span>";
 }
 
+/** Per-token unit USD price for holdings rows (under the name). */
+function holdingUnitUsdPrice(t, chain) {
+  if (!t) return null;
+  if (t.usdPrice != null && Number(t.usdPrice) > 0) return Number(t.usdPrice);
+  if (t.price != null && Number(t.price) > 0) return Number(t.price);
+  const amt = Number(t.amount);
+  const usd = Number(t.usd);
+  if (amt > 0 && Number.isFinite(usd) && usd >= 0) return usd / amt;
+  if (t.kind === "native" && chain && chain.priceId) {
+    const px = Number(PRICES[chain.priceId]);
+    if (px > 0) return px;
+  }
+  return null;
+}
+
+function formatHoldingUnitPrice(n) {
+  const v = Number(n);
+  if (!(v > 0) || !Number.isFinite(v)) return "—";
+  if (v >= 1000) {
+    return (
+      "$" +
+      v.toLocaleString(undefined, { maximumFractionDigits: 0 })
+    );
+  }
+  if (v >= 1) return "$" + v.toFixed(2);
+  if (v >= 0.01) return "$" + v.toFixed(4);
+  if (v >= 0.0001) return "$" + v.toFixed(6);
+  return "$" + v.toPrecision(4);
+}
+
 function paintHoldings() {
   const list = $("tokenList");
   const chain = activeChain(STATE);
@@ -3704,7 +3780,7 @@ function paintHoldings() {
 
   rows.forEach((t) => {
     const li = document.createElement("li");
-    // Name + token amount + USD only — never wallet/mint addresses.
+    // Name + unit price under name; amount + total USD on the right.
     const displayName = holdingDisplayName(t, chain);
     const symbol = holdingDisplaySymbol(t);
     const usdLabel =
@@ -3720,6 +3796,8 @@ function paintHoldings() {
         ? Number(t.amount).toLocaleString(undefined, { maximumFractionDigits: 4 })
         : Number(t.amount).toFixed(6);
     const amtLabel = qty + (symbol && symbol !== "TOKEN" ? " " + symbol : "");
+    const unitPx = holdingUnitUsdPrice(t, chain);
+    const unitLabel = unitPx != null ? formatHoldingUnitPrice(unitPx) : "—";
     li.innerHTML =
       '<button type="button" class="token-row" data-mint="' +
       (t.mint || "native") +
@@ -3731,7 +3809,9 @@ function paintHoldings() {
       "</span>" +
       '<span class="token-meta"><strong>' +
       escapeHtml(displayName) +
-      "</strong></span>" +
+      '</strong><span class="token-unit-price">' +
+      escapeHtml(unitLabel) +
+      "</span></span>" +
       '<span class="token-vals"><strong>' +
       escapeHtml(amtLabel) +
       "</strong><span>" +
@@ -6242,6 +6322,11 @@ async function broadcastSolTx(tx, signer, rpcs, ledgerAcc) {
   const raw = tx.serialize();
   const u8 = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
   const b64 = bytesToBase64(u8);
+  if (ledgerAcc) {
+    await assertLedgerRequestStillLive(
+      pendingLedgerSignReq && pendingLedgerSignReq.id
+    );
+  }
   let sig;
   try {
     sig = await solRpc(
@@ -6515,6 +6600,9 @@ async function signAndBroadcastEvmLedger(acc, chain, provider, txRequest) {
     ...fields,
     signature: { r: sig.r, s: sig.s, v },
   });
+  await assertLedgerRequestStillLive(
+    pendingLedgerSignReq && pendingLedgerSignReq.id
+  );
   const resp = await provider.broadcastTransaction(signed.serialized);
   const hash = resp && resp.hash ? resp.hash : null;
   showToast("Submitted · waiting…");
@@ -6525,6 +6613,24 @@ async function signAndBroadcastEvmLedger(acc, chain, provider, txRequest) {
   }
   if (!hash) throw new Error("No transaction hash returned");
   return hash;
+}
+
+/** Abort Ledger broadcast if the service worker already timed the request out. */
+async function assertLedgerRequestStillLive(reqId) {
+  if (!reqId || !(IS_EXTENSION && chrome.storage && chrome.storage.local)) return;
+  const bag = await new Promise((resolve) => {
+    try {
+      chrome.storage.local.get([LEDGER_RES_KEY], (r) => resolve(r || {}));
+    } catch (_) {
+      resolve({});
+    }
+  });
+  const res = bag[LEDGER_RES_KEY];
+  if (res && res.id === reqId && (res.cancelled || res.error)) {
+    throw new Error(
+      res.error || "Ledger request timed out — check explorer before retrying"
+    );
+  }
 }
 
 async function sendEvmNative(acc, chain, toAddr, amount) {
@@ -10148,6 +10254,7 @@ async function handleLedgerEvmSignRequest(method, params) {
           : [];
     if (!rpcs.length) throw new Error("No EVM RPC for Ledger send");
     let lastErr = null;
+    let submittedHash = null;
     for (const rpc of rpcs) {
       try {
         const provider = new ethers.JsonRpcProvider(rpc, chainId || undefined);
@@ -10162,8 +10269,10 @@ async function handleLedgerEvmSignRequest(method, params) {
               : 0n,
           gasLimit: txReq.gasLimit || txReq.gas || undefined,
         });
+        submittedHash = hash;
         return { hash };
       } catch (err) {
+        if (submittedHash) return { hash: submittedHash };
         lastErr = err;
       }
     }
@@ -10243,9 +10352,11 @@ async function confirmPendingLedgerSign() {
       }
     }
     // Must run from this button click so WebHID has a user gesture.
+    await assertLedgerRequestStillLive(req.id);
     const result = isEvm
       ? await handleLedgerEvmSignRequest(req.method, req.params || {})
       : await handleProviderSignRequest(req.method, req.params || {});
+    await assertLedgerRequestStillLive(req.id);
     await new Promise((resolve, reject) => {
       chrome.storage.local.set(
         { [LEDGER_RES_KEY]: { id: req.id, result }, [LEDGER_REQ_KEY]: null },
@@ -10908,6 +11019,17 @@ async function boot() {
   await fetchPrices();
   updateSendUsdEstimate();
   await refreshBalance();
+  startLiveBalanceRefresh();
+  try {
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) {
+        const home = $("panel-home");
+        if (home && home.classList.contains("is-active")) startLiveBalanceRefresh();
+      } else {
+        stopLiveBalanceRefresh();
+      }
+    });
+  } catch (_) {}
   // Toolbar popup: mirror only. Wallet window / web page: own WC relay.
   if (IS_EXTENSION_POPUP) {
     paintWcSettings();
