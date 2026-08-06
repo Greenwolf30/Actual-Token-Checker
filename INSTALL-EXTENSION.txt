@@ -7,6 +7,17 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+How to read Home numbers:
+- Under Total balance: "+$0.40 · +0.048%" = portfolio USD change + percent since
+  the first local snapshot for this account+chain (not SOL’s market price alone).
+- Beside $: "SOL $145 +1.2%" + line chart = native coin ~24h move (green up / red down).
+- Native chart is not a live tick feed — CoinGecko series cached ~5 minutes per coin
+  (~+1 price API call when cache is cold). No extra Solana RPC for the chart.
+  Full write-up: Gladiator-Wallet-Documentation/DOCUMENTATION.txt §6.1–6.2
+
+v0.6.48:
+- Docs: how to read portfolio PnL + native price refresh cadence (§6.1–6.2)
+
 v0.6.47:
 - Nudge native price + sparkline slightly right and down beside Total balance
 
