@@ -1,0 +1,76 @@
+================================================================================
+HOW TO USE LEDGER IN GLADIATOR (MULTI WALLET + MULTI CHAIN)
+================================================================================
+Docs snapshot: wallet 0.6.8+
+
+
+BEFORE YOU START
+  • Fully quit Ledger Live
+  • Use USB (not Bluetooth)
+  • Unlock the Nano
+
+
+--------------------------------------------------------------------------------
+PART A — SOLANA (Connect Ledger)
+--------------------------------------------------------------------------------
+1. Open the Solana app on the Nano
+2. Gladiator → Accounts → Ledger
+3. Set Account # (0 for first wallet, 1 for second, …)
+4. Tap Connect Ledger
+5. If a browser tab opens, tap Connect Ledger again and Allow the device
+6. Ledger wallet appears (Solana address linked)
+
+
+--------------------------------------------------------------------------------
+PART B — EVM CHAINS (Link EVM) — REQUIRED FOR ETH / POLYGON / BASE / RH ETH
+--------------------------------------------------------------------------------
+Connect Ledger does NOT auto-link Ethereum. You must Link EVM once per
+Ledger account.
+
+1. Select that Ledger wallet in Gladiator (Active)
+2. On the Nano: close Solana app → open the Ethereum app
+3. Do ONE of:
+     • Tap “Link EVM” (Accounts panel or Accounts sidebar), OR
+     • Switch the top-bar chain to Ethereum / Polygon / Base / Robinhood ETH
+4. Wait for toast:  EVM linked · 0x…
+5. Done — you can switch those EVM chains without linking again
+
+Opening the Ethereum app alone is NOT enough. Gladiator must read the address
+(step 3). After linked once, chain switching among EVM does not need reconnect.
+Keep the Ethereum app open when you SEND on EVM. Switch back to Solana app
+for Solana sends / Jupiter signs.
+
+
+WHAT ACCOUNT # MEANS
+  Account # 0 → Solana 44'/501'/0'  +  EVM 44'/60'/0'/0/0  (after Link EVM)
+  Account # 1 → Solana 44'/501'/1'  +  EVM 44'/60'/0'/0/1
+  Account # 2 → …
+
+
+ADD ANOTHER LEDGER WALLET
+  1. Accounts → Ledger
+  2. Change Account # to 1 (then 2, 3, …)
+  3. Solana app → Connect Ledger
+  4. Ethereum app → Link EVM (or pick an EVM chain)
+
+
+RECONNECTING THE SAME NUMBER
+  Connecting Account # 0 again does NOT delete the wallet.
+  Gladiator shows “Ledger already linked”.
+
+
+NOT SUPPORTED YET ON LEDGER
+  • Bitcoin
+  • Sui
+  (Use a software / seed wallet for those.)
+
+
+TROUBLESHOOTING
+  “Link EVM first” / link fails
+    → Ethereum app must be open; quit Ledger Live; try Link EVM or pick ETH
+  “not supported yet”
+    → You picked Bitcoin or Sui on a Ledger account
+  “No Ledger selected”
+    → USB, quit Ledger Live, correct app open, Allow device in Chrome list
+  Blind signing error on EVM send
+    → Ethereum app → Settings → enable Blind signing
