@@ -103,38 +103,12 @@
     }
   }
 
-  let refreshBannerShown = false;
-  function showRefreshBanner() {
-    if (refreshBannerShown || !allowHost(location.hostname)) return;
-    refreshBannerShown = true;
-    try {
-      const host = document.createElement("div");
-      host.id = "gladiator-refresh-banner";
-      host.style.cssText =
-        "all:initial;position:fixed;left:16px;right:16px;bottom:16px;z-index:2147483647;pointer-events:auto;font-family:system-ui,sans-serif;";
-      const box = document.createElement("div");
-      box.style.cssText =
-        "background:#1a1520;color:#f4eef8;border:1px solid #7c6b8a;border-radius:12px;padding:14px 16px;box-shadow:0 10px 30px rgba(0,0,0,.35);display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;";
-      const text = document.createElement("div");
-      text.style.cssText = "font-size:13px;line-height:1.35;max-width:520px;";
-      text.textContent =
-        "Gladiator Wallet was reloaded. Refresh this page, then reconnect Gladiator before swapping.";
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.textContent = "Refresh page";
-      btn.style.cssText =
-        "cursor:pointer;border:0;border-radius:8px;padding:8px 12px;background:#c4a0d8;color:#1a1520;font-weight:700;font-size:13px;";
-      btn.onclick = () => {
-        try {
-          location.reload();
-        } catch (_) {}
-      };
-      box.appendChild(text);
-      box.appendChild(btn);
-      host.appendChild(box);
-      (document.documentElement || document.body).appendChild(host);
-    } catch (_) {}
-  }
+  // No on-page "refresh / reconnect" banner — keep errors in the wallet bridge only.
+  function showRefreshBanner() {}
+  try {
+    const oldBanner = document.getElementById("gladiator-refresh-banner");
+    if (oldBanner) oldBanner.remove();
+  } catch (_) {}
 
   function replyToPage(id, result, error) {
     try {

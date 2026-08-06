@@ -7,6 +7,10 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.32:
+- Total balance: list connected sites on the right; clear when Disconnected
+- Remove on-page “Gladiator reloaded / refresh” banner
+
 v0.6.31:
 - Restore in-page Connect/Approve helpers accidentally removed with fee cleanup (0.6.29)
 - Jupiter inject connections register again and appear in Connections

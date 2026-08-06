@@ -1023,14 +1023,23 @@ body.is-extension .acct-drawer {
 
 .balance-conn {
   margin: 8px 0 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
   font-size: 0.78rem;
   font-weight: 600;
   letter-spacing: 0.02em;
-  line-height: 1.2;
+  line-height: 1.25;
   color: var(--muted);
+}
+
+.balance-conn-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .balance-conn-dot {
@@ -1042,6 +1051,20 @@ body.is-extension .acct-drawer {
   box-shadow: 0 0 0 3px rgba(196, 91, 91, 0.18);
 }
 
+.balance-conn-sites {
+  flex: 1 1 auto;
+  text-align: right;
+  font-weight: 500;
+  font-size: 0.72rem;
+  letter-spacing: 0.01em;
+  color: rgba(232, 238, 252, 0.62);
+  word-break: break-word;
+}
+
+.balance-conn-sites[hidden] {
+  display: none !important;
+}
+
 .balance-conn[data-state="connected"] {
   color: #8fd6a4;
 }
@@ -1050,6 +1073,10 @@ body.is-extension .acct-drawer {
   background: #3ecf70;
   box-shadow: 0 0 0 3px rgba(62, 207, 112, 0.2);
   animation: connDotPulse 1.8s ease-in-out infinite;
+}
+
+.balance-conn[data-state="connected"] .balance-conn-sites {
+  color: rgba(143, 214, 164, 0.85);
 }
 
 .balance-conn[data-state="disconnected"] {
