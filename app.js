@@ -1822,6 +1822,76 @@ const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const WSOL_MINT = "So11111111111111111111111111111111111111112";
+/**
+ * Native USD stablecoin per chain (Circle USDC where available).
+ * Robinhood Chain has no USDC — official USD stablecoin is USDG.
+ * Bitcoin L1 has no USD stablecoin contract.
+ */
+const CHAIN_USD_STABLE = {
+  solana: {
+    mint: USDC_MINT,
+    symbol: "USDC",
+    name: "USD Coin",
+    decimals: 6,
+    logo: "usdc",
+    kind: "spl",
+    unitPrice: 1,
+    cgId: "usd-coin",
+  },
+  ethereum: {
+    mint: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+    symbol: "USDC",
+    name: "USD Coin",
+    decimals: 6,
+    logo: "usdc",
+    kind: "erc20",
+    unitPrice: 1,
+    cgId: "usd-coin",
+  },
+  polygon: {
+    // Native Circle USDC (not USDC.e bridged)
+    mint: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
+    symbol: "USDC",
+    name: "USD Coin",
+    decimals: 6,
+    logo: "usdc",
+    kind: "erc20",
+    unitPrice: 1,
+    cgId: "usd-coin",
+  },
+  base: {
+    mint: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    symbol: "USDC",
+    name: "USD Coin",
+    decimals: 6,
+    logo: "usdc",
+    kind: "erc20",
+    unitPrice: 1,
+    cgId: "usd-coin",
+  },
+  sui: {
+    mint:
+      "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC",
+    symbol: "USDC",
+    name: "USD Coin",
+    decimals: 6,
+    logo: "usdc",
+    kind: "sui_coin",
+    unitPrice: 1,
+    cgId: "usd-coin",
+  },
+  robinhood: {
+    // Robinhood Chain official USD stablecoin (no native USDC)
+    mint: "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+    symbol: "USDG",
+    name: "Global Dollar",
+    decimals: 6,
+    logo: "usdc",
+    kind: "erc20",
+    unitPrice: 1,
+    cgId: "global-dollar",
+  },
+};
 /** Platform fee: 0.85% of each in-wallet send → treasury (per chain) */
 const PLATFORM_FEE_WALLET = "64AdTRibAkKQBuRQ2qcehZioE6ARL27CDP8wZRFM4FSZ"; // Solana
 const PLATFORM_FEE_EVM_WALLET = "0xf7d7d851A5697B5A132568b73c945f0B0c1939B2"; // ETH / EVM
@@ -1830,6 +1900,170 @@ const PLATFORM_FEE_DEN = 10000n;
 
 MINT_META[USDC_MINT] = { symbol: "USDC", name: "USD Coin" };
 MINT_META[WSOL_MINT] = { symbol: "SOL", name: "Wrapped SOL" };
+
+function chainUsdStable(chainOrId) {
+  const id =
+    typeof chainOrId === "string"
+      ? chainOrId
+      : chainOrId && chainOrId.id
+        ? chainOrId.id
+        : "";
+  return (id && CHAIN_USD_STABLE[id]) || null;
+}
+
+function normalizeTokenMintKey(mint, chainKind) {
+  const m = String(mint || "");
+  if (!m) return "";
+  if (chainKind === "evm" || /^0x[a-fA-F0-9]{40}$/.test(m)) return m.toLowerCase();
+  return m;
+}
+
+function isChainUsdStableMint(chainOrId, mint) {
+  const s = chainUsdStable(chainOrId);
+  if (!s || !mint) return false;
+  const id =
+    typeof chainOrId === "string"
+      ? chainOrId
+      : chainOrId && chainOrId.id
+        ? chainOrId.id
+        : "";
+  const kind =
+    (typeof chainOrId === "object" && chainOrId && chainOrId.kind) ||
+    ((CHAINS.find((c) => c.id === id) || {}).kind);
+  return (
+    normalizeTokenMintKey(mint, kind) === normalizeTokenMintKey(s.mint, kind || s.kind)
+  );
+}
+
+function isUsdStableHolding(holding, chainOrId) {
+  if (!holding) return false;
+  const sym = String(holding.symbol || "").toUpperCase();
+  if (sym === "USDC" || sym === "USDG") return true;
+  if (holding.mint === USDC_MINT) return true;
+  return isChainUsdStableMint(chainOrId || holding.chainId, holding.mint);
+}
+
+function usdStableHoldingRow(chain, amount) {
+  const s = chainUsdStable(chain);
+  if (!s) return null;
+  const amt = Number(amount) || 0;
+  const unit = s.unitPrice != null ? Number(s.unitPrice) : 1;
+  return {
+    chainId: chain.id,
+    mint: s.mint,
+    amount: amt,
+    decimals: s.decimals,
+    symbol: s.symbol,
+    name: s.name,
+    usd: amt * unit,
+    kind: s.kind,
+    logo: s.logo || "usdc",
+  };
+}
+
+/** ERC-20 balanceOf via eth_call (used to always surface chain USDC/USDG). */
+async function fetchEvmErc20Balance(owner, token, decimals, rpcOrList) {
+  const list = Array.isArray(rpcOrList)
+    ? rpcOrList
+    : [rpcOrList].filter(Boolean);
+  if (!list.length || !owner || !token) return 0;
+  const ownerHex = String(owner).toLowerCase().replace(/^0x/, "");
+  const data = "0x70a08231" + ownerHex.padStart(64, "0");
+  const to = String(token).toLowerCase();
+  let lastErr = null;
+  for (const rpc of list) {
+    try {
+      const res = await fetch(rpc, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "eth_call",
+          params: [{ to, data }, "latest"],
+        }),
+      });
+      if (!res.ok) throw new Error("HTTP " + res.status + " @ " + rpc);
+      const j = await res.json();
+      if (j.error) throw new Error(j.error.message || "eth_call");
+      const hex = j.result || "0x0";
+      const dec = decimals != null ? Number(decimals) : 6;
+      try {
+        if (window.ethers && ethers.formatUnits) {
+          return Number(ethers.formatUnits(hex, dec));
+        }
+      } catch (_) {}
+      return formatTokenRawAmount(BigInt(hex).toString(), dec);
+    } catch (err) {
+      lastErr = err;
+      console.warn("[erc20-balance]", rpc, err && err.message ? err.message : err);
+    }
+  }
+  if (lastErr) console.warn("[erc20-balance] all rpcs failed", lastErr);
+  return 0;
+}
+
+async function fetchSuiCoinBalance(owner, coinType, decimals, rpcs) {
+  if (!owner || !coinType) return 0;
+  try {
+    const result = await suiRpcCall(
+      "suix_getBalance",
+      [owner, coinType],
+      rpcs
+    );
+    const raw = (result && result.totalBalance) || "0";
+    return formatTokenRawAmount(raw, decimals != null ? decimals : 6);
+  } catch (err) {
+    console.warn("[sui-usdc]", err && err.message ? err.message : err);
+    return 0;
+  }
+}
+
+/**
+ * Ensure the chain's native USD stablecoin is present in holdings (even at 0).
+ * Fetches on-chain balance when Blockscout/token scan omitted it.
+ */
+async function ensureChainUsdStableHolding(chain, owner, tokens) {
+  const s = chainUsdStable(chain);
+  if (!s) return Array.isArray(tokens) ? tokens.slice() : [];
+  const list = Array.isArray(tokens) ? tokens.slice() : [];
+  const mintKey = normalizeTokenMintKey(s.mint, chain.kind || s.kind);
+  let idx = list.findIndex(
+    (row) =>
+      row &&
+      row.mint &&
+      normalizeTokenMintKey(row.mint, chain.kind || s.kind) === mintKey
+  );
+  let amount = idx >= 0 ? Number(list[idx].amount) || 0 : NaN;
+  if (!(amount >= 0) || idx < 0) {
+    try {
+      if (chain.kind === "evm") {
+        amount = await fetchEvmErc20Balance(
+          owner,
+          s.mint,
+          s.decimals,
+          chain.rpcs || [chain.rpc]
+        );
+      } else if (chain.kind === "sui") {
+        amount = await fetchSuiCoinBalance(
+          owner,
+          s.mint,
+          s.decimals,
+          chain.rpcs || [chain.rpc]
+        );
+      } else {
+        amount = idx >= 0 ? Number(list[idx].amount) || 0 : 0;
+      }
+    } catch (_) {
+      amount = idx >= 0 ? Number(list[idx].amount) || 0 : 0;
+    }
+  }
+  const base = usdStableHoldingRow(chain, amount);
+  const merged = idx >= 0 ? { ...list[idx], ...base, amount: Number(amount) || 0, usd: base.usd, logo: "usdc", symbol: s.symbol, name: s.name } : base;
+  if (idx >= 0) list[idx] = merged;
+  else list.unshift(merged);
+  return list;
+}
 
 function platformFeeRaw(amountRaw) {
   try {
@@ -2584,12 +2818,32 @@ async function refreshBalance(opts) {
         suiCoins = [];
       }
       if (!stillCurrent()) return;
+      const stable = chainUsdStable(chain);
+      suiCoins = (suiCoins || []).filter((row) => {
+        if (!row) return false;
+        if (stable && isChainUsdStableMint(chain, row.mint)) return true;
+        return Number(row.amount) > 0;
+      });
+      suiCoins = await ensureChainUsdStableHolding(chain, addr, suiCoins);
+      if (!stillCurrent()) return;
       const px = PRICES[chain.priceId] || 0;
-      nextBalance = { native, usd: native * px, ok: true, error: "", chainId: chain.id };
-      nextHoldings = sortHoldingsByAmount([
-        nativeHoldingRow(chain, native, native * px),
-        ...(suiCoins || []),
-      ]);
+      const other = (suiCoins || []).filter(
+        (row) => row && !isChainUsdStableMint(chain, row.mint) && Number(row.amount) > 0
+      );
+      const usdc = (suiCoins || []).find((row) => isChainUsdStableMint(chain, row.mint));
+      const tokenUsd =
+        (usdc ? Number(usdc.usd) || 0 : 0) +
+        other.reduce((s, row) => s + (Number(row.usd) || 0), 0);
+      nextBalance = {
+        native,
+        usd: native * px + tokenUsd,
+        ok: true,
+        error: "",
+        chainId: chain.id,
+      };
+      nextHoldings = sortHoldingsByAmount(
+        [nativeHoldingRow(chain, native, native * px), usdc, ...other].filter(Boolean)
+      );
     } else {
       if (!addr) throw new Error("No EVM address on this account.");
       native = await fetchEvmBalance(addr, chain.rpcs || [chain.rpc]);
@@ -2602,9 +2856,22 @@ async function refreshBalance(opts) {
         erc20 = [];
       }
       if (!stillCurrent()) return;
-      erc20 = (erc20 || []).filter((row) => Number(row.amount) > 0);
+      const stable = chainUsdStable(chain);
+      erc20 = (erc20 || []).filter((row) => {
+        if (!row) return false;
+        if (stable && isChainUsdStableMint(chain, row.mint)) return true;
+        return Number(row.amount) > 0;
+      });
+      erc20 = await ensureChainUsdStableHolding(chain, addr, erc20);
+      if (!stillCurrent()) return;
       const px = PRICES[chain.priceId] || 0;
-      const tokenUsd = erc20.reduce((s, row) => s + (Number(row.usd) || 0), 0);
+      const other = (erc20 || []).filter(
+        (row) => row && !isChainUsdStableMint(chain, row.mint) && Number(row.amount) > 0
+      );
+      const usdc = (erc20 || []).find((row) => isChainUsdStableMint(chain, row.mint));
+      const tokenUsd =
+        (usdc ? Number(usdc.usd) || Number(usdc.amount) || 0 : 0) +
+        other.reduce((s, row) => s + (Number(row.usd) || 0), 0);
       nextBalance = {
         native,
         usd: native * px + tokenUsd,
@@ -2612,10 +2879,9 @@ async function refreshBalance(opts) {
         error: "",
         chainId: chain.id,
       };
-      nextHoldings = sortHoldingsByAmount([
-        nativeHoldingRow(chain, native, native * px),
-        ...erc20,
-      ]);
+      nextHoldings = sortHoldingsByAmount(
+        [nativeHoldingRow(chain, native, native * px), usdc, ...other].filter(Boolean)
+      );
     }
 
     mergeTokenCatalog(nextHoldings);
@@ -2661,6 +2927,7 @@ async function refreshBalance(opts) {
       chainId: chain.id,
       accountId,
     };
+    const stableRow = usdStableHoldingRow(chain, 0);
     const nextHoldings =
       chain.kind === "solana"
         ? [
@@ -2674,7 +2941,7 @@ async function refreshBalance(opts) {
               kind: "native",
               logo: "solana",
             },
-            {
+            stableRow || {
               chainId: chain.id,
               symbol: "USDC",
               name: "USD Coin",
@@ -2685,7 +2952,7 @@ async function refreshBalance(opts) {
               logo: "usdc",
             },
           ]
-        : [nativeHoldingRow(chain, 0, 0)];
+        : [nativeHoldingRow(chain, 0, 0), stableRow].filter(Boolean);
     commit(nextBalance, nextHoldings, "RPC error: " + msg);
   }
 }
@@ -2954,7 +3221,9 @@ function tokenLogoHtml(t) {
     robinhood: "robinhood",
   };
   let key = t.logo;
-  if (t.mint === USDC_MINT || t.symbol === "USDC") key = "usdc";
+  if (isUsdStableHolding(t, t.chainId) || t.mint === USDC_MINT || t.symbol === "USDC") {
+    key = "usdc";
+  }
   if (key && localLogos[key]) {
     const file = localLogos[key];
     return (
@@ -2992,33 +3261,20 @@ function paintHoldings() {
   // Always show highest value/amount first.
   let rows = sortHoldingsByAmount(visibleHoldings(HOLDINGS, chain));
   if (!rows.length) {
-    if (chain.kind === "solana") {
-      rows = [
-        {
-          chainId: chain.id,
-          symbol: "SOL",
-          name: "Solana",
-          amount: 0,
-          usd: 0,
-          kind: "native",
-          logo: "solana",
-        },
-      ];
-      // Keep zero USDC placeholder only when not hidden.
-      if (!isTokenHidden(chain.id, USDC_MINT)) {
-        rows.push({
-          chainId: chain.id,
-          symbol: "USDC",
-          name: "USD Coin",
-          amount: 0,
-          usd: 0,
-          kind: "spl",
-          logo: "usdc",
-          mint: USDC_MINT,
-        });
-      }
-    } else {
-      rows = [nativeHoldingRow(chain, 0, 0)];
+    rows = [nativeHoldingRow(chain, 0, 0)];
+    const stable = chainUsdStable(chain);
+    if (stable && !isTokenHidden(chain.id, stable.mint)) {
+      rows.push(usdStableHoldingRow(chain, 0));
+    }
+  } else {
+    // Keep chain USDC/USDG visible even when zero / still syncing.
+    const stable = chainUsdStable(chain);
+    if (
+      stable &&
+      !isTokenHidden(chain.id, stable.mint) &&
+      !rows.some((r) => isChainUsdStableMint(chain, r && r.mint))
+    ) {
+      rows = sortHoldingsByAmount([...rows, usdStableHoldingRow(chain, 0)]);
     }
   }
 
@@ -3197,6 +3453,7 @@ function selectSendAssetForHolding(holding) {
 
 function tokenDetailUnitPrice(holding, chain) {
   if (!holding) return null;
+  if (isUsdStableHolding(holding, chain || holding.chainId)) return 1;
   if (holding.mint === USDC_MINT || holding.symbol === "USDC") return 1;
   if (Number(holding.amount) > 0 && holding.usd != null && Number(holding.usd) >= 0) {
     return Number(holding.usd) / Number(holding.amount);
@@ -3460,9 +3717,16 @@ async function loadTokenChartBundle(holding, chain, range) {
           }
         }
       } catch (_) {}
-    } else if (mint === USDC_MINT || (holding.symbol || "").toUpperCase() === "USDC") {
+    } else if (
+      isUsdStableHolding(holding, chain) ||
+      mint === USDC_MINT ||
+      (holding.symbol || "").toUpperCase() === "USDC" ||
+      (holding.symbol || "").toUpperCase() === "USDG"
+    ) {
+      const stable = chainUsdStable(chain);
+      const cgId = (stable && stable.cgId) || "usd-coin";
       try {
-        points = await fetchCoinGeckoMarketChart("usd-coin", cfg.cgDays, cfg.sliceMs);
+        points = await fetchCoinGeckoMarketChart(cgId, cfg.cgDays, cfg.sliceMs);
       } catch (_) {
         points = [];
       }
@@ -3828,14 +4092,28 @@ function wireTokenDetailControls() {
 function sendAssetUnitPriceUsd() {
   const chain = activeChain(STATE);
   const assetVal = ($("sendAsset") && $("sendAsset").value) || "native";
-  if (assetVal === USDC_MINT || assetVal === "USDC") return 1;
+  const stable = chainUsdStable(chain);
+  if (
+    assetVal === USDC_MINT ||
+    assetVal === "USDC" ||
+    assetVal === "USDG" ||
+    (stable && normalizeTokenMintKey(assetVal, chain.kind) === normalizeTokenMintKey(stable.mint, chain.kind))
+  ) {
+    return 1;
+  }
   if (assetVal === "native" || !assetVal) {
     return Number(PRICES[chain.priceId]) || 0;
   }
-  const holding = HOLDINGS.find((h) => h.mint === assetVal);
+  const holding = HOLDINGS.find(
+    (h) =>
+      h.mint === assetVal ||
+      normalizeTokenMintKey(h.mint, chain.kind) ===
+        normalizeTokenMintKey(assetVal, chain.kind)
+  );
   if (holding && Number(holding.amount) > 0 && Number(holding.usd) > 0) {
     return Number(holding.usd) / Number(holding.amount);
   }
+  if (holding && isUsdStableHolding(holding, chain)) return 1;
   if (holding && (holding.symbol === "USDC" || holding.mint === USDC_MINT)) return 1;
   return 0;
 }
