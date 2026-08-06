@@ -663,7 +663,28 @@ function setImportFieldVisible(el, on) {
 }
 
 /** Show only the private-key import field for the active chain. */
+function paintLedgerSeedUi() {
+  const ledger = isLedgerAccount(activeAccount(STATE));
+  const note = $("ledgerSeedNote");
+  const importPanel = $("importSeedPanel");
+  const backupBtn = $("viewBackupBtn");
+  const backupReveal = $("backupReveal");
+  if (note) note.hidden = !ledger;
+  if (importPanel) importPanel.hidden = !!ledger;
+  if (backupBtn) backupBtn.hidden = !!ledger;
+  if (ledger) {
+    if (backupReveal && !backupReveal.hidden) hideBackup();
+    if ($("importMnemonic")) $("importMnemonic").value = "";
+    if ($("importSolSecret")) $("importSolSecret").value = "";
+    if ($("importEvmSecret")) $("importEvmSecret").value = "";
+    if ($("importBtcSecret")) $("importBtcSecret").value = "";
+    if ($("importSuiSecret")) $("importSuiSecret").value = "";
+  }
+}
+
 function paintImportFields() {
+  paintLedgerSeedUi();
+  if (isLedgerAccount(activeAccount(STATE))) return;
   const chain = activeChain(STATE);
   const kind = (chain && chain.kind) || "solana";
   const showSol = kind === "solana";
@@ -7743,11 +7764,17 @@ function renderAccountsPanel() {
           STATE.activeAccountId = a.id;
           await storageSet(STATE);
           paintSwitchers();
+          paintLedgerSeedUi();
           showToast(
-            (a.name || "Ledger") +
-              " · path " +
-              ((a.ledger && a.ledger.path) || "44'/501'/" + ledgerAccountIndex(a) + "'")
+            "Seed phrase is not stored in the wallet for Ledger accounts. Connect your Ledger device."
           );
+          const status = $("accountStatus");
+          if (status) {
+            status.textContent =
+              "Seed phrase is not stored in the wallet for Ledger accounts. Connect your Ledger device. · path " +
+              ((a.ledger && a.ledger.path) ||
+                "44'/501'/" + ledgerAccountIndex(a) + "'");
+          }
           renderAccountsPanel();
           return;
         }
@@ -7783,9 +7810,14 @@ function renderAccountsPanel() {
       ? "Solana only: paste a Helius API key or <code>https://mainnet.helius-rpc.com/?api-key=YOUR_KEY</code> and Save. Ethereum / other chains use built-in public RPCs — do not paste those here."
       : "Solana only: put <code>HELIUS_API_KEY=...</code> in <code>.env</code> and run <code>serve.py</code>. Ethereum uses built-in public RPCs.";
   }
+  paintLedgerSeedUi();
 }
 
-function askRemoveAccount(label) {
+function askRemoveAccount(label, opts) {
+  const ledger = !!(opts && opts.ledger);
+  const warn = ledger
+    ? "This removes the Ledger account from this wallet. Your keys stay on the device — reconnect Ledger anytime. Seed phrase is not stored in the wallet for Ledger accounts."
+    : "Doing so will remove the account from the wallet. If you didn't back up the seed phrase, you may lose funds permanently.";
   const modal = $("removeModal");
   const title = $("removeModalTitle");
   const body = $("removeModalBody");
@@ -7793,17 +7825,12 @@ function askRemoveAccount(label) {
   const no = $("removeModalNo");
   if (!modal || !yes || !no) {
     return Promise.resolve(
-      window.confirm(
-        "Remove " +
-          label +
-          "?\n\nThis removes the account from the wallet. If you did not back up the seed phrase, you may lose funds permanently."
-      )
+      window.confirm("Remove " + label + "?\n\n" + warn)
     );
   }
   if (title) title.textContent = "Remove " + label + "?";
   if (body) {
-    body.textContent =
-      "Doing so will remove the account from the wallet. If you didn't back up the seed phrase, you may lose funds permanently.";
+    body.textContent = warn;
   }
   modal.hidden = false;
   modal.classList.add("is-open");
@@ -7843,7 +7870,7 @@ async function removeAccount(accountId) {
     return;
   }
   const label = acc.name || shortAddr(acc.solana && acc.solana.publicKey) || "wallet";
-  const ok = await askRemoveAccount(label);
+  const ok = await askRemoveAccount(label, { ledger: isLedgerAccount(acc) });
   if (!ok) return;
 
   const wasActive = STATE.activeAccountId === accountId;
@@ -8116,19 +8143,14 @@ async function showBackup() {
   const current = activeAccount(STATE);
   if (isLedgerAccount(current)) {
     hideBackup();
+    paintLedgerSeedUi();
     showToast(
-      (current.name || "Ledger") +
-        " is a hardware wallet — keys stay on the device"
+      "Seed phrase is not stored in the wallet for Ledger accounts. Connect your Ledger device."
     );
     const status = $("accountStatus");
     if (status) {
       status.textContent =
-        "Ledger account “" +
-        (current.name || "Ledger") +
-        "” · path " +
-        ((current.ledger && current.ledger.path) ||
-          "44'/501'/" + ledgerAccountIndex(current) + "'") +
-        ". Rename it in Settings.";
+        "Seed phrase is not stored in the wallet for Ledger accounts. Connect your Ledger device.";
     }
     return;
   }

@@ -12,7 +12,7 @@
       href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=0.6.15" />
+    <link rel="stylesheet" href="./styles.css?v=0.6.16" />
   </head>
   <body class="is-local">
     <div class="atmosphere" aria-hidden="true">
@@ -357,6 +357,13 @@
             </details>
           </div>
 
+          <div class="ledger-seed-note" id="ledgerSeedNote" hidden>
+            <p class="ledger-seed-note-text">
+              Seed phrase is not stored in the wallet for Ledger accounts.
+              Connect your Ledger device.
+            </p>
+          </div>
+
           <details class="photon-details" open>
             <summary>Ledger hardware wallet</summary>
             <div class="photon-details-body">
@@ -395,7 +402,7 @@
             </div>
           </details>
 
-          <details class="photon-details" open>
+          <details class="photon-details" open id="importSeedPanel">
             <summary id="importPanelSummary">Import seed phrase / key</summary>
             <div class="photon-details-body">
               <label class="field">
@@ -721,6 +728,6 @@
     <script src="./lib/ledger-solana.bundle.js?v=0.6.6"></script>
     <script src="./lib/ledger-eth.bundle.js?v=0.6.11"></script>
     <script src="./config.js"></script>
-    <script src="./app.js?v=0.6.15"></script>
+    <script src="./app.js?v=0.6.16"></script>
   </body>
 </html>
