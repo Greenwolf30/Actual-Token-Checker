@@ -1,102 +1,57 @@
-# Actual Data Token Checker
+# Gladiator Wallet (local)
 
-Local + web token research tool (DexScreener markets, holders, bundles, alerts, About narrative).
-
-**This repo has no API keys.** Copy `.env.example` → `.env` and add your own.
-
-## Chains
-
-| Chain | Market (DexScreener) | Holders / bundles |
-|-------|----------------------|-------------------|
-| **Solana** | Yes | Yes (Helius / Rugcheck / …) |
-| **Robinhood Chain** (`robinhood`, chain id **4663**) | Yes | Explorer link only for now |
-| Ethereum / Base / Arbitrum / … | Yes | Not fully wired |
-
-Examples:
-- Chain filter: **robinhood**
-- Query: `0x…` token on Robinhood, or `robinhood:0x…`
+Keys stay in the browser. Solana RPC key stays in a local **`.env`** and is used by `serve.py` — never pasted into the UI.
 
 ## Setup
 
-```bash
-pip install -r requirements.txt
-cp .env.example .env
-# edit .env with HELIUS_API_KEY etc.
+1. Copy `.env.example` → `.env`
+2. Put your key in `.env`:
+
+```env
+HELIUS_API_KEY=your_key_here
 ```
 
-## Desktop app
+Or:
 
-```bash
-python desktop_app.py
+```env
+SOLANA_RPC_URL=https://mainnet.helius-rpc.com/?api-key=your_key_here
 ```
 
-Build Windows exe (optional):
+## Run (PowerShell)
 
-```bash
-python build_exe.py
+First time only — get the folder on your Desktop, then:
+
+```powershell
+cd $env:USERPROFILE\Desktop\Gladiator-Wallet
+Copy-Item .env.example .env
+notepad .env   # set HELIUS_API_KEY=...
+.\start.ps1
 ```
 
-## Website
+After that, just:
 
-```bash
-python run_web.py
-# open http://127.0.0.1:8080/
+```powershell
+cd $env:USERPROFILE\Desktop\Gladiator-Wallet
+.\start.ps1
 ```
 
-Provider keys stay on the server only (never in `web/`).
+To pull file updates (keeps your `.env`):
 
-### RugWatch integration (flags + Ruggers Upload)
-
-| Feature | What it does |
-|--------|----------------|
-| **RugWatch** checkbox (yellow) | Analyze includes or skips flagged-wallet merge |
-| Top nav **RugWatch** (yellow, next to logo) | Opens RugWatch site (`web/config.js` → `rugwatchUrl`) |
-| Ruggers **Upload** (yellow) | Any seller section → RugWatch local DB + Push cloud |
-| Ruggers **Export** | Download JSON/txt for manual RugWatch import (all seller sections) |
-| Ruggers lanes | Creator · Similar-sized · Multi · Multi-send · Shared funder · Fresh · Single · Flagged (RugWatch) · Swing |
-| Bundles Total | Multi-account always + Similar-sized only when Fresh/Multi-send/Shared SOL all off; Single list never in Total |
-| Similar / Single | Exact & near-exact bag clusters (≥3, ≥0.15%) + Rugcheck insider → Similar only; no bleed into Single |
-| Holders flags | Merges **local** + **cloud** RugWatch lists unique-by-address; tags `[local]` / `[cloud]` / `[both]` |
-
-Render ATC env (cloud flags):
-
-```text
-RUGWATCH_WALLETS_URL=https://raw.githubusercontent.com/Greenwolf30/RugWatch/main/data/wallets_index.json
+```powershell
+.\update.ps1
 ```
 
-Full user guide: [DOCUMENTATION.txt on GitHub](https://github.com/Greenwolf30/Actual-Token-Checker/blob/main/DOCUMENTATION.txt) (also `web/documentation.txt` / `/docs.html` on the site).  
-**About tab sources** (Pump.fun API, X, Reddit, LinkedIn, news, etc.): see section **10. ABOUT** in that guide.
+Do **not** use `py -m http.server` — use `.\start.ps1` / `serve.py` so `.env` RPC works.
 
-Public deploy notes: see `DEPLOY.md`.
+## WalletConnect (pump.fun)
 
-## Layout
+1. Get a free Project ID at [cloud.reown.com](https://cloud.reown.com)
+2. Extension → ⋮ → **WalletConnect**
+3. Paste Project ID, then a fresh `wc:` URI from pump.fun
+4. Keep the popup open while connecting / signing (URIs expire quickly)
 
-| Path | Role |
-|------|------|
-| `desktop_app.py` | Desktop UI |
-| `token_tracker/` | Analyze, holders, bundles, about, alerts |
-| `web/` + `web_server.py` | Website UI + API |
-| `market_data/` | Optional local market/intel DB stack |
-| `.env.example` | Key names only |
+## Notes
 
-## Public view counter
-
-The website tracks **profile views** (page loads) and **analyzes**, shown on the UI and via public endpoints (no keys, no raw IPs):
-
-| URL | What |
-|-----|------|
-| `/api/stats` | JSON counters |
-| `/badge.svg` | Embeddable badge |
-| `/api/view` | Records one profile view |
-
-Example badge markdown (after deploy):
-
-```markdown
-![views](https://YOUR-RENDER-URL/badge.svg)
-```
-
-Counts live in `data/view_stats.json` (gitignored). On free hosts they may reset on redeploy without a persistent disk.
-
-## Disclaimer
-
-Heuristics only. Not financial advice.
+- Top-bar address switches with the selected chain (Solana / EVM / Bitcoin / Sui)
+- Optional custom RPC override in Accounts is Solana/Helius only
+- Never commit `.env`

@@ -31,3 +31,9 @@ Thumbs.db
 .idea/
 .vscode/
 *.log
+
+# JS deps
+node_modules/
+package-lock.json
+wc-build/node_modules/
+wc-build/package-lock.json

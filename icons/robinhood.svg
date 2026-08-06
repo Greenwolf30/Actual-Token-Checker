@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <circle cx="64" cy="64" r="64" fill="#CCFF00"/>
+  <g transform="translate(64,64) rotate(-38) scale(1.05)">
+    <!-- left smooth body -->
+    <path fill="#000" d="M-6,-46 C-28,-30 -34,-8 -32,12 C-30,34 -18,48 -4,52 L-2,48 C-14,42 -24,28 -26,10 C-28,-8 -22,-28 -4,-42 Z"/>
+    <!-- spine -->
+    <path fill="#000" d="M-3,-54 L3,-54 L5,50 L-1,54 L-5,50 Z"/>
+    <!-- tip -->
+    <path fill="#000" d="M0,-62 L8,-48 L-8,-48 Z"/>
+    <!-- right vanes (4) -->
+    <path fill="#000" d="M4,-42 L38,-34 L40,-28 L6,-22 Z"/>
+    <path fill="#000" d="M5,-18 L42,-8 L42,-1 L6,6 Z"/>
+    <path fill="#000" d="M5,10 L40,22 L38,28 L6,32 Z"/>
+    <path fill="#000" d="M5,36 L34,46 L32,52 L5,50 Z"/>
+    <!-- green gaps between vanes -->
+    <path fill="#CCFF00" d="M8,-22 L36,-28 L36,-24 L8,-18 Z"/>
+    <path fill="#CCFF00" d="M8,6 L38,-1 L38,3 L8,10 Z"/>
+    <path fill="#CCFF00" d="M8,32 L36,28 L36,32 L8,36 Z"/>
+  </g>
+</svg>

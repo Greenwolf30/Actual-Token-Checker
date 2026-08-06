@@ -1,0 +1,597 @@
+================================================================================
+GLADIATOR WALLET — USER DOCUMENTATION
+================================================================================
+Product:   Gladiator Wallet (Chrome / Opera extension)
+Version:   0.6.52 (documentation snapshot)
+Audience:  Everyday users and operators
+Status:    Documentation-only repository (extension source not included here)
+
+
+--------------------------------------------------------------------------------
+1. WHAT IT IS
+--------------------------------------------------------------------------------
+Gladiator is a multi-chain browser wallet extension.
+
+It lets you:
+  • Hold and view balances across several networks
+  • Send and receive assets
+  • View token holdings and a simple price chart
+  • Connect to selected Solana / EVM dApps
+  • Use WalletConnect (for example with Jupiter)
+  • Connect a Ledger Nano for Solana + EVM chains (keys stay on the device)
+
+Supported networks in the wallet:
+  • Solana
+  • Ethereum
+  • Bitcoin
+  • Polygon
+  • Sui
+  • Robinhood Ethereum
+  • Base (shown as Ethereum Base)
+
+Brand / UI note:
+  Gladiator uses a dark navy + lavender look. Total USD balance is shown in a
+  muted gold tone on the home screen.
+
+
+--------------------------------------------------------------------------------
+2. INSTALL (FIRST TIME)
+--------------------------------------------------------------------------------
+1. Unzip the Gladiator pack you received (gofile / zip).
+2. Open Chrome or Opera → chrome://extensions (or opera://extensions).
+3. Turn on Developer mode.
+4. Click “Load unpacked”.
+5. Select the unzipped Gladiator folder (the folder that contains manifest.json).
+6. Pin Gladiator from the puzzle-piece extensions menu.
+7. Click the Gladiator toolbar icon to open the wallet.
+
+If Chrome asks for HID / Ledger permission later, choose Allow.
+
+
+--------------------------------------------------------------------------------
+3. UPDATE WITHOUT LOSING YOUR WALLET (PREFERRED)
+--------------------------------------------------------------------------------
+Do NOT remove the extension if you only want to update.
+
+1. Unzip the new pack.
+2. Copy everything INSIDE the new folder into your EXISTING Gladiator folder
+   (overwrite files).
+3. chrome://extensions → Gladiator → Reload (do NOT Remove).
+4. If Chrome asks for HID / Ledger permission, Allow.
+5. Click the toolbar icon once.
+6. After any Reload: refresh open dApp tabs (e.g. jup.ag), then reconnect
+   Gladiator on that site before swapping again.
+
+Removing the extension can wipe local wallet data. Prefer overwrite + Reload.
+
+
+--------------------------------------------------------------------------------
+4. FIRST OPEN / CREATE A SOFTWARE WALLET
+--------------------------------------------------------------------------------
+On first launch Gladiator creates a local software wallet for you.
+
+A software wallet means:
+  • A 24-word seed phrase is generated on your device
+  • Private keys are stored in the browser / extension storage
+  • Anyone with the seed can move funds — back it up offline
+
+From Accounts you can also:
+  • Generate another software wallet
+  • Import a 12/24-word seed
+  • Import a private key for the currently selected chain
+  • Connect Ledger (hardware)
+
+
+--------------------------------------------------------------------------------
+5. HOW ADDRESSES WORK (ONE SEED → MANY CHAINS)
+--------------------------------------------------------------------------------
+When you generate or import a seed phrase, Gladiator derives keys for:
+
+  Solana     → Solana address
+  EVM        → one key shared by Ethereum, Polygon, Base, Robinhood Ethereum
+  Bitcoin    → native SegWit (bc1…) address
+  Sui        → Sui address
+
+Important:
+  • Switching the chain in the top bar only changes which address / balance
+    you are looking at.
+  • It does NOT create a brand-new seed each time you switch chains.
+  • Solana and EVM keys are different (do not paste a Solana key into EVM or
+    the reverse).
+
+Ledger is different — see section 12. Ledger uses separate apps on the device
+for Solana vs Ethereum; connecting once for Solana does not automatically
+know your ETH address until you Link EVM.
+
+
+--------------------------------------------------------------------------------
+6. HOME SCREEN
+--------------------------------------------------------------------------------
+The home screen shows:
+
+  • Total balance in USD (for the active wallet + visible holdings)
+  • Portfolio PnL under the $ amount ($ change · percent)
+  • Native coin price + small line chart beside the $ (SOL, ETH, BTC, etc.)
+  • Native balance for the selected chain (SOL, ETH, BTC, etc.)
+  • Sync / connection status
+  • Send / Receive / Sync buttons
+  • Holdings list (token name, amount, USD value)
+  • Green “Ledger” tag next to Total balance when the active account is Ledger
+
+Tips:
+  • Use the top-bar chain control to switch networks.
+  • Tap Sync after sending/receiving or if balances look stale.
+  • Tap a token row to open the token detail page.
+
+
+--------------------------------------------------------------------------------
+6.1 HOW TO READ PORTFOLIO PnL (under Total balance)
+--------------------------------------------------------------------------------
+Example under the big $ amount:
+
+    +$0.40  ·  +0.048%
+
+Meaning:
+  • +$0.40   — your Total balance (USD) went up by forty cents since the
+                wallet saved the first snapshot for this account + chain
+  • +0.048%  — that same change as a percent of the starting total
+
+Notes:
+  • This is wallet / portfolio value change, NOT the native coin’s market
+    price by itself (a token transfer or price move on any holding can move it).
+  • Negative values mean the total went down (e.g. -$1.20 · -0.15%).
+  • It needs at least two saved snapshots before it appears. Snapshots are
+    stored locally on this browser install (not uploaded).
+  • Snapshots are recorded when balances sync successfully — roughly at most
+    about every 10 minutes unless the total moves enough to save sooner.
+  • Switching account or chain uses a separate PnL history for that pair.
+
+
+--------------------------------------------------------------------------------
+6.2 NATIVE PRICE + LINE CHART (beside the $)
+--------------------------------------------------------------------------------
+Beside Total balance you see something like:
+
+    SOL $145.20 +1.2%
+    [green or red line chart]
+
+Meaning:
+  • SOL $145.20  — live-ish USD price of the active chain’s native coin
+  • +1.2%        — change across the chart’s ~24h series (first → last point)
+  • Green chart / delta  — native price is up over that window
+  • Red chart / delta    — native price is down over that window
+
+Same layout for every native chain (SOL, ETH, BTC, MATIC, SUI, etc.).
+
+How often it updates (not tick-by-tick “real time”):
+
+  Two different clocks — do not confuse them:
+
+  1) USD price number (e.g. SOL $145.20)
+     • Refreshes about every 2 minutes while Home is open.
+     • Providers alternate each cycle to share load:
+         minute ~0  → CoinGecko simple/price
+         minute ~2  → DexScreener (wrapped native pools)
+         minute ~4  → CoinGecko again
+         …so each provider is hit about once every 4 minutes.
+     • Sync always force-refreshes via CoinGecko immediately.
+     • Opening Home also pulls a quote (subject to the same 2‑minute auto throttle
+       after the first successful auto fetch).
+
+  2) Line chart (the sparkline beside the price)
+     • Built from CoinGecko’s ~1‑day market series (many points), not from the
+       2‑minute quote feed above.
+     • Cached about 15 minutes per coin. A cold cache (open Home / switch chain /
+       Sync when older than ~15 minutes) fetches a fresh series once; warm cache
+       reuses the saved points.
+     • The +1.2% next to the price is measured across that chart window
+       (first point → last), not across the last 2‑minute quote tick.
+     • Chains that share a price id (Ethereum / Base / Robinhood Ethereum) share
+       one chart cache entry.
+     • No extra Solana/Helius RPC for the chart itself. No DexScreener API key.
+
+  Also: on-chain balances soft-refresh about every 60 seconds while Home is open.
+
+  Why this split: frequent quote refreshes keep the $ number useful without
+  burning CoinGecko free monthly credits on heavy chart downloads every couple
+  of minutes. Alternating DexScreener cuts CoinGecko quote calls roughly in half.
+
+
+--------------------------------------------------------------------------------
+7. HOLDINGS & TOKEN DETAIL
+--------------------------------------------------------------------------------
+Holdings list:
+  • Shows the token name (not wallet/mint addresses)
+  • Shows amount held
+  • Shows USD value when price data is available
+
+Tap a holding to open the token page:
+  • Price
+  • Change for the selected range
+  • Chart ranges: 1H / 1D / 1W / 1M
+  • Your balance + USD value
+  • 24h volume / market cap when available
+  • Send / Receive shortcuts
+
+Chart / market data is best-effort (public market APIs). Some tokens may show
+“Chart unavailable”.
+
+
+--------------------------------------------------------------------------------
+8. SEND
+--------------------------------------------------------------------------------
+1. Choose the correct chain in the top bar.
+2. Open Send (from home, token page, or dock).
+3. Pick the asset.
+4. Enter recipient address (or choose a saved contact).
+5. Enter amount (or Max).
+6. Review the USD estimate and available balance.
+7. Tap Send and confirm.
+
+Rules / notes:
+  • Addresses are chain-specific. A Solana address will not work on Ethereum.
+  • Bitcoin send supports BTC only.
+  • Ledger Solana sends require the Solana app open + on-device approval.
+  • Ledger EVM sends require EVM linked + the Ethereum app open + on-device
+    approval (enable Blind signing in the Ethereum app settings if asked).
+  • Platform fees are currently disabled (section 17).
+
+
+--------------------------------------------------------------------------------
+9. RECEIVE
+--------------------------------------------------------------------------------
+1. Select the chain you want to receive on.
+2. Open Receive.
+3. Share the QR code or copy the address shown.
+4. Only send that chain’s assets to that address.
+
+Example:
+  • To receive SOL / SPL tokens → select Solana, then Receive
+  • To receive ETH on Base → select Base, then Receive
+
+
+--------------------------------------------------------------------------------
+10. HISTORY
+--------------------------------------------------------------------------------
+History shows recent activity for the active wallet on the active chain.
+
+Sources vary by chain (explorer / RPC / local sent-tx memory). If history is
+empty after a fresh install, send/receive once and tap refresh.
+
+
+--------------------------------------------------------------------------------
+11. ACCOUNTS
+--------------------------------------------------------------------------------
+Two ways to open accounts:
+
+  A) Top-left Gladiator chip → side drawer (switch wallets quickly)
+       Drawer buttons: Connect Ledger · Link EVM chains · Manage accounts
+  B) Dock → Accounts (full wallets panel)
+       Generate Wallet · Connect Ledger · Link EVM · Import · Advanced RPC
+
+Open Accounts to:
+
+  • See all wallets
+  • Switch the active wallet
+  • Generate a new software wallet
+  • Import seed / private key
+  • Connect Ledger (Solana app)
+  • Link EVM (Ethereum app) for the active Ledger account
+  • Copy address
+  • Open backup for software wallets
+  • Remove a wallet from this device
+
+Removing a wallet from Gladiator does not delete funds on-chain. It only removes
+local access — make sure you still have the seed / Ledger.
+
+
+--------------------------------------------------------------------------------
+12. LEDGER HARDWARE WALLET (SOLANA + EVM)
+--------------------------------------------------------------------------------
+Ledger keys never leave the device. Gladiator only stores public addresses and
+derivation paths/indexes.
+
+IMPORTANT — two different Ledger apps:
+  • Solana app     → Solana address / Solana signing
+  • Ethereum app   → one EVM address for Ethereum, Polygon, Base,
+                     Robinhood Ethereum
+
+Opening an app on the Nano by itself does NOT connect Gladiator.
+Gladiator must read the address (Connect Ledger or Link EVM / chain switch).
+
+
+12.1 What works on Ledger today
+-------------------------------
+Supported:
+  • Solana — connect + receive + send + many Solana dApp signs
+  • Ethereum / Polygon / Base / Robinhood Ethereum — after Link EVM
+    (receive + in-wallet send; approve on the Nano with Ethereum app open)
+
+Not supported yet on Ledger accounts:
+  • Bitcoin
+  • Sui
+  (Use a software / seed wallet for those chains.)
+
+Uniswap / EVM dApps with Ledger:
+  1. Link EVM (Ethereum app) and select that Ledger wallet
+  2. Select Ethereum (or the matching chain) in Gladiator
+  3. On uniswap.org choose Gladiator → Approve connect
+  4. When prompted, open Gladiator popup → Sign on Ledger
+     (Ethereum app must stay open; enable Blind signing if asked)
+  Opening the Ethereum app alone is not enough — Link EVM + Approve/Sign.
+
+
+12.2 Connect Ledger — Solana (first step)
+-----------------------------------------
+1. Fully quit Ledger Live (it can block USB).
+2. Plug in the Nano with USB (Bluetooth is not supported).
+3. Unlock the Nano.
+4. Open the Solana app on the device.
+5. In Gladiator → Accounts → set Account # (usually 0 for the first wallet).
+6. Tap Connect Ledger.
+7. If a browser tab opens for USB pairing, tap Connect Ledger there too.
+8. In the Chrome device list, select your Ledger → Allow.
+9. The Ledger account appears. Green “Ledger” shows on Home when it is active.
+
+Solana path for Account # N:
+  44'/501'/N'
+
+
+12.3 Link EVM — Ethereum / Polygon / Base / Robinhood ETH
+---------------------------------------------------------
+Connect Ledger only linked Solana. To use ETH-family chains on the SAME
+Ledger account:
+
+1. Select that Ledger wallet in Gladiator (make it Active).
+2. Quit Ledger Live.
+3. On the Nano, leave Solana and open the Ethereum app.
+4. Then do ONE of these:
+     • Tap Link EVM (Accounts panel or Accounts sidebar), OR
+     • Switch the top-bar chain to Ethereum / Polygon / Base / Robinhood ETH
+       (from 0.6.8 this auto-runs Link EVM for you)
+5. Wait for a toast like:  EVM linked · 0x…
+6. You can now switch among those EVM chains freely — no need to Link again.
+
+EVM path for the same Account # N:
+  44'/60'/0'/0/N
+
+Same Account # means Solana index N and EVM index N are treated as one
+Gladiator “Ledger N” wallet entry (two addresses: Solana + shared EVM).
+
+
+12.4 “Is it connected just because I opened the Ethereum app?”
+--------------------------------------------------------------
+No.
+
+  • Opening the Ethereum app alone = not linked yet.
+  • You must Link EVM (or pick an EVM chain so Gladiator can read the address).
+  • After it is linked once, switching EVM chains does NOT require reconnect.
+  • When you SEND on EVM, the Ethereum app must be open so you can approve.
+  • When you SEND / sign on Solana, switch the Nano back to the Solana app.
+
+
+12.5 Why chain switch says “Link EVM first” or “not supported”
+--------------------------------------------------------------
+Toast: “Link EVM first…” / auto-link fails
+  → Active wallet is Ledger, EVM not linked yet, or Ethereum app was not open
+    (or Ledger Live was still running). Open Ethereum app and try again.
+
+Toast: “Ledger Bitcoin/Sui not supported yet”
+  → Those Ledger apps are not wired in Gladiator yet. Use a seed wallet, or
+    stay on Solana / EVM.
+
+
+12.6 Make MULTIPLE Ledger wallets
+---------------------------------
+Each Ledger “Account #” is a different index:
+
+  Account # 0  → Solana 44'/501'/0'   and (after Link EVM) ETH 44'/60'/0'/0/0
+  Account # 1  → Solana 44'/501'/1'   and (after Link EVM) ETH 44'/60'/0'/0/1
+  Account # 2  → …
+
+To add another Ledger wallet:
+  1. Accounts → Ledger
+  2. Change Account # to the next unused number
+  3. Open Solana app → Connect Ledger
+  4. Later open Ethereum app → Link EVM (or pick an EVM chain) for that wallet
+
+Reconnect / same number:
+  • Connecting the SAME Account # again does NOT delete it
+  • Gladiator shows “Ledger already linked” and re-activates it
+
+
+12.7 Ledger + Jupiter / Solana dApps
+------------------------------------
+1. Connect Ledger (Solana app) and select that Ledger account in Gladiator.
+2. On jup.ag (or another allowlisted site), connect Gladiator.
+3. When a swap needs a signature, Gladiator opens the wallet popup —
+   tap Sign on Ledger, approve on the Nano (Solana app open).
+4. After you Reload the extension, hard-refresh the dApp tab and reconnect
+   Gladiator (stale pages show “extension context invalidated”).
+
+
+12.8 Ledger troubleshooting
+---------------------------
+Symptom: “No Ledger selected”
+  • USB, not Bluetooth
+  • Quit Ledger Live completely
+  • Correct app open (Solana for Connect / Solana sign; Ethereum for Link EVM / EVM send)
+  • Actually click your Ledger in the Chrome list → Allow
+
+Symptom: Ledger busy / already open
+  • Quit Ledger Live and other wallet apps
+  • Unplug and replug the Nano
+
+Symptom: CLA_NOT_SUPPORTED / open Ethereum app
+  • Wrong app open on the device — switch apps and retry
+
+Symptom: Blind signing / contract data
+  • In Ledger Ethereum app → Settings → enable Blind signing (needed for many sends)
+
+Permission tip:
+  • If Chrome asks for HID permission for Gladiator, Allow it
+
+
+--------------------------------------------------------------------------------
+13. WALLETCONNECT & DAPPS
+--------------------------------------------------------------------------------
+WalletConnect:
+  • Open Settings → WalletConnect
+  • Enter a Reown / WalletConnect Project ID if prompted by your setup
+  • Paste a fresh wc: URI from the dApp
+  • Keep the Gladiator wallet window/tab open while connecting and signing
+
+In-page wallet injection (selected sites only), including:
+  • jup.ag
+  • pump.fun
+  • raydium.io
+  • tensor.trade
+  • orca.so
+  • drift.trade
+  • mango.markets
+  • kamino.finance
+  • sanctum.so
+  • uniswap.org
+  • relay.link
+  • sol-incinerator.com
+  • localhost / 127.0.0.1
+
+On those sites Gladiator can appear as a Solana and/or EVM wallet provider.
+Other sites are not auto-injected.
+
+Note: LavaMoat / “opr” console errors on Opera often come from MetaMask or
+other wallets — not from Gladiator.
+
+
+--------------------------------------------------------------------------------
+14. SETTINGS & CUSTOM SOLANA RPC
+--------------------------------------------------------------------------------
+Settings includes:
+  • Address book / saved contacts for Send
+  • Rename wallet
+  • Manage tokens (show/hide assets in holdings)
+  • WalletConnect
+  • Network / sync options
+  • Advanced Solana RPC (optional Helius key or Solana RPC URL)
+
+Where the saved RPC is stored:
+  • Field name: solRpc
+  • Inside wallet state key: gladiator_wallet_v1
+  • Locations: chrome.storage.local (extension) and a localStorage mirror
+  • Solana only — do not paste Ethereum RPC URLs into that field
+  • Stored in plaintext (normal for browser wallets). An API key is a
+    usage credential, not your seed — still don’t share it; rotate in
+    Helius if exposed.
+
+
+--------------------------------------------------------------------------------
+15. BACKUP & IMPORT
+--------------------------------------------------------------------------------
+Software wallets:
+  • Backup shows the seed phrase (if the wallet was created/imported from seed)
+  • Backup also shows the private key for the CURRENTLY SELECTED chain only
+  • Write the seed on paper / steel; never screenshot cloud-sync it
+
+Import options:
+  • Seed phrase (12/24) → restores multi-chain derived wallets
+  • Private key → imports only the active chain’s key type
+      - Solana selected → Solana secret
+      - Ethereum/Base/Polygon/Robinhood selected → EVM private key
+      - Bitcoin selected → Bitcoin private key
+      - Sui selected → Sui private key
+
+Ledger wallets:
+  • There is no seed to export from Gladiator for Ledger accounts
+  • Recovery is through your Ledger device / Ledger recovery sheets
+
+
+--------------------------------------------------------------------------------
+16. SECURITY MODEL (PLAIN LANGUAGE)
+--------------------------------------------------------------------------------
+Ledger account in Gladiator:
+  • Private key stays on the Ledger
+  • Extension stores public Solana address (+ EVM address after Link EVM)
+    and path/index
+  • You must approve transactions on the device
+  • Still verify address and amount on the Ledger screen every time
+
+Software account in Gladiator:
+  • Seed / keys live in extension storage on this computer/browser profile
+  • Protect the device login
+  • Back up the seed offline
+  • Anyone with the seed can take the funds
+
+Shared risks (all wallets):
+  • Phishing websites
+  • Fake browser extensions
+  • Approving malicious transactions / connections
+  • Sending to the wrong chain address
+
+
+--------------------------------------------------------------------------------
+17. FEES
+--------------------------------------------------------------------------------
+Network fees:
+  • Paid to the blockchain (SOL rent/fees, ETH gas, BTC fees, etc.)
+
+Platform fee:
+  • Currently disabled — no platform fee on Send, Receive, or DEX swaps
+  • Only normal network / gas fees apply
+
+
+--------------------------------------------------------------------------------
+18. QUICK START CHEAT SHEET
+--------------------------------------------------------------------------------
+Create software wallet:
+  Accounts → Generate
+
+Import seed:
+  Accounts → Import → paste 12/24 words
+
+Receive SOL:
+  Chain = Solana → Receive → copy address
+
+Send SOL:
+  Chain = Solana → Send → asset SOL → amount → recipient → Send
+
+Add first Ledger (Solana):
+  Quit Ledger Live → USB → Solana app → Accounts → Account # 0
+  → Connect Ledger → pick device
+
+Link same Ledger for ETH / Polygon / Base / Robinhood ETH:
+  Select that Ledger wallet → open Ethereum app on Nano
+  → Link EVM  (or just switch top-bar chain to Ethereum)
+  → Wait for “EVM linked · 0x…”
+
+Send on Base with Ledger:
+  Ethereum app open → chain = Base → Send → approve on Nano
+
+Add second Ledger wallet:
+  Account # 1 → Solana app → Connect Ledger → later Ethereum app → Link EVM
+
+Reconnect Ledger wallet #0 later:
+  Account # 0 → Connect Ledger
+  (does not delete the existing account; Link EVM only if EVM not linked yet)
+
+
+--------------------------------------------------------------------------------
+19. SUPPORT / UPDATE PACKS
+--------------------------------------------------------------------------------
+Updates are typically delivered as an extension zip (extension folder contents).
+Install/update by overwrite + Reload as described in section 3.
+
+This documentation repository intentionally does not include the extension
+source code.
+
+
+--------------------------------------------------------------------------------
+20. DISCLAIMER
+--------------------------------------------------------------------------------
+Crypto wallets involve risk of permanent loss of funds.
+Double-check networks, addresses, and Ledger prompts.
+This document describes product behavior as of the version noted above and may
+change as Gladiator is updated.
+
+================================================================================
+END OF DOCUMENT
+================================================================================

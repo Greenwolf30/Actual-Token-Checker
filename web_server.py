@@ -12,6 +12,7 @@ load only from server-side .env and are never sent to the browser.
   POST /api/rugwatch/push-cloud  proxy → RugWatch /api/push-cloud
   POST /api/analyze   JSON: {"query": "...", "chain": "solana"?, "quick": false?}
   GET  /api/analyze?q=...&chain=solana&quick=0
+  POST /api/solana-rpc  JSON-RPC proxy (server Helius key; wallet balances)
 
 Run:
   python run_web.py
@@ -40,8 +41,9 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from token_tracker.env_config import load_dotenv  # noqa: E402
+from token_tracker.env_config import load_dotenv, solana_rpc_url  # noqa: E402
 from token_tracker.bundles import build_bundles_ui_payload  # noqa: E402
+from token_tracker.helius_rpc import rpc_call as helius_rpc_call  # noqa: E402
 from token_tracker.report import (  # noqa: E402
     build_about_ui_payload,
     format_about_section,
@@ -98,6 +100,36 @@ _IP_INFLIGHT: dict[str, int] = defaultdict(int)
 # Optional shared secret so random internet clients can't burn your keys
 # Set WEB_API_TOKEN in .env to require header: X-API-Token: <token>
 # (This is YOUR site gate — not a third-party provider key.)
+
+# Wallet RPC proxy: allowlist read-only methods (never expose API key to browsers).
+_SOLANA_RPC_METHODS = frozenset(
+    {
+        "getBalance",
+        "getTokenAccountsByOwner",
+        "getTokenAccountBalance",
+        "getAccountInfo",
+        "getMultipleAccounts",
+        "getSlot",
+        "getLatestBlockhash",
+        "getSignatureStatuses",
+    }
+)
+_RPC_RATE_HITS: dict[str, deque[float]] = defaultdict(deque)
+_RPC_RATE_MAX = int(os.environ.get("SOLANA_RPC_PROXY_RATE_MAX") or 90)
+_RPC_RATE_WINDOW = float(os.environ.get("SOLANA_RPC_PROXY_RATE_WINDOW") or 60.0)
+
+
+def _rpc_rate_ok(ip: str) -> bool:
+    """Sliding-window max Solana RPC proxy calls per IP."""
+    now = time.time()
+    with _RATE_LOCK:
+        q = _RPC_RATE_HITS[ip]
+        while q and now - q[0] > _RPC_RATE_WINDOW:
+            q.popleft()
+        if len(q) >= _RPC_RATE_MAX:
+            return False
+        q.append(now)
+        return True
 
 
 def _web_api_token() -> str | None:
@@ -1373,6 +1405,7 @@ class WebHandler(BaseHTTPRequestHandler):
                     ).strip()
                 ),
                 "site_gate": bool(_web_api_token()),
+                "solana_rpc_proxy": bool(solana_rpc_url()),
             }
             views = analyzes = None
             try:
@@ -1549,6 +1582,9 @@ class WebHandler(BaseHTTPRequestHandler):
         }:
             return self._proxy_rugwatch_post(path)
 
+        if path in {"/api/solana-rpc", "/api/solana-rpc/", "/solana-rpc"}:
+            return self._proxy_solana_rpc()
+
         if path == "/api/analyze":
             body = self._read_json()
             q = str(body.get("query") or body.get("q") or "").strip()
@@ -1615,6 +1651,91 @@ class WebHandler(BaseHTTPRequestHandler):
             )
 
         return self._json(404, {"ok": False, "error": "not found"})
+
+    def _proxy_solana_rpc(self) -> None:
+        """
+        Browser-safe Solana JSON-RPC proxy.
+        Uses HELIUS_API_KEY / SOLANA_RPC_URL on the server (Render). Never returns the key.
+        """
+        load_dotenv()
+        disabled = (os.environ.get("SOLANA_RPC_PROXY") or "1").strip().lower()
+        if disabled in {"0", "false", "off", "no"}:
+            return self._json(503, {"ok": False, "error": "Solana RPC proxy disabled"})
+
+        ip = self._client_ip()
+        if not _rpc_rate_ok(ip):
+            return self._json(
+                429,
+                {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {"code": -32000, "message": "RPC proxy rate limit — try again shortly"},
+                },
+            )
+
+        body = self._read_json()
+        if not body:
+            return self._json(
+                400,
+                {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {"code": -32700, "message": "Parse error"},
+                },
+            )
+
+        method = str(body.get("method") or "").strip()
+        req_id = body.get("id", 1)
+        params = body.get("params", [])
+        if method not in _SOLANA_RPC_METHODS:
+            return self._json(
+                400,
+                {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {
+                        "code": -32601,
+                        "message": f"Method not allowed via proxy: {method or '(empty)'}",
+                    },
+                },
+            )
+        if not isinstance(params, (list, dict)):
+            return self._json(
+                400,
+                {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {"code": -32602, "message": "Invalid params"},
+                },
+            )
+
+        url = solana_rpc_url()
+        if not url:
+            return self._json(
+                503,
+                {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {
+                        "code": -32000,
+                        "message": "Server RPC not configured (set HELIUS_API_KEY or SOLANA_RPC_URL)",
+                    },
+                },
+            )
+
+        try:
+            result = helius_rpc_call(url, method, params, req_id=req_id)
+            return self._json(200, {"jsonrpc": "2.0", "id": req_id, "result": result})
+        except Exception as exc:  # noqa: BLE001
+            msg = redact_text(str(exc))[:280]
+            return self._json(
+                502,
+                {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {"code": -32000, "message": msg or "Upstream RPC failed"},
+                },
+            )
 
     def _proxy_rugwatch_post(self, path: str) -> None:
         """
