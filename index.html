@@ -12,7 +12,7 @@
       href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=0.6.24" />
+    <link rel="stylesheet" href="./styles.css?v=0.6.25" />
   </head>
   <body class="is-local">
     <div class="atmosphere" aria-hidden="true">
@@ -333,29 +333,34 @@
           </div>
           <ul class="photon-list" id="activityList"></ul>
 
-          <div class="backup-reveal photon-keypanel" id="backupReveal" hidden>
-            <div class="photon-keypanel-top">
-              <strong id="backupWalletLabel">24-word seed phrase</strong>
-              <button type="button" class="photon-icon-btn" id="hideBackupBtn" title="Hide">✕</button>
-            </div>
-            <p class="backup-warn">
-              Write these 24 words down offline. Anyone with them can take your funds.
-            </p>
-            <p class="photon-sub" id="seedPhraseNote" hidden></p>
-            <ol class="seed-grid" id="seedGrid" hidden></ol>
-            <textarea id="backupMnemonic" class="secret-box" readonly rows="3" spellcheck="false" hidden></textarea>
-            <button type="button" class="photon-chip" id="copyMnemonicBtn">Copy seed phrase</button>
-            <details class="photon-details" style="margin-top: 8px">
-              <summary>Show private key</summary>
-              <div class="photon-details-body">
-                <label class="field">
-                  <span id="backupChainKeyLabel">Private key</span>
-                  <textarea id="backupChainSecret" class="secret-box" readonly rows="3" spellcheck="false"></textarea>
-                </label>
-                <button type="button" class="photon-chip" id="copyChainSecretBtn">Copy private key</button>
-                <p class="photon-sub" id="backupChainKeyNote" hidden></p>
+          <div id="softwareSeedTools">
+            <div class="backup-reveal photon-keypanel" id="backupReveal" hidden>
+              <div class="photon-keypanel-top">
+                <strong id="backupWalletLabel">24-word seed phrase</strong>
+                <button type="button" class="photon-icon-btn" id="hideBackupBtn" title="Hide">✕</button>
               </div>
-            </details>
+              <p class="backup-warn">
+                Write these 24 words down offline. Anyone with them can take your funds.
+              </p>
+              <p class="photon-sub" id="seedPhraseNote" hidden></p>
+              <ol class="seed-grid" id="seedGrid" hidden></ol>
+              <textarea id="backupMnemonic" class="secret-box" readonly rows="3" spellcheck="false" hidden></textarea>
+              <button type="button" class="photon-chip" id="copyMnemonicBtn">Copy seed phrase</button>
+              <details class="photon-details" style="margin-top: 8px">
+                <summary>Show private key</summary>
+                <div class="photon-details-body">
+                  <label class="field">
+                    <span id="backupChainKeyLabel">Private key</span>
+                    <textarea id="backupChainSecret" class="secret-box" readonly rows="3" spellcheck="false"></textarea>
+                  </label>
+                  <button type="button" class="photon-chip" id="copyChainSecretBtn">Copy private key</button>
+                  <p class="photon-sub" id="backupChainKeyNote" hidden></p>
+                </div>
+              </details>
+            </div>
+            <button type="button" class="photon-gen photon-gen-block" id="viewBackupBtn" style="margin-top: 12px">
+              Show seed phrase
+            </button>
           </div>
 
           <div class="ledger-seed-note" id="ledgerSeedNote" hidden>
@@ -488,9 +493,6 @@
             </div>
           </details>
 
-          <button type="button" class="photon-gen photon-gen-block" id="viewBackupBtn" style="margin-top: 12px">
-            Show seed phrase
-          </button>
           <p class="form-status" id="accountStatus" role="status" aria-live="polite"></p>
         </section>
 
@@ -738,6 +740,6 @@
     <script src="./lib/ledger-solana.bundle.js?v=0.6.6"></script>
     <script src="./lib/ledger-eth.bundle.js?v=0.6.11"></script>
     <script src="./config.js"></script>
-    <script src="./app.js?v=0.6.24"></script>
+    <script src="./app.js?v=0.6.25"></script>
   </body>
 </html>

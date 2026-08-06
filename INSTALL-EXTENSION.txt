@@ -7,6 +7,9 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.25:
+- Ledger accounts: fully remove 24-word seed phrase UI and strip any stored mnemonic/keys
+
 v0.6.24:
 - Generated wallets named Account 1 / Account 2… (Ledger + Imported names unchanged)
 

@@ -2143,6 +2143,14 @@ body.is-extension .acct-drawer {
   line-height: 1.45;
 }
 
+/* Ledger active: never show seed phrase / import / private-key backup UI */
+body.ledger-account-active #softwareSeedTools,
+body.ledger-account-active #backupReveal,
+body.ledger-account-active #viewBackupBtn,
+body.ledger-account-active #importSeedPanel {
+  display: none !important;
+}
+
 .backup-warn {
   margin: 0;
   color: #e8b4b4;

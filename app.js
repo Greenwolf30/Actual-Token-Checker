@@ -683,23 +683,68 @@ function setImportFieldVisible(el, on) {
   }
 }
 
-/** Show only the private-key import field for the active chain. */
+/** Ledger accounts never store or show a seed phrase / private keys. */
+function sanitizeLedgerAccounts(accounts) {
+  let changed = false;
+  (accounts || []).forEach((a) => {
+    if (!isLedgerAccount(a)) return;
+    if (a.mnemonic) {
+      a.mnemonic = "";
+      changed = true;
+    }
+    if (a.solana && a.solana.secretKey) {
+      a.solana.secretKey = "";
+      changed = true;
+    }
+    if (a.evm && a.evm.privateKey) {
+      a.evm.privateKey = "";
+      changed = true;
+    }
+    if (a.bitcoin && a.bitcoin.privateKey) {
+      a.bitcoin.privateKey = "";
+      changed = true;
+    }
+    if (a.sui && a.sui.secretKey) {
+      a.sui.secretKey = "";
+      changed = true;
+    }
+  });
+  return changed;
+}
+
+/** Hide all seed-phrase / import UI while a Ledger account is active. */
 function paintLedgerSeedUi() {
   const ledger = isLedgerAccount(activeAccount(STATE));
   const note = $("ledgerSeedNote");
   const importPanel = $("importSeedPanel");
   const backupBtn = $("viewBackupBtn");
   const backupReveal = $("backupReveal");
+  const softwareSeed = $("softwareSeedTools");
+  document.body.classList.toggle("ledger-account-active", !!ledger);
   if (note) note.hidden = !ledger;
   if (importPanel) importPanel.hidden = !!ledger;
   if (backupBtn) backupBtn.hidden = !!ledger;
+  if (softwareSeed) softwareSeed.hidden = !!ledger;
   if (ledger) {
-    if (backupReveal && !backupReveal.hidden) hideBackup();
+    try {
+      hideBackup();
+    } catch (_) {}
+    if (backupReveal) backupReveal.hidden = true;
+    if ($("backupMnemonic")) $("backupMnemonic").value = "";
+    if ($("backupChainSecret")) $("backupChainSecret").value = "";
     if ($("importMnemonic")) $("importMnemonic").value = "";
     if ($("importSolSecret")) $("importSolSecret").value = "";
     if ($("importEvmSecret")) $("importEvmSecret").value = "";
     if ($("importBtcSecret")) $("importBtcSecret").value = "";
     if ($("importSuiSecret")) $("importSuiSecret").value = "";
+    renderSeedGrid("");
+    const label = $("backupWalletLabel");
+    if (label) label.textContent = "Ledger — no seed phrase";
+    const seedNote = $("seedPhraseNote");
+    if (seedNote) {
+      seedNote.hidden = true;
+      seedNote.textContent = "";
+    }
   }
   paintLinkEvmUi();
 }
@@ -1211,10 +1256,12 @@ async function connectLedgerAccount(opts) {
   STATE.accounts.push(acc);
   STATE.activeAccountId = acc.id;
   STATE.activeChainId = "solana";
+  sanitizeLedgerAccounts(STATE.accounts);
   await storageSet(STATE);
   await ensureLedgerChainAllowed(acc);
   await refreshAll();
   hideBackup();
+  paintLedgerSeedUi();
   showToast("Ledger connected · " + acc.name + " · Solana ready");
   setStatus(
     "Ledger linked as “" +
@@ -1311,6 +1358,9 @@ async function ensureState() {
     await storageSet(state);
   }
   if (migrateGeneratedAccountNames(state.accounts)) {
+    await storageSet(state);
+  }
+  if (sanitizeLedgerAccounts(state.accounts)) {
     await storageSet(state);
   }
   // Drop duplicate wallets that share any chain address (keep one unique copy).
@@ -8327,6 +8377,11 @@ function renderSeedGrid(phrase) {
 
 async function ensureActiveSeededAccount() {
   let acc = activeAccount(STATE);
+  if (acc && isLedgerAccount(acc)) {
+    throw new Error(
+      "Seed phrase is not stored in the wallet for Ledger accounts. Connect your Ledger device."
+    );
+  }
   if (!acc) {
     acc = await createAccount(nextGeneratedAccountLabel());
     STATE.accounts.push(acc);
@@ -8417,12 +8472,6 @@ function paintBackupChainKey(account) {
 }
 
 async function showBackup() {
-  try {
-    await requireUnlocked("backup");
-  } catch (err) {
-    showToast(String(err && err.message ? err.message : err));
-    return;
-  }
   const current = activeAccount(STATE);
   if (isLedgerAccount(current)) {
     hideBackup();
@@ -8435,6 +8484,12 @@ async function showBackup() {
       status.textContent =
         "Seed phrase is not stored in the wallet for Ledger accounts. Connect your Ledger device.";
     }
+    return;
+  }
+  try {
+    await requireUnlocked("backup");
+  } catch (err) {
+    showToast(String(err && err.message ? err.message : err));
     return;
   }
   const acc = await ensureActiveSeededAccount();
@@ -9729,6 +9784,13 @@ function wire() {
   $("createAccountBtn")?.addEventListener("click", () => addAccount());
   $("importAccountBtn")?.addEventListener("click", () => importAccountFromSecrets());
   $("viewBackupBtn")?.addEventListener("click", () => {
+    if (isLedgerAccount(activeAccount(STATE))) {
+      paintLedgerSeedUi();
+      showToast(
+        "Seed phrase is not stored in the wallet for Ledger accounts. Connect your Ledger device."
+      );
+      return;
+    }
     showBackup().catch((err) => {
       console.error(err);
       showToast(err.message || "Could not show seed phrase");
