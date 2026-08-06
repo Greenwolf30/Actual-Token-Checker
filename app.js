@@ -1001,6 +1001,38 @@ function nextLedgerLabel() {
   return "Ledger " + n;
 }
 
+/** Generated software wallets: Account 1, Account 2… (not Ledger / Imported). */
+function nextGeneratedAccountLabel(accounts) {
+  const list = accounts || (STATE && STATE.accounts) || [];
+  const used = new Set(
+    list.map((a) => String((a && a.name) || "").trim().toLowerCase())
+  );
+  let n = 1;
+  while (used.has("account " + n)) n += 1;
+  return "Account " + n;
+}
+
+/** Rename legacy W1/W2 labels → Account 1/Account 2. Leave Ledger + Imported alone. */
+function migrateGeneratedAccountNames(accounts) {
+  let changed = false;
+  (accounts || []).forEach((a) => {
+    if (!a || isLedgerAccount(a)) return;
+    const name = String(a.name || "").trim();
+    if (/^imported\b/i.test(name)) return;
+    const m = /^W(\d+)$/i.exec(name);
+    if (!m) return;
+    a.name = "Account " + m[1];
+    changed = true;
+  });
+  return changed;
+}
+
+function accountDisplayName(account, idx) {
+  if (account && account.name) return account.name;
+  if (account && isLedgerAccount(account)) return "Ledger";
+  return "Account " + ((idx != null ? idx : 0) + 1);
+}
+
 function nextLedgerAccountIndex() {
   const used = new Set(
     STATE.accounts
@@ -1266,7 +1298,7 @@ async function startLedgerConnectFlow() {
 async function ensureState() {
   let state = await storageGet();
   if (!state || !Array.isArray(state.accounts) || !state.accounts.length) {
-    const first = await createAccount("W1");
+    const first = await createAccount(nextGeneratedAccountLabel([]));
     state = {
       accounts: [first],
       activeAccountId: first.id,
@@ -1276,6 +1308,9 @@ async function ensureState() {
       wcProjectId: "",
     };
     // New wallets stay plaintext until the user sets a password (prompted on boot).
+    await storageSet(state);
+  }
+  if (migrateGeneratedAccountNames(state.accounts)) {
     await storageSet(state);
   }
   // Drop duplicate wallets that share any chain address (keep one unique copy).
@@ -7456,7 +7491,7 @@ function renderAcctDrawerList() {
       escapeHtml((activeChain(STATE) && activeChain(STATE).name) || "") +
       '" />' +
       '<span class="acct-drawer-meta"><strong>' +
-      escapeHtml(a.name || "W" + (idx + 1)) +
+      escapeHtml(accountDisplayName(a, idx)) +
       (active ? " · Active" : "") +
       ledgerBadgeHtml(a) +
       "</strong><span>" +
@@ -7968,7 +8003,7 @@ function renderAccountsPanel() {
       extAssetUrl("icons/gladiator.png") +
       '?v=4" alt="" width="22" height="22" />' +
       '<span class="photon-name">' +
-      escapeHtml(a.name || "W" + (idx + 1)) +
+      escapeHtml(accountDisplayName(a, idx)) +
       ledgerBadgeHtml(a) +
       (active ? "<small>Active</small>" : "") +
       "</span>" +
@@ -8138,8 +8173,7 @@ async function addAccount() {
   let acc = null;
   // Random wallets almost never collide; retry a few times just in case.
   for (let attempt = 0; attempt < 8; attempt++) {
-    const n = STATE.accounts.length + 1;
-    const candidate = await createAccount("W" + n);
+    const candidate = await createAccount(nextGeneratedAccountLabel());
     if (findDuplicateAccount(candidate, STATE.accounts)) continue;
     acc = candidate;
     break;
@@ -8294,7 +8328,7 @@ function renderSeedGrid(phrase) {
 async function ensureActiveSeededAccount() {
   let acc = activeAccount(STATE);
   if (!acc) {
-    acc = await createAccount("W1");
+    acc = await createAccount(nextGeneratedAccountLabel());
     STATE.accounts.push(acc);
     STATE.activeAccountId = acc.id;
     await storageSet(STATE);
@@ -8304,8 +8338,11 @@ async function ensureActiveSeededAccount() {
     return acc;
   }
   // Key-only wallets cannot reverse into a mnemonic — mint a seeded wallet and show it.
-  const n = STATE.accounts.length + 1;
-  const seeded = await createAccount(acc.name && !acc.mnemonic ? acc.name + " seed" : "W" + n);
+  const seeded = await createAccount(
+    acc.name && !acc.mnemonic
+      ? acc.name + " seed"
+      : nextGeneratedAccountLabel()
+  );
   STATE.accounts.push(seeded);
   STATE.activeAccountId = seeded.id;
   await storageSet(STATE);
@@ -8595,7 +8632,7 @@ function paintWalletRenameList() {
         '<input type="text" maxlength="32" data-rename-input="' +
         escapeHtml(a.id) +
         '" value="' +
-        escapeHtml(a.name || "W" + (idx + 1)) +
+        escapeHtml(accountDisplayName(a, idx)) +
         '" aria-label="Rename wallet" />' +
         (isLedgerAccount(a)
           ? '<span class="ledger-badge">Ledger</span>'

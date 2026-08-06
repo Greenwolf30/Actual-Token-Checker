@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Gladiator Wallet",
   "short_name": "Gladiator",
-  "version": "0.6.23",
+  "version": "0.6.24",
   "description": "Gladiator multi-chain wallet \u2014 Solana Wallet Standard + Uniswap EIP-1193 + WalletConnect + Ledger.",
   "action": {
     "default_title": "Gladiator",
