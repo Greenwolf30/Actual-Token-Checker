@@ -4736,6 +4736,8 @@ function connectionSiteLabel(item) {
 
 /** Account ids that still own an active inject/WC connection (sidebar green dots). */
 let CONNECTED_ACCOUNT_IDS = new Set();
+/** Last full inject+WC connection list (all wallets) for re-paint on account switch. */
+let LAST_CONNECTION_ITEMS = [];
 
 function accountAddressesForMatch(acc) {
   if (!acc) return [];
@@ -4763,17 +4765,29 @@ function matchAccountIdFromConnectionAddresses(accounts) {
   return null;
 }
 
+function connectionOwnerAccountId(row) {
+  if (!row) return null;
+  if (row.accountId) return String(row.accountId);
+  return matchAccountIdFromConnectionAddresses(row.accounts);
+}
+
+function filterConnectionsForAccount(items, accountId) {
+  const id = String(accountId || "");
+  if (!id) return [];
+  return (Array.isArray(items) ? items : []).filter((row) => {
+    if (!row) return false;
+    const owner = connectionOwnerAccountId(row);
+    return !!(owner && String(owner) === id);
+  });
+}
+
 function syncConnectedAccountIds(items) {
   const next = new Set();
   const rows = Array.isArray(items) ? items : [];
   for (const row of rows) {
     if (!row || row.status === "pending") continue;
-    if (row.accountId) {
-      next.add(String(row.accountId));
-      continue;
-    }
-    const matched = matchAccountIdFromConnectionAddresses(row.accounts);
-    if (matched) next.add(String(matched));
+    const owner = connectionOwnerAccountId(row);
+    if (owner) next.add(String(owner));
   }
   CONNECTED_ACCOUNT_IDS = next;
   paintAcctDrawerConnDots();
@@ -4803,13 +4817,17 @@ function paintBalanceConnStatus(items) {
   const el = $("balanceConnStatus");
   const label = $("balanceConnLabel");
   const sitesEl = $("balanceConnSites");
-  const rows = Array.isArray(items) ? items.filter(Boolean) : [];
-  // Active dApp / WC sessions count as connected (Jupiter, pump.fun, Uniswap, etc.).
-  const active = rows.filter((r) => r && r.status !== "pending");
-  syncConnectedAccountIds(active);
+  const allRows = Array.isArray(items) ? items.filter(Boolean) : [];
+  // Keep green dots for every wallet that still owns a session…
+  const allActive = allRows.filter((r) => r && r.status !== "pending");
+  syncConnectedAccountIds(allActive);
+  // …but Home status / site chips only reflect the active wallet.
+  const activeId = (STATE && STATE.activeAccountId) || "";
+  const mine = filterConnectionsForAccount(allRows, activeId);
+  const active = mine.filter((r) => r && r.status !== "pending");
   if (!el) return;
   const connected = active.length > 0;
-  const pendingOnly = !connected && rows.length > 0;
+  const pendingOnly = !connected && mine.length > 0;
 
   const clearSites = () => {
     if (!sitesEl) return;
@@ -4852,9 +4870,12 @@ function paintBalanceConnStatus(items) {
 function paintWcConnectionsList(items) {
   const list = $("wcConnectionsList");
   const empty = $("wcConnectionsEmpty");
-  const rows = Array.isArray(items) ? items : [];
-  paintBalanceConnStatus(rows);
+  LAST_CONNECTION_ITEMS = Array.isArray(items) ? items.slice() : [];
+  paintBalanceConnStatus(LAST_CONNECTION_ITEMS);
   if (!list) return;
+  const activeId = (STATE && STATE.activeAccountId) || "";
+  // Connections page: only platforms linked to the active wallet.
+  const rows = filterConnectionsForAccount(LAST_CONNECTION_ITEMS, activeId);
   list.innerHTML = "";
   if (!rows.length) {
     if (empty) empty.hidden = false;
@@ -7911,6 +7932,10 @@ function paintSwitchers() {
     renderAcctDrawerList();
   }
   paintSendContacts();
+  // Re-scope Connected sites / Connections list to the newly active wallet.
+  if (LAST_CONNECTION_ITEMS.length || $("balanceConnStatus") || $("wcConnectionsList")) {
+    paintWcConnectionsList(LAST_CONNECTION_ITEMS);
+  }
 }
 
 function positionChainPickerMenu() {

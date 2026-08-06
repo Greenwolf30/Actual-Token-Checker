@@ -7,6 +7,10 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.34:
+- Home Connected sites + Connections list only show platforms linked to the active wallet
+- Switch wallets → site list updates for that wallet (Disconnected if none)
+
 v0.6.33:
 - Accounts sidebar: green dot on the wallet that still owns a dApp connection (no wording)
 - Switching active wallet keeps the green dot on the connected wallet; disconnect removes it
