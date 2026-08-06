@@ -7,6 +7,11 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.31:
+- Restore in-page Connect/Approve helpers accidentally removed with fee cleanup (0.6.29)
+- Jupiter inject connections register again and appear in Connections
+- WalletConnect disconnect no longer clears inject rows from the Connections list
+
 v0.6.30:
 - Home total balance: green Connected / red Disconnected for Jupiter, pump.fun, WC, etc.
 

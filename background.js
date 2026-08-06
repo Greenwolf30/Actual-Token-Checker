@@ -880,6 +880,113 @@ async function resetOffscreen() {
   await ensureOffscreen();
 }
 
+const DAPP_APPROVE_REQ = "gladiator_dapp_approve_req";
+const DAPP_APPROVE_RES = "gladiator_dapp_approve_res";
+
+function sleepMs(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Show Approve on the dApp tab itself (content-script overlay).
+ * Never opens a side/relay window — that steals focus and breaks swaps.
+ */
+async function showApproveOnTab(tabId, req) {
+  if (tabId == null || !chrome.tabs || !chrome.tabs.sendMessage) return false;
+  try {
+    await chrome.tabs.sendMessage(tabId, {
+      type: "gladiator-show-approve",
+      req,
+    });
+    return true;
+  } catch (_) {
+    // Content script may not be ready — try a one-shot inject, then retry.
+    try {
+      if (chrome.scripting && chrome.scripting.executeScript) {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          files: ["content-script.js"],
+          world: "ISOLATED",
+        });
+        await sleepMs(80);
+        await chrome.tabs.sendMessage(tabId, {
+          type: "gladiator-show-approve",
+          req,
+        });
+        return true;
+      }
+    } catch (err) {
+      console.warn("[Gladiator] in-page approve inject", err);
+    }
+  }
+  return false;
+}
+
+/** Ask the user to approve inside the wallet UI overlay on the dApp page. */
+async function requestUserApproval({
+  origin,
+  method,
+  title,
+  body,
+  chain,
+  tabId,
+}) {
+  const reqId =
+    "dap_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+  const req = {
+    id: reqId,
+    origin: origin || "",
+    method: method || "",
+    title: title || "Approve request?",
+    body: body || "",
+    chain: chain || "",
+    at: Date.now(),
+  };
+  await storageSet({
+    [DAPP_APPROVE_REQ]: req,
+    [DAPP_APPROVE_RES]: null,
+  });
+
+  let shown = false;
+  try {
+    shown = await showApproveOnTab(tabId, req);
+  } catch (err) {
+    console.warn("[Gladiator] approval surface", err);
+  }
+  // Soft fallback: toolbar popup only (never chrome.windows.create).
+  if (!shown) {
+    try {
+      await nudgeWalletPopup();
+    } catch (_) {}
+  }
+
+  for (let i = 0; i < 120; i++) {
+    await sleepMs(500);
+    const bag = await storageGet([DAPP_APPROVE_RES]);
+    const res = bag[DAPP_APPROVE_RES];
+    if (!res || res.id !== reqId) continue;
+    await storageSet({ [DAPP_APPROVE_REQ]: null, [DAPP_APPROVE_RES]: null });
+    if (res.approved) return true;
+    const err = new Error(res.error || "User rejected the request");
+    err.code = 4001;
+    throw err;
+  }
+  await storageSet({ [DAPP_APPROVE_REQ]: null, [DAPP_APPROVE_RES]: null });
+  const err = new Error(
+    "Approval timed out — Approve in the Gladiator prompt on the page"
+  );
+  err.code = 4001;
+  throw err;
+}
+
+function shortOriginHost(origin) {
+  try {
+    return new URL(origin).hostname || origin;
+  } catch (_) {
+    return origin || "unknown site";
+  }
+}
+
 async function handleProviderRequest(msg, sender) {
   const method = msg.method;
   const params = Object.assign({}, msg.params || {});
