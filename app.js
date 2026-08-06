@@ -67,7 +67,9 @@ const CHAINS = [
       "https://polygon-bor.publicnode.com",
       "https://1rpc.io/matic",
     ],
-    priceId: "matic-network",
+    // Native gas is POL (MATIC→POL migration). CoinGecko market_chart for
+    // legacy "matic-network" often returns an empty series.
+    priceId: "polygon-ecosystem-token",
     chainId: 137,
     blockscout: "https://polygon.blockscout.com",
   },
@@ -1810,7 +1812,13 @@ function renderQR(text) {
 }
 
 let STATE = null;
-let PRICES = { solana: 0, ethereum: 0, "matic-network": 0 };
+let PRICES = {
+  solana: 0,
+  ethereum: 0,
+  "polygon-ecosystem-token": 0,
+  bitcoin: 0,
+  sui: 0,
+};
 let BALANCE = { native: 0, usd: 0, ok: false, error: "", chainId: "", accountId: "" };
 let HOLDINGS = []; // [{symbol, name, mint, amount, decimals, usd, kind}]
 let syncBusy = false;
@@ -2189,7 +2197,7 @@ async function fetchSolBalance(address, rpcs) {
 
 async function fetchPrices() {
   try {
-    const ids = "solana,ethereum,matic-network,bitcoin,sui";
+    const ids = "solana,ethereum,polygon-ecosystem-token,bitcoin,sui";
     const url =
       "https://api.coingecko.com/api/v3/simple/price?ids=" +
       ids +
@@ -2200,7 +2208,8 @@ async function fetchPrices() {
     PRICES = {
       solana: Number(j.solana && j.solana.usd) || 0,
       ethereum: Number(j.ethereum && j.ethereum.usd) || 0,
-      "matic-network": Number(j["matic-network"] && j["matic-network"].usd) || 0,
+      "polygon-ecosystem-token":
+        Number(j["polygon-ecosystem-token"] && j["polygon-ecosystem-token"].usd) || 0,
       bitcoin: Number(j.bitcoin && j.bitcoin.usd) || 0,
       sui: Number(j.sui && j.sui.usd) || 0,
     };
