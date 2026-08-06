@@ -164,20 +164,37 @@ Meaning:
 Same layout for every native chain (SOL, ETH, BTC, MATIC, SUI, etc.).
 
 How often it updates (not tick-by-tick “real time”):
-  • USD quotes refresh about every 2 minutes automatically, alternating providers:
-    CoinGecko simple/price on one slot, DexScreener token quotes on the next
-    (each provider ~once per 4 minutes). Sync force-refreshes via CoinGecko.
-  • The chart series comes from CoinGecko (~1 day of points), cached about 15 minutes
-    per coin.
-  • A fresh chart fetch happens when you open Home / switch chain (or Sync) and
-    the cache for that coin is older than ~15 minutes.
-  • Cost: about one CoinGecko price call per ~4 minutes while Home is open (plus
-    DexScreener on the alternate slot), plus chart fetches occasionally — aimed to
-    stay under CoinGecko free monthly credits. No DexScreener API key required.
-    No extra Solana/Helius RPC for the chart itself.
-  • Chains that share a price id (Ethereum / Base / Robinhood Ethereum) share
-    one chart cache entry.
-  • On-chain balances soft-refresh about every 60 seconds while Home is open.
+
+  Two different clocks — do not confuse them:
+
+  1) USD price number (e.g. SOL $145.20)
+     • Refreshes about every 2 minutes while Home is open.
+     • Providers alternate each cycle to share load:
+         minute ~0  → CoinGecko simple/price
+         minute ~2  → DexScreener (wrapped native pools)
+         minute ~4  → CoinGecko again
+         …so each provider is hit about once every 4 minutes.
+     • Sync always force-refreshes via CoinGecko immediately.
+     • Opening Home also pulls a quote (subject to the same 2‑minute auto throttle
+       after the first successful auto fetch).
+
+  2) Line chart (the sparkline beside the price)
+     • Built from CoinGecko’s ~1‑day market series (many points), not from the
+       2‑minute quote feed above.
+     • Cached about 15 minutes per coin. A cold cache (open Home / switch chain /
+       Sync when older than ~15 minutes) fetches a fresh series once; warm cache
+       reuses the saved points.
+     • The +1.2% next to the price is measured across that chart window
+       (first point → last), not across the last 2‑minute quote tick.
+     • Chains that share a price id (Ethereum / Base / Robinhood Ethereum) share
+       one chart cache entry.
+     • No extra Solana/Helius RPC for the chart itself. No DexScreener API key.
+
+  Also: on-chain balances soft-refresh about every 60 seconds while Home is open.
+
+  Why this split: frequent quote refreshes keep the $ number useful without
+  burning CoinGecko free monthly credits on heavy chart downloads every couple
+  of minutes. Alternating DexScreener cuts CoinGecko quote calls roughly in half.
 
 
 --------------------------------------------------------------------------------
