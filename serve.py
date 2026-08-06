@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import sys
+
 sys.dont_write_bytecode = True
 """
 Gladiator local server.
@@ -13,12 +16,9 @@ Usage:
   # or: python serve.py --port 8765
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import os
-import sys
 import urllib.error
 import urllib.request
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -172,7 +172,18 @@ class Handler(SimpleHTTPRequestHandler):
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
 
     def _cors(self) -> None:
-        self.send_header("Access-Control-Allow-Origin", "*")
+        # Local-only: do not open this proxy to arbitrary HTTPS origins.
+        origin = self.headers.get("Origin") or ""
+        allow = {
+            "http://127.0.0.1:8080",
+            "http://localhost:8080",
+            "http://127.0.0.1:5173",
+            "http://localhost:5173",
+            "null",
+        }
+        if origin in allow:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
 

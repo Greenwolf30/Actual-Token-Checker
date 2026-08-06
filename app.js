@@ -1584,8 +1584,11 @@ function paintActiveChainAddress() {
 
 function isValidBtcAddress(addr) {
   const a = String(addr || "").trim();
-  // Native segwit P2WPKH we generate (bc1q…)
-  return /^bc1q[a-z0-9]{38,60}$/i.test(a);
+  // Native segwit / taproot bech32
+  if (/^bc1[qp][a-z0-9]{38,87}$/i.test(a)) return true;
+  // Legacy P2PKH (1…) / P2SH (3…)
+  if (/^[13][a-km-zA-HJ-NP-Z1-9]{25,34}$/.test(a)) return true;
+  return false;
 }
 
 function isValidSuiAddress(addr) {
@@ -3263,6 +3266,19 @@ async function recordPnlSnapshot(accountId, chainId, usd) {
   if (!key || key === ":") return [];
   const v = Number(usd);
   if (!(v >= 0) || !Number.isFinite(v)) return [];
+  // Don't poison PnL history when market prices failed (everything looks like $0).
+  try {
+    const chain = activeChain(STATE);
+    const px = chain && chain.priceId ? Number(PRICES[chain.priceId]) || 0 : 0;
+    if (v === 0 && !(px > 0) && !(Number(BALANCE.native) > 0)) {
+      const bag0 = await loadPnlSnaps();
+      return (bag0 && bag0[key]) || [];
+    }
+    if (!(px > 0) && v === 0) {
+      const bag0 = await loadPnlSnaps();
+      return (bag0 && bag0[key]) || [];
+    }
+  } catch (_) {}
   const bag = await loadPnlSnaps();
   const list = Array.isArray(bag[key]) ? bag[key].slice() : [];
   const now = Date.now();
@@ -6242,9 +6258,14 @@ async function broadcastSolTx(tx, signer, rpcs, ledgerAcc) {
       rpcs
     );
   } catch (err) {
-    // One retry with skipPreflight when node preflight is flaky (not for funds errors)
+    // Never rebroadcast funds/program failures. Only retry transient RPC/preflight flakes.
     const msg = String(err && err.message ? err.message : err);
-    if (/insufficient|debit|no record of a prior credit/i.test(msg)) throw err;
+    if (/insufficient|debit|no record of a prior credit|custom program error/i.test(msg)) {
+      throw err;
+    }
+    const allowSkip = /blockhash not found|node is behind|too many requests|429|502|503/i.test(
+      msg
+    );
     sig = await solRpc(
       "sendTransaction",
       [
@@ -6252,7 +6273,7 @@ async function broadcastSolTx(tx, signer, rpcs, ledgerAcc) {
         {
           encoding: "base64",
           preflightCommitment: "confirmed",
-          skipPreflight: true,
+          skipPreflight: allowSkip,
           maxRetries: 5,
         },
       ],
@@ -6306,7 +6327,17 @@ async function sendSolNative(acc, toAddr, amountSol) {
     );
   }
   const maxSend = balLamports - networkFeeLamports;
-  if (lamports > maxSend) lamports = Math.max(0, maxSend);
+  if (lamports > maxSend) {
+    throw new Error(
+      "Insufficient SOL for amount + network fee on " +
+        shortAddr(fromAddr) +
+        " — have " +
+        bal.toFixed(6) +
+        " SOL (max send ~" +
+        (maxSend / 1e9).toFixed(6) +
+        ")"
+    );
+  }
   if (!(lamports > 0)) {
     throw new Error(
       "Insufficient SOL for amount + network fee on " +
@@ -6364,7 +6395,14 @@ async function sendSplToken(acc, holding, toAddr, amountUi) {
   let rawAmount = uiAmountToRaw(amountUi, decimals);
   if (rawAmount <= 0n) throw new Error("Amount too small");
   const balRaw = uiAmountToRaw(holding.amount, decimals);
-  if (rawAmount > balRaw) rawAmount = balRaw;
+  if (rawAmount > balRaw) {
+    throw new Error(
+      "Insufficient token balance — have " +
+        String(holding.amount) +
+        " " +
+        (holding.symbol || "TOKEN")
+    );
+  }
   if (rawAmount <= 0n) throw new Error("Amount too small");
   const srcAta = getAssociatedTokenAddressSync(
     mintPk,
@@ -6478,9 +6516,15 @@ async function signAndBroadcastEvmLedger(acc, chain, provider, txRequest) {
     signature: { r: sig.r, s: sig.s, v },
   });
   const resp = await provider.broadcastTransaction(signed.serialized);
+  const hash = resp && resp.hash ? resp.hash : null;
   showToast("Submitted · waiting…");
-  await resp.wait(1);
-  return resp.hash;
+  try {
+    await resp.wait(1);
+  } catch (_) {
+    // Already broadcast — do not treat confirm timeout as a failed send.
+  }
+  if (!hash) throw new Error("No transaction hash returned");
+  return hash;
 }
 
 async function sendEvmNative(acc, chain, toAddr, amount) {
@@ -6497,13 +6541,17 @@ async function sendEvmNative(acc, chain, toAddr, amount) {
   const list = (chain.rpcs && chain.rpcs.length ? chain.rpcs : [chain.rpc]).filter(Boolean);
   let lastErr = null;
   const value = ethers.parseUnits(String(amount), chain.decimals || 18);
+  let submittedHash = null;
   for (const rpc of list) {
     try {
       const provider = new ethers.JsonRpcProvider(rpc, chain.chainId || undefined);
       const from = acc.evm.address;
       const bal = await provider.getBalance(from);
-      // Leave headroom for gas only (no platform fee).
-      const gasPad = ethers.parseUnits("0.00008", 18);
+      // Leave headroom for gas only (no platform fee). Slightly higher pad on L1.
+      const gasPad = ethers.parseUnits(
+        chain.chainId === 1 ? "0.0005" : "0.00008",
+        18
+      );
       const need = value + gasPad;
       if (bal < need) {
         throw new Error(
@@ -6522,10 +6570,16 @@ async function sendEvmNative(acc, chain, toAddr, amount) {
       }
       const wallet = new ethers.Wallet(acc.evm.privateKey, provider);
       const tx = await wallet.sendTransaction({ to: toAddr, value });
+      submittedHash = tx.hash;
       showToast("Submitted · waiting…");
-      await tx.wait(1);
+      try {
+        await tx.wait(1);
+      } catch (_) {
+        // Broadcast succeeded; confirmation timeout must not trigger another send.
+      }
       return tx.hash;
     } catch (err) {
+      if (submittedHash) return submittedHash;
       lastErr = err;
       console.warn("[evm-send]", rpc, err && err.message ? err.message : err);
     }
@@ -6555,6 +6609,7 @@ async function sendEvmToken(acc, chain, holding, toAddr, amountUi) {
 
   const list = (chain.rpcs && chain.rpcs.length ? chain.rpcs : [chain.rpc]).filter(Boolean);
   let lastErr = null;
+  let submittedHash = null;
   const iface = new ethers.Interface(ERC20_ABI);
   const data = iface.encodeFunctionData("transfer", [toAddr, value]);
   for (const rpc of list) {
@@ -6571,10 +6626,16 @@ async function sendEvmToken(acc, chain, holding, toAddr, amountUi) {
       const wallet = new ethers.Wallet(acc.evm.privateKey, provider);
       const contract = new ethers.Contract(mint, ERC20_ABI, wallet);
       const tx = await contract.transfer(toAddr, value);
+      submittedHash = tx.hash;
       showToast("Submitted · waiting…");
-      await tx.wait(1);
+      try {
+        await tx.wait(1);
+      } catch (_) {
+        // Already broadcast — do not retry another RPC with a second transfer.
+      }
       return tx.hash;
     } catch (err) {
+      if (submittedHash) return submittedHash;
       lastErr = err;
       console.warn("[erc20-send]", rpc, err && err.message ? err.message : err);
     }
@@ -10232,6 +10293,24 @@ async function processLedgerSignRequest(req) {
     } catch (_) {}
     return;
   }
+  // Don't replace an in-flight Ledger sign with a newer request.
+  if (ledgerSignBusy) {
+    console.warn("[ledger-sign] busy — ignoring overlapping request", req.id);
+    return;
+  }
+  if (
+    pendingLedgerSignReq &&
+    pendingLedgerSignReq.id &&
+    pendingLedgerSignReq.id !== req.id
+  ) {
+    console.warn(
+      "[ledger-sign] already showing",
+      pendingLedgerSignReq.id,
+      "— ignore",
+      req.id
+    );
+    return;
+  }
   // Do NOT auto-sign — WebHID / Ledger needs a real click.
   openLedgerSignModal(req);
 }
@@ -10730,12 +10809,22 @@ function wire() {
     let max = 0;
     if (holding) {
       max = Number(holding.amount) || 0;
-      if (holding.kind === "native" && chain.kind === "solana") {
-        // Network fee buffer only
-        max = Math.max(0, max - 0.00001);
+      if (holding.kind === "native") {
+        if (chain.kind === "solana") max = Math.max(0, max - 0.00001);
+        else if (chain.kind === "bitcoin") max = Math.max(0, max - 0.00003);
+        else if (chain.kind === "evm") {
+          max = Math.max(0, max - (chain.chainId === 1 ? 0.0005 : 0.00008));
+        } else if (chain.kind === "sui") max = Math.max(0, max - 0.005);
       }
     } else {
       max = Math.max(0, (Number(BALANCE.native) || 0) - 0.00001);
+      if (chain.kind === "bitcoin") max = Math.max(0, (Number(BALANCE.native) || 0) - 0.00003);
+      if (chain.kind === "evm") {
+        max = Math.max(
+          0,
+          (Number(BALANCE.native) || 0) - (chain.chainId === 1 ? 0.0005 : 0.00008)
+        );
+      }
     }
     if ($("sendAmount")) {
       $("sendAmount").value =

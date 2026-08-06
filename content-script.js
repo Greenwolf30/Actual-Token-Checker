@@ -7,8 +7,25 @@
   const PAGE = "gladiator-wallet-page";
   const REPLY = "gladiator-wallet-page-reply";
   const FORCE = "gladiator-wallet-force-disconnect";
+  const ACCOUNTS_CHANGED = "gladiator-wallet-accounts-changed";
   const DAPP_APPROVE_REQ = "gladiator_dapp_approve_req";
   const DAPP_APPROVE_RES = "gladiator_dapp_approve_res";
+
+  function pageOrigin() {
+    try {
+      return String(location.origin || "");
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function approveMatchesThisTab(req) {
+    if (!req) return false;
+    const here = pageOrigin();
+    if (!here) return false;
+    if (req.origin && String(req.origin) !== here) return false;
+    return true;
+  }
 
   function allowHost(hostname) {
     const host = String(hostname || "")
@@ -178,7 +195,22 @@
         } catch (_) {}
         return;
       }
+      if (msg.type === "gladiator-accounts-changed") {
+        try {
+          window.postMessage(
+            {
+              source: ACCOUNTS_CHANGED,
+              publicKey: msg.publicKey || "",
+              accounts: Array.isArray(msg.accounts) ? msg.accounts : [],
+              accountId: msg.accountId || "",
+            },
+            "*"
+          );
+        } catch (_) {}
+        return;
+      }
       if (msg.type === "gladiator-show-approve" && msg.req) {
+        if (!approveMatchesThisTab(msg.req)) return;
         showInPageApprove(msg.req);
       }
     });
@@ -314,19 +346,25 @@
     });
   }
 
-  // If an approval request is already pending when this tab loads, show it.
+  // If an approval request is already pending when this tab loads, show it
+  // only when the request origin matches THIS tab (never broadcast to all dApps).
   try {
     chrome.storage.local.get([DAPP_APPROVE_REQ], function (bag) {
       const req = bag && bag[DAPP_APPROVE_REQ];
       if (!req || !req.id) return;
       if (req.at && Date.now() - Number(req.at) > 2 * 60 * 1000) return;
+      if (!approveMatchesThisTab(req)) return;
       showInPageApprove(req);
     });
     chrome.storage.onChanged.addListener(function (changes, area) {
       if (area !== "local" || !changes[DAPP_APPROVE_REQ]) return;
       const req = changes[DAPP_APPROVE_REQ].newValue;
-      if (req && req.id) showInPageApprove(req);
-      else hideInPageApprove();
+      if (req && req.id) {
+        if (approveMatchesThisTab(req)) showInPageApprove(req);
+        else hideInPageApprove();
+      } else {
+        hideInPageApprove();
+      }
     });
   } catch (_) {}
 })();

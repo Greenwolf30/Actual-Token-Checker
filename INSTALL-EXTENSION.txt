@@ -15,6 +15,13 @@ How to read Home numbers:
   (~+1 price API call when cache is cold). No extra Solana RPC for the chart.
   Full write-up: Gladiator-Wallet-Documentation/DOCUMENTATION.txt §6.1–6.2
 
+v0.6.52:
+- Bugfixes: dApp connection follows active wallet (accountChanged on switch);
+  per-origin EVM chain id; approve overlay only on matching origin;
+  no EVM double-send on confirm timeout; SOL/SPL refuse oversize amounts;
+  Send Max reserves BTC/EVM fees; broader BTC addresses; refuse BTC dust burn;
+  revokePermissions untrusts; PnL skips $0 when prices missing; Ledger sign race guard
+
 v0.6.51:
 - Pin native price chart to a fixed right slot so position matches across
   all wallets (Ledger / software) regardless of $ digit width

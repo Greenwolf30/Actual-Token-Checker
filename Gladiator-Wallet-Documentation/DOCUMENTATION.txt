@@ -2,7 +2,7 @@
 GLADIATOR WALLET — USER DOCUMENTATION
 ================================================================================
 Product:   Gladiator Wallet (Chrome / Opera extension)
-Version:   0.6.50 (documentation snapshot)
+Version:   0.6.52 (documentation snapshot)
 Audience:  Everyday users and operators
 Status:    Documentation-only repository (extension source not included here)
 

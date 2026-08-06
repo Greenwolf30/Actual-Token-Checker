@@ -16,6 +16,7 @@
     const SOURCE = "gladiator-wallet-page";
     const REPLY = "gladiator-wallet-page-reply";
     const FORCE = "gladiator-wallet-force-disconnect";
+    const ACCOUNTS_CHANGED = "gladiator-wallet-accounts-changed";
     const CHAINS = Object.freeze(["solana:mainnet", "solana:devnet", "solana:testnet"]);
     const TX_VERSIONS = Object.freeze(["legacy", 0]);
     const ACCOUNT_FEATURES = Object.freeze([
@@ -38,6 +39,8 @@
     let publicKey = null;
     let isConnected = false;
     let registered = false;
+    /** Set after EVM helpers exist — handles active-wallet follow for dApps. */
+    let onAccountsChangedFromWallet = null;
 
     function b64FromBytes(u8) {
       const bytes = u8 instanceof Uint8Array ? u8 : new Uint8Array(u8);
@@ -106,6 +109,18 @@
           try {
             emitStandard("change", { accounts: [] });
           } catch (_) {}
+          try {
+            ethSelectedAddress = null;
+            ethConnected = false;
+            ethEmit("accountsChanged", []);
+          } catch (_) {}
+          return;
+        }
+        // Active wallet switched in Gladiator → connection follows the new wallet.
+        if (data && data.source === ACCOUNTS_CHANGED) {
+          if (typeof onAccountsChangedFromWallet === "function") {
+            onAccountsChangedFromWallet(data);
+          }
           return;
         }
         if (!data || data.source !== REPLY || data.id == null) return;
@@ -617,6 +632,46 @@
       });
     }
 
+    onAccountsChangedFromWallet = function (data) {
+      try {
+        const nextPk = data && data.publicKey ? String(data.publicKey) : "";
+        if (nextPk) {
+          const prev =
+            publicKey && typeof publicKey.toBase58 === "function"
+              ? publicKey.toBase58()
+              : publicKey
+                ? String(publicKey)
+                : "";
+          publicKey = new PublicKey(nextPk);
+          isConnected = true;
+          if (String(prev || "") !== nextPk) {
+            try {
+              emit("accountChanged", publicKey);
+            } catch (_) {}
+            try {
+              emitStandard("change", { accounts: getAccounts() });
+            } catch (_) {}
+          }
+        }
+        const evmAccounts = Array.isArray(data && data.accounts)
+          ? data.accounts.filter(Boolean)
+          : [];
+        const nextEvm = evmAccounts[0] || null;
+        if (
+          String(ethSelectedAddress || "").toLowerCase() !==
+          String(nextEvm || "").toLowerCase()
+        ) {
+          ethSelectedAddress = nextEvm;
+          ethConnected = !!nextEvm;
+          try {
+            ethEmit("accountsChanged", nextEvm ? [nextEvm] : []);
+          } catch (_) {}
+        }
+      } catch (err) {
+        console.warn("[Gladiator] accounts-changed", err);
+      }
+    };
+
     async function ethRequest(args) {
       const method = String((args && args.method) || "");
       const params = (args && args.params) || [];
@@ -670,6 +725,9 @@
           const accounts = await ethRequest({ method: "eth_requestAccounts", params: [] });
           return [{ parentCapability: "eth_accounts", date: Date.now() }];
         }
+        try {
+          await request("wallet_revokePermissions", { args: params });
+        } catch (_) {}
         ethSelectedAddress = null;
         ethConnected = false;
         ethEmit("accountsChanged", []);

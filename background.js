@@ -6,6 +6,8 @@ const TRUSTED_KEY = "gladiator_trusted_origins";
 const TRUSTED_ACCOUNTS_KEY = "gladiator_trusted_origin_accounts";
 /** origin -> ["solana"|"evm"|...] chain kinds approved for that origin */
 const TRUSTED_CHAINS_KEY = "gladiator_trusted_origin_chains";
+/** origin -> EVM chainId number chosen by that dApp (per-origin; not global). */
+const TRUSTED_EVM_CHAINS_KEY = "gladiator_trusted_origin_evm_chains";
 const OFFSCREEN_URL = "offscreen.html";
 
 let walletWindowId = null;
@@ -13,8 +15,10 @@ let offscreenCreating = null;
 /** In-memory signer so Jupiter can sign even if chrome.storage lags. */
 /** Active dApp signer cache — refreshed from storage on each getActive* call. */
 let cachedSigner = null; // { publicKey, secretKey, mnemonic, ledger, accountId, evmAddress, evmPrivateKey, accountIndex }
-/** Active EVM chain for dApp provider (Uniswap). */
+/** Default EVM chain when an origin has no saved preference. */
 let dappEvmChainId = 1;
+/** Last activeAccountId seen on persist — used to detect wallet switches. */
+let lastPersistedAccountId = null;
 
 const EVM_NETWORKS = {
   1: {
@@ -102,13 +106,16 @@ function cacheSignerFromState(state) {
   // Need at least Solana signer or EVM key for dApp use.
   if (!publicKey && !evmAddress) return null;
   if (!secretKey && !mnemonic && !ledger && !evmPrivateKey) return null;
-  // Sync dApp EVM chain with wallet selection when on an EVM network.
+  // Do NOT stomp per-origin dApp chain ids from the wallet UI chain picker.
+  // Only seed the process default when nothing is set yet.
   try {
-    const active = String(state.activeChainId || "");
-    if (active === "ethereum") dappEvmChainId = 1;
-    else if (active === "polygon") dappEvmChainId = 137;
-    else if (active === "base") dappEvmChainId = 8453;
-    else if (active === "robinhood") dappEvmChainId = 4663;
+    if (!dappEvmChainId || dappEvmChainId === 1) {
+      const active = String(state.activeChainId || "");
+      if (active === "polygon") dappEvmChainId = 137;
+      else if (active === "base") dappEvmChainId = 8453;
+      else if (active === "robinhood") dappEvmChainId = 4663;
+      else if (active === "ethereum") dappEvmChainId = 1;
+    }
   } catch (_) {}
   cachedSigner = {
     publicKey,
@@ -163,8 +170,9 @@ async function getActiveEvmAccount() {
   };
 }
 
-async function evmJsonRpc(method, params) {
-  const net = EVM_NETWORKS[dappEvmChainId] || EVM_NETWORKS[1];
+async function evmJsonRpc(method, params, chainId) {
+  const id = Number(chainId) || dappEvmChainId || 1;
+  const net = EVM_NETWORKS[id] || EVM_NETWORKS[1];
   const list = (net && net.rpcs) || [];
   let lastErr = null;
   for (const rpc of list) {
@@ -196,12 +204,13 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
     : Array.isArray(params)
       ? params
       : [];
+  const originChainId = await getOriginEvmChainId(origin);
 
   if (method === "eth_chainId") {
-    return { result: { chainId: toHexChainId(dappEvmChainId) } };
+    return { result: { chainId: toHexChainId(originChainId) } };
   }
   if (method === "net_version") {
-    return { result: { netVersion: String(dappEvmChainId) } };
+    return { result: { netVersion: String(originChainId) } };
   }
   if (method === "eth_accounts") {
     const trusted = await isOriginTrustedForChain(origin, "evm");
@@ -245,9 +254,13 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
     return {
       result: {
         accounts: [acc.address],
-        chainId: toHexChainId(dappEvmChainId),
+        chainId: toHexChainId(originChainId),
       },
     };
+  }
+  if (method === "wallet_revokePermissions") {
+    if (origin) await untrustOrigin(origin);
+    return { result: null };
   }
   if (method === "wallet_switchEthereumChain") {
     const req = args[0] || {};
@@ -258,7 +271,7 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
       err.code = 4902;
       throw err;
     }
-    dappEvmChainId = id;
+    await setOriginEvmChainId(origin, id);
     return { result: { chainId: toHexChainId(id) } };
   }
   if (method === "wallet_addEthereumChain") {
@@ -266,7 +279,7 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
     const hex = String(req.chainId || "").toLowerCase();
     const id = parseInt(hex, 16);
     if (EVM_NETWORKS[id]) {
-      dappEvmChainId = id;
+      await setOriginEvmChainId(origin, id);
       return { result: null };
     }
     throw new Error("Gladiator does not support chain " + hex);
@@ -290,7 +303,7 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
           _evmAddress: acc.address,
           method,
           args,
-          chainId: dappEvmChainId,
+          chainId: originChainId,
         },
         acc
       );
@@ -327,7 +340,7 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
           _evmAddress: acc.address,
           method,
           args,
-          chainId: dappEvmChainId,
+          chainId: originChainId,
         },
         acc
       );
@@ -344,7 +357,7 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
   if (method === "eth_sendTransaction") {
     const acc = await getActiveEvmAccount();
     if (!acc || !acc.hasSigner) throw new Error("No EVM key to send with");
-    const net = EVM_NETWORKS[dappEvmChainId] || EVM_NETWORKS[1];
+    const net = EVM_NETWORKS[originChainId] || EVM_NETWORKS[1];
     const tx = (args && args[0]) || {};
     await requestUserApproval({
       origin,
@@ -370,7 +383,7 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
           args,
           rpcUrl: (net.rpcs && net.rpcs[0]) || "",
           rpcs: net.rpcs || [],
-          chainId: dappEvmChainId,
+          chainId: originChainId,
         },
         acc
       );
@@ -381,7 +394,7 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
       _evmAddress: acc.address,
       rpcUrl: (net.rpcs && net.rpcs[0]) || "",
       rpcs: net.rpcs || [],
-      chainId: dappEvmChainId,
+      chainId: originChainId,
       args,
     });
     return { result: { hash: raw && raw.hash ? raw.hash : raw } };
@@ -406,7 +419,7 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
     "eth_getStorageAt",
   ];
   if (passthrough.includes(method)) {
-    const result = await evmJsonRpc(method, args);
+    const result = await evmJsonRpc(method, args, originChainId);
     return { result: { result } };
   }
 
@@ -755,15 +768,119 @@ async function untrustOrigin(origin) {
   const next = list.filter((o) => o !== origin);
   const map = { ...(await readTrustedOriginAccounts()) };
   const cmap = { ...(await readTrustedOriginChains()) };
+  const emap = { ...(await readTrustedOriginEvmChains()) };
   const hadAccount = Object.prototype.hasOwnProperty.call(map, origin);
   const hadChain = Object.prototype.hasOwnProperty.call(cmap, origin);
+  const hadEvm = Object.prototype.hasOwnProperty.call(emap, origin);
   if (hadAccount) delete map[origin];
   if (hadChain) delete cmap[origin];
+  if (hadEvm) delete emap[origin];
   const patch = {};
   if (next.length !== list.length) patch[TRUSTED_KEY] = next;
   if (hadAccount) patch[TRUSTED_ACCOUNTS_KEY] = map;
   if (hadChain) patch[TRUSTED_CHAINS_KEY] = cmap;
+  if (hadEvm) patch[TRUSTED_EVM_CHAINS_KEY] = emap;
   if (Object.keys(patch).length) await storageSet(patch);
+}
+
+async function readTrustedOriginEvmChains() {
+  try {
+    const bag = await storageGet([TRUSTED_EVM_CHAINS_KEY]);
+    const map = bag[TRUSTED_EVM_CHAINS_KEY];
+    return map && typeof map === "object" ? map : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+async function getOriginEvmChainId(origin) {
+  if (!origin) return dappEvmChainId || 1;
+  try {
+    const map = await readTrustedOriginEvmChains();
+    const id = Number(map[origin]);
+    if (EVM_NETWORKS[id]) return id;
+  } catch (_) {}
+  return dappEvmChainId || 1;
+}
+
+async function setOriginEvmChainId(origin, chainId) {
+  const id = Number(chainId);
+  if (!origin || !EVM_NETWORKS[id]) return;
+  const map = { ...(await readTrustedOriginEvmChains()) };
+  if (Number(map[origin]) === id) return;
+  map[origin] = id;
+  await storageSet({ [TRUSTED_EVM_CHAINS_KEY]: map });
+  dappEvmChainId = id;
+}
+
+/**
+ * Connection always follows the ACTIVE wallet: remap every trusted origin's
+ * owner accountId, then notify open dApp tabs of the new Solana/EVM identity.
+ */
+async function remapTrustedOriginsToActiveAccount(accountId, state) {
+  const id = String(accountId || "");
+  if (!id) return;
+  const list = await readTrustedOrigins();
+  if (!list.length) return;
+  const map = { ...(await readTrustedOriginAccounts()) };
+  let changed = false;
+  for (const origin of list) {
+    if (map[origin] !== id) {
+      map[origin] = id;
+      changed = true;
+    }
+  }
+  if (changed) await storageSet({ [TRUSTED_ACCOUNTS_KEY]: map });
+
+  let publicKey = "";
+  let evmAddress = "";
+  try {
+    const acc =
+      state &&
+      Array.isArray(state.accounts) &&
+      (state.accounts.find((a) => a && a.id === id) || null);
+    if (acc) {
+      publicKey = (acc.solana && acc.solana.publicKey) || "";
+      evmAddress = (acc.evm && acc.evm.address) || "";
+    }
+  } catch (_) {}
+  if (!publicKey && cachedSigner && cachedSigner.accountId === id) {
+    publicKey = cachedSigner.publicKey || "";
+  }
+  if (!evmAddress && cachedSigner && cachedSigner.accountId === id) {
+    evmAddress = cachedSigner.evmAddress || "";
+  }
+  await notifyTrustedOriginsAccountsChanged({
+    publicKey,
+    evmAddress,
+    accountId: id,
+  });
+}
+
+async function notifyTrustedOriginsAccountsChanged(payload) {
+  const list = await readTrustedOrigins();
+  if (!list.length || !chrome.tabs || !chrome.tabs.query) return;
+  const msg = {
+    type: "gladiator-accounts-changed",
+    publicKey: (payload && payload.publicKey) || "",
+    accounts: payload && payload.evmAddress ? [payload.evmAddress] : [],
+    accountId: (payload && payload.accountId) || "",
+  };
+  for (const origin of list) {
+    try {
+      let pattern = origin;
+      if (!/\/$/.test(pattern)) pattern += "/";
+      const tabs = await chrome.tabs.query({ url: [pattern + "*", origin] });
+      for (const tab of tabs) {
+        if (!tab || !tab.id) continue;
+        try {
+          chrome.tabs.sendMessage(tab.id, msg, () => {
+            void chrome.runtime.lastError;
+          });
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
 }
 
 function niceDappName(origin) {
@@ -1088,6 +1205,7 @@ async function requestUserApproval({
     title: title || "Approve request?",
     body: body || "",
     chain: chain || "",
+    tabId: tabId == null ? null : tabId,
     at: Date.now(),
   };
   await storageSet({
@@ -1158,6 +1276,7 @@ async function handleProviderRequest(msg, sender) {
     method === "net_version" ||
     method === "wallet_switchEthereumChain" ||
     method === "wallet_addEthereumChain" ||
+    method === "wallet_revokePermissions" ||
     method === "personal_sign" ||
     method === "eth_sign" ||
     method === "eth_signTypedData" ||
@@ -1497,9 +1616,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       delete toStore.vault;
       delete toStore.vaultEnabled;
     }
+    const prevAccountId = lastPersistedAccountId || (cachedSigner && cachedSigner.accountId) || null;
+    const nextAccountId = toStore.activeAccountId || null;
     const cached = cacheSignerFromState(toStore);
     storageSet({ [STORE_KEY]: toStore })
-      .then(() => {
+      .then(async () => {
+        lastPersistedAccountId = nextAccountId;
+        // Active wallet changed → move all dApp connections to the new wallet and notify tabs.
+        if (nextAccountId && String(prevAccountId || "") !== String(nextAccountId)) {
+          try {
+            await remapTrustedOriginsToActiveAccount(nextAccountId, toStore);
+          } catch (err) {
+            console.warn("[Gladiator] remap connections", err);
+          }
+        }
         notifyPersistWaiters();
         sendResponse({
           ok: true,
