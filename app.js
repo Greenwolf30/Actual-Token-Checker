@@ -4734,14 +4734,80 @@ function connectionSiteLabel(item) {
   return name && name !== "dApp" ? name : "";
 }
 
+/** Account ids that still own an active inject/WC connection (sidebar green dots). */
+let CONNECTED_ACCOUNT_IDS = new Set();
+
+function accountAddressesForMatch(acc) {
+  if (!acc) return [];
+  const out = [];
+  if (acc.solana && acc.solana.publicKey) out.push(String(acc.solana.publicKey));
+  if (acc.evm && acc.evm.address) out.push(String(acc.evm.address));
+  if (acc.bitcoin && acc.bitcoin.address) out.push(String(acc.bitcoin.address));
+  if (acc.sui && acc.sui.address) out.push(String(acc.sui.address));
+  return out;
+}
+
+function matchAccountIdFromConnectionAddresses(accounts) {
+  if (!STATE || !Array.isArray(STATE.accounts) || !STATE.accounts.length) return null;
+  const needles = (accounts || [])
+    .map((raw) => {
+      const parts = String(raw || "").split(":");
+      return (parts[parts.length - 1] || "").trim().toLowerCase();
+    })
+    .filter(Boolean);
+  if (!needles.length) return null;
+  for (const acc of STATE.accounts) {
+    const addrs = accountAddressesForMatch(acc).map((a) => a.toLowerCase());
+    if (addrs.some((a) => needles.includes(a))) return acc.id;
+  }
+  return null;
+}
+
+function syncConnectedAccountIds(items) {
+  const next = new Set();
+  const rows = Array.isArray(items) ? items : [];
+  for (const row of rows) {
+    if (!row || row.status === "pending") continue;
+    if (row.accountId) {
+      next.add(String(row.accountId));
+      continue;
+    }
+    const matched = matchAccountIdFromConnectionAddresses(row.accounts);
+    if (matched) next.add(String(matched));
+  }
+  CONNECTED_ACCOUNT_IDS = next;
+  paintAcctDrawerConnDots();
+}
+
+function paintAcctDrawerConnDots() {
+  const list = $("acctDrawerList");
+  if (!list) return;
+  list.querySelectorAll(".acct-drawer-item").forEach((btn) => {
+    const id = btn.dataset.accountId;
+    const connected = !!(id && CONNECTED_ACCOUNT_IDS.has(id));
+    let dot = btn.querySelector(".acct-drawer-conn-dot");
+    if (connected) {
+      if (!dot) {
+        dot = document.createElement("span");
+        dot.className = "acct-drawer-conn-dot";
+        dot.setAttribute("aria-hidden", "true");
+        btn.appendChild(dot);
+      }
+    } else if (dot) {
+      dot.remove();
+    }
+  });
+}
+
 function paintBalanceConnStatus(items) {
   const el = $("balanceConnStatus");
   const label = $("balanceConnLabel");
   const sitesEl = $("balanceConnSites");
-  if (!el) return;
   const rows = Array.isArray(items) ? items.filter(Boolean) : [];
   // Active dApp / WC sessions count as connected (Jupiter, pump.fun, Uniswap, etc.).
   const active = rows.filter((r) => r && r.status !== "pending");
+  syncConnectedAccountIds(active);
+  if (!el) return;
   const connected = active.length > 0;
   const pendingOnly = !connected && rows.length > 0;
 
@@ -7727,6 +7793,7 @@ function renderAcctDrawerList() {
     const bal = walletSolBalanceLabel(a.id);
     const btn = document.createElement("button");
     btn.type = "button";
+    const dappConnected = CONNECTED_ACCOUNT_IDS.has(a.id);
     btn.className = "acct-drawer-item" + (active ? " is-active" : "");
     btn.dataset.accountId = a.id;
     btn.innerHTML =
@@ -7738,6 +7805,9 @@ function renderAcctDrawerList() {
       '" alt="" width="16" height="16" title="' +
       escapeHtml((activeChain(STATE) && activeChain(STATE).name) || "") +
       '" />' +
+      (dappConnected
+        ? '<span class="acct-drawer-conn-dot" aria-hidden="true"></span>'
+        : "") +
       '<span class="acct-drawer-meta"><strong>' +
       escapeHtml(accountDisplayName(a, idx)) +
       (active ? " · Active" : "") +
@@ -7785,6 +7855,10 @@ function openAcctDrawer() {
   requestAnimationFrame(() => root.classList.add("is-open"));
   if (btn) btn.setAttribute("aria-expanded", "true");
   refreshAccountBalances();
+  // Keep green dots aligned with live inject/WC sessions.
+  refreshWcConnections({ ensure: false })
+    .then(() => paintAcctDrawerConnDots())
+    .catch(() => {});
   document.body.classList.add("acct-drawer-open");
 }
 
@@ -9867,7 +9941,8 @@ function wire() {
       if (
         changes.gladiator_wc_sessions ||
         changes.gladiator_wc_pending ||
-        changes.gladiator_trusted_origins
+        changes.gladiator_trusted_origins ||
+        changes.gladiator_trusted_origin_accounts
       ) {
         paintWcConnections().catch(() => {});
       }

@@ -2,6 +2,8 @@
 const WC_WALLET_PATH = "index.html";
 const STORE_KEY = "gladiator_wallet_v1";
 const TRUSTED_KEY = "gladiator_trusted_origins";
+/** origin -> accountId that approved the inject connection */
+const TRUSTED_ACCOUNTS_KEY = "gladiator_trusted_origin_accounts";
 const OFFSCREEN_URL = "offscreen.html";
 
 let walletWindowId = null;
@@ -237,7 +239,7 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
         tabId,
       });
     }
-    if (origin) await trustOrigin(origin);
+    if (origin) await trustOrigin(origin, acc && acc.accountId);
     return {
       result: {
         accounts: [acc.address],
@@ -619,20 +621,51 @@ async function readTrustedOrigins() {
   return Array.isArray(list) ? list : [];
 }
 
-async function trustOrigin(origin) {
+async function readTrustedOriginAccounts() {
+  const bag = await storageGet([TRUSTED_ACCOUNTS_KEY]);
+  const map = bag[TRUSTED_ACCOUNTS_KEY];
+  return map && typeof map === "object" && !Array.isArray(map) ? map : {};
+}
+
+async function resolveTrustAccountId(accountId) {
+  if (accountId) return String(accountId);
+  try {
+    if (cachedSigner && cachedSigner.accountId) return String(cachedSigner.accountId);
+  } catch (_) {}
+  try {
+    const bag = await storageGet([STORE_KEY]);
+    const state = bag[STORE_KEY];
+    if (state && state.activeAccountId) return String(state.activeAccountId);
+  } catch (_) {}
+  return "";
+}
+
+async function trustOrigin(origin, accountId) {
   if (!origin) return;
   const list = await readTrustedOrigins();
-  if (list.includes(origin)) return;
-  list.push(origin);
-  await storageSet({ [TRUSTED_KEY]: list.slice(-100) });
+  if (!list.includes(origin)) {
+    list.push(origin);
+    await storageSet({ [TRUSTED_KEY]: list.slice(-100) });
+  }
+  const id = await resolveTrustAccountId(accountId);
+  if (!id) return;
+  const map = { ...(await readTrustedOriginAccounts()) };
+  if (map[origin] === id) return;
+  map[origin] = id;
+  await storageSet({ [TRUSTED_ACCOUNTS_KEY]: map });
 }
 
 async function untrustOrigin(origin) {
   if (!origin) return;
   const list = await readTrustedOrigins();
   const next = list.filter((o) => o !== origin);
-  if (next.length === list.length) return;
-  await storageSet({ [TRUSTED_KEY]: next });
+  const map = { ...(await readTrustedOriginAccounts()) };
+  const hadAccount = Object.prototype.hasOwnProperty.call(map, origin);
+  if (hadAccount) delete map[origin];
+  const patch = {};
+  if (next.length !== list.length) patch[TRUSTED_KEY] = next;
+  if (hadAccount) patch[TRUSTED_ACCOUNTS_KEY] = map;
+  if (Object.keys(patch).length) await storageSet(patch);
 }
 
 function niceDappName(origin) {
@@ -696,6 +729,26 @@ function dappIconForOrigin(origin) {
 
 async function listInjectConnections() {
   const origins = await readTrustedOrigins();
+  const map = await readTrustedOriginAccounts();
+  const fallbackId = await resolveTrustAccountId(null);
+  // Drop stale account bindings for origins that are no longer trusted.
+  // Backfill missing bindings once so pre-upgrade connections still show a green dot.
+  const keep = {};
+  let dirty = false;
+  for (const origin of origins) {
+    if (map[origin]) {
+      keep[origin] = map[origin];
+    } else if (fallbackId) {
+      keep[origin] = fallbackId;
+      dirty = true;
+    }
+  }
+  for (const key of Object.keys(map)) {
+    if (!Object.prototype.hasOwnProperty.call(keep, key)) dirty = true;
+  }
+  if (dirty) {
+    await storageSet({ [TRUSTED_ACCOUNTS_KEY]: keep });
+  }
   return origins.map((origin) => ({
     kind: "inject",
     topic: "inject:" + origin,
@@ -703,6 +756,7 @@ async function listInjectConnections() {
     name: niceDappName(origin),
     url: origin,
     icon: dappIconForOrigin(origin),
+    accountId: keep[origin] || null,
     accounts: [],
     status: "active",
   }));
@@ -1040,8 +1094,10 @@ async function handleProviderRequest(msg, sender) {
         tabId,
       });
     }
-    const publicKey = await getActivePublicKey();
-    if (origin) await trustOrigin(origin);
+    const acc = await getActiveSolanaAccount();
+    const publicKey =
+      (acc && acc.publicKey) || (await getActivePublicKey());
+    if (origin) await trustOrigin(origin, acc && acc.accountId);
     return { result: { publicKey } };
   }
 
@@ -1070,7 +1126,10 @@ async function handleProviderRequest(msg, sender) {
         chain: "solana",
         tabId,
       });
-      if (origin) await trustOrigin(origin);
+      if (origin) {
+        const accForTrust = await getActiveSolanaAccount();
+        await trustOrigin(origin, accForTrust && accForTrust.accountId);
+      }
     }
     const labels = {
       signTransaction: "Approve transaction?",

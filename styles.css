@@ -487,6 +487,21 @@ img.brand-mark {
   z-index: 1;
 }
 
+/* Green-only: which wallet still owns an active dApp connection. Never red. */
+.acct-drawer-conn-dot {
+  position: absolute;
+  left: 34px;
+  top: 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3ecf70;
+  border: 1.5px solid rgba(12, 16, 24, 0.95);
+  box-shadow: 0 0 0 2px rgba(62, 207, 112, 0.22);
+  z-index: 2;
+  pointer-events: none;
+}
+
 .photon-wallet-logo,
 .settings-wallet-logo {
   width: 22px;
