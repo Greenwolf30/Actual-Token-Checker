@@ -7,6 +7,9 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.47:
+- Nudge native price + sparkline slightly right and down beside Total balance
+
 v0.6.46:
 - Native price chart on the same row as Total balance $; larger sparkline; green up / red down; native price delta ($ + %)
 

@@ -1048,8 +1048,10 @@ body.is-extension .acct-drawer {
   background: transparent;
   box-shadow: none;
   padding: 0;
-  margin: 0;
+  margin: 8px 0 0 10px;
   min-width: 0;
+  position: relative;
+  top: 2px;
 }
 
 .balance-native-price {
@@ -1134,7 +1136,7 @@ body.is-extension .acct-drawer {
   display: flex;
   align-items: flex-end;
   justify-content: flex-start;
-  gap: 18px;
+  gap: 22px;
   min-height: 0;
 }
 
@@ -3038,11 +3040,13 @@ body.is-extension .balance-value {
 }
 
 body.is-extension .balance-hero {
-  gap: 14px;
+  gap: 18px;
 }
 
 body.is-extension .balance-native-quote {
   width: 132px;
+  margin: 7px 0 0 8px;
+  top: 2px;
 }
 
 body.is-extension .balance-native-chart {
