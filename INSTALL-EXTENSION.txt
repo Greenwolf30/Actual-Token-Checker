@@ -7,6 +7,9 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.19:
+- WalletConnect Connections → Refresh no longer opens a wallet window
+
 v0.6.18:
 - Sync: keep last balance on screen (no 0 flash); busy-state so the button always responds
 

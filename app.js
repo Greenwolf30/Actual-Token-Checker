@@ -9299,9 +9299,14 @@ function wire() {
     wcDisconnect().catch((err) => console.warn(err));
   });
   $("wcRefreshConnections")?.addEventListener("click", () => {
+    // Refresh only reloads the list from storage / in-page inject.
+    // Do NOT open the detached wallet window — that was only needed for
+    // Connect pairing. If a WC host window is already open, nudge it to
+    // republish live sessions without focusing/creating a window.
     if (IS_EXTENSION_POPUP) {
-      chromeLocalSet({ [WC_CMD_KEY]: { type: "publish", at: Date.now() } }).catch(() => {});
-      openWalletWindowForWc({ focus: false, settings: false }).catch(() => {});
+      chromeLocalSet({ [WC_CMD_KEY]: { type: "publish", at: Date.now() } }).catch(
+        () => {}
+      );
     }
     refreshWcConnections({ ensure: IS_WC_HOST, poll: IS_WC_HOST ? 6 : 0 })
       .then((items) => {
