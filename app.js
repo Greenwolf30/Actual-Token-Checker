@@ -179,10 +179,25 @@ function ledgerBadgeHtml(a) {
   if (!isLedgerAccount(a)) return "";
   const tip = ledgerHasEvm(a)
     ? "Ledger · Solana + EVM linked"
-    : "Ledger · Solana (tap Link EVM for ETH chains)";
+    : "Ledger · Solana (pick an ETH chain to link EVM)";
   return (
     '<span class="ledger-badge" title="' + tip + '">Ledger</span>'
   );
+}
+
+/** Resolve extension-relative icon paths reliably in popup + wallet window. */
+function extAssetUrl(relPath) {
+  const rel = String(relPath || "").replace(/^\.\//, "");
+  try {
+    if (
+      typeof chrome !== "undefined" &&
+      chrome.runtime &&
+      typeof chrome.runtime.getURL === "function"
+    ) {
+      return chrome.runtime.getURL(rel);
+    }
+  } catch (_) {}
+  return "./" + rel;
 }
 
 function getLedgerApi() {
@@ -680,6 +695,20 @@ function paintLedgerSeedUi() {
     if ($("importBtcSecret")) $("importBtcSecret").value = "";
     if ($("importSuiSecret")) $("importSuiSecret").value = "";
   }
+  paintLinkEvmUi();
+}
+
+/** Link EVM is for ETH chains only — hide it while Solana (or non-EVM) is selected. */
+function paintLinkEvmUi() {
+  const acc = activeAccount(STATE);
+  const chain = activeChain(STATE);
+  const onEvm = !!(chain && chain.kind === "evm");
+  const ledger = isLedgerAccount(acc);
+  const show = ledger && onEvm;
+  ["linkLedgerEvmBtn", "acctDrawerLinkEvm", "linkEvmHelp"].forEach((id) => {
+    const el = $(id);
+    if (el) el.hidden = !show;
+  });
 }
 
 function paintImportFields() {
@@ -1112,14 +1141,14 @@ async function connectLedgerAccount(opts) {
     showToast(
       "Ledger already linked · " +
         (dup.name || shortAddr(publicKey)) +
-        (ledgerHasEvm(dup) ? " · EVM ready" : " · tap Link EVM for ETH chains")
+        (ledgerHasEvm(dup) ? " · EVM ready" : " · Solana ready")
     );
     setStatus(
       "Connected · " +
         (dup.name || shortAddr(publicKey)) +
         (ledgerHasEvm(dup)
           ? " · EVM linked"
-          : " · open Ethereum app + Link EVM for ETH/Polygon/Base")
+          : " · Solana. Pick ETH/Polygon/Base later to link EVM.")
     );
     go("activity");
     return dup;
@@ -1148,11 +1177,11 @@ async function connectLedgerAccount(opts) {
   await ensureLedgerChainAllowed(acc);
   await refreshAll();
   hideBackup();
-  showToast("Ledger connected · " + acc.name + " · tap Link EVM for ETH chains");
+  showToast("Ledger connected · " + acc.name + " · Solana ready");
   setStatus(
     "Ledger linked as “" +
       acc.name +
-      "” (Solana). Open the Ethereum app and tap Link EVM for Ethereum / Polygon / Base / Robinhood ETH."
+      "” on Solana. To use ETH chains later, open the Ethereum app and pick Ethereum / Polygon / Base."
   );
   go("activity");
   return acc;
@@ -2795,7 +2824,7 @@ function chainLogoSrc(chainOrLogo) {
       ? chainOrLogo
       : (chainOrLogo && (chainOrLogo.logo || chainOrLogo.id)) || "solana";
   const file = String(logo || "solana").replace(/[^a-z0-9_-]/gi, "") || "solana";
-  return "./icons/" + file + ".png?v=" + LOGO_ICON_VER;
+  return extAssetUrl("icons/" + file + ".png") + "?v=" + LOGO_ICON_VER;
 }
 
 function escapeHtml(s) {
@@ -2822,9 +2851,9 @@ function tokenLogoHtml(t) {
   if (key && localLogos[key]) {
     const file = localLogos[key];
     return (
-      '<img class="token-logo-img" src="./icons/' +
-      file +
-      ".png?v=" +
+      '<img class="token-logo-img" src="' +
+      extAssetUrl("icons/" + file + ".png") +
+      "?v=" +
       LOGO_ICON_VER +
       '" alt="' +
       String(t.symbol || file).replace(/"/g, "") +
@@ -3982,7 +4011,7 @@ function collectLiveWcSessions() {
         const block = ns[key] || {};
         if (Array.isArray(block.accounts)) accounts.push(...block.accounts);
       }
-      return {
+      const row = {
         topic,
         name: meta.name || "dApp",
         url: meta.url || "",
@@ -3990,6 +4019,8 @@ function collectLiveWcSessions() {
         accounts,
         status: "active",
       };
+      if (!row.icon) row.icon = localDappIconSrc(row) || "";
+      return row;
     });
   } catch (_) {
     return [];
@@ -4215,25 +4246,33 @@ function localDappIconSrc(hostOrItem) {
     const suffix = DAPP_LOCAL_ICON_MAP[i][0];
     const file = DAPP_LOCAL_ICON_MAP[i][1];
     if (host === suffix || host.endsWith("." + suffix)) {
-      return "./icons/dapps/" + file + ".png?v=1";
+      return extAssetUrl("icons/dapps/" + file + ".png") + "?v=1";
     }
   }
   // Name-based fallback (persisted WC rows sometimes lack url).
   const name = String(
     (hostOrItem && hostOrItem.name) || hostOrItem || ""
   ).toLowerCase();
-  if (name.includes("jupiter") || name === "jup") return "./icons/dapps/jupiter.png?v=1";
-  if (name.includes("pump")) return "./icons/dapps/pump.png?v=1";
-  if (name.includes("raydium")) return "./icons/dapps/raydium.png?v=1";
-  if (name.includes("orca")) return "./icons/dapps/orca.png?v=1";
-  if (name.includes("tensor")) return "./icons/dapps/tensor.png?v=1";
-  if (name.includes("drift")) return "./icons/dapps/drift.png?v=1";
-  if (name.includes("mango")) return "./icons/dapps/mango.png?v=1";
-  if (name.includes("kamino")) return "./icons/dapps/kamino.png?v=1";
-  if (name.includes("sanctum")) return "./icons/dapps/sanctum.png?v=1";
-  if (name.includes("uniswap")) return "./icons/dapps/uniswap.png?v=1";
-  if (name.includes("relay")) return "./icons/dapps/relay.png?v=1";
-  if (name.includes("incinerator")) return "./icons/dapps/incinerator.png?v=1";
+  const byName = [
+    ["jupiter", "jupiter"],
+    ["jup", "jupiter"],
+    ["pump", "pump"],
+    ["raydium", "raydium"],
+    ["orca", "orca"],
+    ["tensor", "tensor"],
+    ["drift", "drift"],
+    ["mango", "mango"],
+    ["kamino", "kamino"],
+    ["sanctum", "sanctum"],
+    ["uniswap", "uniswap"],
+    ["relay", "relay"],
+    ["incinerator", "incinerator"],
+  ];
+  for (let i = 0; i < byName.length; i++) {
+    if (name === byName[i][0] || name.includes(byName[i][0])) {
+      return extAssetUrl("icons/dapps/" + byName[i][1] + ".png") + "?v=1";
+    }
+  }
   return "";
 }
 
@@ -7385,7 +7424,14 @@ function renderAcctDrawerList() {
     btn.className = "acct-drawer-item" + (active ? " is-active" : "");
     btn.dataset.accountId = a.id;
     btn.innerHTML =
-      '<img class="acct-drawer-avatar" src="./icons/gladiator.png?v=4" alt="" width="36" height="36" />' +
+      '<img class="acct-drawer-avatar" src="' +
+      extAssetUrl("icons/gladiator.png") +
+      '?v=4" alt="" width="36" height="36" />' +
+      '<img class="acct-drawer-chain" src="' +
+      chainLogoSrc(activeChain(STATE)) +
+      '" alt="" width="16" height="16" title="' +
+      escapeHtml((activeChain(STATE) && activeChain(STATE).name) || "") +
+      '" />' +
       '<span class="acct-drawer-meta"><strong>' +
       escapeHtml(a.name || "W" + (idx + 1)) +
       (active ? " · Active" : "") +
@@ -7895,6 +7941,9 @@ function renderAccountsPanel() {
     const addr = a.solana.publicKey;
     li.innerHTML =
       '<span class="photon-radio" aria-hidden="true"></span>' +
+      '<img class="photon-wallet-logo" src="' +
+      extAssetUrl("icons/gladiator.png") +
+      '?v=4" alt="" width="22" height="22" />' +
       '<span class="photon-name">' +
       escapeHtml(a.name || "W" + (idx + 1)) +
       ledgerBadgeHtml(a) +
@@ -8516,6 +8565,9 @@ function paintWalletRenameList() {
         '<li class="settings-wallet" data-wallet-id="' +
         escapeHtml(a.id) +
         '">' +
+        '<img class="settings-wallet-logo" src="' +
+        extAssetUrl("icons/gladiator.png") +
+        '?v=4" alt="" width="28" height="28" />' +
         '<div class="settings-wallet-meta">' +
         '<input type="text" maxlength="32" data-rename-input="' +
         escapeHtml(a.id) +
@@ -8886,11 +8938,27 @@ function openDappApproveModal(req) {
   const modal = $("dappApproveModal");
   const title = $("dappApproveTitle");
   const body = $("dappApproveBody");
+  const logo = $("dappApproveLogo");
+  const hostEl = $("dappApproveHost");
   if (title) title.textContent = (req && req.title) || "Approve request?";
   if (body) {
     body.textContent =
       (req && req.body) ||
       ((req && req.origin) || "A site") + " is requesting wallet access.";
+  }
+  const iconSrc =
+    localDappIconSrc({ origin: req && req.origin, url: req && req.origin, name: req && req.title }) ||
+    extAssetUrl("icons/gladiator.png");
+  if (logo) {
+    logo.src = iconSrc;
+    logo.hidden = false;
+  }
+  if (hostEl) {
+    try {
+      hostEl.textContent = req && req.origin ? new URL(req.origin).hostname : "";
+    } catch (_) {
+      hostEl.textContent = (req && req.origin) || "";
+    }
   }
   pendingDappApproveId = req && req.id ? req.id : null;
   if (modal) modal.hidden = false;

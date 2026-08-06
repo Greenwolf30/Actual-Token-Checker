@@ -682,6 +682,11 @@ function dappIconForOrigin(origin) {
       const suffix = map[i][0];
       const file = map[i][1];
       if (host === suffix || host.endsWith("." + suffix)) {
+        try {
+          if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getURL) {
+            return chrome.runtime.getURL("icons/dapps/" + file + ".png");
+          }
+        } catch (_) {}
         return "./icons/dapps/" + file + ".png";
       }
     }

@@ -438,6 +438,7 @@ img.brand-mark {
 }
 
 .acct-drawer-item {
+  position: relative;
   width: 100%;
   display: grid;
   grid-template-columns: 36px 1fr auto;
@@ -471,6 +472,53 @@ img.brand-mark {
   object-fit: cover;
   background: #1c1c20;
   box-shadow: 0 0 0 1px rgba(184, 167, 207, 0.25);
+}
+
+.acct-drawer-chain {
+  position: absolute;
+  left: 42px;
+  bottom: 10px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(12, 16, 24, 0.95);
+  background: #0c1018;
+  object-fit: cover;
+  z-index: 1;
+}
+
+.photon-wallet-logo,
+.settings-wallet-logo {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  object-fit: cover;
+  background: rgba(8, 12, 20, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  flex-shrink: 0;
+}
+
+.settings-wallet-logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.dapp-approve-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.dapp-approve-logo {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  object-fit: cover;
+  background: rgba(8, 12, 20, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  flex-shrink: 0;
 }
 
 .acct-drawer-meta {
@@ -2936,7 +2984,7 @@ body.is-local .dock {
 
 .photon-table-head {
   display: grid;
-  grid-template-columns: 22px 1fr 1.1fr 0.7fr 96px;
+  grid-template-columns: 22px 24px minmax(0, 1.2fr) minmax(0, 1fr) 0.7fr 96px;
   gap: 8px;
   padding: 0 10px 8px;
   font-size: 0.68rem;
@@ -2958,7 +3006,7 @@ body.is-local .dock {
 
 .photon-row {
   display: grid;
-  grid-template-columns: 22px 1fr 1.1fr 0.7fr 96px;
+  grid-template-columns: 22px 24px minmax(0, 1.2fr) minmax(0, 1fr) 0.7fr 96px;
   gap: 8px;
   align-items: center;
   padding: 12px 10px;
@@ -3182,9 +3230,9 @@ body.is-local .dock {
 @media (max-width: 420px) {
   .photon-table-head,
   .photon-row {
-    grid-template-columns: 22px 1fr 0.85fr 88px;
+    grid-template-columns: 22px 24px 1fr 0.85fr 88px;
   }
-  .photon-table-head span:nth-child(3),
+  .photon-table-head span:nth-child(4),
   .photon-row .photon-addr {
     display: none;
   }

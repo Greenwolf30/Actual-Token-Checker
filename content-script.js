@@ -275,6 +275,31 @@
         return req.origin || location.hostname;
       }
     })();
+    const dappLogo = (function () {
+      const host = String(hostLabel || "")
+        .toLowerCase()
+        .replace(/^www\./, "");
+      const map = [
+        ["jup.ag", "jupiter"],
+        ["pump.fun", "pump"],
+        ["raydium.io", "raydium"],
+        ["orca.so", "orca"],
+        ["tensor.trade", "tensor"],
+        ["drift.trade", "drift"],
+        ["mango.markets", "mango"],
+        ["kamino.finance", "kamino"],
+        ["sanctum.so", "sanctum"],
+        ["uniswap.org", "uniswap"],
+        ["relay.link", "relay"],
+        ["sol-incinerator.com", "incinerator"],
+      ];
+      for (let i = 0; i < map.length; i++) {
+        if (host === map[i][0] || host.endsWith("." + map[i][0])) {
+          return chrome.runtime.getURL("icons/dapps/" + map[i][1] + ".png");
+        }
+      }
+      return chrome.runtime.getURL("icons/icon48.png");
+    })();
 
     root.innerHTML =
       '<style>' +
@@ -301,7 +326,7 @@
       '<div class="card" role="alertdialog" aria-modal="true">' +
       '<div class="brand">' +
       '<img class="logo" alt="" src="' +
-      chrome.runtime.getURL("icons/icon48.png") +
+      dappLogo +
       '" />' +
       "<div><strong>Gladiator</strong><span>" +
       hostLabel +

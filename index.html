@@ -12,7 +12,7 @@
       href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=0.6.20" />
+    <link rel="stylesheet" href="./styles.css?v=0.6.21" />
   </head>
   <body class="is-local">
     <div class="atmosphere" aria-hidden="true">
@@ -325,6 +325,7 @@
 
           <div class="photon-table-head" aria-hidden="true">
             <span></span>
+            <span></span>
             <span>Wallet</span>
             <span>Address</span>
             <span class="r">SOL</span>
@@ -390,12 +391,15 @@
                   <button type="button" class="photon-gen" id="connectLedgerBtn" title="Connect Ledger Nano (Solana app)">
                     Connect Ledger
                   </button>
-                  <button type="button" class="photon-chip" id="linkLedgerEvmBtn" title="Open Ethereum app on Ledger, then link ETH/Polygon/Base">
+                  <button type="button" class="photon-chip" id="linkLedgerEvmBtn" hidden title="Open Ethereum app on Ledger, then link ETH/Polygon/Base">
                     Link EVM
                   </button>
                 </div>
                 <p class="photon-sub" style="margin-top: 8px">
-                  Solana app → Connect Ledger. Ethereum app → Link EVM (same Account #) for ETH / Polygon / Base / Robinhood ETH. Bitcoin &amp; Sui Ledger not yet.
+                  Solana app → Connect Ledger. For ETH / Polygon / Base, switch to that chain (Ethereum app open) to link EVM. Bitcoin &amp; Sui Ledger not yet.
+                </p>
+                <p class="photon-sub" id="linkEvmHelp" hidden style="margin-top: 8px">
+                  Ethereum app open on the Nano → Link EVM (same Account #).
                 </p>
                 <p class="photon-sub" id="ledgerConnectStatus" style="margin-top: 8px"></p>
               </div>
@@ -631,7 +635,7 @@
           <button type="button" class="photon-chip photon-gen-block" id="acctDrawerLedger">
             Connect Ledger
           </button>
-          <button type="button" class="photon-chip photon-gen-block" id="acctDrawerLinkEvm" title="Open Ethereum app on Ledger first">
+          <button type="button" class="photon-chip photon-gen-block" id="acctDrawerLinkEvm" hidden title="Open Ethereum app on Ledger first">
             Link EVM chains
           </button>
           <button type="button" class="photon-chip acct-drawer-manage" id="acctDrawerManage">
@@ -687,7 +691,13 @@
 
     <div class="confirm-modal" id="dappApproveModal" hidden>
       <div class="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="dappApproveTitle" aria-describedby="dappApproveBody">
-        <h2 class="confirm-title" id="dappApproveTitle">Approve request?</h2>
+        <div class="dapp-approve-brand">
+          <img class="dapp-approve-logo" id="dappApproveLogo" alt="" width="40" height="40" src="./icons/gladiator.png" />
+          <div>
+            <h2 class="confirm-title" id="dappApproveTitle">Approve request?</h2>
+            <p class="photon-sub" id="dappApproveHost" style="margin: 2px 0 0"></p>
+          </div>
+        </div>
         <p class="confirm-body" id="dappApproveBody">A site is requesting wallet access.</p>
         <p class="photon-sub" style="margin: 0 0 10px">
           Connection stays until you disconnect. Every transaction still needs your Approve.
@@ -728,6 +738,6 @@
     <script src="./lib/ledger-solana.bundle.js?v=0.6.6"></script>
     <script src="./lib/ledger-eth.bundle.js?v=0.6.11"></script>
     <script src="./config.js"></script>
-    <script src="./app.js?v=0.6.20"></script>
+    <script src="./app.js?v=0.6.21"></script>
   </body>
 </html>
