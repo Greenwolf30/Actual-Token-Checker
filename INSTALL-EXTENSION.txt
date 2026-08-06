@@ -1,8 +1,8 @@
 Gladiator Wallet — update without losing your wallet
 
 PREFERRED UPDATE (keeps seed / accounts):
-1. Unzip the new pack
-2. Copy everything INSIDE the new folder into your EXISTING Gladiator folder (overwrite)
+1. Unzip the new pack (you get a Gladiator-Wallet folder)
+2. Copy everything INSIDE that folder into your EXISTING Gladiator folder (overwrite)
 3. chrome://extensions → Gladiator → Reload (do NOT Remove)
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
