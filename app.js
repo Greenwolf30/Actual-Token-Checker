@@ -3421,8 +3421,10 @@ async function syncPnlDelta(usd) {
   }
 }
 
-/** Cache: priceId -> { at, points: number[], price: number } */
+/** Cache: priceId -> { at, points: number[], price: number, marketOk: boolean } */
 const NATIVE_CHART_CACHE = Object.create(null);
+/** In-flight fetches so rapid paintBalances calls share one CoinGecko request. */
+const NATIVE_CHART_INFLIGHT = Object.create(null);
 const NATIVE_CHART_TTL_MS = 5 * 60 * 1000;
 let nativeChartSeq = 0;
 
@@ -3432,8 +3434,11 @@ function paintNativePriceLabel(chain, price, seriesMeta) {
   if (!el) return;
   const sym = (chain && chain.symbol) || "";
   const px = Number(price);
-  const meta = seriesMeta || { dir: "flat", pct: 0 };
-  if (quote) quote.dataset.dir = meta.dir || "flat";
+  const meta = seriesMeta || { dir: "flat", pct: 0, hasSeries: false };
+  if (quote) {
+    if (meta.hasSeries) quote.dataset.dir = meta.dir || "flat";
+    else delete quote.dataset.dir;
+  }
   if (!(px > 0)) {
     el.textContent = sym ? sym + " —" : "—";
     return;
@@ -3449,28 +3454,50 @@ function paintNativePriceLabel(chain, price, seriesMeta) {
 
 async function fetchNativePriceSeries(chain) {
   const priceId = chain && chain.priceId;
-  if (!priceId) return { points: [], price: 0 };
+  if (!priceId) return { points: [], price: 0, marketOk: false };
   const cached = NATIVE_CHART_CACHE[priceId];
-  if (cached && Date.now() - cached.at < NATIVE_CHART_TTL_MS && cached.points.length) {
+  if (
+    cached &&
+    cached.marketOk &&
+    Date.now() - cached.at < NATIVE_CHART_TTL_MS &&
+    cached.points.length >= 2
+  ) {
     return cached;
   }
-  let points = [];
+  if (NATIVE_CHART_INFLIGHT[priceId]) {
+    return NATIVE_CHART_INFLIGHT[priceId];
+  }
+  NATIVE_CHART_INFLIGHT[priceId] = (async () => {
+    let points = [];
+    let marketOk = false;
+    try {
+      const rows = await fetchCoinGeckoMarketChart(priceId, 1, 0);
+      points = (rows || []).map((r) => Number(r.price)).filter((v) => v > 0);
+      marketOk = points.length >= 2;
+    } catch (err) {
+      console.warn("[native-chart]", chain && chain.id, err);
+    }
+    const live = Number(PRICES[priceId]) || 0;
+    if (marketOk && live > 0) {
+      points = points.slice();
+      points[points.length - 1] = live;
+    }
+    const price = live > 0 ? live : marketOk ? points[points.length - 1] : 0;
+    const pack = {
+      at: Date.now(),
+      points: marketOk ? points : [],
+      price,
+      marketOk,
+    };
+    // Only cache successful market series — failed/empty must not block retries for 5 min.
+    if (marketOk) NATIVE_CHART_CACHE[priceId] = pack;
+    return pack;
+  })();
   try {
-    const rows = await fetchCoinGeckoMarketChart(priceId, 1, 0);
-    points = (rows || []).map((r) => Number(r.price)).filter((v) => v > 0);
-  } catch (err) {
-    console.warn("[native-chart]", chain && chain.id, err);
+    return await NATIVE_CHART_INFLIGHT[priceId];
+  } finally {
+    delete NATIVE_CHART_INFLIGHT[priceId];
   }
-  const live = Number(PRICES[priceId]) || 0;
-  if (live > 0) {
-    if (!points.length) points = [live, live];
-    else points = points.slice();
-    points[points.length - 1] = live;
-  }
-  const price = live > 0 ? live : points.length ? points[points.length - 1] : 0;
-  const pack = { at: Date.now(), points, price };
-  NATIVE_CHART_CACHE[priceId] = pack;
-  return pack;
 }
 
 async function syncNativePriceChart() {
@@ -3479,19 +3506,27 @@ async function syncNativePriceChart() {
   const quote = $("balanceNativeQuote");
   if (!chain || !svg) return;
   const seq = ++nativeChartSeq;
-  // Immediate label from PRICES while chart loads.
-  paintNativePriceLabel(chain, PRICES[chain.priceId] || 0, { dir: "flat", pct: 0, hasSeries: false });
+  // Drop previous chain's path immediately so SOL/ETH don't flash the wrong chart.
+  paintSparklineSvg(svg, []);
+  if (quote) delete quote.dataset.dir;
+  paintNativePriceLabel(chain, PRICES[chain.priceId] || 0, {
+    dir: "flat",
+    pct: 0,
+    hasSeries: false,
+  });
   try {
     const pack = await fetchNativePriceSeries(chain);
     if (seq !== nativeChartSeq) return;
     if (STATE.activeChainId !== chain.id) return;
-    const meta = nativeSeriesDir(pack.points);
+    const meta = pack.marketOk
+      ? nativeSeriesDir(pack.points)
+      : { dir: "flat", pct: 0, diff: 0, hasSeries: false };
     paintNativePriceLabel(chain, pack.price || PRICES[chain.priceId] || 0, meta);
-    paintSparklineSvg(svg, pack.points);
+    paintSparklineSvg(svg, pack.marketOk ? pack.points : []);
     if (quote) quote.hidden = false;
   } catch (_) {
     if (seq !== nativeChartSeq) return;
-    if (quote) quote.dataset.dir = "flat";
+    if (quote) delete quote.dataset.dir;
     paintSparklineSvg(svg, []);
   }
 }

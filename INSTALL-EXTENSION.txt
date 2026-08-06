@@ -15,6 +15,10 @@ How to read Home numbers:
   (~+1 price API call when cache is cold). No extra Solana RPC for the chart.
   Full write-up: Gladiator-Wallet-Documentation/DOCUMENTATION.txt §6.1–6.2
 
+v0.6.49:
+- Fix native chart: don't cache failed CoinGecko fetches; clear chart on chain switch;
+  no fake flat chart when market series missing; dedupe in-flight price requests
+
 v0.6.48:
 - Docs: how to read portfolio PnL + native price refresh cadence (§6.1–6.2)
 
