@@ -436,6 +436,12 @@ function shortAddr(a) {
   return a.slice(0, 4) + "…" + a.slice(-4);
 }
 
+/** Slightly longer truncation for the top address bar. */
+function shortAddrWide(a) {
+  if (!a || a.length < 14) return shortAddr(a);
+  return a.slice(0, 6) + "…" + a.slice(-6);
+}
+
 /** True when a string looks like a truncated or full chain address (not a ticker). */
 function looksLikeAddressLabel(s) {
   const t = String(s || "").trim();
@@ -1449,7 +1455,7 @@ function paintActiveChainAddress() {
   const chain = activeChain(STATE);
   const addr = chainKeyAddress(acc, chain) || "";
   const short = $("addrShort");
-  if (short) short.textContent = shortAddr(addr) || "—";
+  if (short) short.textContent = shortAddrWide(addr) || "—";
   const addrLogo = $("addrChainLogo");
   if (addrLogo && chain) {
     addrLogo.src = chainLogoSrc(chain);

@@ -7,6 +7,9 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.22:
+- Top address bar shifted left, wider, aligned with brand/chain; more space between dock tabs
+
 v0.6.21:
 - Hide Link EVM on Solana (shows on ETH chains); dApp/chain/wallet logos instead of letter avatars
 

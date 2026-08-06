@@ -2225,7 +2225,7 @@ body.is-extension .acct-drawer {
   width: min(calc(100% - 24px), calc(var(--shell-max) - 24px));
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 4px;
+  gap: 8px;
   padding: 8px;
   border-radius: 20px;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -2547,35 +2547,36 @@ body.is-extension .shell {
   flex-direction: column;
 }
 
-/* Compact top row: Gladiator + chain grouped left, address inset on right */
+/* Top row: brand | chain | address — equal height, clear gaps, address inset */
 body.is-extension .topbar-main {
-  display: flex;
-  flex-direction: row;
+  display: grid;
+  grid-template-columns: minmax(92px, 0.95fr) minmax(102px, 1.05fr) minmax(128px, 1.45fr);
   align-items: center;
-  justify-content: flex-start;
-  gap: 6px;
-  column-gap: 6px;
+  column-gap: 10px;
   min-width: 0;
   width: 100%;
-  /* Must stay visible so the chain dropdown can open/receive clicks */
+  padding-right: 10px; /* keep address off the right edge */
+  box-sizing: border-box;
   overflow: visible;
 }
 
 body.is-extension .topbar-main > .brand-chip {
-  justify-self: auto;
-  flex: 0 1 auto;
-  max-width: 108px;
+  justify-self: stretch;
+  width: 100%;
+  max-width: none;
   min-width: 0;
   position: relative;
   z-index: 1;
 }
 
 body.is-extension .brand-chip-sm {
-  max-width: 108px;
-  min-height: 32px;
-  height: 32px;
-  padding: 3px 6px 3px 3px;
-  gap: 4px;
+  max-width: none;
+  width: 100%;
+  min-height: 34px;
+  height: 34px;
+  padding: 0 8px 0 6px;
+  gap: 6px;
+  box-sizing: border-box;
 }
 
 body.is-extension .brand-chip-sm .brand-mark {
@@ -2584,8 +2585,8 @@ body.is-extension .brand-chip-sm .brand-mark {
 }
 
 body.is-extension .brand-chip-sm .brand-name {
-  font-size: 0.7rem;
-  letter-spacing: -0.05em;
+  font-size: 0.72rem;
+  letter-spacing: -0.04em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2598,19 +2599,7 @@ body.is-extension .brand-chip-sm .brand-acct {
 body.is-extension .brand-chip-sm .brand-chevron {
   font-size: 0.58rem;
   flex: 0 0 auto;
-}
-
-body.is-extension .topbar-center {
-  position: relative;
-  z-index: 5;
-  justify-self: auto;
-  flex: 0 0 auto;
-  min-width: 0;
-  max-width: 130px;
-  display: flex;
-  justify-content: flex-start;
-  margin-left: 0;
-  overflow: visible;
+  margin-left: auto;
 }
 
 body.is-extension .topbar {
@@ -2627,11 +2616,17 @@ body.is-extension .chain-bar.is-chain-open {
 }
 
 body.is-extension .topbar-center {
-  overflow: visible;
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 138px;
+  position: relative;
   z-index: 70;
+  justify-self: stretch;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  display: flex;
+  align-items: center;
+  justify-content: stretch;
+  margin: 0;
+  overflow: visible;
   pointer-events: auto;
 }
 
@@ -2642,13 +2637,13 @@ body.is-extension .switcher-bar {
   overflow: visible;
   pointer-events: auto;
   width: 100%;
-  justify-content: flex-start;
+  justify-content: stretch;
 }
 
 body.is-extension .chain-picker {
   display: block !important;
   min-width: 0;
-  max-width: 138px;
+  max-width: none;
   width: 100%;
   position: relative;
   z-index: 80;
@@ -2657,17 +2652,19 @@ body.is-extension .chain-picker {
 
 body.is-extension .chain-picker-btn {
   display: inline-flex !important;
+  align-items: center;
   width: 100%;
-  min-width: 96px;
-  min-height: 32px;
-  height: 32px;
+  min-width: 0;
+  min-height: 34px;
+  height: 34px;
   padding: 0 8px;
-  gap: 5px;
+  gap: 6px;
   border-radius: 9px;
   cursor: pointer;
   pointer-events: auto !important;
   position: relative;
   z-index: 81;
+  box-sizing: border-box;
 }
 
 body.is-extension .chain-picker-caret {
@@ -2675,12 +2672,13 @@ body.is-extension .chain-picker-caret {
   font-size: 0.7rem;
   line-height: 1;
   transform: none;
+  margin-left: auto;
 }
 
 body.is-extension .chain-picker-logo,
 body.is-extension .addr-chip-logo {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   flex: 0 0 auto;
 }
 
@@ -2695,19 +2693,17 @@ body.is-extension .chain-picker-title {
 }
 
 body.is-extension .topbar-meta {
-  justify-self: auto;
-  margin-left: auto;
-  margin-right: 0;
-  padding-right: 0;
-  flex: 1 1 0;
+  justify-self: stretch;
+  margin: 0;
+  padding: 0;
   min-width: 0;
-  max-width: 38%;
+  max-width: none;
+  width: 100%;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  overflow: hidden;
+  justify-content: stretch;
+  overflow: visible;
   position: relative;
-  /* Keep address chip from covering the chain button */
   z-index: 1;
   pointer-events: none;
 }
@@ -2734,18 +2730,31 @@ body.is-extension .chain-picker-menu.is-open {
 body.is-extension .addr-plain,
 body.is-extension .addr-chip {
   min-width: 0;
-  max-width: 100%;
-  width: auto;
-  min-height: 32px;
-  height: 32px;
-  gap: 4px;
-  padding: 0;
+  max-width: none;
+  width: 100%;
+  min-height: 34px;
+  height: 34px;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: 9px !important;
+  border: 1px solid rgba(184, 167, 207, 0.22);
+  background: rgba(8, 14, 28, 0.55);
   overflow: hidden;
+  box-sizing: border-box;
+  justify-content: flex-start;
+}
+
+body.is-extension .addr-plain:hover,
+body.is-extension .addr-chip:hover {
+  border-color: rgba(184, 167, 207, 0.4);
+  background: rgba(16, 24, 40, 0.75);
+  color: #fff;
 }
 
 body.is-extension .addr-short {
-  font-size: 0.68rem;
-  max-width: 100%;
+  font-size: 0.74rem;
+  letter-spacing: -0.01em;
+  max-width: none;
   min-width: 0;
   flex: 1 1 auto;
   overflow: hidden;
@@ -2795,6 +2804,7 @@ body.is-extension .dock {
   bottom: 10px;
   width: auto;
   transform: none;
+  gap: 8px;
 }
 
 body.is-extension .toast {
