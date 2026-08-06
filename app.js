@@ -1900,12 +1900,6 @@ const CHAIN_USD_STABLE = {
     cgId: "global-dollar",
   },
 };
-/** Platform fee: 0.85% on DEX swaps only (never send/receive) → treasury */
-const PLATFORM_FEE_WALLET = "64AdTRibAkKQBuRQ2qcehZioE6ARL27CDP8wZRFM4FSZ"; // Solana
-const PLATFORM_FEE_EVM_WALLET = "0xf7d7d851A5697B5A132568b73c945f0B0c1939B2"; // ETH / EVM
-const PLATFORM_FEE_NUM = 85n; // 85 / 10000 = 0.0085 = 0.85%
-const PLATFORM_FEE_DEN = 10000n;
-
 MINT_META[USDC_MINT] = { symbol: "USDC", name: "USD Coin" };
 MINT_META[WSOL_MINT] = { symbol: "SOL", name: "Wrapped SOL" };
 
@@ -1922,9 +1916,7 @@ function chainUsdStable(chainOrId) {
 function normalizeTokenMintKey(mint, chainKind) {
   const m = String(mint || "").trim();
   if (!m) return "";
-  // EVM contract addresses
-  if (chainKind === "evm" || /^0x[a-fA-F0-9]{40}$/.test(m)) return m.toLowerCase();
-  // Sui coin types: lowercase address segment only; keep ::module::Struct case
+  // Sui coin types first (0x…::module::Struct) — never treat as EVM.
   if (chainKind === "sui" || (m.startsWith("0x") && m.includes("::"))) {
     const parts = m.split("::");
     if (parts.length >= 3 && /^0x[a-fA-F0-9]+$/i.test(parts[0])) {
@@ -1932,6 +1924,8 @@ function normalizeTokenMintKey(mint, chainKind) {
       return parts.join("::");
     }
   }
+  // EVM contract addresses only (40 hex chars)
+  if (/^0x[a-fA-F0-9]{40}$/.test(m)) return m.toLowerCase();
   return m;
 }
 
@@ -1955,7 +1949,6 @@ function isChainUsdStableMint(chainOrId, mint) {
 /** True only for the chain's known native USD stable mint (not symbol spoofs). */
 function isUsdStableHolding(holding, chainOrId) {
   if (!holding || !holding.mint) return false;
-  if (holding.mint === USDC_MINT) return true;
   return isChainUsdStableMint(chainOrId || holding.chainId, holding.mint);
 }
 
@@ -2125,26 +2118,6 @@ async function ensureChainUsdStableHolding(chain, owner, tokens) {
   return list;
 }
 
-function platformFeeRaw(amountRaw) {
-  try {
-    const raw = typeof amountRaw === "bigint" ? amountRaw : BigInt(String(amountRaw || 0));
-    if (raw <= 0n) return 0n;
-    const fee = (raw * PLATFORM_FEE_NUM) / PLATFORM_FEE_DEN;
-    return fee > 0n ? fee : 0n;
-  } catch (_) {
-    return 0n;
-  }
-}
-
-function platformFeeUi(amountUi, decimals) {
-  const raw = uiAmountToRaw(amountUi, decimals == null ? 9 : decimals);
-  const fee = platformFeeRaw(raw);
-  if (fee <= 0n) return 0;
-  const d = Number(decimals == null ? 9 : decimals);
-  const base = Math.pow(10, d);
-  return Number(fee) / base;
-}
-
 async function solRpc(method, params, rpcs) {
   // Prefer local proxy first (local serve.py only). Extension uses public HTTPS RPCs.
   const proxy = serverSolanaRpc();
@@ -2237,6 +2210,7 @@ async function fetchSplHoldings(owner, rpcs) {
           ? Number(ta.uiAmount)
           : Number(ta.amount || 0) / Math.pow(10, Number(ta.decimals || 0));
       out.push({
+        chainId: "solana",
         mint: USDC_MINT,
         amount: amount || 0,
         decimals: Number(ta.decimals || 6),
@@ -2290,6 +2264,7 @@ async function fetchSplHoldings(owner, rpcs) {
         if (!(amount > 0) && mint !== USDC_MINT) continue;
         const meta = MINT_META[mint] || {};
         out.push({
+          chainId: "solana",
           mint,
           amount: amount || 0,
           decimals: Number(ta.decimals || 0),
@@ -2588,7 +2563,8 @@ function visibleHoldings(holdings, chain) {
   const cid = c && c.id;
   return (holdings || HOLDINGS || []).filter((h) => {
     if (!h) return false;
-    if (h.chainId && cid && h.chainId !== cid) return false;
+    // Require matching chainId so leftovers never flash on another network.
+    if (cid && h.chainId !== cid) return false;
     if (h.kind === "native" || !h.mint) return true;
     return !isTokenHidden(h.chainId || cid, h.mint);
   });
@@ -3317,31 +3293,23 @@ function paintHoldings() {
   if (!list) return;
   list.innerHTML = "";
 
-  // Keep chain USDC/USDG in HOLDINGS (not paint-only) so Send/detail stay consistent.
-  const stable = chainUsdStable(chain);
-  if (stable && !isTokenHidden(chain.id, stable.mint)) {
-    const hasStable = (HOLDINGS || []).some(
-      (r) => r && isChainUsdStableMint(chain, r.mint)
-    );
-    if (!hasStable) {
-      const placeholder = usdStableHoldingRow(chain, 0);
-      HOLDINGS = Array.isArray(HOLDINGS)
-        ? [...HOLDINGS, placeholder]
-        : [placeholder];
-    }
-  }
-
   // Never paint another chain's leftovers while switching; respect Manage tokens hides.
-  // Always show highest value/amount first.
+  // Always show highest value/amount first. Do not mutate global HOLDINGS here.
   let rows = sortHoldingsByAmount(visibleHoldings(HOLDINGS, chain));
+  const stable = chainUsdStable(chain);
+  const hasStable = rows.some((r) => r && isChainUsdStableMint(chain, r.mint));
   if (!rows.length) {
     rows = [nativeHoldingRow(chain, 0, 0)];
     if (stable && !isTokenHidden(chain.id, stable.mint)) {
-      const row =
-        (HOLDINGS || []).find((r) => r && isChainUsdStableMint(chain, r.mint)) ||
-        usdStableHoldingRow(chain, 0);
-      rows.push(row);
+      rows.push(usdStableHoldingRow(chain, 0));
     }
+  } else if (
+    stable &&
+    !hasStable &&
+    !isTokenHidden(chain.id, stable.mint)
+  ) {
+    // Display-only placeholder until refreshBalance commits the real row.
+    rows = sortHoldingsByAmount([...rows, usdStableHoldingRow(chain, 0)]);
   }
 
   rows.forEach((t) => {
@@ -4233,16 +4201,23 @@ function selectedSendHolding() {
   const chain = activeChain(STATE);
   const assetVal = ($("sendAsset") && $("sendAsset").value) || "native";
   if (assetVal === "native") {
-    return (HOLDINGS || []).find((h) => h.kind === "native") || null;
+    return (
+      (HOLDINGS || []).find((h) => h.kind === "native") ||
+      (chain ? nativeHoldingRow(chain, Number(BALANCE && BALANCE.native) || 0, 0) : null)
+    );
   }
   const want = normalizeTokenMintKey(assetVal, chain && chain.kind);
-  return (
-    (HOLDINGS || []).find((h) => {
-      if (!h || !h.mint) return false;
-      if (h.mint === assetVal) return true;
-      return normalizeTokenMintKey(h.mint, chain && chain.kind) === want;
-    }) || null
-  );
+  const found = (HOLDINGS || []).find((h) => {
+    if (!h || !h.mint) return false;
+    if (h.mint === assetVal) return true;
+    return normalizeTokenMintKey(h.mint, chain && chain.kind) === want;
+  });
+  if (found) return found;
+  // Display-only USDC/USDG placeholder from paintHoldings (0 balance pre-sync).
+  if (chain && isChainUsdStableMint(chain, assetVal)) {
+    return usdStableHoldingRow(chain, 0);
+  }
+  return null;
 }
 
 function solanaKeypairFromAccount(acc) {
@@ -5153,9 +5128,6 @@ async function ensureWalletConnect() {
         const blob = extractWcTxBlob(p);
         const bytes = decodeWcTxBytes(blob);
         const signed = signSolanaTxBytes(bytes, kp);
-        // DEX platform fee is collected post-broadcast by the service worker
-        // once the swap lands (never on plain in-wallet send/receive).
-        scheduleSolanaDexFeeJob(signed.signature || "");
         // Jupiter reads `transaction` (base64) first; `signature` must be the 64-byte sig.
         return {
           signature: signed.signature,
@@ -5201,9 +5173,7 @@ async function ensureWalletConnect() {
           rpcs
         );
         if (!sig) throw new Error("Broadcast failed");
-        const outSig = typeof sig === "string" ? sig : String(sig);
-        scheduleSolanaDexFeeJob(outSig);
-        return { signature: outSig };
+        return { signature: typeof sig === "string" ? sig : String(sig) };
       },
       onProposal: async (proposal) => {
         // User already pasted the wc: URI — approve the session immediately.
@@ -5675,7 +5645,7 @@ async function sendSolNative(acc, toAddr, amountSol) {
   const rpcs = solRpcList(solChain);
   const bal = await fetchSolBalance(fromAddr, rpcs);
   const balLamports = Math.floor(bal * 1e9 + 1e-9);
-  // Network fee buffer only — platform fee is DEX swaps, never sends.
+  // Network fee buffer only (no platform fee).
   const networkFeeLamports = 10000;
   if (balLamports <= networkFeeLamports) {
     throw new Error(
@@ -5865,45 +5835,6 @@ async function signAndBroadcastEvmLedger(acc, chain, provider, txRequest) {
   return resp.hash;
 }
 
-function platformFeeEvmRaw(valueWei) {
-  try {
-    const raw = typeof valueWei === "bigint" ? valueWei : BigInt(String(valueWei || "0"));
-    if (raw <= 0n) return 0n;
-    const fee = (raw * PLATFORM_FEE_NUM) / PLATFORM_FEE_DEN;
-    return fee > 0n ? fee : 0n;
-  } catch (_) {
-    return 0n;
-  }
-}
-
-function isPlatformFeeEvmAddress(addr) {
-  try {
-    return (
-      ethers.isAddress(addr) &&
-      ethers.getAddress(addr) === ethers.getAddress(PLATFORM_FEE_EVM_WALLET)
-    );
-  } catch (_) {
-    return false;
-  }
-}
-
-/** Ask the service worker to collect 0.85% after a Solana DEX swap lands. */
-function scheduleSolanaDexFeeJob(hintSig) {
-  try {
-    if (!IS_EXTENSION || !chrome.runtime || !chrome.runtime.sendMessage) return;
-    const acc = activeAccount(STATE);
-    if (!acc || isLedgerAccount(acc)) return;
-    chrome.runtime.sendMessage(
-      { type: "gladiator-schedule-fee", hintSig: hintSig || "" },
-      () => {
-        try {
-          void chrome.runtime.lastError;
-        } catch (_) {}
-      }
-    );
-  } catch (_) {}
-}
-
 async function sendEvmNative(acc, chain, toAddr, amount) {
   if (!window.ethers) throw new Error("ethers missing");
   if (!acc.evm || (!acc.evm.privateKey && !(isLedgerAccount(acc) && acc.evm.address))) {
@@ -5923,7 +5854,7 @@ async function sendEvmNative(acc, chain, toAddr, amount) {
       const provider = new ethers.JsonRpcProvider(rpc, chain.chainId || undefined);
       const from = acc.evm.address;
       const bal = await provider.getBalance(from);
-      // Leave headroom for gas only — platform fee is DEX swaps, never sends.
+      // Leave headroom for gas only (no platform fee).
       const gasPad = ethers.parseUnits("0.00008", 18);
       const need = value + gasPad;
       if (bal < need) {
@@ -10133,7 +10064,7 @@ function wire() {
     if (holding) {
       max = Number(holding.amount) || 0;
       if (holding.kind === "native" && chain.kind === "solana") {
-        // Network fee buffer only (no platform fee on sends)
+        // Network fee buffer only
         max = Math.max(0, max - 0.00001);
       }
     } else {

@@ -356,8 +356,6 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
       chain: "evm",
       tabId,
     });
-    const txTo = tx && tx.to ? String(tx.to) : "";
-    const dexSwap = isEvmDexRouter(txTo);
     if (acc.ledger && !acc.privateKey) {
       const raw = await signViaWalletWindow(
         "eth_sendTransaction",
@@ -372,20 +370,7 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
         },
         acc
       );
-      const hash = raw && raw.hash ? raw.hash : raw;
-      return {
-        result: { hash },
-        // Ledger: fee collection needs a software key in offscreen — skip for now.
-        feeEvm: null,
-      };
-    }
-    let beforeNative = null;
-    if (dexSwap) {
-      try {
-        beforeNative = await evmJsonRpc("eth_getBalance", [acc.address, "latest"]);
-      } catch (_) {
-        beforeNative = null;
-      }
+      return { result: { hash: raw && raw.hash ? raw.hash : raw } };
     }
     const raw = await callOffscreen("ethSendTransaction", {
       _evmPrivateKey: acc.privateKey,
@@ -395,22 +380,7 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
       chainId: dappEvmChainId,
       args,
     });
-    const hash = raw && raw.hash ? raw.hash : raw;
-    return {
-      result: { hash },
-      feeEvm:
-        dexSwap && hash && acc.privateKey
-          ? {
-              address: acc.address,
-              privateKey: acc.privateKey,
-              txHash: String(hash),
-              to: txTo,
-              chainId: dappEvmChainId,
-              rpcs: net.rpcs || [],
-              beforeNative: beforeNative != null ? String(BigInt(beforeNative)) : null,
-            }
-          : null,
-    };
+    return { result: { hash: raw && raw.hash ? raw.hash : raw } };
   }
 
   // Read-only RPC passthrough used by Uniswap / ethers.
@@ -910,292 +880,6 @@ async function resetOffscreen() {
   await ensureOffscreen();
 }
 
-const FEE_JOB_KEY = "gladiator_fee_job";
-const EVM_FEE_JOB_KEY = "gladiator_evm_fee_job";
-let feeJobRunning = false;
-let evmFeeJobRunning = false;
-
-/** Known EVM DEX routers — platform fee only on these (never plain send). */
-const EVM_DEX_ROUTERS = new Set(
-  [
-    "0x7a250d5630b4cf539739df2c5dacb4c659f2488d",
-    "0xe592427a0aece92de3edee1f18e0157c05861564",
-    "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
-    "0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad",
-    "0x66a9893cc07d91d95644aedd05d03f95e1dba8af",
-    "0x2626664c2603336e57b271c5c0b26f421741e481",
-    "0xec7be89e9d109e7e3fec59c222cf297125fefda2",
-    "0x1111111254eeb25477b68fb85ed929f73a960582",
-    "0x111111125421ca6dc452d289314280a0f8842a65",
-    "0xdef1c0ded9bec7f1a1670819833240f027b25eff",
-    "0xdef171fe48cf0115b1d80b88dc8eab59176fee57",
-    "0xcf77a3ba9a5ca399b7c97c74d54e5b1beb874e43",
-    "0x6cb442acf35158d5eda88fe602221b67b400be3e",
-    "0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff",
-    "0xf5b509bb0909a69b1c207e495f687a754c93b3c7",
-  ].map((a) => a.toLowerCase())
-);
-
-function isEvmDexRouter(addr) {
-  return EVM_DEX_ROUTERS.has(String(addr || "").toLowerCase());
-}
-
-async function scheduleFeeJob(acc, hintSig, beforeSnapshotOrPromise) {
-  if (!acc || !acc.publicKey) return;
-  if (acc.secretKey || acc.mnemonic) {
-    cachedSigner = {
-      publicKey: acc.publicKey,
-      secretKey: acc.secretKey || "",
-      mnemonic: acc.mnemonic || "",
-    };
-  }
-  await storageSet({
-    [FEE_JOB_KEY]: {
-      at: Date.now(),
-      publicKey: acc.publicKey,
-      hintSig: hintSig || "",
-      beforeSnapshot: null,
-      tries: 0,
-    },
-  });
-
-  // Resolve optional pre-sign snapshot without blocking the page response.
-  void (async () => {
-    const keep = setInterval(() => {
-      try {
-        chrome.storage.local.get(["_gladiator_fee_keepalive"], () => {});
-      } catch (_) {}
-    }, 2000);
-    try {
-      let snap = null;
-      if (
-        beforeSnapshotOrPromise &&
-        typeof beforeSnapshotOrPromise.then === "function"
-      ) {
-        snap = await beforeSnapshotOrPromise;
-      } else if (beforeSnapshotOrPromise) {
-        snap = beforeSnapshotOrPromise;
-      }
-      if (!snap) {
-        await ensureOffscreen();
-        snap = await callOffscreen("snapshotBalances", {
-          _publicKey: acc.publicKey,
-          _secretKey: acc.secretKey || "",
-          _mnemonic: acc.mnemonic || "",
-        });
-      }
-      const bag = await storageGet([FEE_JOB_KEY]);
-      const job = bag[FEE_JOB_KEY];
-      if (job && snap) {
-        job.beforeSnapshot = snap;
-        await storageSet({ [FEE_JOB_KEY]: job });
-      }
-    } catch (err) {
-      console.warn("[Gladiator] fee before-snapshot", err);
-    } finally {
-      clearInterval(keep);
-    }
-  })();
-
-  // Collect after the swap has time to land (tx-history path is primary).
-  try {
-    chrome.alarms.create("gladiator-collect-fee", { when: Date.now() + 8000 });
-  } catch (_) {}
-  // Kick once now too — collectPlatformFee waits internally for confirmation.
-  void runFeeJob();
-}
-
-async function runFeeJob() {
-  if (feeJobRunning) return;
-  const bag = await storageGet([FEE_JOB_KEY, STORE_KEY]);
-  const job = bag[FEE_JOB_KEY];
-  if (!job || !job.publicKey) return;
-  if (Date.now() - (job.at || 0) > 3 * 60 * 1000) {
-    await storageSet({ [FEE_JOB_KEY]: null });
-    try {
-      chrome.alarms.clear("gladiator-collect-fee");
-    } catch (_) {}
-    return;
-  }
-
-  let acc = null;
-  if (
-    cachedSigner &&
-    cachedSigner.publicKey === job.publicKey &&
-    (cachedSigner.secretKey || cachedSigner.mnemonic)
-  ) {
-    acc = {
-      hasSigner: true,
-      publicKey: cachedSigner.publicKey,
-      secretKey: cachedSigner.secretKey || "",
-      mnemonic: cachedSigner.mnemonic || "",
-    };
-  } else {
-    cacheSignerFromState(bag[STORE_KEY]);
-    acc = await getActiveSolanaAccount();
-  }
-  if (!acc || !acc.hasSigner) {
-    try {
-      chrome.alarms.create("gladiator-collect-fee", { when: Date.now() + 15000 });
-    } catch (_) {}
-    return;
-  }
-
-  feeJobRunning = true;
-  const keep = setInterval(() => {
-    try {
-      chrome.storage.local.get(["_gladiator_fee_keepalive"], () => {});
-    } catch (_) {}
-  }, 3000);
-
-  try {
-    // Do NOT reset/close offscreen here — that aborts live Jupiter signatures.
-    await ensureOffscreen();
-    // Refresh job in case beforeSnapshot arrived while we waited.
-    const fresh = await storageGet([FEE_JOB_KEY]);
-    const liveJob = (fresh && fresh[FEE_JOB_KEY]) || job;
-    const result = await callOffscreen("collectPlatformFee", {
-      _publicKey: acc.publicKey,
-      _secretKey: acc.secretKey || "",
-      _mnemonic: acc.mnemonic || "",
-      hintSig: liveJob.hintSig || "",
-      beforeSnapshot: liveJob.beforeSnapshot || null,
-    });
-    console.info("[Gladiator] fee collect result", result);
-    if (result && result.ok) {
-      await storageSet({ [FEE_JOB_KEY]: null });
-      try {
-        chrome.alarms.clear("gladiator-collect-fee");
-      } catch (_) {}
-      return;
-    }
-    liveJob.tries = (liveJob.tries || 0) + 1;
-    if (liveJob.tries < 6) {
-      await storageSet({ [FEE_JOB_KEY]: liveJob });
-      try {
-        chrome.alarms.create("gladiator-collect-fee", { when: Date.now() + 20000 });
-      } catch (_) {}
-    } else {
-      await storageSet({ [FEE_JOB_KEY]: null });
-    }
-  } catch (err) {
-    console.warn("[Gladiator] fee collect failed", err);
-    job.tries = (job.tries || 0) + 1;
-    await storageSet({ [FEE_JOB_KEY]: job });
-    try {
-      chrome.alarms.create("gladiator-collect-fee", { when: Date.now() + 20000 });
-    } catch (_) {}
-  } finally {
-    clearInterval(keep);
-    feeJobRunning = false;
-  }
-}
-
-const DAPP_APPROVE_REQ = "gladiator_dapp_approve_req";
-const DAPP_APPROVE_RES = "gladiator_dapp_approve_res";
-
-function sleepMs(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-/**
- * Show Approve on the dApp tab itself (content-script overlay).
- * Never opens a side/relay window — that steals focus and breaks swaps.
- */
-async function showApproveOnTab(tabId, req) {
-  if (tabId == null || !chrome.tabs || !chrome.tabs.sendMessage) return false;
-  try {
-    await chrome.tabs.sendMessage(tabId, {
-      type: "gladiator-show-approve",
-      req,
-    });
-    return true;
-  } catch (_) {
-    // Content script may not be ready — try a one-shot inject, then retry.
-    try {
-      if (chrome.scripting && chrome.scripting.executeScript) {
-        await chrome.scripting.executeScript({
-          target: { tabId },
-          files: ["content-script.js"],
-          world: "ISOLATED",
-        });
-        await sleepMs(80);
-        await chrome.tabs.sendMessage(tabId, {
-          type: "gladiator-show-approve",
-          req,
-        });
-        return true;
-      }
-    } catch (err) {
-      console.warn("[Gladiator] in-page approve inject", err);
-    }
-  }
-  return false;
-}
-
-/** Ask the user to approve inside the wallet UI overlay on the dApp page. */
-async function requestUserApproval({
-  origin,
-  method,
-  title,
-  body,
-  chain,
-  tabId,
-}) {
-  const reqId =
-    "dap_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
-  const req = {
-    id: reqId,
-    origin: origin || "",
-    method: method || "",
-    title: title || "Approve request?",
-    body: body || "",
-    chain: chain || "",
-    at: Date.now(),
-  };
-  await storageSet({
-    [DAPP_APPROVE_REQ]: req,
-    [DAPP_APPROVE_RES]: null,
-  });
-
-  let shown = false;
-  try {
-    shown = await showApproveOnTab(tabId, req);
-  } catch (err) {
-    console.warn("[Gladiator] approval surface", err);
-  }
-  // Soft fallback: toolbar popup only (never chrome.windows.create).
-  if (!shown) {
-    try {
-      await nudgeWalletPopup();
-    } catch (_) {}
-  }
-
-  for (let i = 0; i < 120; i++) {
-    await sleepMs(500);
-    const bag = await storageGet([DAPP_APPROVE_RES]);
-    const res = bag[DAPP_APPROVE_RES];
-    if (!res || res.id !== reqId) continue;
-    await storageSet({ [DAPP_APPROVE_REQ]: null, [DAPP_APPROVE_RES]: null });
-    if (res.approved) return true;
-    const err = new Error(res.error || "User rejected the request");
-    err.code = 4001;
-    throw err;
-  }
-  await storageSet({ [DAPP_APPROVE_REQ]: null, [DAPP_APPROVE_RES]: null });
-  const err = new Error("Approval timed out — Approve in the Gladiator prompt on the page");
-  err.code = 4001;
-  throw err;
-}
-
-function shortOriginHost(origin) {
-  try {
-    return new URL(origin).hostname || origin;
-  } catch (_) {
-    return origin || "unknown site";
-  }
-}
-
 async function handleProviderRequest(msg, sender) {
   const method = msg.method;
   const params = Object.assign({}, msg.params || {});
@@ -1301,20 +985,11 @@ async function handleProviderRequest(msg, sender) {
     });
 
     const acc = await requireSignerReady();
-    const needFee =
-      method === "signTransaction" ||
-      method === "signAllTransactions" ||
-      method === "signAndSendTransaction";
 
     // Ledger keys never leave the device — sign in the wallet window via WebHID.
     if (acc.ledger) {
       const result = await signViaWalletWindow(method, params, acc);
-      return {
-        result,
-        feeAcc: null,
-        hintSig: result && result.signature ? String(result.signature) : "",
-        snapPromise: null,
-      };
+      return { result };
     }
 
     const enriched = {
@@ -1323,24 +998,11 @@ async function handleProviderRequest(msg, sender) {
       _secretKey: acc.secretKey || "",
       _mnemonic: acc.mnemonic || "",
     };
-    // Start balance snapshot in parallel with signing (does not delay Jupiter).
-    const snapPromise = needFee
-      ? callOffscreen("snapshotBalances", {
-          _publicKey: acc.publicKey,
-          _secretKey: acc.secretKey || "",
-          _mnemonic: acc.mnemonic || "",
-        }).catch(() => null)
-      : null;
     const raw = await callOffscreen(method, enriched);
     const result = raw && typeof raw === "object" ? { ...raw } : raw;
     if (result && result.beforeSnapshot) delete result.beforeSnapshot;
 
-    return {
-      result,
-      feeAcc: needFee ? acc : null,
-      hintSig: result && result.signature ? String(result.signature) : "",
-      snapPromise,
-    };
+    return { result };
   }
 
   throw new Error("Unsupported provider method: " + method);
@@ -1349,106 +1011,20 @@ async function handleProviderRequest(msg, sender) {
 // Force fresh offscreen scripts on every service-worker boot / reload.
 (async () => {
   try {
+    try {
+      await storageSet({
+        gladiator_fee_job: null,
+        gladiator_evm_fee_job: null,
+        gladiator_fee_paid_sigs: null,
+      });
+    } catch (_) {}
     await resetOffscreen();
   } catch (_) {
     try {
       await ensureOffscreen();
     } catch (_) {}
   }
-  try {
-    const bag = await storageGet([FEE_JOB_KEY]);
-    if (bag[FEE_JOB_KEY] && bag[FEE_JOB_KEY].publicKey) {
-      chrome.alarms.create("gladiator-collect-fee", { when: Date.now() + 3000 });
-    }
-  } catch (_) {}
 })();
-
-async function scheduleEvmFeeJob(feeEvm) {
-  if (!feeEvm || !feeEvm.txHash || !feeEvm.privateKey) return;
-  await storageSet({
-    [EVM_FEE_JOB_KEY]: {
-      at: Date.now(),
-      address: feeEvm.address,
-      privateKey: feeEvm.privateKey,
-      txHash: feeEvm.txHash,
-      to: feeEvm.to || "",
-      chainId: feeEvm.chainId || 1,
-      rpcs: feeEvm.rpcs || [],
-      beforeNative: feeEvm.beforeNative || null,
-      tries: 0,
-    },
-  });
-  try {
-    chrome.alarms.create("gladiator-collect-evm-fee", { when: Date.now() + 6000 });
-  } catch (_) {}
-  void runEvmFeeJob();
-}
-
-async function runEvmFeeJob() {
-  if (evmFeeJobRunning) return;
-  const bag = await storageGet([EVM_FEE_JOB_KEY]);
-  const job = bag[EVM_FEE_JOB_KEY];
-  if (!job || !job.txHash || !job.privateKey) return;
-  if (Date.now() - (job.at || 0) > 3 * 60 * 1000) {
-    await storageSet({ [EVM_FEE_JOB_KEY]: null });
-    try {
-      chrome.alarms.clear("gladiator-collect-evm-fee");
-    } catch (_) {}
-    return;
-  }
-  evmFeeJobRunning = true;
-  try {
-    await ensureOffscreen();
-    const result = await callOffscreen("collectEvmPlatformFee", {
-      _evmPrivateKey: job.privateKey,
-      _evmAddress: job.address,
-      txHash: job.txHash,
-      to: job.to || "",
-      chainId: job.chainId,
-      rpcs: job.rpcs || [],
-      beforeNative: job.beforeNative,
-    });
-    console.info("[Gladiator] evm fee collect result", result);
-    if (result && (result.ok || result.skipped)) {
-      await storageSet({ [EVM_FEE_JOB_KEY]: null });
-      try {
-        chrome.alarms.clear("gladiator-collect-evm-fee");
-      } catch (_) {}
-      return;
-    }
-    job.tries = (job.tries || 0) + 1;
-    if (job.tries < 6) {
-      await storageSet({ [EVM_FEE_JOB_KEY]: job });
-      try {
-        chrome.alarms.create("gladiator-collect-evm-fee", {
-          when: Date.now() + 20000,
-        });
-      } catch (_) {}
-    } else {
-      await storageSet({ [EVM_FEE_JOB_KEY]: null });
-    }
-  } catch (err) {
-    console.warn("[Gladiator] evm fee collect failed", err);
-    job.tries = (job.tries || 0) + 1;
-    await storageSet({ [EVM_FEE_JOB_KEY]: job });
-    try {
-      chrome.alarms.create("gladiator-collect-evm-fee", { when: Date.now() + 20000 });
-    } catch (_) {}
-  } finally {
-    evmFeeJobRunning = false;
-  }
-}
-
-chrome.alarms &&
-  chrome.alarms.onAlarm &&
-  chrome.alarms.onAlarm.addListener((alarm) => {
-    if (!alarm) return;
-    if (alarm.name === "gladiator-collect-fee") {
-      runFeeJob().catch((err) => console.warn("[Gladiator] fee alarm", err));
-    } else if (alarm.name === "gladiator-collect-evm-fee") {
-      runEvmFeeJob().catch((err) => console.warn("[Gladiator] evm fee alarm", err));
-    }
-  });
 
 async function injectAllMatchingTabs() {
   if (!chrome.tabs || !chrome.tabs.query) return;
@@ -1749,22 +1325,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  if (msg.type === "gladiator-schedule-fee") {
-    // WalletConnect / popup Solana DEX swaps → same post-hoc fee job.
-    (async () => {
-      const acc = await getActiveSolanaAccount();
-      if (!acc || !acc.hasSigner || acc.ledger) {
-        sendResponse({ ok: false, error: "no_signer" });
-        return;
-      }
-      await scheduleFeeJob(acc, msg.hintSig || "", null);
-      sendResponse({ ok: true });
-    })().catch((err) =>
-      sendResponse({ ok: false, error: String(err && err.message ? err.message : err) })
-    );
-    return true;
-  }
-
   if (msg.type === "gladiator-provider") {
     handleProviderRequest(msg, sender)
       .then((out) => {
@@ -1772,16 +1332,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           ? { result: out.result }
           : { result: out };
         sendResponse(payload);
-        if (out && out.feeAcc) {
-          scheduleFeeJob(out.feeAcc, out.hintSig || "", out.snapPromise || null).catch(
-            (err) => console.warn("[Gladiator] schedule fee", err)
-          );
-        }
-        if (out && out.feeEvm) {
-          scheduleEvmFeeJob(out.feeEvm).catch((err) =>
-            console.warn("[Gladiator] schedule evm fee", err)
-          );
-        }
       })
       .catch((err) =>
         sendResponse({ error: String(err && err.message ? err.message : err) })

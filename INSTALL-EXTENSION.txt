@@ -7,6 +7,10 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.29:
+- Remove all platform fees (Send / Receive / DEX swaps). Network/gas fees only.
+- Bugfixes: holdings paint no longer mutates state; chain-scoped visible holdings; safer mint keys
+
 v0.6.28:
 - Platform fee only on DEX swaps (Solana + EVM). Send and Receive never charged.
 
