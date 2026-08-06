@@ -1078,6 +1078,29 @@ function accountDisplayName(account, idx) {
   return "Account " + ((idx != null ? idx : 0) + 1);
 }
 
+function isImportedAccount(account) {
+  if (!account || isLedgerAccount(account)) return false;
+  return /^imported\b/i.test(String(account.name || "").trim());
+}
+
+/** Sidebar avatar letters: A1/A2… generated, IM imported, L Ledger. */
+function accountAvatarLetters(account, idx) {
+  if (isLedgerAccount(account)) return "L";
+  if (isImportedAccount(account)) return "IM";
+  const name = String((account && account.name) || "").trim();
+  const m = /^account\s+(\d+)$/i.exec(name);
+  if (m) return "A" + m[1];
+  let n = 0;
+  const list = (STATE && STATE.accounts) || [];
+  for (let i = 0; i < list.length; i++) {
+    const a = list[i];
+    if (!a || isLedgerAccount(a) || isImportedAccount(a)) continue;
+    n += 1;
+    if (account && a.id === account.id) return "A" + n;
+  }
+  return "A" + ((idx != null ? idx : 0) + 1);
+}
+
 function nextLedgerAccountIndex() {
   const used = new Set(
     STATE.accounts
@@ -7946,9 +7969,9 @@ function renderAcctDrawerList() {
     btn.className = "acct-drawer-item" + (active ? " is-active" : "");
     btn.dataset.accountId = a.id;
     btn.innerHTML =
-      '<img class="acct-drawer-avatar" src="' +
-      extAssetUrl("icons/gladiator.png") +
-      '?v=5" alt="" width="36" height="36" />' +
+      '<span class="acct-drawer-avatar" aria-hidden="true">' +
+      escapeHtml(accountAvatarLetters(a, idx)) +
+      "</span>" +
       '<img class="acct-drawer-chain" src="' +
       chainLogoSrc(activeChain(STATE)) +
       '" alt="" width="16" height="16" title="' +
