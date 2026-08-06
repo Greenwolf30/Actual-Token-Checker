@@ -647,6 +647,8 @@ function niceDappName(origin) {
     if (host === "mango.markets" || host.endsWith(".mango.markets")) return "Mango";
     if (host === "kamino.finance" || host.endsWith(".kamino.finance")) return "Kamino";
     if (host === "sanctum.so" || host.endsWith(".sanctum.so")) return "Sanctum";
+    if (host === "uniswap.org" || host.endsWith(".uniswap.org")) return "Uniswap";
+    if (host === "relay.link" || host.endsWith(".relay.link")) return "Relay";
     if (
       host === "sol-incinerator.com" ||
       host.endsWith(".sol-incinerator.com")
@@ -659,6 +661,34 @@ function niceDappName(origin) {
   }
 }
 
+function dappIconForOrigin(origin) {
+  try {
+    const host = new URL(origin).hostname.toLowerCase().replace(/^www\./, "");
+    const map = [
+      ["jup.ag", "jupiter"],
+      ["pump.fun", "pump"],
+      ["raydium.io", "raydium"],
+      ["orca.so", "orca"],
+      ["tensor.trade", "tensor"],
+      ["drift.trade", "drift"],
+      ["mango.markets", "mango"],
+      ["kamino.finance", "kamino"],
+      ["sanctum.so", "sanctum"],
+      ["uniswap.org", "uniswap"],
+      ["relay.link", "relay"],
+      ["sol-incinerator.com", "incinerator"],
+    ];
+    for (let i = 0; i < map.length; i++) {
+      const suffix = map[i][0];
+      const file = map[i][1];
+      if (host === suffix || host.endsWith("." + suffix)) {
+        return "./icons/dapps/" + file + ".png";
+      }
+    }
+  } catch (_) {}
+  return "";
+}
+
 async function listInjectConnections() {
   const origins = await readTrustedOrigins();
   return origins.map((origin) => ({
@@ -667,7 +697,7 @@ async function listInjectConnections() {
     origin,
     name: niceDappName(origin),
     url: origin,
-    icon: "",
+    icon: dappIconForOrigin(origin),
     accounts: [],
     status: "active",
   }));

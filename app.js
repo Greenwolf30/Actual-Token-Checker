@@ -4177,6 +4177,84 @@ async function disconnectInjectOrigin(origin) {
   });
 }
 
+/** Known dApp logos shipped under icons/dapps/ (host suffix → file stem). */
+const DAPP_LOCAL_ICON_MAP = [
+  ["jup.ag", "jupiter"],
+  ["pump.fun", "pump"],
+  ["raydium.io", "raydium"],
+  ["orca.so", "orca"],
+  ["tensor.trade", "tensor"],
+  ["drift.trade", "drift"],
+  ["mango.markets", "mango"],
+  ["kamino.finance", "kamino"],
+  ["sanctum.so", "sanctum"],
+  ["uniswap.org", "uniswap"],
+  ["relay.link", "relay"],
+  ["sol-incinerator.com", "incinerator"],
+];
+
+function connectionHost(item) {
+  const raw = (item && (item.origin || item.url || item.name)) || "";
+  try {
+    if (/^https?:\/\//i.test(raw)) {
+      return new URL(raw).hostname.toLowerCase().replace(/^www\./, "");
+    }
+  } catch (_) {}
+  return String(raw)
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .split("/")[0];
+}
+
+function localDappIconSrc(hostOrItem) {
+  const host =
+    typeof hostOrItem === "string" ? hostOrItem : connectionHost(hostOrItem);
+  if (!host) return "";
+  for (let i = 0; i < DAPP_LOCAL_ICON_MAP.length; i++) {
+    const suffix = DAPP_LOCAL_ICON_MAP[i][0];
+    const file = DAPP_LOCAL_ICON_MAP[i][1];
+    if (host === suffix || host.endsWith("." + suffix)) {
+      return "./icons/dapps/" + file + ".png?v=1";
+    }
+  }
+  // Name-based fallback (persisted WC rows sometimes lack url).
+  const name = String(
+    (hostOrItem && hostOrItem.name) || hostOrItem || ""
+  ).toLowerCase();
+  if (name.includes("jupiter") || name === "jup") return "./icons/dapps/jupiter.png?v=1";
+  if (name.includes("pump")) return "./icons/dapps/pump.png?v=1";
+  if (name.includes("raydium")) return "./icons/dapps/raydium.png?v=1";
+  if (name.includes("orca")) return "./icons/dapps/orca.png?v=1";
+  if (name.includes("tensor")) return "./icons/dapps/tensor.png?v=1";
+  if (name.includes("drift")) return "./icons/dapps/drift.png?v=1";
+  if (name.includes("mango")) return "./icons/dapps/mango.png?v=1";
+  if (name.includes("kamino")) return "./icons/dapps/kamino.png?v=1";
+  if (name.includes("sanctum")) return "./icons/dapps/sanctum.png?v=1";
+  if (name.includes("uniswap")) return "./icons/dapps/uniswap.png?v=1";
+  if (name.includes("relay")) return "./icons/dapps/relay.png?v=1";
+  if (name.includes("incinerator")) return "./icons/dapps/incinerator.png?v=1";
+  return "";
+}
+
+function resolveConnectionIconSrc(item) {
+  const local = localDappIconSrc(item);
+  if (local) return local;
+  const remote = item && item.icon ? String(item.icon) : "";
+  if (remote && (/^https?:\/\//i.test(remote) || remote.startsWith("./") || remote.startsWith("data:"))) {
+    return remote;
+  }
+  const host = connectionHost(item);
+  if (host && host.includes(".")) {
+    return (
+      "https://www.google.com/s2/favicons?domain=" +
+      encodeURIComponent(host) +
+      "&sz=64"
+    );
+  }
+  return "";
+}
+
 function paintWcConnectionsList(items) {
   const list = $("wcConnectionsList");
   const empty = $("wcConnectionsEmpty");
@@ -4197,18 +4275,19 @@ function paintWcConnectionsList(items) {
     li.dataset.kind = kind;
     if (item.origin) li.dataset.origin = item.origin;
 
-    const iconUrl = item.icon || "";
-    let iconHtml;
-    if (iconUrl && /^https?:/i.test(iconUrl)) {
-      iconHtml =
-        '<img class="wc-conn-icon" alt="" src="' +
-        iconUrl.replace(/"/g, "") +
-        '" onerror="this.classList.add(\'fallback\');this.removeAttribute(\'src\');this.textContent=\'WC\';" />';
-    } else {
-      const initials = String(item.name || (kind === "inject" ? "GL" : "WC"))
+    const initials =
+      String(item.name || (kind === "inject" ? "GL" : "WC"))
         .replace(/[^A-Za-z0-9]/g, "")
         .slice(0, 2)
         .toUpperCase() || (kind === "inject" ? "GL" : "WC");
+    const iconUrl = resolveConnectionIconSrc(item);
+    let iconHtml;
+    if (iconUrl) {
+      iconHtml =
+        '<img class="wc-conn-icon" alt="" width="36" height="36" src="' +
+        iconUrl.replace(/"/g, "&quot;") +
+        '" />';
+    } else {
       iconHtml = '<div class="wc-conn-icon fallback">' + initials + "</div>";
     }
 
@@ -4236,6 +4315,21 @@ function paintWcConnectionsList(items) {
       '<button type="button" class="wc-conn-disconnect" data-topic="" data-kind="" data-origin="">Disconnect</button>';
     li.querySelector("strong").textContent = item.name || "dApp";
     li.querySelector("span").textContent = sub;
+    const img = li.querySelector("img.wc-conn-icon");
+    if (img) {
+      img.addEventListener("error", () => {
+        // Prefer local brand mark if a remote/WC icon failed.
+        const local = localDappIconSrc(item);
+        if (local && img.getAttribute("src") !== local) {
+          img.src = local;
+          return;
+        }
+        const wrap = document.createElement("div");
+        wrap.className = "wc-conn-icon fallback";
+        wrap.textContent = initials;
+        img.replaceWith(wrap);
+      });
+    }
     const btn = li.querySelector(".wc-conn-disconnect");
     btn.dataset.topic = item.topic || "";
     btn.dataset.kind = kind;

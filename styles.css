@@ -3533,8 +3533,9 @@ body.is-extension #chainSelect {
   height: 36px;
   border-radius: 9px;
   object-fit: cover;
-  background: rgba(20, 241, 149, 0.12);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(8, 12, 20, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  flex-shrink: 0;
 }
 
 .wc-conn-icon.fallback {
@@ -3543,6 +3544,7 @@ body.is-extension #chainSelect {
   font-size: 0.72rem;
   font-weight: 800;
   color: #14f195;
+  background: rgba(20, 241, 149, 0.12);
 }
 
 .wc-conn-meta {
