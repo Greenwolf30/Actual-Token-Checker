@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Gladiator Wallet Standard self-test</title>
+    <style>
+      body {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        margin: 24px;
+        background: #0b1220;
+        color: #e2e8f0;
+      }
+      h1 {
+        font-size: 18px;
+      }
+      .ok {
+        color: #34d399;
+      }
+      .fail {
+        color: #f87171;
+      }
+      pre {
+        white-space: pre-wrap;
+        background: #111827;
+        padding: 12px;
+        border-radius: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Gladiator Wallet Standard self-test</h1>
+    <p>
+      Open this file while the extension is loaded, or run via a local server after
+      injecting <code>injected.js</code>. Validates register shape without Jupiter.
+    </p>
+    <pre id="out">Running…</pre>
+    <script>
+      (function () {
+        const lines = [];
+        function log(ok, msg) {
+          lines.push((ok ? "OK  " : "FAIL") + "  " + msg);
+          document.getElementById("out").textContent = lines.join("\n");
+        }
+
+        // Minimal Wallet Standard app side (getWallets register API).
+        const wallets = [];
+        const listeners = new Set();
+        const api = {
+          register(wallet) {
+            wallets.push(wallet);
+            for (const l of listeners) {
+              try {
+                l(wallet);
+              } catch (_) {}
+            }
+          },
+        };
+
+        window.addEventListener("wallet-standard:register-wallet", (event) => {
+          try {
+            const cb = event.detail;
+            if (typeof cb === "function") cb(api);
+          } catch (err) {
+            log(false, "register-wallet handler threw: " + err);
+          }
+        });
+
+        // Announce app ready after a tick so late inject still works.
+        setTimeout(() => {
+          try {
+            window.dispatchEvent(
+              new CustomEvent("wallet-standard:app-ready", { detail: api })
+            );
+          } catch (_) {}
+        }, 50);
+
+        function isCompatible(wallet) {
+          const f = wallet && wallet.features;
+          return !!(
+            f &&
+            f["standard:connect"] &&
+            f["standard:events"] &&
+            (f["solana:signTransaction"] || f["solana:signAndSendTransaction"])
+          );
+        }
+
+        async function validate(wallet) {
+          log(!!wallet, "wallet registered: " + (wallet && wallet.name));
+          if (!wallet) return;
+
+          log(wallet.version === "1.0.0", "version === 1.0.0");
+          log(typeof wallet.name === "string" && wallet.name.length > 0, "name");
+          log(
+            typeof wallet.icon === "string" && wallet.icon.indexOf("data:image/") === 0,
+            "icon is data:image"
+          );
+          log(Array.isArray(wallet.chains) && wallet.chains.length > 0, "chains");
+          log(Array.isArray(wallet.accounts), "accounts is array");
+          log(isCompatible(wallet), "adapter-compatible features present");
+
+          const st = wallet.features["solana:signTransaction"];
+          const sas = wallet.features["solana:signAndSendTransaction"];
+          const versions = (st && st.supportedTransactionVersions) ||
+            (sas && sas.supportedTransactionVersions);
+          log(
+            Array.isArray(versions) && versions.indexOf("legacy") !== -1,
+            "supportedTransactionVersions includes legacy"
+          );
+
+          // silent connect must resolve to empty accounts and never throw
+          try {
+            const res = await wallet.features["standard:connect"].connect({
+              silent: true,
+            });
+            log(
+              res && Array.isArray(res.accounts) && res.accounts.length === 0,
+              "silent connect → { accounts: [] }"
+            );
+          } catch (err) {
+            log(false, "silent connect threw: " + err);
+          }
+
+          // events.on must return an unsubscribe function
+          try {
+            const off = wallet.features["standard:events"].on("change", () => {});
+            log(typeof off === "function", "events.on returns unsubscribe");
+            if (typeof off === "function") off();
+          } catch (err) {
+            log(false, "events.on threw: " + err);
+          }
+
+          log(
+            typeof window.gladiator === "object",
+            "window.gladiator set (legacy helper)"
+          );
+          log(
+            typeof window.solana === "undefined" || !window.solana.isGladiator,
+            "did not claim window.solana"
+          );
+        }
+
+        // Prefer already-injected provider from the extension; else load local file.
+        function waitForWallet(ms) {
+          return new Promise((resolve) => {
+            const start = Date.now();
+            const tick = () => {
+              if (wallets.length) {
+                resolve(wallets[0]);
+                return;
+              }
+              if (Date.now() - start > ms) {
+                resolve(null);
+                return;
+              }
+              setTimeout(tick, 50);
+            };
+            tick();
+          });
+        }
+
+        (async () => {
+          let wallet = await waitForWallet(800);
+          if (!wallet) {
+            log(true, "no live inject yet — loading ./injected.js");
+            await new Promise((resolve, reject) => {
+              const s = document.createElement("script");
+              s.src = "./injected.js";
+              s.onload = resolve;
+              s.onerror = reject;
+              document.head.appendChild(s);
+            });
+            wallet = await waitForWallet(1500);
+          }
+          await validate(wallet);
+          const failed = lines.some((l) => l.indexOf("FAIL") === 0);
+          log(!failed, failed ? "SELF-TEST FAILED" : "SELF-TEST PASSED");
+        })().catch((err) => log(false, String(err)));
+      })();
+    </script>
+  </body>
+</html>

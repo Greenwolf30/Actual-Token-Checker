@@ -1,0 +1,113 @@
+Gladiator Wallet — update without losing your wallet
+
+PREFERRED UPDATE (keeps seed / accounts):
+1. Unzip the new pack (you get a Gladiator-Wallet folder)
+2. Copy everything INSIDE that folder into your EXISTING Gladiator folder (overwrite)
+3. chrome://extensions → Gladiator → Reload (do NOT Remove)
+4. If Chrome asks for HID / Ledger permission, Allow
+5. Click the toolbar icon once
+
+v0.6.32:
+- Total balance: list connected sites on the right; clear when Disconnected
+- Remove on-page “Gladiator reloaded / refresh” banner
+
+v0.6.31:
+- Restore in-page Connect/Approve helpers accidentally removed with fee cleanup (0.6.29)
+- Jupiter inject connections register again and appear in Connections
+- WalletConnect disconnect no longer clears inject rows from the Connections list
+
+v0.6.30:
+- Home total balance: green Connected / red Disconnected for Jupiter, pump.fun, WC, etc.
+
+v0.6.29:
+- Remove all platform fees (Send / Receive / DEX swaps). Network/gas fees only.
+- Bugfixes: holdings paint no longer mutates state; chain-scoped visible holdings; safer mint keys
+
+v0.6.28:
+- Platform fee only on DEX swaps (Solana + EVM). Send and Receive never charged.
+
+v0.6.27:
+- Bugfixes for per-chain USDC/USDG: mint-only $1 pricing (no symbol spoofs), Sui mint casing dedupe, Send holding match by normalized mint, RPC fail no longer pretends balance is 0 when a scanner amount exists
+
+v0.6.26:
+- Holdings: show each chain’s native USDC (ETH / Polygon / Base / Solana / Sui); Robinhood shows USDG (chain’s USD stablecoin). Bitcoin has none.
+
+v0.6.25:
+- Ledger accounts: fully remove 24-word seed phrase UI and strip any stored mnemonic/keys
+
+v0.6.24:
+- Generated wallets named Account 1 / Account 2… (Ledger + Imported names unchanged)
+
+v0.6.23:
+- Holdings list always sorted most → least (USD value, then amount)
+
+v0.6.22:
+- Top address bar shifted left, wider, aligned with brand/chain; more space between dock tabs
+
+v0.6.21:
+- Hide Link EVM on Solana (shows on ETH chains); dApp/chain/wallet logos instead of letter avatars
+
+v0.6.20:
+- Connections list shows real dApp logos (Jupiter, pump.fun, Raydium, etc.) instead of letter avatars
+
+v0.6.19:
+- WalletConnect Connections → Refresh no longer opens a wallet window
+
+v0.6.18:
+- Sync: keep last balance on screen (no 0 flash); busy-state so the button always responds
+
+v0.6.17:
+- Clean extension toolbar logo — remove remaining white fringe / spots on circular icon
+
+v0.6.16:
+- Ledger accounts: hide Show seed phrase + Import seed; show “Seed phrase is not stored in the wallet for Ledger accounts. Connect your Ledger device.”
+
+v0.6.15:
+- Allowlist inject for sol-incinerator.com
+
+v0.6.14:
+- Hide platform-fee toasts/labels from Send UI (fee details stay in docs)
+
+v0.6.13:
+- Fix ETH/Ledger send errors (no more fake “need SOL”); EVM 0.85% fee → 0xf7d7…1939B2
+
+v0.6.12:
+- Holdings rows slightly larger (padding, icons, type)
+
+v0.6.11:
+- Ledger + Uniswap/EVM dApps: sign personal_sign / EIP-712 / sendTx via Ethereum app (Link EVM first)
+
+v0.6.10:
+- Manage tokens: only active wallet + currently selected chain
+
+v0.6.9:
+- Token detail: show mint / contract address (tap to copy)
+
+v0.6.8:
+- Ledger: picking ETH/Polygon/Base auto-runs Link EVM (open Ethereum app first). Bitcoin/Sui Ledger still blocked.
+
+v0.6.7:
+- Ledger multi-chain: Link EVM (Ethereum app) for ETH / Polygon / Base / Robinhood ETH; Solana still via Solana app. Bitcoin & Sui Ledger not yet.
+
+v0.6.6:
+- Accounts sidebar: restore Connect Ledger (Generate Wallet stays off)
+
+v0.6.5:
+- Accounts sidebar: remove Generate Wallet + Connect Ledger (use Manage accounts)
+
+v0.6.4:
+- Remove duplicate “Ledger” word on Accounts rows (was overlapping the delete button)
+
+v0.6.3:
+- Fix Accounts sidebar Generate Wallet button (was an empty green outline — CSS vars only lived on the Wallets panel)
+
+v0.6.2:
+- Clearer error + on-page banner when Gladiator was Reloaded while a dApp tab stayed open
+- After any Reload of the extension: refresh jup.ag (or other dApp), reconnect Gladiator, then swap again
+- Note: LavaMoat "opr" console errors come from MetaMask/other wallets on Opera — not Gladiator
+
+v0.6.1:
+- Ledger dApp signing stays in the wallet popup (no separate tab)
+- Tap Sign on Ledger in the popup, then approve on the Nano
+
+Version: see manifest.json

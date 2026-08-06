@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0A162E" />
+    <title>Gladiator Wallet (local)</title>
+    <link rel="icon" type="image/png" href="./icons/gladiator.png?v=4" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css?v=0.6.32" />
+  </head>
+  <body class="is-local">
+    <div class="atmosphere" aria-hidden="true">
+      <div class="orb orb-a"></div>
+      <div class="orb orb-b"></div>
+      <div class="grid-wash"></div>
+    </div>
+
+    <div class="shell">
+      <header class="topbar">
+        <div class="topbar-main">
+          <button
+            type="button"
+            class="brand brand-chip brand-chip-sm"
+            id="brandAccountsBtn"
+            aria-haspopup="dialog"
+            aria-controls="acctDrawer"
+            aria-expanded="false"
+            title="Accounts"
+          >
+            <img class="brand-mark" src="./icons/gladiator.png?v=4" alt="" width="20" height="20" />
+            <span class="brand-copy">
+              <span class="brand-name">Gladiator</span>
+              <span class="brand-acct" id="brandAcctLabel">—</span>
+            </span>
+            <span class="brand-chevron" aria-hidden="true">▾</span>
+          </button>
+
+          <div class="topbar-center">
+            <div class="chain-bar switcher-bar" role="group" aria-label="Network">
+              <div class="chain-picker" id="chainPicker">
+                <button
+                  type="button"
+                  class="chain-picker-btn"
+                  id="chainPickerBtn"
+                  aria-haspopup="listbox"
+                  aria-expanded="false"
+                  aria-label="Select chain"
+                >
+                  <img class="chain-picker-logo" id="chainPickerLogo" src="./icons/solana.png?v=8" alt="" width="18" height="18" />
+                  <span class="chain-picker-title" id="chainPickerName">Solana</span>
+                  <span class="chain-picker-caret" aria-hidden="true">▾</span>
+                </button>
+                <div class="chain-picker-menu" id="chainPickerMenu" role="listbox" hidden></div>
+              </div>
+              <select id="chainSelect" class="chain-select-fallback" aria-label="Switch chain" hidden></select>
+            </div>
+          </div>
+
+          <div class="topbar-meta">
+            <button type="button" class="addr-plain" id="copyAddrBtn" title="Copy address">
+              <img class="addr-chip-logo" id="addrChainLogo" src="./icons/solana.png?v=8" alt="" width="16" height="16" />
+              <span class="addr-short" id="addrShort">—</span>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main class="stage">
+        <section class="panel is-active" id="panel-home" data-panel="home">
+          <p class="eyebrow reveal">Multi-chain wallet</p>
+          <h1 class="brand-hero reveal">Gladiator</h1>
+          <p class="lede reveal">
+            Solana, Ethereum, Bitcoin, Polygon, Sui, Robinhood Ethereum &amp; Base — switch anytime.
+          </p>
+
+          <div class="balance-block reveal">
+            <div class="balance-label-row">
+              <p class="balance-label">
+                <span id="ledgerBalanceTag" class="ledger-balance-tag" hidden>Ledger</span>
+                Total balance <span id="chainBadge">Solana</span>
+              </p>
+              <div class="addr-menu-wrap" id="addrMenuWrap">
+                <button
+                  type="button"
+                  class="icon-btn addr-menu-btn"
+                  id="addrMenuBtn"
+                  title="Menu"
+                  aria-haspopup="menu"
+                  aria-expanded="false"
+                  aria-controls="addrMenu"
+                >
+                  <span class="addr-menu-dots" aria-hidden="true">⋮</span>
+                </button>
+                <div class="addr-menu" id="addrMenu" role="menu" hidden>
+                  <button type="button" class="addr-menu-item" role="menuitem" data-menu="connect">
+                    WalletConnect
+                  </button>
+                  <button type="button" class="addr-menu-item" role="menuitem" data-menu="manage-tokens">
+                    Manage tokens
+                  </button>
+                  <button type="button" class="addr-menu-item" role="menuitem" data-menu="settings">
+                    Settings
+                  </button>
+                </div>
+              </div>
+            </div>
+            <p class="balance-value">
+              <span class="currency">$</span><span id="fiatBalance">0.00</span>
+            </p>
+            <p
+              class="balance-conn"
+              id="balanceConnStatus"
+              data-state="disconnected"
+              aria-live="polite"
+            >
+              <span class="balance-conn-left">
+                <span class="balance-conn-dot" aria-hidden="true"></span>
+                <span id="balanceConnLabel">Disconnected</span>
+              </span>
+              <span class="balance-conn-sites" id="balanceConnSites" hidden></span>
+            </p>
+            <p class="balance-receive-note" id="balanceReceiveNote" hidden>
+              <span id="balanceReceiveText">Received tokens</span>
+            </p>
+            <p class="balance-sol">
+              <img
+                id="solBalanceLogo"
+                class="inline-asset-logo"
+                src="./icons/solana.png?v=8"
+                alt=""
+                width="18"
+                height="18"
+              />
+              <span id="nativeBalance">0.00</span>
+              <span id="nativeSymbol">SOL</span>
+              <span class="delta" id="dayDelta">live</span>
+            </p>
+            <p class="balance-status" id="balanceStatus">Waiting for sync…</p>
+          </div>
+
+          <div class="cta-row reveal" role="group" aria-label="Primary actions">
+            <button type="button" class="btn btn-send" data-go="send">
+              <span class="btn-ico" aria-hidden="true">↗</span>
+              <span>Send</span>
+            </button>
+            <button type="button" class="btn btn-receive" data-go="receive">
+              <span class="btn-ico" aria-hidden="true">↘</span>
+              <span>Receive</span>
+            </button>
+            <button type="button" class="btn btn-ghost" id="refreshBtn">
+              <span class="btn-ico" aria-hidden="true">↻</span>
+              <span>Sync</span>
+            </button>
+          </div>
+
+          <section class="holdings" aria-labelledby="holdingsTitle">
+            <div class="section-head">
+              <h2 id="holdingsTitle">Holdings</h2>
+              <span class="section-note" id="tokenCount">—</span>
+            </div>
+            <ul class="token-list" id="tokenList"></ul>
+          </section>
+        </section>
+
+        <section class="panel panel-token" id="panel-token" data-panel="token" hidden>
+          <div class="token-detail-nav">
+            <button type="button" class="back-link token-back" data-go="home">←</button>
+            <div class="token-detail-identity">
+              <div class="token-detail-logo" id="tokenDetailLogo" aria-hidden="true"></div>
+              <div class="token-detail-titles">
+                <h2 class="token-detail-name" id="tokenDetailName">Token</h2>
+                <p class="token-detail-symbol" id="tokenDetailSymbol">—</p>
+                <button
+                  type="button"
+                  class="token-detail-mint"
+                  id="tokenDetailMint"
+                  title="Copy mint / contract address"
+                  hidden
+                >
+                  <span class="token-detail-mint-label">Mint</span>
+                  <span class="token-detail-mint-addr" id="tokenDetailMintText">—</span>
+                  <span class="token-detail-mint-copy" aria-hidden="true">⧉</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="token-detail-price-block">
+            <p class="token-detail-price" id="tokenDetailPrice">—</p>
+            <p class="token-detail-change" id="tokenDetailChange">—</p>
+          </div>
+
+          <div class="token-chart-card">
+            <div class="token-chart-wrap">
+              <canvas id="tokenChartCanvas" width="360" height="168" aria-label="Price chart"></canvas>
+              <p class="token-chart-empty" id="tokenChartEmpty" hidden>Chart unavailable</p>
+            </div>
+            <div class="token-chart-ranges" id="tokenChartRanges" role="tablist" aria-label="Chart range">
+              <button type="button" class="token-chart-range is-active" data-range="1H">1H</button>
+              <button type="button" class="token-chart-range" data-range="1D">1D</button>
+              <button type="button" class="token-chart-range" data-range="1W">1W</button>
+              <button type="button" class="token-chart-range" data-range="1M">1M</button>
+            </div>
+          </div>
+
+          <div class="token-holding-strip">
+            <div>
+              <p class="token-holding-label">Your balance</p>
+              <p class="token-holding-amount" id="tokenDetailBalance">—</p>
+            </div>
+            <p class="token-holding-usd" id="tokenDetailUsd">—</p>
+          </div>
+
+          <dl class="token-detail-stats">
+            <div>
+              <dt>24h volume</dt>
+              <dd id="tokenDetailVol">—</dd>
+            </div>
+            <div>
+              <dt>Market cap</dt>
+              <dd id="tokenDetailMcap">—</dd>
+            </div>
+          </dl>
+
+          <div class="cta-row token-detail-cta" role="group" aria-label="Token actions">
+            <button type="button" class="btn btn-send" id="tokenDetailSendBtn">
+              <span class="btn-ico" aria-hidden="true">↗</span>
+              <span>Send</span>
+            </button>
+            <button type="button" class="btn btn-receive" id="tokenDetailReceiveBtn">
+              <span class="btn-ico" aria-hidden="true">↘</span>
+              <span>Receive</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="panel" id="panel-send" data-panel="send" hidden>
+          <button type="button" class="back-link" data-go="home">← Back</button>
+          <h2 class="panel-title">Send</h2>
+          <p class="panel-sub">Sign and broadcast from this wallet. Double-check the recipient.</p>
+
+          <form class="form" id="sendForm" autocomplete="off">
+            <label class="field">
+              <span>Asset</span>
+              <select id="sendAsset" name="asset"></select>
+            </label>
+            <label class="field">
+              <span>Saved contact</span>
+              <select id="sendContactSelect" aria-label="Choose saved contact">
+                <option value="">Enter address manually</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Recipient</span>
+              <input
+                id="sendTo"
+                name="to"
+                type="text"
+                spellcheck="false"
+                placeholder="Address or contact name"
+              />
+            </label>
+            <label class="field">
+              <span>Amount</span>
+              <div class="amount-row">
+                <input id="sendAmount" name="amount" inputmode="decimal" placeholder="0.00" />
+                <button type="button" class="btn-inline" id="sendMaxBtn">Max</button>
+              </div>
+            </label>
+            <p class="send-usd-est" id="sendUsdEst">≈ $0.00 USD</p>
+            <p class="send-available" id="sendAvailable">Available: —</p>
+            <p class="fee-line">Network · <span id="feeEst">selected chain</span></p>
+            <button type="submit" class="btn btn-send btn-block" id="sendSubmitBtn">
+              <span class="btn-ico" aria-hidden="true">▸</span>
+              <span>Send</span>
+            </button>
+          </form>
+          <p class="form-status" id="sendStatus" role="status" aria-live="polite"></p>
+        </section>
+
+        <section class="panel" id="panel-receive" data-panel="receive" hidden>
+          <button type="button" class="back-link" data-go="home">← Back</button>
+          <h2 class="panel-title">Receive</h2>
+          <p class="panel-sub">
+            Send <span id="receiveAssetName">SOL / SPL tokens</span> to this
+            <strong id="receiveChainName">Solana</strong> address. The top bar address updates when you switch chains.
+          </p>
+
+          <div class="receive-stage">
+            <div class="qr-frame" aria-hidden="true">
+              <div id="qrBox"></div>
+            </div>
+            <p class="receive-addr" id="fullAddr"></p>
+            <button type="button" class="btn btn-secondary btn-block" id="copyFullBtn">
+              <span class="btn-ico" aria-hidden="true">⎘</span>
+              <span>Copy address</span>
+            </button>
+            <div class="both-addrs" id="bothAddrs"></div>
+            <p class="receive-hint" id="receiveHint">
+              Anyone can deposit to this address. Keep your secret key backup safe.
+            </p>
+          </div>
+        </section>
+
+        <section class="panel" id="panel-history" data-panel="history" hidden>
+          <button type="button" class="back-link" data-go="home">← Back</button>
+          <div class="history-head">
+            <div>
+              <h2 class="panel-title">History</h2>
+              <p class="panel-sub">Sends, receives, buys &amp; sells for this wallet.</p>
+            </div>
+            <button type="button" class="photon-chip" id="historyRefreshBtn">Refresh</button>
+          </div>
+          <p class="form-status" id="historyStatus" role="status" aria-live="polite">Loading…</p>
+          <ul class="history-list" id="historyList"></ul>
+        </section>
+
+        <section class="panel photon-wallets" id="panel-activity" data-panel="activity" hidden>
+          <header class="photon-head">
+            <div>
+              <button type="button" class="back-link photon-back" data-go="home">← Back</button>
+              <h2 class="photon-title">Wallets</h2>
+              <p class="photon-sub">Multi-wallet · select one to trade</p>
+            </div>
+            <div class="photon-gen-row">
+              <button type="button" class="photon-gen" id="createAccountBtn">
+                Generate Wallet
+              </button>
+            </div>
+          </header>
+
+          <div class="photon-table-head" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span>Wallet</span>
+            <span>Address</span>
+            <span class="r">SOL</span>
+            <span></span>
+          </div>
+          <ul class="photon-list" id="activityList"></ul>
+
+          <div id="softwareSeedTools">
+            <div class="backup-reveal photon-keypanel" id="backupReveal" hidden>
+              <div class="photon-keypanel-top">
+                <strong id="backupWalletLabel">24-word seed phrase</strong>
+                <button type="button" class="photon-icon-btn" id="hideBackupBtn" title="Hide">✕</button>
+              </div>
+              <p class="backup-warn">
+                Write these 24 words down offline. Anyone with them can take your funds.
+              </p>
+              <p class="photon-sub" id="seedPhraseNote" hidden></p>
+              <ol class="seed-grid" id="seedGrid" hidden></ol>
+              <textarea id="backupMnemonic" class="secret-box" readonly rows="3" spellcheck="false" hidden></textarea>
+              <button type="button" class="photon-chip" id="copyMnemonicBtn">Copy seed phrase</button>
+              <details class="photon-details" style="margin-top: 8px">
+                <summary>Show private key</summary>
+                <div class="photon-details-body">
+                  <label class="field">
+                    <span id="backupChainKeyLabel">Private key</span>
+                    <textarea id="backupChainSecret" class="secret-box" readonly rows="3" spellcheck="false"></textarea>
+                  </label>
+                  <button type="button" class="photon-chip" id="copyChainSecretBtn">Copy private key</button>
+                  <p class="photon-sub" id="backupChainKeyNote" hidden></p>
+                </div>
+              </details>
+            </div>
+            <button type="button" class="photon-gen photon-gen-block" id="viewBackupBtn" style="margin-top: 12px">
+              Show seed phrase
+            </button>
+          </div>
+
+          <div class="ledger-seed-note" id="ledgerSeedNote" hidden>
+            <p class="ledger-seed-note-text">
+              Seed phrase is not stored in the wallet for Ledger accounts.
+              Connect your Ledger device.
+            </p>
+          </div>
+
+          <details class="photon-details" open>
+            <summary>Ledger hardware wallet</summary>
+            <div class="photon-details-body">
+              <div class="ledger-connect-block">
+                <p class="photon-sub">
+                  Use <strong>USB</strong> (not Bluetooth). Quit <strong>Ledger Live</strong>,
+                  unlock your Nano, open the <strong>Solana</strong> app, then tap
+                  <strong>Connect Ledger</strong>, pick your Ledger in the Chrome list,
+                  and Allow. Keys stay on the device.
+                </p>
+                <div class="ledger-connect-row">
+                  <label class="field">
+                    <span>Account #</span>
+                    <input
+                      id="ledgerAccountIndex"
+                      type="number"
+                      min="0"
+                      max="50"
+                      step="1"
+                      value="0"
+                      inputmode="numeric"
+                    />
+                  </label>
+                  <button type="button" class="photon-gen" id="connectLedgerBtn" title="Connect Ledger Nano (Solana app)">
+                    Connect Ledger
+                  </button>
+                  <button type="button" class="photon-chip" id="linkLedgerEvmBtn" hidden title="Open Ethereum app on Ledger, then link ETH/Polygon/Base">
+                    Link EVM
+                  </button>
+                </div>
+                <p class="photon-sub" style="margin-top: 8px">
+                  Solana app → Connect Ledger. For ETH / Polygon / Base, switch to that chain (Ethereum app open) to link EVM. Bitcoin &amp; Sui Ledger not yet.
+                </p>
+                <p class="photon-sub" id="linkEvmHelp" hidden style="margin-top: 8px">
+                  Ethereum app open on the Nano → Link EVM (same Account #).
+                </p>
+                <p class="photon-sub" id="ledgerConnectStatus" style="margin-top: 8px"></p>
+              </div>
+            </div>
+          </details>
+
+          <details class="photon-details" open id="importSeedPanel">
+            <summary id="importPanelSummary">Import seed phrase / key</summary>
+            <div class="photon-details-body">
+              <label class="field">
+                <span>Seed phrase (12 or 24 words)</span>
+                <textarea
+                  id="importMnemonic"
+                  class="secret-box"
+                  rows="3"
+                  spellcheck="false"
+                  placeholder="word1 word2 … (12 or 24 words)"
+                  autocomplete="off"
+                ></textarea>
+              </label>
+              <label class="field" id="importSolField" hidden>
+                <span>Or Solana secret (base58)</span>
+                <input
+                  id="importSolSecret"
+                  type="password"
+                  spellcheck="false"
+                  placeholder="Paste Solana secret key"
+                  autocomplete="off"
+                />
+              </label>
+              <label class="field" id="importEvmField" hidden>
+                <span>Or EVM private key</span>
+                <input
+                  id="importEvmSecret"
+                  type="password"
+                  spellcheck="false"
+                  placeholder="0x..."
+                  autocomplete="off"
+                />
+              </label>
+              <label class="field" id="importBtcField" hidden>
+                <span>Or Bitcoin private key</span>
+                <input
+                  id="importBtcSecret"
+                  type="password"
+                  spellcheck="false"
+                  placeholder="0x… hex private key"
+                  autocomplete="off"
+                />
+              </label>
+              <label class="field" id="importSuiField" hidden>
+                <span>Or Sui private key</span>
+                <input
+                  id="importSuiSecret"
+                  type="password"
+                  spellcheck="false"
+                  placeholder="0x… hex private key"
+                  autocomplete="off"
+                />
+              </label>
+              <p class="photon-sub" id="importChainKeyNote" hidden></p>
+              <button type="button" class="photon-gen photon-gen-block" id="importAccountBtn">
+                Import Wallet
+              </button>
+            </div>
+          </details>
+
+          <details class="photon-details">
+            <summary>Advanced · RPC</summary>
+            <div class="photon-details-body">
+              <p class="photon-sub" id="rpcStatusNote">
+                Extension: paste your Helius API key or full RPC URL, then Save.
+                Local page uses <code>.env</code> via <code>serve.py</code>.
+              </p>
+              <label class="field">
+                <span>Custom Solana RPC (Helius) — not for Ethereum</span>
+                <input
+                  id="solRpcInput"
+                  type="text"
+                  spellcheck="false"
+                  autocomplete="off"
+                  placeholder="API key or https://mainnet.helius-rpc.com/?api-key=..."
+                />
+              </label>
+              <button type="button" class="photon-chip" id="saveRpcBtn">Save override</button>
+            </div>
+          </details>
+
+          <p class="form-status" id="accountStatus" role="status" aria-live="polite"></p>
+        </section>
+
+        <section class="panel" id="panel-settings" data-panel="settings" hidden>
+          <button type="button" class="back-link" data-go="home">← Back</button>
+          <h2 class="panel-title">Settings</h2>
+          <p class="panel-sub">Address book, wallets, and sync.</p>
+
+          <div class="settings-block">
+            <h3 class="settings-block-title">Address book</h3>
+            <p class="photon-sub">Save frequent recipients by name. Pick the name on Send.</p>
+            <label class="field">
+              <span>Name</span>
+              <input id="abName" type="text" maxlength="40" placeholder="e.g. Exchange" autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>Address</span>
+              <input id="abAddress" type="text" spellcheck="false" placeholder="Paste address" autocomplete="off" />
+            </label>
+            <button type="button" class="photon-chip" id="abAddBtn">Save contact</button>
+            <ul class="settings-contacts" id="abList"></ul>
+          </div>
+
+          <div class="settings-block">
+            <h3 class="settings-block-title">Manage wallets</h3>
+            <p class="photon-sub">Rename wallets stored on this device.</p>
+            <ul class="settings-wallets" id="walletRenameList"></ul>
+          </div>
+
+          <div class="settings-block" id="manageTokensBlock">
+            <h3 class="settings-block-title">Manage tokens</h3>
+            <p class="photon-sub">
+              Toggle tokens on or off for the Home list. Shows only the active wallet on the
+              currently selected chain — Sync that chain first so its tokens appear here.
+            </p>
+            <ul class="settings-tokens" id="manageTokenList"></ul>
+            <p class="photon-sub" id="manageTokenEmpty" style="margin-top: 10px">
+              No tokens for this wallet on the selected chain yet — open Home and Sync.
+            </p>
+          </div>
+
+          <div class="settings-block" id="wcSettingsBlock">
+            <h3 class="settings-block-title">WalletConnect</h3>
+            <p class="photon-sub">
+              Use WalletConnect for Jupiter: Project ID + <code>wc:</code> URI → Connect
+              (Connect keeps a wallet window open for the session). Refresh only updates this list.
+              Project ID:
+              <a href="https://dashboard.walletconnect.com" target="_blank" rel="noreferrer">dashboard.walletconnect.com</a>
+            </p>
+            <label class="field">
+              <span>Reown Project ID</span>
+              <input
+                id="wcProjectId"
+                type="text"
+                spellcheck="false"
+                autocomplete="off"
+                placeholder="Paste Project ID from cloud.reown.com"
+              />
+            </label>
+            <label class="field">
+              <span>WalletConnect URI</span>
+              <textarea
+                id="wcUri"
+                class="secret-box"
+                rows="3"
+                spellcheck="false"
+                autocomplete="off"
+                placeholder="wc:…@2?relay-protocol=irn&amp;symKey=…"
+              ></textarea>
+            </label>
+            <div class="wc-actions">
+              <button type="button" class="wc-btn-connect" id="wcConnectBtn">Connect</button>
+              <button type="button" class="wc-btn-disconnect" id="wcDisconnectBtn">Disconnect all</button>
+            </div>
+            <div class="wc-connections" id="wcConnections">
+              <div class="wc-connections-head">
+                <strong>Connections</strong>
+                <button type="button" class="wc-btn-refresh" id="wcRefreshConnections" title="Refresh">Refresh</button>
+              </div>
+              <ul class="wc-connections-list" id="wcConnectionsList"></ul>
+              <p class="wc-connections-empty" id="wcConnectionsEmpty">No active connections. Connect on jup.ag / pump.fun, or paste a WalletConnect URI.</p>
+            </div>
+            <div class="wc-approve-bar" id="wcApproveBar" hidden>
+              <p id="wcApproveHint">Jupiter / pump.fun is waiting — tap Approve to connect your Solana wallet.</p>
+              <div class="wc-approve-actions">
+                <button type="button" class="wc-btn-reject" id="wcRejectInline">Reject</button>
+                <button type="button" class="wc-btn-approve" id="wcApproveInline">Approve</button>
+              </div>
+            </div>
+            <p class="form-status" id="wcStatus" role="status" aria-live="polite">Not connected</p>
+          </div>
+
+          <div class="settings-list">
+            <div class="settings-row">
+              <div>
+                <strong>Network sync</strong>
+                <span>Pull balances for the active chain</span>
+              </div>
+              <button type="button" class="photon-chip" id="settingsSyncBtn">Sync now</button>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <nav class="dock" aria-label="Wallet navigation">
+        <button type="button" class="dock-item is-active" data-go="home">
+          <span class="dock-ico" aria-hidden="true">◈</span>
+          Home
+        </button>
+        <button type="button" class="dock-item" data-go="send">
+          <span class="dock-ico" aria-hidden="true">↗</span>
+          Send
+        </button>
+        <button type="button" class="dock-item" data-go="history">
+          <span class="dock-ico" aria-hidden="true">◷</span>
+          History
+        </button>
+        <button type="button" class="dock-item" data-go="activity">
+          <span class="dock-ico" aria-hidden="true">≡</span>
+          Accounts
+        </button>
+      </nav>
+    </div>
+
+    <div class="toast" id="toast" hidden role="status" aria-live="polite"></div>
+
+    <div class="acct-drawer-root" id="acctDrawerRoot" hidden>
+      <button type="button" class="acct-drawer-backdrop" id="acctDrawerBackdrop" aria-label="Close accounts"></button>
+      <aside class="acct-drawer" id="acctDrawer" role="dialog" aria-modal="true" aria-labelledby="acctDrawerTitle">
+        <header class="acct-drawer-head">
+          <div class="acct-drawer-brand">
+            <img class="brand-mark" src="./icons/gladiator.png?v=4" alt="" width="40" height="40" />
+            <div>
+              <h2 class="acct-drawer-title" id="acctDrawerTitle">Accounts</h2>
+              <p class="acct-drawer-sub" id="acctDrawerSub">Switch wallet</p>
+            </div>
+          </div>
+          <button type="button" class="photon-icon-btn" id="acctDrawerClose" title="Close">✕</button>
+        </header>
+        <ul class="acct-drawer-list" id="acctDrawerList"></ul>
+        <div class="acct-drawer-foot">
+          <button type="button" class="photon-chip photon-gen-block" id="acctDrawerLedger">
+            Connect Ledger
+          </button>
+          <button type="button" class="photon-chip photon-gen-block" id="acctDrawerLinkEvm" hidden title="Open Ethereum app on Ledger first">
+            Link EVM chains
+          </button>
+          <button type="button" class="photon-chip acct-drawer-manage" id="acctDrawerManage">
+            Manage accounts
+          </button>
+        </div>
+      </aside>
+    </div>
+
+    <div class="confirm-modal" id="vaultModal" hidden>
+      <div class="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="vaultModalTitle" aria-describedby="vaultModalBody">
+        <h2 class="confirm-title" id="vaultModalTitle">Restore wallet</h2>
+        <p class="confirm-body" id="vaultModalBody">Password encryption is paused. Enter your old password once to restore keys.</p>
+        <label class="field vault-field">
+          <span>Password</span>
+          <input id="vaultPass1" type="password" autocomplete="current-password" placeholder="Password" />
+        </label>
+        <label class="field vault-field" id="vaultPass2Wrap" hidden>
+          <span>Confirm password</span>
+          <input id="vaultPass2" type="password" autocomplete="new-password" placeholder="Confirm password" />
+        </label>
+        <p class="vault-error" id="vaultModalError" role="alert"></p>
+        <div class="confirm-actions">
+          <button type="button" class="confirm-btn confirm-no" id="vaultModalCancel">Cancel</button>
+          <button type="button" class="confirm-btn confirm-yes" id="vaultModalSubmit">Continue</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="confirm-modal" id="removeModal" hidden>
+      <div class="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="removeModalTitle" aria-describedby="removeModalBody">
+        <h2 class="confirm-title" id="removeModalTitle">Remove account?</h2>
+        <p class="confirm-body" id="removeModalBody">
+          Doing so will remove the account from the wallet. If you didn't back up the seed phrase, you may lose funds permanently.
+        </p>
+        <div class="confirm-actions">
+          <button type="button" class="confirm-btn confirm-no" id="removeModalNo">No</button>
+          <button type="button" class="confirm-btn confirm-yes" id="removeModalYes">Yes</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="confirm-modal" id="wcProposalModal" hidden>
+      <div class="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="wcProposalTitle" aria-describedby="wcProposalBody">
+        <h2 class="confirm-title" id="wcProposalTitle">Connect dApp?</h2>
+        <p class="confirm-body" id="wcProposalBody">Approve WalletConnect session for Solana.</p>
+        <div class="confirm-actions">
+          <button type="button" class="confirm-btn confirm-no" id="wcProposalReject">Reject</button>
+          <button type="button" class="confirm-btn confirm-yes" id="wcProposalApprove">Approve</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="confirm-modal" id="dappApproveModal" hidden>
+      <div class="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="dappApproveTitle" aria-describedby="dappApproveBody">
+        <div class="dapp-approve-brand">
+          <img class="dapp-approve-logo" id="dappApproveLogo" alt="" width="40" height="40" src="./icons/gladiator.png" />
+          <div>
+            <h2 class="confirm-title" id="dappApproveTitle">Approve request?</h2>
+            <p class="photon-sub" id="dappApproveHost" style="margin: 2px 0 0"></p>
+          </div>
+        </div>
+        <p class="confirm-body" id="dappApproveBody">A site is requesting wallet access.</p>
+        <p class="photon-sub" style="margin: 0 0 10px">
+          Connection stays until you disconnect. Every transaction still needs your Approve.
+        </p>
+        <div class="confirm-actions">
+          <button type="button" class="confirm-btn confirm-no" id="dappApproveReject">Reject</button>
+          <button type="button" class="confirm-btn confirm-yes" id="dappApproveApprove">Approve</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="confirm-modal" id="ledgerSignModal" hidden>
+      <div class="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="ledgerSignTitle" aria-describedby="ledgerSignBody">
+        <h2 class="confirm-title" id="ledgerSignTitle">Sign with Ledger</h2>
+        <p class="confirm-body" id="ledgerSignBody">
+          A dApp needs your Ledger signature. Unlock the Nano, open the Solana app, then tap Sign on Ledger.
+        </p>
+        <p class="photon-sub" style="margin: 0 0 10px">
+          Stay in this wallet UI while you approve on the device.
+        </p>
+        <div class="confirm-actions">
+          <button type="button" class="confirm-btn confirm-no" id="ledgerSignReject">Reject</button>
+          <button type="button" class="confirm-btn confirm-yes" id="ledgerSignApprove">Sign on Ledger</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="./lib/nacl-fast.min.js"></script>
+    <script src="./lib/base58.js"></script>
+    <script src="./lib/ethers.umd.min.js"></script>
+    <script src="./lib/solana-hd.js"></script>
+    <script src="./lib/multi-hd.js"></script>
+    <script src="./lib/btc-send.bundle.js?v=0.6.1"></script>
+    <script src="./lib/buffer.min.js"></script>
+    <script src="./lib/solana-tx.bundle.js?v=0.6.1"></script>
+    <script src="./lib/qrcode.min.js"></script>
+    <script src="./lib/walletconnect.bundle.js?v=0.6.1"></script>
+    <script src="./lib/ledger-solana.bundle.js?v=0.6.6"></script>
+    <script src="./lib/ledger-eth.bundle.js?v=0.6.11"></script>
+    <script src="./config.js"></script>
+    <script src="./app.js?v=0.6.32"></script>
+  </body>
+</html>

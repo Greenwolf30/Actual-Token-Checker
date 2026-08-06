@@ -1,33 +1,8 @@
-# Secrets — never commit
 .env
-.env.*
-!.env.example
-*.pem
-secrets/
-*.key
-
-# Python
+*.pyc
 __pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-venv/
-.pytest_cache/
-.mypy_cache/
-
-# Local / build artifacts
-dist/
-build/
-*.spec.bak
-data/
-search_history.json
-watchlist.json
-*.db
-*.sqlite
-
-# OS / IDE
 .DS_Store
-Thumbs.db
-.idea/
-.vscode/
-*.log
+node_modules/
+package-lock.json
+wc-build/node_modules/
+wc-build/package-lock.json
