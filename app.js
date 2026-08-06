@@ -8498,9 +8498,9 @@ function renderAccountsPanel() {
     const addr = a.solana.publicKey;
     li.innerHTML =
       '<span class="photon-radio" aria-hidden="true"></span>' +
-      '<img class="photon-wallet-logo" src="' +
-      extAssetUrl("icons/gladiator.png") +
-      '?v=5" alt="" width="22" height="22" />' +
+      '<span class="photon-wallet-logo" aria-hidden="true">' +
+      escapeHtml(accountAvatarLetters(a, idx)) +
+      "</span>" +
       '<span class="photon-name">' +
       escapeHtml(accountDisplayName(a, idx)) +
       ledgerBadgeHtml(a) +
@@ -9129,9 +9129,9 @@ function paintWalletRenameList() {
         '<li class="settings-wallet" data-wallet-id="' +
         escapeHtml(a.id) +
         '">' +
-        '<img class="settings-wallet-logo" src="' +
-        extAssetUrl("icons/gladiator.png") +
-        '?v=5" alt="" width="28" height="28" />' +
+        '<span class="settings-wallet-logo" aria-hidden="true">' +
+        escapeHtml(accountAvatarLetters(a, idx)) +
+        "</span>" +
         '<div class="settings-wallet-meta">' +
         '<input type="text" maxlength="32" data-rename-input="' +
         escapeHtml(a.id) +

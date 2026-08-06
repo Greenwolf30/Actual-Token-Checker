@@ -7,6 +7,9 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.41:
+- Accounts page: same gray letter avatars (A1/IM/L) beside Account 1 / Imported / Ledger names
+
 v0.6.40:
 - Accounts sidebar: gray letter avatars (A1/A2, IM, L); top Gladiator brand mark unchanged
 
