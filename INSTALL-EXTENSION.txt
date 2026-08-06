@@ -7,6 +7,9 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.17:
+- Clean extension toolbar logo — remove remaining white fringe / spots on circular icon
+
 v0.6.16:
 - Ledger accounts: hide Show seed phrase + Import seed; show “Seed phrase is not stored in the wallet for Ledger accounts. Connect your Ledger device.”
 

@@ -7211,7 +7211,7 @@ function renderAcctDrawerList() {
     btn.className = "acct-drawer-item" + (active ? " is-active" : "");
     btn.dataset.accountId = a.id;
     btn.innerHTML =
-      '<img class="acct-drawer-avatar" src="./icons/gladiator.png?v=2" alt="" width="36" height="36" />' +
+      '<img class="acct-drawer-avatar" src="./icons/gladiator.png?v=4" alt="" width="36" height="36" />' +
       '<span class="acct-drawer-meta"><strong>' +
       escapeHtml(a.name || "W" + (idx + 1)) +
       (active ? " · Active" : "") +
