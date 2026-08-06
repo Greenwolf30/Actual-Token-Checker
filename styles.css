@@ -1116,36 +1116,22 @@ body.is-extension .acct-drawer {
   color: var(--muted);
 }
 
-.balance-pnl[data-dir="up"] .balance-pnl-delta {
-  color: #6fd99a;
+.balance-pnl[data-dir="up"] .balance-pnl-delta,
+.balance-pnl[data-dir="down"] .balance-pnl-delta,
+.balance-pnl[data-dir="flat"] .balance-pnl-delta {
+  color: #d4c07a;
 }
 
-.balance-pnl[data-dir="down"] .balance-pnl-delta {
-  color: #e07a7a;
-}
-
-.balance-pnl[data-dir="up"] .pnl-line {
-  stroke: #4ecf82;
-}
-
-.balance-pnl[data-dir="down"] .pnl-line {
-  stroke: #d96a6a;
-}
-
+.balance-pnl[data-dir="up"] .pnl-line,
+.balance-pnl[data-dir="down"] .pnl-line,
 .balance-pnl[data-dir="flat"] .pnl-line {
-  stroke: rgba(196, 178, 120, 0.75);
+  stroke: #c4b278;
 }
 
-.balance-pnl[data-dir="up"] .pnl-fill {
-  fill: #4ecf82;
-}
-
-.balance-pnl[data-dir="down"] .pnl-fill {
-  fill: #d96a6a;
-}
-
+.balance-pnl[data-dir="up"] .pnl-fill,
+.balance-pnl[data-dir="down"] .pnl-fill,
 .balance-pnl[data-dir="flat"] .pnl-fill {
-  fill: rgba(196, 178, 120, 0.55);
+  fill: #c4b278;
 }
 
 .balance-conn {
