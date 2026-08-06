@@ -4726,23 +4726,60 @@ function resolveConnectionIconSrc(item) {
   return "";
 }
 
+function connectionSiteLabel(item) {
+  if (!item) return "";
+  const host = shortHost(item.url || item.origin || "");
+  if (host) return host;
+  const name = String(item.name || "").trim();
+  return name && name !== "dApp" ? name : "";
+}
+
 function paintBalanceConnStatus(items) {
   const el = $("balanceConnStatus");
   const label = $("balanceConnLabel");
+  const sitesEl = $("balanceConnSites");
   if (!el) return;
   const rows = Array.isArray(items) ? items.filter(Boolean) : [];
   // Active dApp / WC sessions count as connected (Jupiter, pump.fun, Uniswap, etc.).
-  const connected = rows.some((r) => r && r.status !== "pending");
+  const active = rows.filter((r) => r && r.status !== "pending");
+  const connected = active.length > 0;
   const pendingOnly = !connected && rows.length > 0;
+
+  const clearSites = () => {
+    if (!sitesEl) return;
+    sitesEl.textContent = "";
+    sitesEl.hidden = true;
+  };
+
   if (connected) {
     el.dataset.state = "connected";
     if (label) label.textContent = "Connected";
+    if (sitesEl) {
+      const names = [];
+      const seen = new Set();
+      for (const row of active) {
+        const site = connectionSiteLabel(row);
+        if (!site) continue;
+        const key = site.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        names.push(site);
+      }
+      if (names.length) {
+        sitesEl.textContent = names.join(" · ");
+        sitesEl.hidden = false;
+      } else {
+        clearSites();
+      }
+    }
   } else if (pendingOnly) {
     el.dataset.state = "disconnected";
     if (label) label.textContent = "Connecting…";
+    clearSites();
   } else {
     el.dataset.state = "disconnected";
     if (label) label.textContent = "Disconnected";
+    clearSites();
   }
 }
 
