@@ -4,6 +4,8 @@ const STORE_KEY = "gladiator_wallet_v1";
 const TRUSTED_KEY = "gladiator_trusted_origins";
 /** origin -> accountId that approved the inject connection */
 const TRUSTED_ACCOUNTS_KEY = "gladiator_trusted_origin_accounts";
+/** origin -> ["solana"|"evm"|...] chain kinds approved for that origin */
+const TRUSTED_CHAINS_KEY = "gladiator_trusted_origin_chains";
 const OFFSCREEN_URL = "offscreen.html";
 
 let walletWindowId = null;
@@ -239,7 +241,7 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
         tabId,
       });
     }
-    if (origin) await trustOrigin(origin, acc && acc.accountId);
+    if (origin) await trustOrigin(origin, acc && acc.accountId, "evm");
     return {
       result: {
         accounts: [acc.address],
@@ -627,6 +629,56 @@ async function readTrustedOriginAccounts() {
   return map && typeof map === "object" && !Array.isArray(map) ? map : {};
 }
 
+async function readTrustedOriginChains() {
+  const bag = await storageGet([TRUSTED_CHAINS_KEY]);
+  const map = bag[TRUSTED_CHAINS_KEY];
+  return map && typeof map === "object" && !Array.isArray(map) ? map : {};
+}
+
+function normalizeTrustChainKind(chainKind) {
+  const k = String(chainKind || "")
+    .trim()
+    .toLowerCase();
+  if (k === "solana" || k === "evm" || k === "bitcoin" || k === "sui") return k;
+  if (k === "ethereum" || k === "polygon" || k === "base" || k === "robinhood") {
+    return "evm";
+  }
+  return "";
+}
+
+function inferChainKindsFromOrigin(origin) {
+  try {
+    const host = new URL(origin).hostname.toLowerCase().replace(/^www\./, "");
+    const sol = [
+      "jup.ag",
+      "pump.fun",
+      "raydium.io",
+      "tensor.trade",
+      "orca.so",
+      "drift.trade",
+      "mango.markets",
+      "kamino.finance",
+      "sanctum.so",
+      "sol-incinerator.com",
+    ];
+    for (let i = 0; i < sol.length; i++) {
+      const s = sol[i];
+      if (host === s || host.endsWith("." + s)) return ["solana"];
+    }
+    if (
+      host === "uniswap.org" ||
+      host.endsWith(".uniswap.org") ||
+      host === "relay.link" ||
+      host.endsWith(".relay.link") ||
+      host === "app.uniswap.org"
+    ) {
+      return ["evm"];
+    }
+  } catch (_) {}
+  // Inject path is primarily Solana Wallet Standard.
+  return ["solana"];
+}
+
 async function resolveTrustAccountId(accountId) {
   if (accountId) return String(accountId);
   try {
@@ -640,19 +692,37 @@ async function resolveTrustAccountId(accountId) {
   return "";
 }
 
-async function trustOrigin(origin, accountId) {
+async function trustOrigin(origin, accountId, chainKind) {
   if (!origin) return;
   const list = await readTrustedOrigins();
+  const patch = {};
   if (!list.includes(origin)) {
     list.push(origin);
-    await storageSet({ [TRUSTED_KEY]: list.slice(-100) });
+    patch[TRUSTED_KEY] = list.slice(-100);
   }
   const id = await resolveTrustAccountId(accountId);
-  if (!id) return;
-  const map = { ...(await readTrustedOriginAccounts()) };
-  if (map[origin] === id) return;
-  map[origin] = id;
-  await storageSet({ [TRUSTED_ACCOUNTS_KEY]: map });
+  if (id) {
+    const map = { ...(await readTrustedOriginAccounts()) };
+    if (map[origin] !== id) {
+      map[origin] = id;
+      patch[TRUSTED_ACCOUNTS_KEY] = map;
+    }
+  }
+  const kind =
+    normalizeTrustChainKind(chainKind) || inferChainKindsFromOrigin(origin)[0] || "solana";
+  const cmap = { ...(await readTrustedOriginChains()) };
+  const prev = Array.isArray(cmap[origin])
+    ? cmap[origin].map((x) => normalizeTrustChainKind(x)).filter(Boolean)
+    : [];
+  if (!prev.includes(kind)) {
+    prev.push(kind);
+    cmap[origin] = prev;
+    patch[TRUSTED_CHAINS_KEY] = cmap;
+  } else if (!Object.prototype.hasOwnProperty.call(cmap, origin)) {
+    cmap[origin] = prev.length ? prev : [kind];
+    patch[TRUSTED_CHAINS_KEY] = cmap;
+  }
+  if (Object.keys(patch).length) await storageSet(patch);
 }
 
 async function untrustOrigin(origin) {
@@ -660,11 +730,15 @@ async function untrustOrigin(origin) {
   const list = await readTrustedOrigins();
   const next = list.filter((o) => o !== origin);
   const map = { ...(await readTrustedOriginAccounts()) };
+  const cmap = { ...(await readTrustedOriginChains()) };
   const hadAccount = Object.prototype.hasOwnProperty.call(map, origin);
+  const hadChain = Object.prototype.hasOwnProperty.call(cmap, origin);
   if (hadAccount) delete map[origin];
+  if (hadChain) delete cmap[origin];
   const patch = {};
   if (next.length !== list.length) patch[TRUSTED_KEY] = next;
   if (hadAccount) patch[TRUSTED_ACCOUNTS_KEY] = map;
+  if (hadChain) patch[TRUSTED_CHAINS_KEY] = cmap;
   if (Object.keys(patch).length) await storageSet(patch);
 }
 
@@ -730,25 +804,41 @@ function dappIconForOrigin(origin) {
 async function listInjectConnections() {
   const origins = await readTrustedOrigins();
   const map = await readTrustedOriginAccounts();
+  const chainMap = await readTrustedOriginChains();
   const fallbackId = await resolveTrustAccountId(null);
-  // Drop stale account bindings for origins that are no longer trusted.
-  // Backfill missing bindings once so pre-upgrade connections still show a green dot.
+  // Drop stale account/chain bindings for origins that are no longer trusted.
+  // Backfill missing bindings so pre-upgrade connections still paint correctly.
   const keep = {};
-  let dirty = false;
+  const keepChains = {};
+  let dirtyAccounts = false;
+  let dirtyChains = false;
   for (const origin of origins) {
     if (map[origin]) {
       keep[origin] = map[origin];
     } else if (fallbackId) {
       keep[origin] = fallbackId;
-      dirty = true;
+      dirtyAccounts = true;
+    }
+    const stored = Array.isArray(chainMap[origin])
+      ? chainMap[origin].map((x) => normalizeTrustChainKind(x)).filter(Boolean)
+      : [];
+    if (stored.length) {
+      keepChains[origin] = stored;
+    } else {
+      keepChains[origin] = inferChainKindsFromOrigin(origin);
+      dirtyChains = true;
     }
   }
   for (const key of Object.keys(map)) {
-    if (!Object.prototype.hasOwnProperty.call(keep, key)) dirty = true;
+    if (!Object.prototype.hasOwnProperty.call(keep, key)) dirtyAccounts = true;
   }
-  if (dirty) {
-    await storageSet({ [TRUSTED_ACCOUNTS_KEY]: keep });
+  for (const key of Object.keys(chainMap)) {
+    if (!Object.prototype.hasOwnProperty.call(keepChains, key)) dirtyChains = true;
   }
+  const patch = {};
+  if (dirtyAccounts) patch[TRUSTED_ACCOUNTS_KEY] = keep;
+  if (dirtyChains) patch[TRUSTED_CHAINS_KEY] = keepChains;
+  if (Object.keys(patch).length) await storageSet(patch);
   return origins.map((origin) => ({
     kind: "inject",
     topic: "inject:" + origin,
@@ -757,6 +847,7 @@ async function listInjectConnections() {
     url: origin,
     icon: dappIconForOrigin(origin),
     accountId: keep[origin] || null,
+    chains: keepChains[origin] || inferChainKindsFromOrigin(origin),
     accounts: [],
     status: "active",
   }));
@@ -1097,7 +1188,7 @@ async function handleProviderRequest(msg, sender) {
     const acc = await getActiveSolanaAccount();
     const publicKey =
       (acc && acc.publicKey) || (await getActivePublicKey());
-    if (origin) await trustOrigin(origin, acc && acc.accountId);
+    if (origin) await trustOrigin(origin, acc && acc.accountId, "solana");
     return { result: { publicKey } };
   }
 
@@ -1128,7 +1219,7 @@ async function handleProviderRequest(msg, sender) {
       });
       if (origin) {
         const accForTrust = await getActiveSolanaAccount();
-        await trustOrigin(origin, accForTrust && accForTrust.accountId);
+        await trustOrigin(origin, accForTrust && accForTrust.accountId, "solana");
       }
     }
     const labels = {

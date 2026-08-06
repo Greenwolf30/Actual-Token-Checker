@@ -4427,11 +4427,32 @@ function accountHint(accounts) {
 
 const WC_SESSIONS_STORE = "gladiator_wc_sessions";
 
+function chainKindsFromWcAccounts(accounts, namespaceKeys) {
+  const kinds = new Set();
+  (namespaceKeys || []).forEach((key) => {
+    const k = String(key || "").toLowerCase();
+    if (k === "solana" || k.startsWith("solana:")) kinds.add("solana");
+    if (k === "eip155" || k.startsWith("eip155:")) kinds.add("evm");
+  });
+  (accounts || []).forEach((raw) => {
+    const s = String(raw || "").toLowerCase();
+    if (s.startsWith("solana:")) kinds.add("solana");
+    if (s.startsWith("eip155:") || /^0x[a-f0-9]{40}$/.test(s)) kinds.add("evm");
+  });
+  return Array.from(kinds);
+}
+
 function collectLiveWcSessions() {
   try {
     if (!(window.GladiatorWC && GladiatorWC.isReady())) return [];
     if (typeof GladiatorWC.listSessions === "function") {
-      return GladiatorWC.listSessions() || [];
+      const listed = GladiatorWC.listSessions() || [];
+      return listed.map((row) => {
+        if (!row) return row;
+        if (Array.isArray(row.chains) && row.chains.length) return row;
+        const chains = chainKindsFromWcAccounts(row.accounts, row.namespaces || row.namespaceKeys);
+        return chains.length ? { ...row, chains } : row;
+      });
     }
     const sessions = GladiatorWC.getActiveSessions() || {};
     return Object.keys(sessions).map((topic) => {
@@ -4439,7 +4460,8 @@ function collectLiveWcSessions() {
       const meta = (s.peer && s.peer.metadata) || {};
       const ns = s.namespaces || {};
       const accounts = [];
-      for (const key of Object.keys(ns)) {
+      const nsKeys = Object.keys(ns);
+      for (const key of nsKeys) {
         const block = ns[key] || {};
         if (Array.isArray(block.accounts)) accounts.push(...block.accounts);
       }
@@ -4449,6 +4471,7 @@ function collectLiveWcSessions() {
         url: meta.url || "",
         icon: Array.isArray(meta.icons) && meta.icons[0] ? meta.icons[0] : "",
         accounts,
+        chains: chainKindsFromWcAccounts(accounts, nsKeys),
         status: "active",
       };
       if (!row.icon) row.icon = localDappIconSrc(row) || "";
@@ -4771,6 +4794,62 @@ function connectionOwnerAccountId(row) {
   return matchAccountIdFromConnectionAddresses(row.accounts);
 }
 
+function inferConnectionChainKindsFromHost(urlOrOrigin) {
+  try {
+    const host = new URL(urlOrOrigin).hostname.toLowerCase().replace(/^www\./, "");
+    const sol = [
+      "jup.ag",
+      "pump.fun",
+      "raydium.io",
+      "tensor.trade",
+      "orca.so",
+      "drift.trade",
+      "mango.markets",
+      "kamino.finance",
+      "sanctum.so",
+      "sol-incinerator.com",
+    ];
+    for (let i = 0; i < sol.length; i++) {
+      const s = sol[i];
+      if (host === s || host.endsWith("." + s)) return ["solana"];
+    }
+    if (
+      host === "uniswap.org" ||
+      host.endsWith(".uniswap.org") ||
+      host === "relay.link" ||
+      host.endsWith(".relay.link")
+    ) {
+      return ["evm"];
+    }
+  } catch (_) {}
+  return [];
+}
+
+function connectionChainKinds(row) {
+  if (!row) return [];
+  if (Array.isArray(row.chains) && row.chains.length) {
+    return row.chains.map((x) => String(x || "").toLowerCase()).filter(Boolean);
+  }
+  if (row.chain) return [String(row.chain).toLowerCase()];
+  const fromAccounts = chainKindsFromWcAccounts(row.accounts, row.namespaces || row.namespaceKeys);
+  if (fromAccounts.length) return fromAccounts;
+  const fromHost = inferConnectionChainKindsFromHost(row.origin || row.url || "");
+  if (fromHost.length) return fromHost;
+  // Inject rows without metadata are almost always Solana Wallet Standard.
+  if (row.kind === "inject") return ["solana"];
+  return [];
+}
+
+function connectionMatchesActiveChain(row) {
+  const chain = activeChain(STATE);
+  const kind = chain && chain.kind ? String(chain.kind).toLowerCase() : "";
+  if (!kind) return true;
+  const kinds = connectionChainKinds(row);
+  // No known chain on the session → do not claim Connected on mismatched networks.
+  if (!kinds.length) return false;
+  return kinds.includes(kind);
+}
+
 function filterConnectionsForAccount(items, accountId) {
   const id = String(accountId || "");
   if (!id) return [];
@@ -4781,11 +4860,18 @@ function filterConnectionsForAccount(items, accountId) {
   });
 }
 
+function filterConnectionsForActiveContext(items) {
+  const activeId = (STATE && STATE.activeAccountId) || "";
+  return filterConnectionsForAccount(items, activeId).filter(connectionMatchesActiveChain);
+}
+
 function syncConnectedAccountIds(items) {
   const next = new Set();
   const rows = Array.isArray(items) ? items : [];
   for (const row of rows) {
     if (!row || row.status === "pending") continue;
+    // Green dots follow the active chain — Solana session should not light up on Bitcoin.
+    if (!connectionMatchesActiveChain(row)) continue;
     const owner = connectionOwnerAccountId(row);
     if (owner) next.add(String(owner));
   }
@@ -4818,12 +4904,11 @@ function paintBalanceConnStatus(items) {
   const label = $("balanceConnLabel");
   const sitesEl = $("balanceConnSites");
   const allRows = Array.isArray(items) ? items.filter(Boolean) : [];
-  // Keep green dots for every wallet that still owns a session…
+  // Green dots: wallets with a session on the *active chain*.
   const allActive = allRows.filter((r) => r && r.status !== "pending");
   syncConnectedAccountIds(allActive);
-  // …but Home status / site chips only reflect the active wallet.
-  const activeId = (STATE && STATE.activeAccountId) || "";
-  const mine = filterConnectionsForAccount(allRows, activeId);
+  // Home status / site chips: active wallet + active chain only.
+  const mine = filterConnectionsForActiveContext(allRows);
   const active = mine.filter((r) => r && r.status !== "pending");
   if (!el) return;
   const connected = active.length > 0;
@@ -4873,9 +4958,8 @@ function paintWcConnectionsList(items) {
   LAST_CONNECTION_ITEMS = Array.isArray(items) ? items.slice() : [];
   paintBalanceConnStatus(LAST_CONNECTION_ITEMS);
   if (!list) return;
-  const activeId = (STATE && STATE.activeAccountId) || "";
-  // Connections page: only platforms linked to the active wallet.
-  const rows = filterConnectionsForAccount(LAST_CONNECTION_ITEMS, activeId);
+  // Connections page: only platforms linked to the active wallet + chain.
+  const rows = filterConnectionsForActiveContext(LAST_CONNECTION_ITEMS);
   list.innerHTML = "";
   if (!rows.length) {
     if (empty) empty.hidden = false;
@@ -9967,7 +10051,8 @@ function wire() {
         changes.gladiator_wc_sessions ||
         changes.gladiator_wc_pending ||
         changes.gladiator_trusted_origins ||
-        changes.gladiator_trusted_origin_accounts
+        changes.gladiator_trusted_origin_accounts ||
+        changes.gladiator_trusted_origin_chains
       ) {
         paintWcConnections().catch(() => {});
       }
