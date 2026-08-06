@@ -164,14 +164,16 @@ Meaning:
 Same layout for every native chain (SOL, ETH, BTC, MATIC, SUI, etc.).
 
 How often it updates (not tick-by-tick “real time”):
-  • USD quotes (CoinGecko simple/price): at most about every 5 minutes automatically;
-    Sync force-refreshes.
+  • USD quotes refresh about every 2 minutes automatically, alternating providers:
+    CoinGecko simple/price on one slot, DexScreener token quotes on the next
+    (each provider ~once per 4 minutes). Sync force-refreshes via CoinGecko.
   • The chart series comes from CoinGecko (~1 day of points), cached about 15 minutes
     per coin.
   • A fresh chart fetch happens when you open Home / switch chain (or Sync) and
     the cache for that coin is older than ~15 minutes.
-  • Cost: about +1 price API call per ~5 minutes while Home is open, plus chart
-    fetches occasionally — aimed to stay under CoinGecko free monthly credits.
+  • Cost: about one CoinGecko price call per ~4 minutes while Home is open (plus
+    DexScreener on the alternate slot), plus chart fetches occasionally — aimed to
+    stay under CoinGecko free monthly credits. No DexScreener API key required.
     No extra Solana/Helius RPC for the chart itself.
   • Chains that share a price id (Ethereum / Base / Robinhood Ethereum) share
     one chart cache entry.

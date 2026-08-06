@@ -2210,36 +2210,101 @@ async function fetchSolBalance(address, rpcs) {
   return Number(result && result.value != null ? result.value : 0) / 1e9;
 }
 
-/** CoinGecko simple/price — throttle autos to stay under free monthly credits (~10k). */
-const PRICE_AUTO_MIN_MS = 5 * 60 * 1000;
+/**
+ * Auto USD quotes every ~2 minutes, alternating CoinGecko ↔ DexScreener so each
+ * provider is hit about once per 4 minutes. Sync / force always uses CoinGecko.
+ */
+const PRICE_AUTO_MIN_MS = 2 * 60 * 1000;
 let lastPricesFetchAt = 0;
+/** Even = CoinGecko, odd = DexScreener (advanced after each successful auto fetch). */
+let priceProviderFlip = 0;
+
+/** Wrapped / liquid proxies used for DexScreener native quotes. */
+const DEX_NATIVE_BY_PRICE_ID = {
+  solana: "So11111111111111111111111111111111111111112",
+  ethereum: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+  "polygon-ecosystem-token": "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+  bitcoin: "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",
+  sui: "0x2::sui::SUI",
+};
+
+async function fetchPricesFromCoinGecko() {
+  const ids = "solana,ethereum,polygon-ecosystem-token,bitcoin,sui";
+  const url =
+    "https://api.coingecko.com/api/v3/simple/price?ids=" +
+    ids +
+    "&vs_currencies=usd";
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("coingecko http " + res.status);
+  const j = await res.json();
+  PRICES = {
+    solana: Number(j.solana && j.solana.usd) || PRICES.solana || 0,
+    ethereum: Number(j.ethereum && j.ethereum.usd) || PRICES.ethereum || 0,
+    "polygon-ecosystem-token":
+      Number(j["polygon-ecosystem-token"] && j["polygon-ecosystem-token"].usd) ||
+      PRICES["polygon-ecosystem-token"] ||
+      0,
+    bitcoin: Number(j.bitcoin && j.bitcoin.usd) || PRICES.bitcoin || 0,
+    sui: Number(j.sui && j.sui.usd) || PRICES.sui || 0,
+  };
+}
+
+async function fetchPricesFromDexScreener() {
+  // One request per token — DexScreener's multi-token response caps at ~30 pairs
+  // and can drop lower-liquidity natives when batched with SOL/WETH.
+  const next = { ...PRICES };
+  await Promise.all(
+    Object.entries(DEX_NATIVE_BY_PRICE_ID).map(async ([priceId, addr]) => {
+      try {
+        const res = await fetch(
+          "https://api.dexscreener.com/latest/dex/tokens/" + encodeURIComponent(addr)
+        );
+        if (!res.ok) throw new Error("dex http " + res.status);
+        const data = await res.json();
+        const pairs = Array.isArray(data && data.pairs) ? data.pairs : [];
+        let bestLiq = -1;
+        let bestPx = 0;
+        for (const p of pairs) {
+          const px = Number(p && p.priceUsd);
+          if (!(px > 0)) continue;
+          const liq = Number(p.liquidity && p.liquidity.usd) || 0;
+          if (liq >= bestLiq) {
+            bestLiq = liq;
+            bestPx = px;
+          }
+        }
+        if (bestPx > 0) next[priceId] = bestPx;
+      } catch (err) {
+        console.warn("[prices/dex]", priceId, err);
+      }
+    })
+  );
+  PRICES = next;
+}
 
 async function fetchPrices(opts) {
   const force = !!(opts && opts.force);
-  // Auto path: at most once per 5 minutes to stay under CoinGecko free monthly budget.
   if (!force && lastPricesFetchAt && Date.now() - lastPricesFetchAt < PRICE_AUTO_MIN_MS) {
     return PRICES;
   }
+  // Force (Sync): CoinGecko. Auto: alternate CoinGecko → DexScreener → …
+  const useDex = !force && priceProviderFlip % 2 === 1;
   try {
-    const ids = "solana,ethereum,polygon-ecosystem-token,bitcoin,sui";
-    const url =
-      "https://api.coingecko.com/api/v3/simple/price?ids=" +
-      ids +
-      "&vs_currencies=usd";
-    const res = await fetch(url);
-    if (!res.ok) throw new Error("price http " + res.status);
-    const j = await res.json();
-    PRICES = {
-      solana: Number(j.solana && j.solana.usd) || 0,
-      ethereum: Number(j.ethereum && j.ethereum.usd) || 0,
-      "polygon-ecosystem-token":
-        Number(j["polygon-ecosystem-token"] && j["polygon-ecosystem-token"].usd) || 0,
-      bitcoin: Number(j.bitcoin && j.bitcoin.usd) || 0,
-      sui: Number(j.sui && j.sui.usd) || 0,
-    };
+    if (useDex) await fetchPricesFromDexScreener();
+    else await fetchPricesFromCoinGecko();
     lastPricesFetchAt = Date.now();
+    if (!force) priceProviderFlip += 1;
   } catch (err) {
-    console.warn("[prices]", err);
+    console.warn("[prices]", useDex ? "dex" : "cg", err);
+    if (useDex) {
+      try {
+        await fetchPricesFromCoinGecko();
+        lastPricesFetchAt = Date.now();
+        if (!force) priceProviderFlip += 1;
+      } catch (err2) {
+        console.warn("[prices] cg fallback", err2);
+      }
+    }
   }
   return PRICES;
 }
@@ -2738,7 +2803,7 @@ function setSyncButtonsBusy(busy) {
 }
 
 /** Soft live balance refresh while Home is open.
- *  Chain RPC ~every 60s. CoinGecko prices at most every 5 minutes (monthly budget).
+ *  Chain RPC ~every 60s. USD prices every ~2 min (CoinGecko ↔ DexScreener).
  */
 const LIVE_BALANCE_MS = 60 * 1000;
 let liveBalanceTimer = null;
@@ -2763,8 +2828,8 @@ function startLiveBalanceRefresh() {
     const tick = liveBalanceTicks;
     (async () => {
       try {
-        // Prices: throttled inside fetchPrices (~5 min). Sync button uses force.
-        if (tick === 1 || tick % 5 === 0) await fetchPrices();
+        // Odd ticks (~every 2 min): prices (internal throttle + CG/Dex alternate).
+        if (tick % 2 === 1) await fetchPrices();
         await refreshBalance({ keepUi: true });
       } catch (err) {
         console.warn("[live-balance]", err);
