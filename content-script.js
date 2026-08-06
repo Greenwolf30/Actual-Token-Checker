@@ -264,7 +264,7 @@
           return chrome.runtime.getURL("icons/dapps/" + map[i][1] + ".png");
         }
       }
-      return chrome.runtime.getURL("icons/icon48.png");
+      return chrome.runtime.getURL("icons/gladiator.png");
     })();
 
     root.innerHTML =
@@ -275,7 +275,7 @@
       "background: linear-gradient(165deg, #1a1524 0%, #0d1018 55%, #12101a 100%); " +
       "color: #e8eefc; box-shadow: 0 24px 60px rgba(0,0,0,0.55); padding: 18px 18px 16px; pointer-events: auto; }" +
       ".brand { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }" +
-      ".logo { width: 36px; height: 36px; border-radius: 10px; object-fit: cover; background: rgba(184,167,207,0.15); }" +
+      ".logo { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; background: rgba(184,167,207,0.15); }" +
       ".brand strong { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; }" +
       ".brand span { display: block; font-size: 11px; color: rgba(232,238,252,0.55); margin-top: 2px; }" +
       "h2 { margin: 0 0 8px; font-size: 18px; font-weight: 700; color: #fff; }" +

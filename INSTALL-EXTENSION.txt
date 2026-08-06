@@ -7,6 +7,9 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.39:
+- Injected wallet / dApp picker logo uses the new rounded Gladiator mark
+
 v0.6.38:
 - Replace Gladiator logo with new rounded helmet mark (toolbar + in-app)
 
