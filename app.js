@@ -7948,7 +7948,7 @@ function renderAcctDrawerList() {
     btn.innerHTML =
       '<img class="acct-drawer-avatar" src="' +
       extAssetUrl("icons/gladiator.png") +
-      '?v=4" alt="" width="36" height="36" />' +
+      '?v=5" alt="" width="36" height="36" />' +
       '<img class="acct-drawer-chain" src="' +
       chainLogoSrc(activeChain(STATE)) +
       '" alt="" width="16" height="16" title="' +
@@ -8477,7 +8477,7 @@ function renderAccountsPanel() {
       '<span class="photon-radio" aria-hidden="true"></span>' +
       '<img class="photon-wallet-logo" src="' +
       extAssetUrl("icons/gladiator.png") +
-      '?v=4" alt="" width="22" height="22" />' +
+      '?v=5" alt="" width="22" height="22" />' +
       '<span class="photon-name">' +
       escapeHtml(accountDisplayName(a, idx)) +
       ledgerBadgeHtml(a) +
@@ -9108,7 +9108,7 @@ function paintWalletRenameList() {
         '">' +
         '<img class="settings-wallet-logo" src="' +
         extAssetUrl("icons/gladiator.png") +
-        '?v=4" alt="" width="28" height="28" />' +
+        '?v=5" alt="" width="28" height="28" />' +
         '<div class="settings-wallet-meta">' +
         '<input type="text" maxlength="32" data-rename-input="' +
         escapeHtml(a.id) +

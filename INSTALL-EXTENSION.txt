@@ -7,6 +7,9 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.38:
+- Replace Gladiator logo with new rounded helmet mark (toolbar + in-app)
+
 v0.6.37:
 - Cleanup/bugfix: trust checks are chain-scoped (Solana trust ≠ EVM trust)
 - Stop permanently guessing connection owners on list; refresh Solana signer from storage on each use
