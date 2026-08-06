@@ -77,9 +77,6 @@
   if (window.__GLADIATOR_BRIDGE_INSTALLED__) return;
   window.__GLADIATOR_BRIDGE_INSTALLED__ = true;
 
-  const REFRESH_MSG =
-    "Gladiator was updated or reloaded — refresh this page, reconnect Gladiator, then try again";
-
   function isDeadExtensionContext(msg) {
     const s = String(msg || "").toLowerCase();
     return (
@@ -91,8 +88,9 @@
   }
 
   function friendlyBridgeError(msg) {
-    if (isDeadExtensionContext(msg)) return REFRESH_MSG;
-    return String(msg || "Gladiator extension unavailable");
+    // Never surface the old "Gladiator Wallet was reloaded…" page banner copy.
+    if (isDeadExtensionContext(msg)) return "Gladiator unavailable";
+    return String(msg || "Gladiator unavailable");
   }
 
   function extensionAlive() {
@@ -103,8 +101,7 @@
     }
   }
 
-  // No on-page "refresh / reconnect" banner — keep errors in the wallet bridge only.
-  function showRefreshBanner() {}
+  // Remove any leftover banner from older builds; do not show a new one.
   try {
     const oldBanner = document.getElementById("gladiator-refresh-banner");
     if (oldBanner) oldBanner.remove();
@@ -112,14 +109,12 @@
 
   function replyToPage(id, result, error) {
     try {
-      const err = error ? friendlyBridgeError(error) : undefined;
-      if (err && isDeadExtensionContext(error)) showRefreshBanner();
       window.postMessage(
         {
           source: REPLY,
           id,
           result,
-          error: err,
+          error: error ? friendlyBridgeError(error) : undefined,
         },
         "*"
       );
@@ -139,8 +134,7 @@
       } catch (_) {}
 
       if (!extensionAlive()) {
-        showRefreshBanner();
-        replyToPage(data.id, undefined, REFRESH_MSG);
+        replyToPage(data.id, undefined, "Gladiator unavailable");
         return;
       }
 
@@ -157,8 +151,7 @@
           const errMsg =
             (response && response.error) ||
             (err && err.message) ||
-            (!response ? "Gladiator extension unavailable" : "");
-          if (errMsg && isDeadExtensionContext(errMsg)) showRefreshBanner();
+            (!response ? "Gladiator unavailable" : "");
           replyToPage(
             data.id,
             response && response.result,
@@ -171,7 +164,6 @@
         const data = event && event.data;
         if (!data || data.id == null) return;
         const msg = String(err && err.message ? err.message : err);
-        if (isDeadExtensionContext(msg)) showRefreshBanner();
         replyToPage(data.id, undefined, msg);
       } catch (_) {}
     }

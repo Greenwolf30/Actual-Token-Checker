@@ -55,20 +55,20 @@
       return out;
     }
 
-    const REFRESH_MSG =
-      "Gladiator was updated or reloaded — refresh this page, reconnect Gladiator, then try again";
-
     function friendlyRequestError(msg) {
       const s = String(msg || "");
       const lower = s.toLowerCase();
+      // Keep bridge failures short — never show the old reload/reconnect banner copy.
       if (
         lower.includes("extension context invalidated") ||
         lower.includes("receiving end does not exist") ||
         lower.includes("could not establish connection") ||
         lower.includes("message port closed") ||
-        lower.includes("gladiator extension unavailable")
+        lower.includes("gladiator extension unavailable") ||
+        lower.includes("gladiator wallet was reloaded") ||
+        lower.includes("reconnect gladiator")
       ) {
-        return REFRESH_MSG;
+        return "Gladiator unavailable";
       }
       return s;
     }
@@ -88,7 +88,7 @@
         setTimeout(() => {
           if (!pending.has(id)) return;
           pending.delete(id);
-          reject(new Error("Gladiator request timed out — refresh this page and try again"));
+          reject(new Error("Gladiator request timed out"));
         }, ms);
       });
     }

@@ -7,6 +7,9 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.36:
+- Remove on-page “Gladiator Wallet was reloaded…” banner / reload notification copy entirely
+
 v0.6.35:
 - Connected status is chain-scoped: Solana dApp session does not show Connected on Bitcoin/EVM/etc.
 - Switch chains → Connected/sites/green dots only if that wallet is connected on the active chain
