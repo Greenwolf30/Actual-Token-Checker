@@ -1912,9 +1912,18 @@ function chainUsdStable(chainOrId) {
 }
 
 function normalizeTokenMintKey(mint, chainKind) {
-  const m = String(mint || "");
+  const m = String(mint || "").trim();
   if (!m) return "";
+  // EVM contract addresses
   if (chainKind === "evm" || /^0x[a-fA-F0-9]{40}$/.test(m)) return m.toLowerCase();
+  // Sui coin types: lowercase address segment only; keep ::module::Struct case
+  if (chainKind === "sui" || (m.startsWith("0x") && m.includes("::"))) {
+    const parts = m.split("::");
+    if (parts.length >= 3 && /^0x[a-fA-F0-9]+$/i.test(parts[0])) {
+      parts[0] = parts[0].toLowerCase();
+      return parts.join("::");
+    }
+  }
   return m;
 }
 
@@ -1935,10 +1944,9 @@ function isChainUsdStableMint(chainOrId, mint) {
   );
 }
 
+/** True only for the chain's known native USD stable mint (not symbol spoofs). */
 function isUsdStableHolding(holding, chainOrId) {
-  if (!holding) return false;
-  const sym = String(holding.symbol || "").toUpperCase();
-  if (sym === "USDC" || sym === "USDG") return true;
+  if (!holding || !holding.mint) return false;
   if (holding.mint === USDC_MINT) return true;
   return isChainUsdStableMint(chainOrId || holding.chainId, holding.mint);
 }
@@ -1961,12 +1969,28 @@ function usdStableHoldingRow(chain, amount) {
   };
 }
 
-/** ERC-20 balanceOf via eth_call (used to always surface chain USDC/USDG). */
+function parseEvmHexAmount(hex, decimals) {
+  const dec = decimals != null ? Number(decimals) : 6;
+  let h = String(hex == null ? "0x0" : hex);
+  if (h === "" || h === "0x") h = "0x0";
+  if (!h.startsWith("0x") && !h.startsWith("0X")) h = "0x" + h;
+  try {
+    if (window.ethers && ethers.formatUnits) {
+      return Number(ethers.formatUnits(h, dec));
+    }
+  } catch (_) {}
+  return formatTokenRawAmount(BigInt(h).toString(), dec);
+}
+
+/**
+ * ERC-20 balanceOf via eth_call.
+ * Returns a number on success, or null when all RPCs fail (do not treat as 0).
+ */
 async function fetchEvmErc20Balance(owner, token, decimals, rpcOrList) {
   const list = Array.isArray(rpcOrList)
     ? rpcOrList
     : [rpcOrList].filter(Boolean);
-  if (!list.length || !owner || !token) return 0;
+  if (!list.length || !owner || !token) return null;
   const ownerHex = String(owner).toLowerCase().replace(/^0x/, "");
   const data = "0x70a08231" + ownerHex.padStart(64, "0");
   const to = String(token).toLowerCase();
@@ -1986,25 +2010,20 @@ async function fetchEvmErc20Balance(owner, token, decimals, rpcOrList) {
       if (!res.ok) throw new Error("HTTP " + res.status + " @ " + rpc);
       const j = await res.json();
       if (j.error) throw new Error(j.error.message || "eth_call");
-      const hex = j.result || "0x0";
-      const dec = decimals != null ? Number(decimals) : 6;
-      try {
-        if (window.ethers && ethers.formatUnits) {
-          return Number(ethers.formatUnits(hex, dec));
-        }
-      } catch (_) {}
-      return formatTokenRawAmount(BigInt(hex).toString(), dec);
+      if (j.result == null) throw new Error("empty eth_call result");
+      return parseEvmHexAmount(j.result, decimals);
     } catch (err) {
       lastErr = err;
       console.warn("[erc20-balance]", rpc, err && err.message ? err.message : err);
     }
   }
   if (lastErr) console.warn("[erc20-balance] all rpcs failed", lastErr);
-  return 0;
+  return null;
 }
 
+/** Returns number on success, null on failure. */
 async function fetchSuiCoinBalance(owner, coinType, decimals, rpcs) {
-  if (!owner || !coinType) return 0;
+  if (!owner || !coinType) return null;
   try {
     const result = await suiRpcCall(
       "suix_getBalance",
@@ -2015,51 +2034,84 @@ async function fetchSuiCoinBalance(owner, coinType, decimals, rpcs) {
     return formatTokenRawAmount(raw, decimals != null ? decimals : 6);
   } catch (err) {
     console.warn("[sui-usdc]", err && err.message ? err.message : err);
-    return 0;
+    return null;
   }
 }
 
 /**
  * Ensure the chain's native USD stablecoin is present in holdings (even at 0).
- * Fetches on-chain balance when Blockscout/token scan omitted it.
+ * Prefers live RPC balance; falls back to scanner amount; placeholder 0 only when unknown.
  */
 async function ensureChainUsdStableHolding(chain, owner, tokens) {
   const s = chainUsdStable(chain);
   if (!s) return Array.isArray(tokens) ? tokens.slice() : [];
   const list = Array.isArray(tokens) ? tokens.slice() : [];
-  const mintKey = normalizeTokenMintKey(s.mint, chain.kind || s.kind);
-  let idx = list.findIndex(
-    (row) =>
-      row &&
-      row.mint &&
-      normalizeTokenMintKey(row.mint, chain.kind || s.kind) === mintKey
-  );
-  let amount = idx >= 0 ? Number(list[idx].amount) || 0 : NaN;
-  if (!(amount >= 0) || idx < 0) {
-    try {
-      if (chain.kind === "evm") {
-        amount = await fetchEvmErc20Balance(
-          owner,
-          s.mint,
-          s.decimals,
-          chain.rpcs || [chain.rpc]
-        );
-      } else if (chain.kind === "sui") {
-        amount = await fetchSuiCoinBalance(
-          owner,
-          s.mint,
-          s.decimals,
-          chain.rpcs || [chain.rpc]
-        );
-      } else {
-        amount = idx >= 0 ? Number(list[idx].amount) || 0 : 0;
-      }
-    } catch (_) {
-      amount = idx >= 0 ? Number(list[idx].amount) || 0 : 0;
+  const kind = chain.kind || s.kind;
+  const mintKey = normalizeTokenMintKey(s.mint, kind);
+
+  // Dedupe casing variants (esp. Sui coin types); keep the last match.
+  let idx = -1;
+  let scannedAmt = null;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const row = list[i];
+    if (!row || !row.mint) continue;
+    if (normalizeTokenMintKey(row.mint, kind) !== mintKey) continue;
+    const amt = Number(row.amount);
+    if (Number.isFinite(amt)) {
+      scannedAmt = scannedAmt == null ? amt : Math.max(scannedAmt, amt);
+    }
+    if (idx < 0) {
+      idx = i;
+    } else {
+      list.splice(i, 1);
+      if (idx > i) idx -= 1;
     }
   }
+
+  let fetched = null;
+  try {
+    if (chain.kind === "evm") {
+      fetched = await fetchEvmErc20Balance(
+        owner,
+        s.mint,
+        s.decimals,
+        chain.rpcs || [chain.rpc]
+      );
+    } else if (chain.kind === "sui") {
+      fetched = await fetchSuiCoinBalance(
+        owner,
+        s.mint,
+        s.decimals,
+        chain.rpcs || [chain.rpc]
+      );
+    }
+  } catch (_) {
+    fetched = null;
+  }
+
+  let amount = 0;
+  if (fetched != null && Number.isFinite(Number(fetched))) {
+    amount = Number(fetched);
+  } else if (scannedAmt != null && Number.isFinite(scannedAmt)) {
+    amount = scannedAmt;
+  } else {
+    amount = 0; // always-show placeholder when both RPC + scanner unknown
+  }
+
   const base = usdStableHoldingRow(chain, amount);
-  const merged = idx >= 0 ? { ...list[idx], ...base, amount: Number(amount) || 0, usd: base.usd, logo: "usdc", symbol: s.symbol, name: s.name } : base;
+  const merged =
+    idx >= 0
+      ? {
+          ...list[idx],
+          ...base,
+          mint: s.mint,
+          amount: Number(amount) || 0,
+          usd: base.usd,
+          logo: s.logo || "usdc",
+          symbol: s.symbol,
+          name: s.name,
+        }
+      : base;
   if (idx >= 0) list[idx] = merged;
   else list.unshift(merged);
   return list;
@@ -2832,7 +2884,7 @@ async function refreshBalance(opts) {
       );
       const usdc = (suiCoins || []).find((row) => isChainUsdStableMint(chain, row.mint));
       const tokenUsd =
-        (usdc ? Number(usdc.usd) || 0 : 0) +
+        (usdc ? Number(usdc.usd) || Number(usdc.amount) || 0 : 0) +
         other.reduce((s, row) => s + (Number(row.usd) || 0), 0);
       nextBalance = {
         native,
@@ -3221,7 +3273,7 @@ function tokenLogoHtml(t) {
     robinhood: "robinhood",
   };
   let key = t.logo;
-  if (isUsdStableHolding(t, t.chainId) || t.mint === USDC_MINT || t.symbol === "USDC") {
+  if (isUsdStableHolding(t, t.chainId) || t.mint === USDC_MINT) {
     key = "usdc";
   }
   if (key && localLogos[key]) {
@@ -3257,24 +3309,30 @@ function paintHoldings() {
   if (!list) return;
   list.innerHTML = "";
 
+  // Keep chain USDC/USDG in HOLDINGS (not paint-only) so Send/detail stay consistent.
+  const stable = chainUsdStable(chain);
+  if (stable && !isTokenHidden(chain.id, stable.mint)) {
+    const hasStable = (HOLDINGS || []).some(
+      (r) => r && isChainUsdStableMint(chain, r.mint)
+    );
+    if (!hasStable) {
+      const placeholder = usdStableHoldingRow(chain, 0);
+      HOLDINGS = Array.isArray(HOLDINGS)
+        ? [...HOLDINGS, placeholder]
+        : [placeholder];
+    }
+  }
+
   // Never paint another chain's leftovers while switching; respect Manage tokens hides.
   // Always show highest value/amount first.
   let rows = sortHoldingsByAmount(visibleHoldings(HOLDINGS, chain));
   if (!rows.length) {
     rows = [nativeHoldingRow(chain, 0, 0)];
-    const stable = chainUsdStable(chain);
     if (stable && !isTokenHidden(chain.id, stable.mint)) {
-      rows.push(usdStableHoldingRow(chain, 0));
-    }
-  } else {
-    // Keep chain USDC/USDG visible even when zero / still syncing.
-    const stable = chainUsdStable(chain);
-    if (
-      stable &&
-      !isTokenHidden(chain.id, stable.mint) &&
-      !rows.some((r) => isChainUsdStableMint(chain, r && r.mint))
-    ) {
-      rows = sortHoldingsByAmount([...rows, usdStableHoldingRow(chain, 0)]);
+      const row =
+        (HOLDINGS || []).find((r) => r && isChainUsdStableMint(chain, r.mint)) ||
+        usdStableHoldingRow(chain, 0);
+      rows.push(row);
     }
   }
 
@@ -3453,8 +3511,9 @@ function selectSendAssetForHolding(holding) {
 
 function tokenDetailUnitPrice(holding, chain) {
   if (!holding) return null;
-  if (isUsdStableHolding(holding, chain || holding.chainId)) return 1;
-  if (holding.mint === USDC_MINT || holding.symbol === "USDC") return 1;
+  if (isUsdStableHolding(holding, chain || holding.chainId) || holding.mint === USDC_MINT) {
+    return 1;
+  }
   if (Number(holding.amount) > 0 && holding.usd != null && Number(holding.usd) >= 0) {
     return Number(holding.usd) / Number(holding.amount);
   }
@@ -3717,12 +3776,7 @@ async function loadTokenChartBundle(holding, chain, range) {
           }
         }
       } catch (_) {}
-    } else if (
-      isUsdStableHolding(holding, chain) ||
-      mint === USDC_MINT ||
-      (holding.symbol || "").toUpperCase() === "USDC" ||
-      (holding.symbol || "").toUpperCase() === "USDG"
-    ) {
+    } else if (isUsdStableHolding(holding, chain) || mint === USDC_MINT) {
       const stable = chainUsdStable(chain);
       const cgId = (stable && stable.cgId) || "usd-coin";
       try {
@@ -4095,9 +4149,9 @@ function sendAssetUnitPriceUsd() {
   const stable = chainUsdStable(chain);
   if (
     assetVal === USDC_MINT ||
-    assetVal === "USDC" ||
-    assetVal === "USDG" ||
-    (stable && normalizeTokenMintKey(assetVal, chain.kind) === normalizeTokenMintKey(stable.mint, chain.kind))
+    (stable &&
+      normalizeTokenMintKey(assetVal, chain.kind) ===
+        normalizeTokenMintKey(stable.mint, chain.kind))
   ) {
     return 1;
   }
@@ -4113,8 +4167,9 @@ function sendAssetUnitPriceUsd() {
   if (holding && Number(holding.amount) > 0 && Number(holding.usd) > 0) {
     return Number(holding.usd) / Number(holding.amount);
   }
-  if (holding && isUsdStableHolding(holding, chain)) return 1;
-  if (holding && (holding.symbol === "USDC" || holding.mint === USDC_MINT)) return 1;
+  if (holding && (isUsdStableHolding(holding, chain) || holding.mint === USDC_MINT)) {
+    return 1;
+  }
   return 0;
 }
 
@@ -4167,11 +4222,19 @@ function uiAmountToRaw(amount, decimals) {
 }
 
 function selectedSendHolding() {
+  const chain = activeChain(STATE);
   const assetVal = ($("sendAsset") && $("sendAsset").value) || "native";
   if (assetVal === "native") {
-    return HOLDINGS.find((h) => h.kind === "native") || null;
+    return (HOLDINGS || []).find((h) => h.kind === "native") || null;
   }
-  return HOLDINGS.find((h) => h.mint === assetVal) || null;
+  const want = normalizeTokenMintKey(assetVal, chain && chain.kind);
+  return (
+    (HOLDINGS || []).find((h) => {
+      if (!h || !h.mint) return false;
+      if (h.mint === assetVal) return true;
+      return normalizeTokenMintKey(h.mint, chain && chain.kind) === want;
+    }) || null
+  );
 }
 
 function solanaKeypairFromAccount(acc) {

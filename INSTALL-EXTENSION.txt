@@ -7,6 +7,9 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.27:
+- Bugfixes for per-chain USDC/USDG: mint-only $1 pricing (no symbol spoofs), Sui mint casing dedupe, Send holding match by normalized mint, RPC fail no longer pretends balance is 0 when a scanner amount exists
+
 v0.6.26:
 - Holdings: show each chain’s native USDC (ETH / Polygon / Base / Solana / Sui); Robinhood shows USDG (chain’s USD stablecoin). Bitcoin has none.
 
