@@ -1021,9 +1021,7 @@ body.is-extension .acct-drawer {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 4px;
-  min-width: 108px;
-  max-width: 42%;
+  gap: 0;
 }
 
 .balance-label-row .addr-menu-wrap {
@@ -1037,34 +1035,55 @@ body.is-extension .acct-drawer {
   padding: 0;
 }
 
-/* Native coin quote + sparkline under the ⋮ menu (no border/box). */
+/* Native coin quote + sparkline on the balance row (no border/box). */
 .balance-native-quote {
-  width: 108px;
+  flex: 0 1 auto;
+  width: 148px;
+  max-width: 46%;
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: flex-start;
   gap: 2px;
   border: 0;
   background: transparent;
   box-shadow: none;
   padding: 0;
   margin: 0;
+  min-width: 0;
 }
 
 .balance-native-price {
-  font-size: 0.68rem;
+  font-size: 0.72rem;
   font-weight: 650;
   letter-spacing: 0.01em;
   font-variant-numeric: tabular-nums;
   color: #d4c07a;
-  line-height: 1.1;
-  text-align: right;
+  line-height: 1.15;
+  text-align: left;
   white-space: nowrap;
 }
 
+.balance-native-price .native-px-delta {
+  margin-left: 0.35em;
+  font-weight: 700;
+}
+
+.balance-native-quote[data-dir="up"] .balance-native-price .native-px-delta {
+  color: #3ecf8e;
+}
+
+.balance-native-quote[data-dir="down"] .balance-native-price .native-px-delta {
+  color: #f07178;
+}
+
+.balance-native-quote[data-dir="flat"] .balance-native-price .native-px-delta {
+  color: rgba(212, 192, 122, 0.8);
+}
+
 .balance-native-chart {
-  width: 108px;
-  height: 34px;
+  width: 148px;
+  height: 42px;
+  max-width: 100%;
   display: block;
   overflow: visible;
   border: 0;
@@ -1074,7 +1093,7 @@ body.is-extension .acct-drawer {
 .balance-native-chart .pnl-line {
   fill: none;
   stroke: #c4b278;
-  stroke-width: 2;
+  stroke-width: 2.1;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -1082,7 +1101,23 @@ body.is-extension .acct-drawer {
 .balance-native-chart .pnl-fill {
   stroke: none;
   fill: #c4b278;
-  opacity: 0.16;
+  opacity: 0.14;
+}
+
+.balance-native-quote[data-dir="up"] .balance-native-chart .pnl-line {
+  stroke: #3ecf8e;
+}
+
+.balance-native-quote[data-dir="up"] .balance-native-chart .pnl-fill {
+  fill: #3ecf8e;
+}
+
+.balance-native-quote[data-dir="down"] .balance-native-chart .pnl-line {
+  stroke: #f07178;
+}
+
+.balance-native-quote[data-dir="down"] .balance-native-chart .pnl-fill {
+  fill: #f07178;
 }
 
 .balance-label {
@@ -1096,7 +1131,10 @@ body.is-extension .acct-drawer {
 
 .balance-hero {
   margin: 4px 0 0;
-  display: block;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  gap: 18px;
   min-height: 0;
 }
 
@@ -2999,13 +3037,17 @@ body.is-extension .balance-value {
   font-size: 2.35rem;
 }
 
-body.is-extension .balance-right {
-  min-width: 96px;
+body.is-extension .balance-hero {
+  gap: 14px;
 }
 
-body.is-extension .balance-native-quote,
+body.is-extension .balance-native-quote {
+  width: 132px;
+}
+
 body.is-extension .balance-native-chart {
-  width: 96px;
+  width: 132px;
+  height: 40px;
 }
 
 body.is-extension .holdings {

@@ -3306,7 +3306,7 @@ function formatNativeUsdPrice(n) {
   return v.toFixed(6);
 }
 
-/** Draw a borderless yellow sparkline into an SVG element. */
+/** Draw a borderless sparkline into an SVG element. Color via parent data-dir. */
 function paintSparklineSvg(svg, values) {
   if (!svg) return;
   const pts = (Array.isArray(values) ? values : [])
@@ -3316,8 +3316,8 @@ function paintSparklineSvg(svg, values) {
     svg.innerHTML = "";
     return;
   }
-  const w = 120;
-  const h = 36;
+  const w = 160;
+  const h = 44;
   const padX = 2;
   const padY = 3;
   let min = Math.min.apply(null, pts);
@@ -3354,6 +3354,19 @@ function paintSparklineSvg(svg, values) {
     '"></path><path class="pnl-line" d="' +
     line +
     '"></path>';
+}
+
+function nativeSeriesDir(points) {
+  const pts = (Array.isArray(points) ? points : [])
+    .map((v) => Number(v))
+    .filter((v) => Number.isFinite(v) && v > 0);
+  if (pts.length < 2) return { dir: "flat", pct: 0, diff: 0, hasSeries: false };
+  const first = pts[0];
+  const last = pts[pts.length - 1];
+  const diff = last - first;
+  const pct = first > 0 ? (diff / first) * 100 : 0;
+  const dir = Math.abs(pct) < 0.05 ? "flat" : diff > 0 ? "up" : "down";
+  return { dir, pct, diff, hasSeries: true };
 }
 
 /** Portfolio PnL: $ delta + percent under Total balance (no chart). */
@@ -3413,16 +3426,25 @@ const NATIVE_CHART_CACHE = Object.create(null);
 const NATIVE_CHART_TTL_MS = 5 * 60 * 1000;
 let nativeChartSeq = 0;
 
-function paintNativePriceLabel(chain, price) {
+function paintNativePriceLabel(chain, price, seriesMeta) {
   const el = $("balanceNativePrice");
+  const quote = $("balanceNativeQuote");
   if (!el) return;
   const sym = (chain && chain.symbol) || "";
   const px = Number(price);
+  const meta = seriesMeta || { dir: "flat", pct: 0 };
+  if (quote) quote.dataset.dir = meta.dir || "flat";
   if (!(px > 0)) {
     el.textContent = sym ? sym + " —" : "—";
     return;
   }
-  el.textContent = sym + " $" + formatNativeUsdPrice(px);
+  let deltaHtml = "";
+  if (meta.hasSeries && Number.isFinite(meta.pct)) {
+    const sign = meta.pct > 0 ? "+" : meta.pct < 0 ? "-" : "";
+    deltaHtml =
+      '<span class="native-px-delta">' + sign + formatPnlPct(meta.pct) + "%</span>";
+  }
+  el.innerHTML = escapeHtml(sym) + " $" + escapeHtml(formatNativeUsdPrice(px)) + deltaHtml;
 }
 
 async function fetchNativePriceSeries(chain) {
@@ -3458,16 +3480,18 @@ async function syncNativePriceChart() {
   if (!chain || !svg) return;
   const seq = ++nativeChartSeq;
   // Immediate label from PRICES while chart loads.
-  paintNativePriceLabel(chain, PRICES[chain.priceId] || 0);
+  paintNativePriceLabel(chain, PRICES[chain.priceId] || 0, { dir: "flat", pct: 0, hasSeries: false });
   try {
     const pack = await fetchNativePriceSeries(chain);
     if (seq !== nativeChartSeq) return;
     if (STATE.activeChainId !== chain.id) return;
-    paintNativePriceLabel(chain, pack.price || PRICES[chain.priceId] || 0);
+    const meta = nativeSeriesDir(pack.points);
+    paintNativePriceLabel(chain, pack.price || PRICES[chain.priceId] || 0, meta);
     paintSparklineSvg(svg, pack.points);
     if (quote) quote.hidden = false;
   } catch (_) {
     if (seq !== nativeChartSeq) return;
+    if (quote) quote.dataset.dir = "flat";
     paintSparklineSvg(svg, []);
   }
 }
@@ -3529,7 +3553,7 @@ function paintBalances() {
     }
   }
   paintReceiveAlert();
-  // Portfolio PnL ($ delta + %) + native coin price sparkline under ⋮.
+  // Portfolio PnL ($ delta + %) + native coin price sparkline beside $.
   syncPnlDelta(shownUsd).catch(() => paintPnlDelta([]));
   syncNativePriceChart().catch(() => {});
 }
