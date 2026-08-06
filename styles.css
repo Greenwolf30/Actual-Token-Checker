@@ -1034,8 +1034,19 @@ body.is-extension .acct-drawer {
   color: var(--muted);
 }
 
-.balance-value {
+.balance-hero {
   margin: 8px 0 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+}
+
+.balance-value {
+  margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
   font-family: var(--font-ui);
   font-size: clamp(2.35rem, 8.5vw, 2.9rem);
   font-weight: 700;
@@ -1050,6 +1061,91 @@ body.is-extension .acct-drawer {
   margin-right: 2px;
   font-weight: 700;
   color: #b8a66a;
+}
+
+/* Borderless PnL sparkline — sits in empty space beside the big $ balance. */
+.balance-pnl {
+  flex: 0 0 108px;
+  width: 108px;
+  height: 46px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  margin: 0 0 2px;
+}
+
+.balance-pnl[hidden] {
+  display: none !important;
+}
+
+.balance-pnl-chart {
+  width: 100%;
+  height: 36px;
+  display: block;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+}
+
+.balance-pnl-chart .pnl-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.balance-pnl-chart .pnl-fill {
+  stroke: none;
+  opacity: 0.16;
+}
+
+.balance-pnl-delta {
+  display: block;
+  align-self: flex-end;
+  margin: 0 0 2px;
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: var(--muted);
+}
+
+.balance-pnl[data-dir="up"] .balance-pnl-delta {
+  color: #6fd99a;
+}
+
+.balance-pnl[data-dir="down"] .balance-pnl-delta {
+  color: #e07a7a;
+}
+
+.balance-pnl[data-dir="up"] .pnl-line {
+  stroke: #4ecf82;
+}
+
+.balance-pnl[data-dir="down"] .pnl-line {
+  stroke: #d96a6a;
+}
+
+.balance-pnl[data-dir="flat"] .pnl-line {
+  stroke: rgba(196, 178, 120, 0.75);
+}
+
+.balance-pnl[data-dir="up"] .pnl-fill {
+  fill: #4ecf82;
+}
+
+.balance-pnl[data-dir="down"] .pnl-fill {
+  fill: #d96a6a;
+}
+
+.balance-pnl[data-dir="flat"] .pnl-fill {
+  fill: rgba(196, 178, 120, 0.55);
 }
 
 .balance-conn {
@@ -2904,6 +3000,11 @@ body.is-extension .balance-block {
 
 body.is-extension .balance-value {
   font-size: 2.35rem;
+}
+
+body.is-extension .balance-pnl {
+  flex-basis: 96px;
+  width: 96px;
 }
 
 body.is-extension .holdings {

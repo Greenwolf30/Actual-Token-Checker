@@ -3193,6 +3193,167 @@ function maybeNotifyReceives(accountId, chainId, holdings) {
   }
 }
 
+const PNL_STORE_KEY = "gladiator_pnl_snaps_v1";
+const PNL_MAX_POINTS = 72;
+const PNL_MIN_GAP_MS = 10 * 60 * 1000; // at most ~every 10 min unless value moves
+/** In-memory cache: key -> [{t,v}] */
+let PNL_SNAPS = null;
+
+function pnlSnapKey(accountId, chainId) {
+  return String(accountId || "") + ":" + String(chainId || "");
+}
+
+async function loadPnlSnaps() {
+  if (PNL_SNAPS) return PNL_SNAPS;
+  try {
+    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+      const bag = await chromeLocalGet([PNL_STORE_KEY]);
+      PNL_SNAPS =
+        bag[PNL_STORE_KEY] && typeof bag[PNL_STORE_KEY] === "object"
+          ? bag[PNL_STORE_KEY]
+          : {};
+    } else {
+      const raw = localStorage.getItem(PNL_STORE_KEY);
+      PNL_SNAPS = raw ? JSON.parse(raw) || {} : {};
+    }
+  } catch (_) {
+    PNL_SNAPS = {};
+  }
+  return PNL_SNAPS;
+}
+
+async function savePnlSnaps() {
+  if (!PNL_SNAPS) return;
+  try {
+    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+      await chromeLocalSet({ [PNL_STORE_KEY]: PNL_SNAPS });
+    } else {
+      localStorage.setItem(PNL_STORE_KEY, JSON.stringify(PNL_SNAPS));
+    }
+  } catch (_) {}
+}
+
+async function recordPnlSnapshot(accountId, chainId, usd) {
+  const key = pnlSnapKey(accountId, chainId);
+  if (!key || key === ":") return [];
+  const v = Number(usd);
+  if (!(v >= 0) || !Number.isFinite(v)) return [];
+  const bag = await loadPnlSnaps();
+  const list = Array.isArray(bag[key]) ? bag[key].slice() : [];
+  const now = Date.now();
+  const last = list.length ? list[list.length - 1] : null;
+  if (last) {
+    const age = now - (Number(last.t) || 0);
+    const prev = Number(last.v) || 0;
+    const moved =
+      Math.abs(v - prev) >= 0.5 || (prev > 0 && Math.abs(v - prev) / prev >= 0.004);
+    if (age < PNL_MIN_GAP_MS && !moved) {
+      // Refresh chart from existing points without writing.
+      return list;
+    }
+    // Replace last point if still in the same quiet window and only a tiny drift.
+    if (age < 60 * 1000) {
+      list[list.length - 1] = { t: now, v };
+    } else {
+      list.push({ t: now, v });
+    }
+  } else {
+    list.push({ t: now, v });
+  }
+  while (list.length > PNL_MAX_POINTS) list.shift();
+  bag[key] = list;
+  PNL_SNAPS = bag;
+  await savePnlSnaps();
+  return list;
+}
+
+function paintPnlChart(points) {
+  const wrap = $("balancePnlWrap");
+  const svg = $("balancePnlChart");
+  const deltaEl = $("balancePnlDelta");
+  if (!wrap || !svg) return;
+  const pts = (Array.isArray(points) ? points : [])
+    .map((p) => ({ t: Number(p.t) || 0, v: Number(p.v) || 0 }))
+    .filter((p) => p.t > 0 && Number.isFinite(p.v));
+  if (pts.length < 2) {
+    wrap.hidden = true;
+    if (deltaEl) deltaEl.textContent = "";
+    svg.innerHTML = "";
+    return;
+  }
+  const first = pts[0].v;
+  const last = pts[pts.length - 1].v;
+  const diff = last - first;
+  const pct = first > 0 ? (diff / first) * 100 : 0;
+  const dir = Math.abs(diff) < 0.005 ? "flat" : diff > 0 ? "up" : "down";
+  wrap.dataset.dir = dir;
+  wrap.hidden = false;
+  if (deltaEl) {
+    const sign = diff > 0 ? "+" : diff < 0 ? "" : "";
+    const abs = Math.abs(diff);
+    const money =
+      abs >= 100 ? abs.toFixed(0) : abs >= 10 ? abs.toFixed(1) : abs.toFixed(2);
+    const pctTxt =
+      Math.abs(pct) >= 10 ? pct.toFixed(0) : Math.abs(pct) >= 1 ? pct.toFixed(1) : pct.toFixed(2);
+    deltaEl.textContent =
+      dir === "flat" ? "0.00%" : sign + "$" + money + " · " + sign + pctTxt + "%";
+  }
+
+  const w = 120;
+  const h = 44;
+  const padX = 2;
+  const padY = 4;
+  let min = Math.min(...pts.map((p) => p.v));
+  let max = Math.max(...pts.map((p) => p.v));
+  if (max - min < 1e-9) {
+    min -= 1;
+    max += 1;
+  }
+  const span = max - min;
+  const n = pts.length;
+  const coords = pts.map((p, i) => {
+    const x = padX + ((w - padX * 2) * i) / Math.max(1, n - 1);
+    const y = padY + (h - padY * 2) * (1 - (p.v - min) / span);
+    return [x, y];
+  });
+  const line = coords
+    .map((c, i) => (i === 0 ? "M" : "L") + c[0].toFixed(2) + " " + c[1].toFixed(2))
+    .join(" ");
+  const fill =
+    line +
+    " L" +
+    coords[coords.length - 1][0].toFixed(2) +
+    " " +
+    h +
+    " L" +
+    coords[0][0].toFixed(2) +
+    " " +
+    h +
+    " Z";
+  svg.setAttribute("viewBox", "0 0 " + w + " " + h);
+  svg.innerHTML =
+    '<path class="pnl-fill" d="' +
+    fill +
+    '"></path><path class="pnl-line" d="' +
+    line +
+    '"></path>';
+}
+
+async function syncPnlChart(usd) {
+  const acc = activeAccount(STATE);
+  const chain = activeChain(STATE);
+  if (!acc || !chain || !BALANCE.ok) {
+    paintPnlChart([]);
+    return;
+  }
+  try {
+    const points = await recordPnlSnapshot(acc.id, chain.id, usd);
+    paintPnlChart(points);
+  } catch (_) {
+    paintPnlChart([]);
+  }
+}
+
 function paintBalances() {
   const chain = activeChain(STATE);
   const fiat = $("fiatBalance");
@@ -3214,7 +3375,8 @@ function paintBalances() {
   }
   const vis = visibleHoldings(HOLDINGS, chain);
   const usd = vis.reduce((s, h) => s + (Number(h.usd) || 0), 0);
-  if (fiat) fiat.textContent = (BALANCE.ok ? usd : BALANCE.usd || 0).toFixed(2);
+  const shownUsd = BALANCE.ok ? usd : BALANCE.usd || 0;
+  if (fiat) fiat.textContent = Number(shownUsd || 0).toFixed(2);
   const digits =
     chain.kind === "bitcoin" ? 8 : chain.kind === "solana" || chain.kind === "sui" ? 4 : 5;
   if (native) native.textContent = Number(BALANCE.native || 0).toFixed(digits);
@@ -3249,6 +3411,18 @@ function paintBalances() {
     }
   }
   paintReceiveAlert();
+  // Sparkline beside Total balance — record only when sync is healthy.
+  if (BALANCE.ok) {
+    syncPnlChart(shownUsd).catch(() => paintPnlChart([]));
+  } else {
+    // Still show prior series for this wallet/chain if we have it.
+    loadPnlSnaps()
+      .then((bag) => {
+        const key = pnlSnapKey(acc && acc.id, chain && chain.id);
+        paintPnlChart((bag && bag[key]) || []);
+      })
+      .catch(() => paintPnlChart([]));
+  }
 }
 
 function chainLogoSrc(chainOrLogo) {
