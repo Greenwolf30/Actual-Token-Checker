@@ -11,7 +11,8 @@ const OFFSCREEN_URL = "offscreen.html";
 let walletWindowId = null;
 let offscreenCreating = null;
 /** In-memory signer so Jupiter can sign even if chrome.storage lags. */
-let cachedSigner = null; // { publicKey, secretKey, mnemonic, evmAddress, evmPrivateKey }
+/** Active dApp signer cache — refreshed from storage on each getActive* call. */
+let cachedSigner = null; // { publicKey, secretKey, mnemonic, ledger, accountId, evmAddress, evmPrivateKey, accountIndex }
 /** Active EVM chain for dApp provider (Uniswap). */
 let dappEvmChainId = 1;
 
@@ -203,8 +204,8 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
     return { result: { netVersion: String(dappEvmChainId) } };
   }
   if (method === "eth_accounts") {
-    const trusted = await readTrustedOrigins();
-    if (origin && !trusted.includes(origin)) return { result: { accounts: [] } };
+    const trusted = await isOriginTrustedForChain(origin, "evm");
+    if (origin && !trusted) return { result: { accounts: [] } };
     const acc = await getActiveEvmAccount();
     return { result: { accounts: acc && acc.address ? [acc.address] : [] } };
   }
@@ -226,8 +227,7 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
         "No EVM address — open Gladiator, select an Ethereum wallet (or Link EVM on Ledger), then retry"
       );
     }
-    const trusted = await readTrustedOrigins();
-    const isTrusted = !!(origin && trusted.includes(origin));
+    const isTrusted = await isOriginTrustedForChain(origin, "evm");
     if (!isTrusted) {
       await requestUserApproval({
         origin,
@@ -669,8 +669,7 @@ function inferChainKindsFromOrigin(origin) {
       host === "uniswap.org" ||
       host.endsWith(".uniswap.org") ||
       host === "relay.link" ||
-      host.endsWith(".relay.link") ||
-      host === "app.uniswap.org"
+      host.endsWith(".relay.link")
     ) {
       return ["evm"];
     }
@@ -679,15 +678,45 @@ function inferChainKindsFromOrigin(origin) {
   return ["solana"];
 }
 
+function normalizeChainKindList(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  const seen = new Set();
+  for (let i = 0; i < list.length; i++) {
+    const k = normalizeTrustChainKind(list[i]);
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(k);
+  }
+  return out;
+}
+
+async function trustedChainKindsForOrigin(origin) {
+  if (!origin) return [];
+  const list = await readTrustedOrigins();
+  if (!list.includes(origin)) return [];
+  const cmap = await readTrustedOriginChains();
+  const stored = normalizeChainKindList(cmap[origin]);
+  if (stored.length) return stored;
+  return inferChainKindsFromOrigin(origin);
+}
+
+async function isOriginTrustedForChain(origin, chainKind) {
+  const kind = normalizeTrustChainKind(chainKind);
+  if (!origin || !kind) return false;
+  const kinds = await trustedChainKindsForOrigin(origin);
+  return kinds.includes(kind);
+}
+
 async function resolveTrustAccountId(accountId) {
   if (accountId) return String(accountId);
-  try {
-    if (cachedSigner && cachedSigner.accountId) return String(cachedSigner.accountId);
-  } catch (_) {}
   try {
     const bag = await storageGet([STORE_KEY]);
     const state = bag[STORE_KEY];
     if (state && state.activeAccountId) return String(state.activeAccountId);
+  } catch (_) {}
+  try {
+    if (cachedSigner && cachedSigner.accountId) return String(cachedSigner.accountId);
   } catch (_) {}
   return "";
 }
@@ -711,15 +740,10 @@ async function trustOrigin(origin, accountId, chainKind) {
   const kind =
     normalizeTrustChainKind(chainKind) || inferChainKindsFromOrigin(origin)[0] || "solana";
   const cmap = { ...(await readTrustedOriginChains()) };
-  const prev = Array.isArray(cmap[origin])
-    ? cmap[origin].map((x) => normalizeTrustChainKind(x)).filter(Boolean)
-    : [];
+  const prev = normalizeChainKindList(cmap[origin]);
   if (!prev.includes(kind)) {
     prev.push(kind);
     cmap[origin] = prev;
-    patch[TRUSTED_CHAINS_KEY] = cmap;
-  } else if (!Object.prototype.hasOwnProperty.call(cmap, origin)) {
-    cmap[origin] = prev.length ? prev : [kind];
     patch[TRUSTED_CHAINS_KEY] = cmap;
   }
   if (Object.keys(patch).length) await storageSet(patch);
@@ -806,22 +830,15 @@ async function listInjectConnections() {
   const map = await readTrustedOriginAccounts();
   const chainMap = await readTrustedOriginChains();
   const fallbackId = await resolveTrustAccountId(null);
-  // Drop stale account/chain bindings for origins that are no longer trusted.
-  // Backfill missing bindings so pre-upgrade connections still paint correctly.
-  const keep = {};
+  // Prune stale keys. Do NOT persist guessed account owners — that can permanently
+  // mis-attribute a pre-upgrade connection to whichever wallet happens to be active.
+  const keepAccounts = {};
   const keepChains = {};
   let dirtyAccounts = false;
   let dirtyChains = false;
   for (const origin of origins) {
-    if (map[origin]) {
-      keep[origin] = map[origin];
-    } else if (fallbackId) {
-      keep[origin] = fallbackId;
-      dirtyAccounts = true;
-    }
-    const stored = Array.isArray(chainMap[origin])
-      ? chainMap[origin].map((x) => normalizeTrustChainKind(x)).filter(Boolean)
-      : [];
+    if (map[origin]) keepAccounts[origin] = map[origin];
+    const stored = normalizeChainKindList(chainMap[origin]);
     if (stored.length) {
       keepChains[origin] = stored;
     } else {
@@ -830,13 +847,13 @@ async function listInjectConnections() {
     }
   }
   for (const key of Object.keys(map)) {
-    if (!Object.prototype.hasOwnProperty.call(keep, key)) dirtyAccounts = true;
+    if (!Object.prototype.hasOwnProperty.call(keepAccounts, key)) dirtyAccounts = true;
   }
   for (const key of Object.keys(chainMap)) {
     if (!Object.prototype.hasOwnProperty.call(keepChains, key)) dirtyChains = true;
   }
   const patch = {};
-  if (dirtyAccounts) patch[TRUSTED_ACCOUNTS_KEY] = keep;
+  if (dirtyAccounts) patch[TRUSTED_ACCOUNTS_KEY] = keepAccounts;
   if (dirtyChains) patch[TRUSTED_CHAINS_KEY] = keepChains;
   if (Object.keys(patch).length) await storageSet(patch);
   return origins.map((origin) => ({
@@ -846,7 +863,8 @@ async function listInjectConnections() {
     name: niceDappName(origin),
     url: origin,
     icon: dappIconForOrigin(origin),
-    accountId: keep[origin] || null,
+    // Ephemeral fallback for UI only when older connections have no owner stamp.
+    accountId: keepAccounts[origin] || fallbackId || null,
     chains: keepChains[origin] || inferChainKindsFromOrigin(origin),
     accounts: [],
     status: "active",
@@ -876,26 +894,11 @@ function sleep(ms) {
 }
 
 async function getActiveSolanaAccount() {
-  if (
-    cachedSigner &&
-    (cachedSigner.secretKey || cachedSigner.mnemonic || cachedSigner.ledger)
-  ) {
-    return {
-      publicKey: cachedSigner.publicKey,
-      secretKey: cachedSigner.secretKey || "",
-      mnemonic: cachedSigner.mnemonic || "",
-      ledger: !!cachedSigner.ledger,
-      accountIndex: cachedSigner.accountIndex || 0,
-      needsMigrate: false,
-      hasSigner: true,
-      accountId: cachedSigner.accountId || null,
-      fromCache: true,
-    };
-  }
+  // Always refresh from storage so an account switch cannot stamp the previous wallet.
   const bag = await storageGet([STORE_KEY]);
   const state = bag[STORE_KEY];
   const cached = cacheSignerFromState(state);
-  if (cached) {
+  if (cached && (cached.secretKey || cached.mnemonic || cached.ledger || cached.publicKey)) {
     return {
       publicKey: cached.publicKey,
       secretKey: cached.secretKey || "",
@@ -903,7 +906,7 @@ async function getActiveSolanaAccount() {
       ledger: !!cached.ledger,
       accountIndex: cached.accountIndex || 0,
       needsMigrate: false,
-      hasSigner: true,
+      hasSigner: !!(cached.secretKey || cached.mnemonic || cached.ledger),
       accountId: cached.accountId || null,
       fromCache: false,
     };
@@ -1168,8 +1171,7 @@ async function handleProviderRequest(msg, sender) {
 
   if (method === "connect") {
     const onlyIfTrusted = !!params.onlyIfTrusted;
-    const trusted = await readTrustedOrigins();
-    const isTrusted = !!(origin && trusted.includes(origin));
+    const isTrusted = await isOriginTrustedForChain(origin, "solana");
     if (onlyIfTrusted && !isTrusted) {
       return { result: null };
     }
@@ -1204,8 +1206,7 @@ async function handleProviderRequest(msg, sender) {
     method === "signMessage"
   ) {
     // Stay connected until the user disconnects, but approve every tx/sign.
-    const trusted = await readTrustedOrigins();
-    const isTrusted = !!(origin && trusted.includes(origin));
+    const isTrusted = await isOriginTrustedForChain(origin, "solana");
     if (!isTrusted) {
       await requestUserApproval({
         origin,

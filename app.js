@@ -4610,7 +4610,7 @@ async function loadInjectConnections() {
 
 function mergeConnectionLists(injectItems, wcItems) {
   const out = [];
-  const seenHosts = new Set();
+  const hostIndex = new Map();
   const hostOf = (item) => {
     try {
       const raw = item && (item.origin || item.url || "");
@@ -4624,20 +4624,53 @@ function mergeConnectionLists(injectItems, wcItems) {
         .split("/")[0];
     }
   };
+  const mergeChains = (a, b) => {
+    const set = new Set();
+    (Array.isArray(a) ? a : []).forEach((k) => {
+      const v = String(k || "").toLowerCase();
+      if (v) set.add(v);
+    });
+    (Array.isArray(b) ? b : []).forEach((k) => {
+      const v = String(k || "").toLowerCase();
+      if (v) set.add(v);
+    });
+    return Array.from(set);
+  };
   (injectItems || []).forEach((item) => {
     if (!item) return;
     const row = { ...item, kind: item.kind || "inject" };
     out.push(row);
     const h = hostOf(row);
-    if (h) seenHosts.add(h);
+    if (h) hostIndex.set(h, out.length - 1);
   });
   (wcItems || []).forEach((item) => {
     if (!item) return;
     const h = hostOf(item);
-    // Prefer in-page inject row when both exist for the same dApp.
-    if (h && seenHosts.has(h)) return;
-    out.push({ ...item, kind: item.kind || "wc" });
-    if (h) seenHosts.add(h);
+    const wcChains =
+      Array.isArray(item.chains) && item.chains.length
+        ? item.chains
+        : chainKindsFromWcAccounts(item.accounts, item.namespaces || item.namespaceKeys);
+    // Prefer in-page inject row, but merge WC chain/account metadata into it.
+    if (h && hostIndex.has(h)) {
+      const idx = hostIndex.get(h);
+      const existing = out[idx] || {};
+      out[idx] = {
+        ...existing,
+        chains: mergeChains(existing.chains, wcChains),
+        accountId: existing.accountId || item.accountId || null,
+        accounts:
+          Array.isArray(existing.accounts) && existing.accounts.length
+            ? existing.accounts
+            : item.accounts || [],
+      };
+      return;
+    }
+    out.push({
+      ...item,
+      kind: item.kind || "wc",
+      chains: wcChains,
+    });
+    if (h) hostIndex.set(h, out.length - 1);
   });
   return out;
 }
@@ -4761,6 +4794,16 @@ function connectionSiteLabel(item) {
 let CONNECTED_ACCOUNT_IDS = new Set();
 /** Last full inject+WC connection list (all wallets) for re-paint on account switch. */
 let LAST_CONNECTION_ITEMS = [];
+/** Last account|chain context used to paint Connected / Connections UI. */
+let LAST_CONN_UI_CTX = "";
+
+function connectionUiContext() {
+  return (
+    String((STATE && STATE.activeAccountId) || "") +
+    "|" +
+    String((STATE && STATE.activeChainId) || "")
+  );
+}
 
 function accountAddressesForMatch(acc) {
   if (!acc) return [];
@@ -4956,6 +4999,7 @@ function paintWcConnectionsList(items) {
   const list = $("wcConnectionsList");
   const empty = $("wcConnectionsEmpty");
   LAST_CONNECTION_ITEMS = Array.isArray(items) ? items.slice() : [];
+  LAST_CONN_UI_CTX = connectionUiContext();
   paintBalanceConnStatus(LAST_CONNECTION_ITEMS);
   if (!list) return;
   // Connections page: only platforms linked to the active wallet + chain.
@@ -7960,10 +8004,8 @@ function openAcctDrawer() {
   requestAnimationFrame(() => root.classList.add("is-open"));
   if (btn) btn.setAttribute("aria-expanded", "true");
   refreshAccountBalances();
-  // Keep green dots aligned with live inject/WC sessions.
-  refreshWcConnections({ ensure: false })
-    .then(() => paintAcctDrawerConnDots())
-    .catch(() => {});
+  // Live inject/WC sessions already paint dots via paintWcConnectionsList.
+  refreshWcConnections({ ensure: false }).catch(() => {});
   document.body.classList.add("acct-drawer-open");
 }
 
@@ -8016,9 +8058,12 @@ function paintSwitchers() {
     renderAcctDrawerList();
   }
   paintSendContacts();
-  // Re-scope Connected sites / Connections list to the newly active wallet.
-  if (LAST_CONNECTION_ITEMS.length || $("balanceConnStatus") || $("wcConnectionsList")) {
+  // Re-scope Connected sites / Connections only when wallet or chain changed.
+  const ctx = connectionUiContext();
+  if (ctx !== LAST_CONN_UI_CTX) {
     paintWcConnectionsList(LAST_CONNECTION_ITEMS);
+  } else {
+    paintAcctDrawerConnDots();
   }
 }
 

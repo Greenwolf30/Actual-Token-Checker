@@ -7,6 +7,11 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.37:
+- Cleanup/bugfix: trust checks are chain-scoped (Solana trust ≠ EVM trust)
+- Stop permanently guessing connection owners on list; refresh Solana signer from storage on each use
+- Merge inject+WC chain metadata; only re-paint Connected UI when wallet/chain changes
+
 v0.6.36:
 - Remove on-page “Gladiator Wallet was reloaded…” banner / reload notification copy entirely
 
