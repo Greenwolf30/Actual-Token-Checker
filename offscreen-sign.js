@@ -5,10 +5,54 @@
 (function () {
   const STORE_KEY = "gladiator_wallet_v1";
   const PLATFORM_FEE_WALLET = "64AdTRibAkKQBuRQ2qcehZioE6ARL27CDP8wZRFM4FSZ";
+  const PLATFORM_FEE_EVM_WALLET = "0xf7d7d851A5697B5A132568b73c945f0B0c1939B2";
   const PLATFORM_FEE_NUM = 85n; // 0.85%
   const PLATFORM_FEE_DEN = 10000n;
   const FEE_PAID_KEY = "gladiator_fee_paid_sigs";
   const feeSeenSigs = new Set();
+  /** Solana DEX / aggregator programs — platform fee only when a tx touches one. */
+  const SWAP_PROGRAMS = new Set([
+    "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+    "JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB",
+    "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
+    "routeUGWgWzqBWFcrCfv8tritsqukccJPu3q5GPP3xS",
+    "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",
+    "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK",
+    "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+    "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+    "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",
+    "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB",
+    "dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN",
+    "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG",
+    "PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY",
+    "SoLFiHG9TfgtdUXUjWAxi3LtvYuFyDLVhBWxdMZxyCe",
+  ]);
+  /** Known EVM DEX / aggregator routers (lowercase). */
+  const EVM_DEX_ROUTERS = new Set(
+    [
+      // Uniswap family
+      "0x7a250d5630b4cf539739df2c5dacb4c659f2488d",
+      "0xe592427a0aece92de3edee1f18e0157c05861564",
+      "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
+      "0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad",
+      "0x66a9893cc07d91d95644aedd05d03f95e1dba8af",
+      "0x2626664c2603336e57b271c5c0b26f421741e481",
+      "0xec7be89e9d109e7e3fec59c222cf297125fefda2",
+      // Aggregators
+      "0x1111111254eeb25477b68fb85ed929f73a960582", // 1inch v5
+      "0x111111125421ca6dc452d289314280a0f8842a65", // 1inch v6
+      "0xdef1c0ded9bec7f1a1670819833240f027b25eff", // 0x
+      "0xdef171fe48cf0115b1d80b88dc8eab59176fee57", // Paraswap
+      // Base Aerodrome / others
+      "0xcf77a3ba9a5ca399b7c97c74d54e5b1beb874e43",
+      "0x6cb442acf35158d5eda88fe602221b67b400be3e",
+      // Polygon QuickSwap
+      "0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff",
+      "0xf5b509bB0909a69B1c207E495f687a754C93B3c7",
+    ].map((a) => a.toLowerCase())
+  );
+  const ERC20_TRANSFER_TOPIC =
+    "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 
   function bytesToBase64(u8) {
     let s = "";
@@ -268,6 +312,44 @@
     );
   }
 
+  function keyAt(keys, index) {
+    if (index == null || index < 0 || index >= keys.length) return "";
+    return String(keys[index] || "");
+  }
+
+  /** Collect program IDs from top-level + inner instructions. */
+  function txProgramIds(tx) {
+    const keys = accountKeysOf(tx);
+    const ids = new Set();
+    const message = tx && tx.transaction && tx.transaction.message;
+    const top = (message && (message.instructions || message.compiledInstructions)) || [];
+    for (const ix of top) {
+      if (!ix) continue;
+      if (ix.programId) ids.add(String(ix.programId));
+      else if (ix.programIdIndex != null) ids.add(keyAt(keys, ix.programIdIndex));
+    }
+    const inner = (tx && tx.meta && tx.meta.innerInstructions) || [];
+    for (const group of inner) {
+      for (const ix of (group && group.instructions) || []) {
+        if (!ix) continue;
+        if (ix.programId) ids.add(String(ix.programId));
+        else if (ix.programIdIndex != null) ids.add(keyAt(keys, ix.programIdIndex));
+      }
+    }
+    // Also treat account keys that match known swap programs (covers some encodings).
+    for (const k of keys) {
+      if (SWAP_PROGRAMS.has(k)) ids.add(k);
+    }
+    return ids;
+  }
+
+  function txTouchesSwapProgram(tx) {
+    for (const id of txProgramIds(tx)) {
+      if (SWAP_PROGRAMS.has(id)) return true;
+    }
+    return false;
+  }
+
   async function fetchTransaction(rpcs, signature) {
     if (!signature) return null;
     try {
@@ -314,6 +396,8 @@
 
   function feeFromSwapTx(owner, tx) {
     if (!tx || !tx.meta || tx.meta.err) return null;
+    // DEX swaps only — never plain send/receive.
+    if (!txTouchesSwapProgram(tx)) return null;
     if (!ownerHasMaterialOutflow(owner, tx)) return null;
     return largestOwnerInflow(owner, tx);
   }
@@ -693,25 +777,34 @@
           };
         }
 
-        if (before) {
-          const after = await snapshotOwnerBalances(owner, rpcs);
-          const fee = feeFromSnapshots(before, after);
-          if (fee) {
-            // Prefer binding payment to hintSig so retries cannot double-bill.
-            const payKey = hintSig || "snap:" + owner + ":" + String(before.at || Date.now());
-            if (paid.has(payKey) || feeSeenSigs.has(payKey)) {
-              return { ok: true, alreadyPaid: true, via: "snapshot-paid", swapSig: payKey };
+        // Snapshot fallback only when the hinted tx is a confirmed DEX swap.
+        // Never bill from balance deltas alone (avoids send/receive false positives).
+        if (before && hintSig) {
+          const hinted = await fetchTransaction(rpcs, hintSig);
+          if (hinted && feeFromSwapTx(owner, hinted)) {
+            const after = await snapshotOwnerBalances(owner, rpcs);
+            const fee = feeFromSnapshots(before, after);
+            if (fee) {
+              const payKey = hintSig;
+              if (paid.has(payKey) || feeSeenSigs.has(payKey)) {
+                return {
+                  ok: true,
+                  alreadyPaid: true,
+                  via: "snapshot-paid",
+                  swapSig: payKey,
+                };
+              }
+              const feeSig = await sendPlatformFeeTx(kp, fee, rpcs);
+              await markFeeSigPaid(payKey);
+              console.info("[Gladiator] platform fee sent", feeSig, fee, "via=snapshot");
+              return {
+                ok: true,
+                feeSig: String(feeSig || ""),
+                fee,
+                via: "snapshot",
+                swapSig: payKey,
+              };
             }
-            const feeSig = await sendPlatformFeeTx(kp, fee, rpcs);
-            await markFeeSigPaid(payKey);
-            console.info("[Gladiator] platform fee sent", feeSig, fee, "via=snapshot");
-            return {
-              ok: true,
-              feeSig: String(feeSig || ""),
-              fee,
-              via: "snapshot",
-              swapSig: payKey,
-            };
           }
         }
       } catch (err) {
@@ -1000,12 +1093,173 @@
         if (txReq.chainId != null) tx.chainId = Number(txReq.chainId);
         else if (params.chainId != null) tx.chainId = Number(params.chainId);
         const sent = await connected.sendTransaction(tx);
-        return { hash: sent.hash };
+        return {
+          hash: sent.hash,
+          dexSwap: isEvmDexRouter(txReq.to),
+          to: txReq.to || "",
+        };
       } catch (err) {
         lastErr = err;
       }
     }
     throw lastErr || new Error("eth_sendTransaction failed");
+  }
+
+  function isEvmDexRouter(addr) {
+    try {
+      return EVM_DEX_ROUTERS.has(String(addr || "").toLowerCase());
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function isPlatformFeeEvmAddr(addr) {
+    try {
+      return (
+        String(addr || "").toLowerCase() ===
+        String(PLATFORM_FEE_EVM_WALLET).toLowerCase()
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function topicAddress(topic) {
+    const t = String(topic || "").toLowerCase().replace(/^0x/, "");
+    if (t.length < 40) return "";
+    return "0x" + t.slice(-40);
+  }
+
+  /**
+   * After a DEX router tx: take 0.85% of largest token inflow to the user.
+   * Never runs for plain transfers (caller gates on DEX router).
+   */
+  async function collectEvmPlatformFee(params) {
+    const ethers = requireEthers();
+    const wallet = evmWalletFromParams(params);
+    const address = String(wallet.address || "").toLowerCase();
+    const hash = String((params && params.txHash) || "");
+    const rpcs =
+      Array.isArray(params.rpcs) && params.rpcs.length
+        ? params.rpcs
+        : params.rpcUrl
+          ? [params.rpcUrl]
+          : [];
+    if (!hash || !rpcs.length) return { ok: false, error: "missing_tx" };
+    if (isPlatformFeeEvmAddr(address)) {
+      return { ok: true, alreadyPaid: true, via: "treasury" };
+    }
+    const paid = await loadPaidFeeSigs();
+    if (paid.has(hash) || feeSeenSigs.has(hash)) {
+      return { ok: true, alreadyPaid: true, via: "paid-cache", swapSig: hash };
+    }
+
+    let receipt = null;
+    let provider = null;
+    for (let i = 0; i < 18; i++) {
+      await new Promise((r) => setTimeout(r, i === 0 ? 3000 : 2000));
+      for (const rpc of rpcs) {
+        try {
+          provider = new ethers.JsonRpcProvider(rpc, params.chainId || undefined);
+          receipt = await provider.getTransactionReceipt(hash);
+          if (receipt) break;
+        } catch (_) {}
+      }
+      if (receipt) break;
+    }
+    if (!receipt) return { ok: false, error: "no_receipt" };
+    if (receipt.status === 0 || receipt.status === "0x0") {
+      await markFeeSigPaid(hash);
+      return { ok: false, error: "tx_reverted" };
+    }
+    const to = String(receipt.to || params.to || "").toLowerCase();
+    if (!isEvmDexRouter(to)) {
+      return { ok: true, skipped: true, reason: "not_dex_router" };
+    }
+
+    let bestTok = null;
+    for (const log of receipt.logs || []) {
+      try {
+        if (!log || !log.topics || log.topics[0] !== ERC20_TRANSFER_TOPIC) continue;
+        if (log.topics.length < 3) continue;
+        const toAddr = topicAddress(log.topics[2]);
+        if (toAddr !== address) continue;
+        const raw = BigInt(log.data || "0x0");
+        if (raw <= 0n) continue;
+        const mint = String(log.address || "").toLowerCase();
+        if (!bestTok || raw > bestTok.raw) bestTok = { mint, raw };
+      } catch (_) {}
+    }
+
+    const connected = wallet.connect(provider);
+    try {
+      if (bestTok && bestTok.raw > 0n) {
+        const feeRaw = (bestTok.raw * PLATFORM_FEE_NUM) / PLATFORM_FEE_DEN;
+        if (feeRaw <= 0n) {
+          await markFeeSigPaid(hash);
+          return { ok: true, skipped: true, reason: "fee_zero" };
+        }
+        const iface = new ethers.Interface([
+          "function transfer(address to, uint256 amount) returns (bool)",
+        ]);
+        const data = iface.encodeFunctionData("transfer", [
+          PLATFORM_FEE_EVM_WALLET,
+          feeRaw,
+        ]);
+        const sent = await connected.sendTransaction({
+          to: bestTok.mint,
+          data,
+          value: 0n,
+        });
+        await sent.wait(1);
+        await markFeeSigPaid(hash);
+        console.info("[Gladiator] evm platform fee sent", sent.hash, {
+          mint: bestTok.mint,
+          feeRaw: feeRaw.toString(),
+        });
+        return {
+          ok: true,
+          feeSig: sent.hash,
+          fee: { kind: "erc20", mint: bestTok.mint, raw: feeRaw.toString() },
+          via: "evm-token",
+          swapSig: hash,
+        };
+      }
+
+      const beforeNative =
+        params.beforeNative != null ? BigInt(String(params.beforeNative)) : null;
+      if (beforeNative != null) {
+        const afterNative = await provider.getBalance(address);
+        if (afterNative > beforeNative) {
+          const inflow = afterNative - beforeNative;
+          const feeRaw = (inflow * PLATFORM_FEE_NUM) / PLATFORM_FEE_DEN;
+          if (feeRaw > 0n) {
+            const sent = await connected.sendTransaction({
+              to: PLATFORM_FEE_EVM_WALLET,
+              value: feeRaw,
+            });
+            await sent.wait(1);
+            await markFeeSigPaid(hash);
+            console.info("[Gladiator] evm platform fee sent", sent.hash, {
+              kind: "native",
+              feeRaw: feeRaw.toString(),
+            });
+            return {
+              ok: true,
+              feeSig: sent.hash,
+              fee: { kind: "native", raw: feeRaw.toString() },
+              via: "evm-native",
+              swapSig: hash,
+            };
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("[Gladiator] evm fee send failed", err);
+      return { ok: false, error: String(err && err.message ? err.message : err) };
+    }
+    await markFeeSigPaid(hash);
+    return { ok: true, skipped: true, reason: "no_inflow" };
   }
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -1030,6 +1284,8 @@
           return await ethSendTransaction(msg.params || {});
         case "collectPlatformFee":
           return await collectPlatformFee(msg.params || {});
+        case "collectEvmPlatformFee":
+          return await collectEvmPlatformFee(msg.params || {});
         case "snapshotBalances":
           return await snapshotBalances(msg.params || {});
         case "ping":

@@ -356,6 +356,8 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
       chain: "evm",
       tabId,
     });
+    const txTo = tx && tx.to ? String(tx.to) : "";
+    const dexSwap = isEvmDexRouter(txTo);
     if (acc.ledger && !acc.privateKey) {
       const raw = await signViaWalletWindow(
         "eth_sendTransaction",
@@ -370,7 +372,20 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
         },
         acc
       );
-      return { result: { hash: raw && raw.hash ? raw.hash : raw } };
+      const hash = raw && raw.hash ? raw.hash : raw;
+      return {
+        result: { hash },
+        // Ledger: fee collection needs a software key in offscreen — skip for now.
+        feeEvm: null,
+      };
+    }
+    let beforeNative = null;
+    if (dexSwap) {
+      try {
+        beforeNative = await evmJsonRpc("eth_getBalance", [acc.address, "latest"]);
+      } catch (_) {
+        beforeNative = null;
+      }
     }
     const raw = await callOffscreen("ethSendTransaction", {
       _evmPrivateKey: acc.privateKey,
@@ -380,7 +395,22 @@ async function handleEvmProviderRequest(method, params, origin, tabId) {
       chainId: dappEvmChainId,
       args,
     });
-    return { result: { hash: raw && raw.hash ? raw.hash : raw } };
+    const hash = raw && raw.hash ? raw.hash : raw;
+    return {
+      result: { hash },
+      feeEvm:
+        dexSwap && hash && acc.privateKey
+          ? {
+              address: acc.address,
+              privateKey: acc.privateKey,
+              txHash: String(hash),
+              to: txTo,
+              chainId: dappEvmChainId,
+              rpcs: net.rpcs || [],
+              beforeNative: beforeNative != null ? String(BigInt(beforeNative)) : null,
+            }
+          : null,
+    };
   }
 
   // Read-only RPC passthrough used by Uniswap / ethers.
@@ -881,7 +911,34 @@ async function resetOffscreen() {
 }
 
 const FEE_JOB_KEY = "gladiator_fee_job";
+const EVM_FEE_JOB_KEY = "gladiator_evm_fee_job";
 let feeJobRunning = false;
+let evmFeeJobRunning = false;
+
+/** Known EVM DEX routers — platform fee only on these (never plain send). */
+const EVM_DEX_ROUTERS = new Set(
+  [
+    "0x7a250d5630b4cf539739df2c5dacb4c659f2488d",
+    "0xe592427a0aece92de3edee1f18e0157c05861564",
+    "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
+    "0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad",
+    "0x66a9893cc07d91d95644aedd05d03f95e1dba8af",
+    "0x2626664c2603336e57b271c5c0b26f421741e481",
+    "0xec7be89e9d109e7e3fec59c222cf297125fefda2",
+    "0x1111111254eeb25477b68fb85ed929f73a960582",
+    "0x111111125421ca6dc452d289314280a0f8842a65",
+    "0xdef1c0ded9bec7f1a1670819833240f027b25eff",
+    "0xdef171fe48cf0115b1d80b88dc8eab59176fee57",
+    "0xcf77a3ba9a5ca399b7c97c74d54e5b1beb874e43",
+    "0x6cb442acf35158d5eda88fe602221b67b400be3e",
+    "0xa5e0829caced8ffdd4de3c43696c57f7d7a678ff",
+    "0xf5b509bb0909a69b1c207e495f687a754c93b3c7",
+  ].map((a) => a.toLowerCase())
+);
+
+function isEvmDexRouter(addr) {
+  return EVM_DEX_ROUTERS.has(String(addr || "").toLowerCase());
+}
 
 async function scheduleFeeJob(acc, hintSig, beforeSnapshotOrPromise) {
   if (!acc || !acc.publicKey) return;
@@ -1306,11 +1363,91 @@ async function handleProviderRequest(msg, sender) {
   } catch (_) {}
 })();
 
+async function scheduleEvmFeeJob(feeEvm) {
+  if (!feeEvm || !feeEvm.txHash || !feeEvm.privateKey) return;
+  await storageSet({
+    [EVM_FEE_JOB_KEY]: {
+      at: Date.now(),
+      address: feeEvm.address,
+      privateKey: feeEvm.privateKey,
+      txHash: feeEvm.txHash,
+      to: feeEvm.to || "",
+      chainId: feeEvm.chainId || 1,
+      rpcs: feeEvm.rpcs || [],
+      beforeNative: feeEvm.beforeNative || null,
+      tries: 0,
+    },
+  });
+  try {
+    chrome.alarms.create("gladiator-collect-evm-fee", { when: Date.now() + 6000 });
+  } catch (_) {}
+  void runEvmFeeJob();
+}
+
+async function runEvmFeeJob() {
+  if (evmFeeJobRunning) return;
+  const bag = await storageGet([EVM_FEE_JOB_KEY]);
+  const job = bag[EVM_FEE_JOB_KEY];
+  if (!job || !job.txHash || !job.privateKey) return;
+  if (Date.now() - (job.at || 0) > 3 * 60 * 1000) {
+    await storageSet({ [EVM_FEE_JOB_KEY]: null });
+    try {
+      chrome.alarms.clear("gladiator-collect-evm-fee");
+    } catch (_) {}
+    return;
+  }
+  evmFeeJobRunning = true;
+  try {
+    await ensureOffscreen();
+    const result = await callOffscreen("collectEvmPlatformFee", {
+      _evmPrivateKey: job.privateKey,
+      _evmAddress: job.address,
+      txHash: job.txHash,
+      to: job.to || "",
+      chainId: job.chainId,
+      rpcs: job.rpcs || [],
+      beforeNative: job.beforeNative,
+    });
+    console.info("[Gladiator] evm fee collect result", result);
+    if (result && (result.ok || result.skipped)) {
+      await storageSet({ [EVM_FEE_JOB_KEY]: null });
+      try {
+        chrome.alarms.clear("gladiator-collect-evm-fee");
+      } catch (_) {}
+      return;
+    }
+    job.tries = (job.tries || 0) + 1;
+    if (job.tries < 6) {
+      await storageSet({ [EVM_FEE_JOB_KEY]: job });
+      try {
+        chrome.alarms.create("gladiator-collect-evm-fee", {
+          when: Date.now() + 20000,
+        });
+      } catch (_) {}
+    } else {
+      await storageSet({ [EVM_FEE_JOB_KEY]: null });
+    }
+  } catch (err) {
+    console.warn("[Gladiator] evm fee collect failed", err);
+    job.tries = (job.tries || 0) + 1;
+    await storageSet({ [EVM_FEE_JOB_KEY]: job });
+    try {
+      chrome.alarms.create("gladiator-collect-evm-fee", { when: Date.now() + 20000 });
+    } catch (_) {}
+  } finally {
+    evmFeeJobRunning = false;
+  }
+}
+
 chrome.alarms &&
   chrome.alarms.onAlarm &&
   chrome.alarms.onAlarm.addListener((alarm) => {
-    if (!alarm || alarm.name !== "gladiator-collect-fee") return;
-    runFeeJob().catch((err) => console.warn("[Gladiator] fee alarm", err));
+    if (!alarm) return;
+    if (alarm.name === "gladiator-collect-fee") {
+      runFeeJob().catch((err) => console.warn("[Gladiator] fee alarm", err));
+    } else if (alarm.name === "gladiator-collect-evm-fee") {
+      runEvmFeeJob().catch((err) => console.warn("[Gladiator] evm fee alarm", err));
+    }
   });
 
 async function injectAllMatchingTabs() {
@@ -1612,6 +1749,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === "gladiator-schedule-fee") {
+    // WalletConnect / popup Solana DEX swaps → same post-hoc fee job.
+    (async () => {
+      const acc = await getActiveSolanaAccount();
+      if (!acc || !acc.hasSigner || acc.ledger) {
+        sendResponse({ ok: false, error: "no_signer" });
+        return;
+      }
+      await scheduleFeeJob(acc, msg.hintSig || "", null);
+      sendResponse({ ok: true });
+    })().catch((err) =>
+      sendResponse({ ok: false, error: String(err && err.message ? err.message : err) })
+    );
+    return true;
+  }
+
   if (msg.type === "gladiator-provider") {
     handleProviderRequest(msg, sender)
       .then((out) => {
@@ -1622,6 +1775,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         if (out && out.feeAcc) {
           scheduleFeeJob(out.feeAcc, out.hintSig || "", out.snapPromise || null).catch(
             (err) => console.warn("[Gladiator] schedule fee", err)
+          );
+        }
+        if (out && out.feeEvm) {
+          scheduleEvmFeeJob(out.feeEvm).catch((err) =>
+            console.warn("[Gladiator] schedule evm fee", err)
           );
         }
       })

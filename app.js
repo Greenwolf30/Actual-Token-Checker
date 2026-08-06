@@ -1810,12 +1810,20 @@ const RECEIVE_ALERT_MS = 3500;
 const LOCAL_TX_KEY = "gladiator_local_txs_v1";
 const HOLDINGS_SNAP_KEY = "gladiator_holdings_snap_v1";
 const SWAP_PROGRAMS = new Set([
-  "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
-  "JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB",
-  "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",
-  "routeUGWgWzqBWFcrCfv8tritsqukccJPu3q5GPP3xS",
-  "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",
-  "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK",
+  "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4", // Jupiter v6
+  "JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB", // Jupiter v4
+  "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8", // Raydium AMM
+  "routeUGWgWzqBWFcrCfv8tritsqukccJPu3q5GPP3xS", // Raydium route
+  "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc", // Orca Whirlpool
+  "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK", // Raydium CLMM
+  "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P", // pump.fun
+  "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA", // Pump AMM
+  "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo", // Meteora DLMM
+  "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB", // Meteora pools
+  "dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN", // Meteora DBC
+  "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG", // Meteora DAMM v2
+  "PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY", // Phoenix
+  "SoLFiHG9TfgtdUXUjWAxi3LtvYuFyDLVhBWxdMZxyCe", // SolFi
 ]);
 
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
@@ -1892,7 +1900,7 @@ const CHAIN_USD_STABLE = {
     cgId: "global-dollar",
   },
 };
-/** Platform fee: 0.85% of each in-wallet send → treasury (per chain) */
+/** Platform fee: 0.85% on DEX swaps only (never send/receive) → treasury */
 const PLATFORM_FEE_WALLET = "64AdTRibAkKQBuRQ2qcehZioE6ARL27CDP8wZRFM4FSZ"; // Solana
 const PLATFORM_FEE_EVM_WALLET = "0xf7d7d851A5697B5A132568b73c945f0B0c1939B2"; // ETH / EVM
 const PLATFORM_FEE_NUM = 85n; // 85 / 10000 = 0.0085 = 0.85%
@@ -5145,6 +5153,9 @@ async function ensureWalletConnect() {
         const blob = extractWcTxBlob(p);
         const bytes = decodeWcTxBytes(blob);
         const signed = signSolanaTxBytes(bytes, kp);
+        // DEX platform fee is collected post-broadcast by the service worker
+        // once the swap lands (never on plain in-wallet send/receive).
+        scheduleSolanaDexFeeJob(signed.signature || "");
         // Jupiter reads `transaction` (base64) first; `signature` must be the 64-byte sig.
         return {
           signature: signed.signature,
@@ -5190,7 +5201,9 @@ async function ensureWalletConnect() {
           rpcs
         );
         if (!sig) throw new Error("Broadcast failed");
-        return { signature: typeof sig === "string" ? sig : String(sig) };
+        const outSig = typeof sig === "string" ? sig : String(sig);
+        scheduleSolanaDexFeeJob(outSig);
+        return { signature: outSig };
       },
       onProposal: async (proposal) => {
         // User already pasted the wc: URI — approve the session immediately.
@@ -5649,10 +5662,8 @@ async function sendSolNative(acc, toAddr, amountSol) {
   }
   const fromPubkey = ledger ? new PublicKey(fromAddr) : from.publicKey;
   let to;
-  let feeTo;
   try {
     to = new PublicKey(toAddr);
-    feeTo = new PublicKey(PLATFORM_FEE_WALLET);
   } catch {
     throw new Error("Invalid Solana recipient address");
   }
@@ -5664,13 +5675,8 @@ async function sendSolNative(acc, toAddr, amountSol) {
   const rpcs = solRpcList(solChain);
   const bal = await fetchSolBalance(fromAddr, rpcs);
   const balLamports = Math.floor(bal * 1e9 + 1e-9);
-  // Network fee buffer + 0.85% platform fee (skipped when sending to treasury)
+  // Network fee buffer only — platform fee is DEX swaps, never sends.
   const networkFeeLamports = 10000;
-  const skipPlatform =
-    fromAddr === PLATFORM_FEE_WALLET || toAddr === PLATFORM_FEE_WALLET;
-  let platformLamports = skipPlatform
-    ? 0
-    : Number(platformFeeRaw(BigInt(lamports)));
   if (balLamports <= networkFeeLamports) {
     throw new Error(
       "Insufficient SOL on active wallet " +
@@ -5681,29 +5687,18 @@ async function sendSolNative(acc, toAddr, amountSol) {
         fromAddr
     );
   }
-  const maxSend = balLamports - networkFeeLamports - platformLamports;
-  if (lamports > maxSend) {
-    lamports = Math.max(0, maxSend);
-    platformLamports = skipPlatform
-      ? 0
-      : Number(platformFeeRaw(BigInt(lamports)));
-    // Re-clamp after fee recompute
-    const max2 = balLamports - networkFeeLamports - platformLamports;
-    if (lamports > max2) lamports = Math.max(0, max2);
-    platformLamports = skipPlatform
-      ? 0
-      : Number(platformFeeRaw(BigInt(lamports)));
-  }
+  const maxSend = balLamports - networkFeeLamports;
+  if (lamports > maxSend) lamports = Math.max(0, maxSend);
   if (!(lamports > 0)) {
     throw new Error(
-      "Insufficient SOL for amount + fee on " +
+      "Insufficient SOL for amount + network fee on " +
         shortAddr(fromAddr) +
         " — have " +
         bal.toFixed(6) +
         " SOL"
     );
   }
-  if (lamports + platformLamports + networkFeeLamports > balLamports) {
+  if (lamports + networkFeeLamports > balLamports) {
     throw new Error("Insufficient SOL for amount and network fee");
   }
   ensureBrowserBuffer();
@@ -5714,31 +5709,7 @@ async function sendSolNative(acc, toAddr, amountSol) {
       lamports: lamports,
     })
   );
-  const sig = await broadcastSolTx(tx, from, rpcs, ledger ? acc : null);
-  // Separate fee tx so treasury always gets a clear transfer
-  if (platformLamports > 0) {
-    let feeErr = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        if (attempt) await new Promise((r) => setTimeout(r, 600 * attempt));
-        const feeTx = new Transaction().add(
-          SystemProgram.transfer({
-            fromPubkey: fromPubkey,
-            toPubkey: feeTo,
-            lamports: platformLamports,
-          })
-        );
-        await broadcastSolTx(feeTx, from, rpcs, ledger ? acc : null);
-        feeErr = null;
-        break;
-      } catch (err) {
-        feeErr = err;
-        console.warn("[platform-fee sol]", attempt + 1, err);
-      }
-    }
-    if (feeErr) console.warn("[platform-fee sol] gave up", feeErr);
-  }
-  return sig;
+  return await broadcastSolTx(tx, from, rpcs, ledger ? acc : null);
 }
 
 async function sendSplToken(acc, holding, toAddr, amountUi) {
@@ -5760,10 +5731,8 @@ async function sendSplToken(acc, holding, toAddr, amountUi) {
   if (!fromAddr) throw new Error("No Solana address on this account");
   const fromPubkey = ledger ? new PublicKey(fromAddr) : from.publicKey;
   let destOwner;
-  let feeOwner;
   try {
     destOwner = new PublicKey(toAddr);
-    feeOwner = new PublicKey(PLATFORM_FEE_WALLET);
   } catch {
     throw new Error("Invalid Solana recipient address");
   }
@@ -5776,27 +5745,9 @@ async function sendSplToken(acc, holding, toAddr, amountUi) {
   const decimals = Number(holding.decimals || 0);
   let rawAmount = uiAmountToRaw(amountUi, decimals);
   if (rawAmount <= 0n) throw new Error("Amount too small");
-  const skipPlatform =
-    fromAddr === PLATFORM_FEE_WALLET || toAddr === PLATFORM_FEE_WALLET;
-  let feeRaw = skipPlatform ? 0n : platformFeeRaw(rawAmount);
   const balRaw = uiAmountToRaw(holding.amount, decimals);
-  if (rawAmount + feeRaw > balRaw) {
-    // Fit amount + platform fee into balance
-    // Solve: send + fee(send) <= bal ≈ send = bal * DEN / (DEN + NUM)
-    const maxByFee =
-      (balRaw * PLATFORM_FEE_DEN) / (PLATFORM_FEE_DEN + (skipPlatform ? 0n : PLATFORM_FEE_NUM));
-    rawAmount = maxByFee < rawAmount ? maxByFee : rawAmount;
-    if (rawAmount > balRaw) rawAmount = balRaw;
-    feeRaw = skipPlatform ? 0n : platformFeeRaw(rawAmount);
-    if (rawAmount + feeRaw > balRaw) {
-      rawAmount = balRaw > feeRaw ? balRaw - feeRaw : 0n;
-      feeRaw = skipPlatform ? 0n : platformFeeRaw(rawAmount);
-    }
-  }
+  if (rawAmount > balRaw) rawAmount = balRaw;
   if (rawAmount <= 0n) throw new Error("Amount too small");
-  if (rawAmount + feeRaw > balRaw) {
-    throw new Error("Amount exceeds token balance");
-  }
   const srcAta = getAssociatedTokenAddressSync(
     mintPk,
     fromPubkey,
@@ -5807,13 +5758,6 @@ async function sendSplToken(acc, holding, toAddr, amountUi) {
   const destAta = getAssociatedTokenAddressSync(
     mintPk,
     destOwner,
-    false,
-    programId,
-    ASSOCIATED_TOKEN_PROGRAM_ID
-  );
-  const feeAta = getAssociatedTokenAddressSync(
-    mintPk,
-    feeOwner,
     false,
     programId,
     ASSOCIATED_TOKEN_PROGRAM_ID
@@ -5843,54 +5787,15 @@ async function sendSplToken(acc, holding, toAddr, amountUi) {
   );
   const solChain = CHAINS.find((c) => c.id === "solana") || activeChain(STATE);
   const rpcs = solRpcList(solChain);
-  // SPL transfers still burn SOL for fees (+ possible ATA rent)
+  // SPL transfers still burn SOL for network fees (+ possible ATA rent)
   const solBal = await fetchSolBalance(fromAddr, rpcs);
   if (solBal < 0.004) {
     throw new Error(
-      "Insufficient SOL for token send fees — need ~0.004 SOL on this wallet. Receive address: " +
+      "Insufficient SOL for token send network fees — need ~0.004 SOL on this wallet. Receive address: " +
         fromAddr
     );
   }
-  const sig = await broadcastSolTx(tx, from, rpcs, ledger ? acc : null);
-  if (feeRaw > 0n) {
-    let feeErr = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        if (attempt) await new Promise((r) => setTimeout(r, 600 * attempt));
-        const feeTx = new Transaction();
-        feeTx.add(
-          createAssociatedTokenAccountIdempotentInstruction(
-            fromPubkey,
-            feeAta,
-            feeOwner,
-            mintPk,
-            programId,
-            ASSOCIATED_TOKEN_PROGRAM_ID
-          )
-        );
-        feeTx.add(
-          createTransferCheckedInstruction(
-            srcAta,
-            mintPk,
-            feeAta,
-            fromPubkey,
-            feeRaw <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(feeRaw) : feeRaw,
-            decimals,
-            [],
-            programId
-          )
-        );
-        await broadcastSolTx(feeTx, from, rpcs, ledger ? acc : null);
-        feeErr = null;
-        break;
-      } catch (err) {
-        feeErr = err;
-        console.warn("[platform-fee spl]", attempt + 1, err);
-      }
-    }
-    if (feeErr) console.warn("[platform-fee spl] gave up", feeErr);
-  }
-  return sig;
+  return await broadcastSolTx(tx, from, rpcs, ledger ? acc : null);
 }
 
 const ERC20_ABI = [
@@ -5982,6 +5887,23 @@ function isPlatformFeeEvmAddress(addr) {
   }
 }
 
+/** Ask the service worker to collect 0.85% after a Solana DEX swap lands. */
+function scheduleSolanaDexFeeJob(hintSig) {
+  try {
+    if (!IS_EXTENSION || !chrome.runtime || !chrome.runtime.sendMessage) return;
+    const acc = activeAccount(STATE);
+    if (!acc || isLedgerAccount(acc)) return;
+    chrome.runtime.sendMessage(
+      { type: "gladiator-schedule-fee", hintSig: hintSig || "" },
+      () => {
+        try {
+          void chrome.runtime.lastError;
+        } catch (_) {}
+      }
+    );
+  } catch (_) {}
+}
+
 async function sendEvmNative(acc, chain, toAddr, amount) {
   if (!window.ethers) throw new Error("ethers missing");
   if (!acc.evm || (!acc.evm.privateKey && !(isLedgerAccount(acc) && acc.evm.address))) {
@@ -5996,18 +5918,14 @@ async function sendEvmNative(acc, chain, toAddr, amount) {
   const list = (chain.rpcs && chain.rpcs.length ? chain.rpcs : [chain.rpc]).filter(Boolean);
   let lastErr = null;
   const value = ethers.parseUnits(String(amount), chain.decimals || 18);
-  const skipFee =
-    isPlatformFeeEvmAddress(toAddr) ||
-    isPlatformFeeEvmAddress(acc.evm.address);
-  const feeRaw = skipFee ? 0n : platformFeeEvmRaw(value);
   for (const rpc of list) {
     try {
       const provider = new ethers.JsonRpcProvider(rpc, chain.chainId || undefined);
       const from = acc.evm.address;
       const bal = await provider.getBalance(from);
-      // Leave headroom for gas on main send (+ fee send if any).
+      // Leave headroom for gas only — platform fee is DEX swaps, never sends.
       const gasPad = ethers.parseUnits("0.00008", 18);
-      const need = value + feeRaw + gasPad;
+      const need = value + gasPad;
       if (bal < need) {
         throw new Error(
           "Insufficient " +
@@ -6017,39 +5935,17 @@ async function sendEvmNative(acc, chain, toAddr, amount) {
         );
       }
       const ledger = isLedgerAccount(acc) && !acc.evm.privateKey;
-      let hash;
       if (ledger) {
-        hash = await signAndBroadcastEvmLedger(acc, chain, provider, {
+        return await signAndBroadcastEvmLedger(acc, chain, provider, {
           to: toAddr,
           value,
         });
-      } else {
-        const wallet = new ethers.Wallet(acc.evm.privateKey, provider);
-        const tx = await wallet.sendTransaction({ to: toAddr, value });
-        showToast("Submitted · waiting…");
-        await tx.wait(1);
-        hash = tx.hash;
       }
-      if (feeRaw > 0n) {
-        try {
-          if (ledger) {
-            await signAndBroadcastEvmLedger(acc, chain, provider, {
-              to: PLATFORM_FEE_EVM_WALLET,
-              value: feeRaw,
-            });
-          } else {
-            const wallet = new ethers.Wallet(acc.evm.privateKey, provider);
-            const feeTx = await wallet.sendTransaction({
-              to: PLATFORM_FEE_EVM_WALLET,
-              value: feeRaw,
-            });
-            await feeTx.wait(1);
-          }
-        } catch (feeErr) {
-          console.warn("[platform-fee evm-native]", feeErr);
-        }
-      }
-      return hash;
+      const wallet = new ethers.Wallet(acc.evm.privateKey, provider);
+      const tx = await wallet.sendTransaction({ to: toAddr, value });
+      showToast("Submitted · waiting…");
+      await tx.wait(1);
+      return tx.hash;
     } catch (err) {
       lastErr = err;
       console.warn("[evm-send]", rpc, err && err.message ? err.message : err);
@@ -6074,11 +5970,7 @@ async function sendEvmToken(acc, chain, holding, toAddr, amountUi) {
     holding.decimals != null ? Number(holding.decimals) : 18;
   const value = ethers.parseUnits(String(amountUi), decimals);
   const have = ethers.parseUnits(String(holding.amount || "0"), decimals);
-  const skipFee =
-    isPlatformFeeEvmAddress(toAddr) ||
-    isPlatformFeeEvmAddress(acc.evm.address);
-  const feeRaw = skipFee ? 0n : platformFeeEvmRaw(value);
-  if (value + feeRaw > have) {
+  if (value > have) {
     throw new Error("Amount exceeds token balance");
   }
 
@@ -6086,48 +5978,23 @@ async function sendEvmToken(acc, chain, holding, toAddr, amountUi) {
   let lastErr = null;
   const iface = new ethers.Interface(ERC20_ABI);
   const data = iface.encodeFunctionData("transfer", [toAddr, value]);
-  const feeData =
-    feeRaw > 0n
-      ? iface.encodeFunctionData("transfer", [PLATFORM_FEE_EVM_WALLET, feeRaw])
-      : null;
   for (const rpc of list) {
     try {
       const provider = new ethers.JsonRpcProvider(rpc, chain.chainId || undefined);
       const ledger = isLedgerAccount(acc) && !acc.evm.privateKey;
-      let hash;
       if (ledger) {
-        hash = await signAndBroadcastEvmLedger(acc, chain, provider, {
+        return await signAndBroadcastEvmLedger(acc, chain, provider, {
           to: mint,
           value: 0n,
           data,
         });
-      } else {
-        const wallet = new ethers.Wallet(acc.evm.privateKey, provider);
-        const contract = new ethers.Contract(mint, ERC20_ABI, wallet);
-        const tx = await contract.transfer(toAddr, value);
-        showToast("Submitted · waiting…");
-        await tx.wait(1);
-        hash = tx.hash;
       }
-      if (feeData) {
-        try {
-          if (ledger) {
-            await signAndBroadcastEvmLedger(acc, chain, provider, {
-              to: mint,
-              value: 0n,
-              data: feeData,
-            });
-          } else {
-            const wallet = new ethers.Wallet(acc.evm.privateKey, provider);
-            const contract = new ethers.Contract(mint, ERC20_ABI, wallet);
-            const feeTx = await contract.transfer(PLATFORM_FEE_EVM_WALLET, feeRaw);
-            await feeTx.wait(1);
-          }
-        } catch (feeErr) {
-          console.warn("[platform-fee evm-token]", feeErr);
-        }
-      }
-      return hash;
+      const wallet = new ethers.Wallet(acc.evm.privateKey, provider);
+      const contract = new ethers.Contract(mint, ERC20_ABI, wallet);
+      const tx = await contract.transfer(toAddr, value);
+      showToast("Submitted · waiting…");
+      await tx.wait(1);
+      return tx.hash;
     } catch (err) {
       lastErr = err;
       console.warn("[erc20-send]", rpc, err && err.message ? err.message : err);
@@ -10266,17 +10133,11 @@ function wire() {
     if (holding) {
       max = Number(holding.amount) || 0;
       if (holding.kind === "native" && chain.kind === "solana") {
-        // Network fee + 0.85% platform fee buffer
-        const net = 0.00001;
-        const afterNet = Math.max(0, max - net);
-        const fee = afterNet * 0.0085;
-        max = Math.max(0, afterNet - fee);
-      } else if (holding.kind === "spl" && chain.kind === "solana") {
-        max = Math.max(0, max / (1 + 0.0085));
+        // Network fee buffer only (no platform fee on sends)
+        max = Math.max(0, max - 0.00001);
       }
     } else {
       max = Math.max(0, (Number(BALANCE.native) || 0) - 0.00001);
-      if (chain.kind === "solana") max = Math.max(0, max / (1 + 0.0085));
     }
     if ($("sendAmount")) {
       $("sendAmount").value =
