@@ -1006,23 +1006,83 @@ body.is-extension .acct-drawer {
 
 .balance-label-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
 }
 
 .balance-label-row .balance-label {
   margin: 0;
+  padding-top: 6px;
+}
+
+.balance-right {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  min-width: 108px;
+  max-width: 42%;
 }
 
 .balance-label-row .addr-menu-wrap {
   flex: 0 0 auto;
+  align-self: flex-end;
 }
 
 .balance-label-row .addr-menu-btn {
   min-width: 30px;
   min-height: 30px;
   padding: 0;
+}
+
+/* Native coin quote + sparkline under the ⋮ menu (no border/box). */
+.balance-native-quote {
+  width: 108px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  margin: 0;
+}
+
+.balance-native-price {
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+  color: #d4c07a;
+  line-height: 1.1;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.balance-native-chart {
+  width: 108px;
+  height: 34px;
+  display: block;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+}
+
+.balance-native-chart .pnl-line {
+  fill: none;
+  stroke: #c4b278;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.balance-native-chart .pnl-fill {
+  stroke: none;
+  fill: #c4b278;
+  opacity: 0.16;
 }
 
 .balance-label {
@@ -1035,18 +1095,13 @@ body.is-extension .acct-drawer {
 }
 
 .balance-hero {
-  margin: 8px 0 0;
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 48px;
+  margin: 4px 0 0;
+  display: block;
+  min-height: 0;
 }
 
 .balance-value {
   margin: 0;
-  flex: 1 1 auto;
-  min-width: 0;
   font-family: var(--font-ui);
   font-size: clamp(2.35rem, 8.5vw, 2.9rem);
   font-weight: 700;
@@ -1063,75 +1118,31 @@ body.is-extension .acct-drawer {
   color: #b8a66a;
 }
 
-/* Borderless PnL sparkline — sits in empty space beside the big $ balance. */
-.balance-pnl {
-  flex: 0 0 108px;
-  width: 108px;
-  height: 46px;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  padding: 0;
-  margin: 0 0 2px;
-}
-
-.balance-pnl[hidden] {
-  display: none !important;
-}
-
-.balance-pnl-chart {
-  width: 100%;
-  height: 36px;
-  display: block;
-  overflow: visible;
-  border: 0;
-  background: transparent;
-}
-
-.balance-pnl-chart .pnl-line {
-  fill: none;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.balance-pnl-chart .pnl-fill {
-  stroke: none;
-  opacity: 0.16;
-}
-
+/* Portfolio PnL under Total balance: $ delta + percent only. */
 .balance-pnl-delta {
-  display: block;
-  align-self: flex-end;
-  margin: 0 0 2px;
-  font-size: 0.68rem;
+  margin: 6px 0 0;
+  font-size: 0.78rem;
   font-weight: 650;
   letter-spacing: 0.01em;
   font-variant-numeric: tabular-nums;
-  line-height: 1;
-  color: var(--muted);
-}
-
-.balance-pnl[data-dir="up"] .balance-pnl-delta,
-.balance-pnl[data-dir="down"] .balance-pnl-delta,
-.balance-pnl[data-dir="flat"] .balance-pnl-delta {
+  line-height: 1.2;
   color: #d4c07a;
 }
 
-.balance-pnl[data-dir="up"] .pnl-line,
-.balance-pnl[data-dir="down"] .pnl-line,
-.balance-pnl[data-dir="flat"] .pnl-line {
-  stroke: #c4b278;
+.balance-pnl-delta[hidden] {
+  display: none !important;
 }
 
-.balance-pnl[data-dir="up"] .pnl-fill,
-.balance-pnl[data-dir="down"] .pnl-fill,
-.balance-pnl[data-dir="flat"] .pnl-fill {
-  fill: #c4b278;
+.balance-pnl-delta[data-dir="up"] {
+  color: #d4c07a;
+}
+
+.balance-pnl-delta[data-dir="down"] {
+  color: #d4c07a;
+}
+
+.balance-pnl-delta[data-dir="flat"] {
+  color: rgba(212, 192, 122, 0.75);
 }
 
 .balance-conn {
@@ -2988,8 +2999,12 @@ body.is-extension .balance-value {
   font-size: 2.35rem;
 }
 
-body.is-extension .balance-pnl {
-  flex-basis: 96px;
+body.is-extension .balance-right {
+  min-width: 96px;
+}
+
+body.is-extension .balance-native-quote,
+body.is-extension .balance-native-chart {
   width: 96px;
 }
 

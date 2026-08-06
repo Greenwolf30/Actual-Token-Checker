@@ -12,7 +12,7 @@
       href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=0.6.44" />
+    <link rel="stylesheet" href="./styles.css?v=0.6.45" />
   </head>
   <body class="is-local">
     <div class="atmosphere" aria-hidden="true">
@@ -85,28 +85,40 @@
                 <span id="ledgerBalanceTag" class="ledger-balance-tag" hidden>Ledger</span>
                 Total balance <span id="chainBadge">Solana</span>
               </p>
-              <div class="addr-menu-wrap" id="addrMenuWrap">
-                <button
-                  type="button"
-                  class="icon-btn addr-menu-btn"
-                  id="addrMenuBtn"
-                  title="Menu"
-                  aria-haspopup="menu"
-                  aria-expanded="false"
-                  aria-controls="addrMenu"
-                >
-                  <span class="addr-menu-dots" aria-hidden="true">⋮</span>
-                </button>
-                <div class="addr-menu" id="addrMenu" role="menu" hidden>
-                  <button type="button" class="addr-menu-item" role="menuitem" data-menu="connect">
-                    WalletConnect
+              <div class="balance-right">
+                <div class="addr-menu-wrap" id="addrMenuWrap">
+                  <button
+                    type="button"
+                    class="icon-btn addr-menu-btn"
+                    id="addrMenuBtn"
+                    title="Menu"
+                    aria-haspopup="menu"
+                    aria-expanded="false"
+                    aria-controls="addrMenu"
+                  >
+                    <span class="addr-menu-dots" aria-hidden="true">⋮</span>
                   </button>
-                  <button type="button" class="addr-menu-item" role="menuitem" data-menu="manage-tokens">
-                    Manage tokens
-                  </button>
-                  <button type="button" class="addr-menu-item" role="menuitem" data-menu="settings">
-                    Settings
-                  </button>
+                  <div class="addr-menu" id="addrMenu" role="menu" hidden>
+                    <button type="button" class="addr-menu-item" role="menuitem" data-menu="connect">
+                      WalletConnect
+                    </button>
+                    <button type="button" class="addr-menu-item" role="menuitem" data-menu="manage-tokens">
+                      Manage tokens
+                    </button>
+                    <button type="button" class="addr-menu-item" role="menuitem" data-menu="settings">
+                      Settings
+                    </button>
+                  </div>
+                </div>
+                <div class="balance-native-quote" id="balanceNativeQuote">
+                  <div class="balance-native-price" id="balanceNativePrice">—</div>
+                  <svg
+                    id="balanceNativeChart"
+                    class="balance-native-chart"
+                    viewBox="0 0 120 36"
+                    preserveAspectRatio="none"
+                    aria-hidden="true"
+                  ></svg>
                 </div>
               </div>
             </div>
@@ -114,17 +126,8 @@
               <p class="balance-value">
                 <span class="currency">$</span><span id="fiatBalance">0.00</span>
               </p>
-              <div class="balance-pnl" id="balancePnlWrap" hidden>
-                <span class="balance-pnl-delta" id="balancePnlDelta"></span>
-                <svg
-                  id="balancePnlChart"
-                  class="balance-pnl-chart"
-                  viewBox="0 0 120 44"
-                  preserveAspectRatio="none"
-                  aria-hidden="true"
-                ></svg>
-              </div>
             </div>
+            <p class="balance-pnl-delta" id="balancePnlDelta" hidden></p>
             <p
               class="balance-conn"
               id="balanceConnStatus"
@@ -764,6 +767,6 @@
     <script src="./lib/ledger-solana.bundle.js?v=0.6.6"></script>
     <script src="./lib/ledger-eth.bundle.js?v=0.6.11"></script>
     <script src="./config.js"></script>
-    <script src="./app.js?v=0.6.44"></script>
+    <script src="./app.js?v=0.6.45"></script>
   </body>
 </html>

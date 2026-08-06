@@ -7,6 +7,9 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.45:
+- Total balance: PnL as $ delta + %; native coin price + borderless sparkline under ⋮ (every chain)
+
 v0.6.44:
 - Keep Solana first in chain lists; pin native SOL at top of holdings, then amount order
 

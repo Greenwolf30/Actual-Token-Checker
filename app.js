@@ -3283,53 +3283,54 @@ async function recordPnlSnapshot(accountId, chainId, usd) {
   return list;
 }
 
-function paintPnlChart(points) {
-  const wrap = $("balancePnlWrap");
-  const svg = $("balancePnlChart");
-  const deltaEl = $("balancePnlDelta");
-  if (!wrap || !svg) return;
-  const pts = (Array.isArray(points) ? points : [])
-    .map((p) => ({ t: Number(p.t) || 0, v: Number(p.v) || 0 }))
-    .filter((p) => p.t > 0 && Number.isFinite(p.v));
+function formatPnlMoney(n) {
+  const abs = Math.abs(Number(n) || 0);
+  if (abs >= 1000) return abs.toFixed(0);
+  if (abs >= 100) return abs.toFixed(1);
+  return abs.toFixed(2);
+}
+
+function formatPnlPct(n) {
+  const abs = Math.abs(Number(n) || 0);
+  if (abs >= 10) return abs.toFixed(0);
+  if (abs >= 1) return abs.toFixed(1);
+  return abs.toFixed(2);
+}
+
+function formatNativeUsdPrice(n) {
+  const v = Number(n) || 0;
+  if (v >= 1000) return v.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  if (v >= 100) return v.toFixed(2);
+  if (v >= 1) return v.toFixed(2);
+  if (v >= 0.01) return v.toFixed(4);
+  return v.toFixed(6);
+}
+
+/** Draw a borderless yellow sparkline into an SVG element. */
+function paintSparklineSvg(svg, values) {
+  if (!svg) return;
+  const pts = (Array.isArray(values) ? values : [])
+    .map((v) => Number(v))
+    .filter((v) => Number.isFinite(v));
   if (pts.length < 2) {
-    wrap.hidden = true;
-    if (deltaEl) deltaEl.textContent = "";
     svg.innerHTML = "";
     return;
   }
-  const first = pts[0].v;
-  const last = pts[pts.length - 1].v;
-  const diff = last - first;
-  const pct = first > 0 ? (diff / first) * 100 : 0;
-  const dir = Math.abs(diff) < 0.005 ? "flat" : diff > 0 ? "up" : "down";
-  wrap.dataset.dir = dir;
-  wrap.hidden = false;
-  if (deltaEl) {
-    const sign = diff > 0 ? "+" : diff < 0 ? "" : "";
-    const abs = Math.abs(diff);
-    const money =
-      abs >= 100 ? abs.toFixed(0) : abs >= 10 ? abs.toFixed(1) : abs.toFixed(2);
-    const pctTxt =
-      Math.abs(pct) >= 10 ? pct.toFixed(0) : Math.abs(pct) >= 1 ? pct.toFixed(1) : pct.toFixed(2);
-    deltaEl.textContent =
-      dir === "flat" ? "0.00%" : sign + "$" + money + " · " + sign + pctTxt + "%";
-  }
-
   const w = 120;
-  const h = 44;
+  const h = 36;
   const padX = 2;
-  const padY = 4;
-  let min = Math.min(...pts.map((p) => p.v));
-  let max = Math.max(...pts.map((p) => p.v));
-  if (max - min < 1e-9) {
+  const padY = 3;
+  let min = Math.min.apply(null, pts);
+  let max = Math.max.apply(null, pts);
+  if (max - min < 1e-12) {
     min -= 1;
     max += 1;
   }
   const span = max - min;
   const n = pts.length;
-  const coords = pts.map((p, i) => {
+  const coords = pts.map((v, i) => {
     const x = padX + ((w - padX * 2) * i) / Math.max(1, n - 1);
-    const y = padY + (h - padY * 2) * (1 - (p.v - min) / span);
+    const y = padY + (h - padY * 2) * (1 - (v - min) / span);
     return [x, y];
   });
   const line = coords
@@ -3355,18 +3356,119 @@ function paintPnlChart(points) {
     '"></path>';
 }
 
-async function syncPnlChart(usd) {
+/** Portfolio PnL: $ delta + percent under Total balance (no chart). */
+function paintPnlDelta(points) {
+  const deltaEl = $("balancePnlDelta");
+  if (!deltaEl) return;
+  const pts = (Array.isArray(points) ? points : [])
+    .map((p) => ({ t: Number(p.t) || 0, v: Number(p.v) || 0 }))
+    .filter((p) => p.t > 0 && Number.isFinite(p.v));
+  if (pts.length < 2) {
+    deltaEl.hidden = true;
+    deltaEl.textContent = "";
+    delete deltaEl.dataset.dir;
+    return;
+  }
+  const first = pts[0].v;
+  const last = pts[pts.length - 1].v;
+  const diff = last - first;
+  const pct = first > 0 ? (diff / first) * 100 : 0;
+  const dir = Math.abs(diff) < 0.005 ? "flat" : diff > 0 ? "up" : "down";
+  const sign = diff > 0 ? "+" : diff < 0 ? "-" : "";
+  deltaEl.dataset.dir = dir;
+  deltaEl.hidden = false;
+  deltaEl.textContent =
+    sign +
+    "$" +
+    formatPnlMoney(diff) +
+    "  ·  " +
+    sign +
+    formatPnlPct(pct) +
+    "%";
+}
+
+async function syncPnlDelta(usd) {
   const acc = activeAccount(STATE);
   const chain = activeChain(STATE);
-  if (!acc || !chain || !BALANCE.ok) {
-    paintPnlChart([]);
+  if (!acc || !chain) {
+    paintPnlDelta([]);
     return;
   }
   try {
-    const points = await recordPnlSnapshot(acc.id, chain.id, usd);
-    paintPnlChart(points);
+    let points;
+    if (BALANCE.ok) {
+      points = await recordPnlSnapshot(acc.id, chain.id, usd);
+    } else {
+      const bag = await loadPnlSnaps();
+      points = (bag && bag[pnlSnapKey(acc.id, chain.id)]) || [];
+    }
+    paintPnlDelta(points);
   } catch (_) {
-    paintPnlChart([]);
+    paintPnlDelta([]);
+  }
+}
+
+/** Cache: priceId -> { at, points: number[], price: number } */
+const NATIVE_CHART_CACHE = Object.create(null);
+const NATIVE_CHART_TTL_MS = 5 * 60 * 1000;
+let nativeChartSeq = 0;
+
+function paintNativePriceLabel(chain, price) {
+  const el = $("balanceNativePrice");
+  if (!el) return;
+  const sym = (chain && chain.symbol) || "";
+  const px = Number(price);
+  if (!(px > 0)) {
+    el.textContent = sym ? sym + " —" : "—";
+    return;
+  }
+  el.textContent = sym + " $" + formatNativeUsdPrice(px);
+}
+
+async function fetchNativePriceSeries(chain) {
+  const priceId = chain && chain.priceId;
+  if (!priceId) return { points: [], price: 0 };
+  const cached = NATIVE_CHART_CACHE[priceId];
+  if (cached && Date.now() - cached.at < NATIVE_CHART_TTL_MS && cached.points.length) {
+    return cached;
+  }
+  let points = [];
+  try {
+    const rows = await fetchCoinGeckoMarketChart(priceId, 1, 0);
+    points = (rows || []).map((r) => Number(r.price)).filter((v) => v > 0);
+  } catch (err) {
+    console.warn("[native-chart]", chain && chain.id, err);
+  }
+  const live = Number(PRICES[priceId]) || 0;
+  if (live > 0) {
+    if (!points.length) points = [live, live];
+    else points = points.slice();
+    points[points.length - 1] = live;
+  }
+  const price = live > 0 ? live : points.length ? points[points.length - 1] : 0;
+  const pack = { at: Date.now(), points, price };
+  NATIVE_CHART_CACHE[priceId] = pack;
+  return pack;
+}
+
+async function syncNativePriceChart() {
+  const chain = activeChain(STATE);
+  const svg = $("balanceNativeChart");
+  const quote = $("balanceNativeQuote");
+  if (!chain || !svg) return;
+  const seq = ++nativeChartSeq;
+  // Immediate label from PRICES while chart loads.
+  paintNativePriceLabel(chain, PRICES[chain.priceId] || 0);
+  try {
+    const pack = await fetchNativePriceSeries(chain);
+    if (seq !== nativeChartSeq) return;
+    if (STATE.activeChainId !== chain.id) return;
+    paintNativePriceLabel(chain, pack.price || PRICES[chain.priceId] || 0);
+    paintSparklineSvg(svg, pack.points);
+    if (quote) quote.hidden = false;
+  } catch (_) {
+    if (seq !== nativeChartSeq) return;
+    paintSparklineSvg(svg, []);
   }
 }
 
@@ -3427,18 +3529,9 @@ function paintBalances() {
     }
   }
   paintReceiveAlert();
-  // Sparkline beside Total balance — record only when sync is healthy.
-  if (BALANCE.ok) {
-    syncPnlChart(shownUsd).catch(() => paintPnlChart([]));
-  } else {
-    // Still show prior series for this wallet/chain if we have it.
-    loadPnlSnaps()
-      .then((bag) => {
-        const key = pnlSnapKey(acc && acc.id, chain && chain.id);
-        paintPnlChart((bag && bag[key]) || []);
-      })
-      .catch(() => paintPnlChart([]));
-  }
+  // Portfolio PnL ($ delta + %) + native coin price sparkline under ⋮.
+  syncPnlDelta(shownUsd).catch(() => paintPnlDelta([]));
+  syncNativePriceChart().catch(() => {});
 }
 
 function chainLogoSrc(chainOrLogo) {
@@ -8575,19 +8668,21 @@ function renderReceive() {
   }
   const both = $("bothAddrs");
   if (both && acc) {
-    const rows = CHAINS.map((c) => {
-      const a = chainKeyAddress(acc, c);
-      if (!a) return "";
-      const active = c.id === chain.id ? " · selected" : "";
-      return (
-        "<div><strong>" +
-        escapeHtml(c.name) +
-        active +
-        "</strong><br /><code>" +
-        escapeHtml(a) +
-        "</code></div>"
-      );
-    }).join("");
+    const rows = chainsInDisplayOrder()
+      .map((c) => {
+        const a = chainKeyAddress(acc, c);
+        if (!a) return "";
+        const active = c.id === chain.id ? " · selected" : "";
+        return (
+          "<div><strong>" +
+          escapeHtml(c.name) +
+          active +
+          "</strong><br /><code>" +
+          escapeHtml(a) +
+          "</code></div>"
+        );
+      })
+      .join("");
     both.innerHTML =
       "<div><strong>Active deposit (" +
       escapeHtml(chain.name) +
