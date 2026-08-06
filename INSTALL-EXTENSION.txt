@@ -7,6 +7,9 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.44:
+- Keep Solana first in chain lists; pin native SOL at top of holdings, then amount order
+
 v0.6.43:
 - PnL sparkline uses yellow/gold to match Total balance
 

@@ -2593,9 +2593,25 @@ function visibleHoldings(holdings, chain) {
   });
 }
 
-/** Highest holdings first: USD value, then token amount. */
+/** Chains for UI lists: Solana always first, then original placement order. */
+function chainsInDisplayOrder() {
+  const sol = [];
+  const rest = [];
+  for (let i = 0; i < CHAINS.length; i++) {
+    const c = CHAINS[i];
+    if (!c) continue;
+    if (c.id === "solana" || c.kind === "solana") sol.push(c);
+    else rest.push(c);
+  }
+  return sol.concat(rest);
+}
+
+/** Highest holdings first: USD value, then token amount. Native (SOL) always pinned on top. */
 function sortHoldingsByAmount(rows) {
   return (rows || []).slice().sort((a, b) => {
+    const aNative = a && a.kind === "native" ? 1 : 0;
+    const bNative = b && b.kind === "native" ? 1 : 0;
+    if (aNative !== bNative) return bNative - aNative;
     const usdA = Number(a && a.usd);
     const usdB = Number(b && b.usd);
     const aUsd = Number.isFinite(usdA) ? usdA : 0;
@@ -8236,16 +8252,18 @@ function paintSwitchers() {
       .join("");
   }
   if (chainSel) {
-    chainSel.innerHTML = CHAINS.map(
-      (c) =>
-        '<option value="' +
-        c.id +
-        '"' +
-        (c.id === STATE.activeChainId ? " selected" : "") +
-        ">" +
-        c.name +
-        "</option>"
-    ).join("");
+    chainSel.innerHTML = chainsInDisplayOrder()
+      .map(
+        (c) =>
+          '<option value="' +
+          c.id +
+          '"' +
+          (c.id === STATE.activeChainId ? " selected" : "") +
+          ">" +
+          c.name +
+          "</option>"
+      )
+      .join("");
   }
   paintChainPicker();
   paintActiveChainAddress();
@@ -8339,7 +8357,7 @@ function paintChainPicker() {
   }
   if (nameEl) nameEl.textContent = chain.name || "Chain";
   if (!menu) return;
-  menu.innerHTML = CHAINS.map((c) => {
+  menu.innerHTML = chainsInDisplayOrder().map((c) => {
     const a = chainKeyAddress(acc, c) || "";
     const active = c.id === STATE.activeChainId;
     return (
