@@ -15,6 +15,10 @@ How to read Home numbers:
   (~+1 price API call when cache is cold). No extra Solana RPC for the chart.
   Full write-up: Gladiator-Wallet-Documentation/DOCUMENTATION.txt §6.1–6.2
 
+v0.6.51:
+- Pin native price chart to a fixed right slot so position matches across
+  all wallets (Ledger / software) regardless of $ digit width
+
 v0.6.50:
 - Fix Polygon native chart/price: use CoinGecko POL id (polygon-ecosystem-token)
   instead of legacy matic-network (empty market_chart series)

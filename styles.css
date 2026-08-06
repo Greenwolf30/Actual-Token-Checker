@@ -1035,9 +1035,10 @@ body.is-extension .acct-drawer {
   padding: 0;
 }
 
-/* Native coin quote + sparkline on the balance row (no border/box). */
+/* Native coin quote + sparkline on the balance row (no border/box).
+   Fixed slot on the right so $ digit width / Ledger tag never shifts it. */
 .balance-native-quote {
-  flex: 0 1 auto;
+  flex: 0 0 148px;
   width: 148px;
   max-width: 46%;
   display: flex;
@@ -1048,7 +1049,7 @@ body.is-extension .acct-drawer {
   background: transparent;
   box-shadow: none;
   padding: 0;
-  margin: 8px 0 0 10px;
+  margin: 8px 0 0 auto;
   min-width: 0;
   position: relative;
   top: 2px;
@@ -1135,13 +1136,16 @@ body.is-extension .acct-drawer {
   margin: 4px 0 0;
   display: flex;
   align-items: flex-end;
-  justify-content: flex-start;
-  gap: 22px;
+  justify-content: space-between;
+  gap: 12px;
   min-height: 0;
+  width: 100%;
 }
 
 .balance-value {
   margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
   font-family: var(--font-ui);
   font-size: clamp(2.35rem, 8.5vw, 2.9rem);
   font-weight: 700;
@@ -3040,12 +3044,13 @@ body.is-extension .balance-value {
 }
 
 body.is-extension .balance-hero {
-  gap: 18px;
+  gap: 10px;
 }
 
 body.is-extension .balance-native-quote {
+  flex-basis: 132px;
   width: 132px;
-  margin: 7px 0 0 8px;
+  margin: 7px 0 0 auto;
   top: 2px;
 }
 
