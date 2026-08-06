@@ -164,16 +164,18 @@ Meaning:
 Same layout for every native chain (SOL, ETH, BTC, MATIC, SUI, etc.).
 
 How often it updates (not tick-by-tick “real time”):
-  • The chart series comes from CoinGecko (~1 day of points).
-  • Gladiator caches that series for about 5 minutes per coin.
-  • A fresh fetch happens when you open Home / switch chain (or Sync) and
-    the cache for that coin is older than ~5 minutes.
-  • Cost: about +1 CoinGecko request per coin every ~5 minutes when shown —
-    not extra Solana/Helius RPC pings.
+  • USD quotes (CoinGecko simple/price): at most about every 5 minutes automatically;
+    Sync force-refreshes.
+  • The chart series comes from CoinGecko (~1 day of points), cached about 15 minutes
+    per coin.
+  • A fresh chart fetch happens when you open Home / switch chain (or Sync) and
+    the cache for that coin is older than ~15 minutes.
+  • Cost: about +1 price API call per ~5 minutes while Home is open, plus chart
+    fetches occasionally — aimed to stay under CoinGecko free monthly credits.
+    No extra Solana/Helius RPC for the chart itself.
   • Chains that share a price id (Ethereum / Base / Robinhood Ethereum) share
-    one cache entry.
-  • The last point on the chart is nudged to the wallet’s current price quote
-    when available; it still is not a streaming live ticker.
+    one chart cache entry.
+  • On-chain balances soft-refresh about every 60 seconds while Home is open.
 
 
 --------------------------------------------------------------------------------

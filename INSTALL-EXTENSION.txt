@@ -15,6 +15,10 @@ How to read Home numbers:
   (~+1 price API call when cache is cold). No extra Solana RPC for the chart.
   Full write-up: Gladiator-Wallet-Documentation/DOCUMENTATION.txt §6.1–6.2
 
+v0.6.54:
+- Throttle CoinGecko: auto prices ≤1/5min, native chart cache 15min (fit free monthly budget);
+  live balance RPC every 60s; Sync still force-refreshes prices
+
 v0.6.53:
 - Live balance refresh every ~30s while Home is open
 - Holdings: show each token's unit USD price under the name

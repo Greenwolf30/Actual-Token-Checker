@@ -2210,7 +2210,16 @@ async function fetchSolBalance(address, rpcs) {
   return Number(result && result.value != null ? result.value : 0) / 1e9;
 }
 
-async function fetchPrices() {
+/** CoinGecko simple/price — throttle autos to stay under free monthly credits (~10k). */
+const PRICE_AUTO_MIN_MS = 5 * 60 * 1000;
+let lastPricesFetchAt = 0;
+
+async function fetchPrices(opts) {
+  const force = !!(opts && opts.force);
+  // Auto path: at most once per 5 minutes to stay under CoinGecko free monthly budget.
+  if (!force && lastPricesFetchAt && Date.now() - lastPricesFetchAt < PRICE_AUTO_MIN_MS) {
+    return PRICES;
+  }
   try {
     const ids = "solana,ethereum,polygon-ecosystem-token,bitcoin,sui";
     const url =
@@ -2228,9 +2237,11 @@ async function fetchPrices() {
       bitcoin: Number(j.bitcoin && j.bitcoin.usd) || 0,
       sui: Number(j.sui && j.sui.usd) || 0,
     };
+    lastPricesFetchAt = Date.now();
   } catch (err) {
     console.warn("[prices]", err);
   }
+  return PRICES;
 }
 
 async function fetchSplHoldings(owner, rpcs) {
@@ -2726,8 +2737,10 @@ function setSyncButtonsBusy(busy) {
   });
 }
 
-/** Soft live balance refresh while Home is open (RPC — not the 5m CoinGecko chart cache). */
-const LIVE_BALANCE_MS = 30 * 1000;
+/** Soft live balance refresh while Home is open.
+ *  Chain RPC ~every 60s. CoinGecko prices at most every 5 minutes (monthly budget).
+ */
+const LIVE_BALANCE_MS = 60 * 1000;
 let liveBalanceTimer = null;
 let liveBalanceTicks = 0;
 
@@ -2750,8 +2763,8 @@ function startLiveBalanceRefresh() {
     const tick = liveBalanceTicks;
     (async () => {
       try {
-        // Refresh USD quotes about once a minute; balances every 30s.
-        if (tick % 2 === 1) await fetchPrices();
+        // Prices: throttled inside fetchPrices (~5 min). Sync button uses force.
+        if (tick === 1 || tick % 5 === 0) await fetchPrices();
         await refreshBalance({ keepUi: true });
       } catch (err) {
         console.warn("[live-balance]", err);
@@ -2773,7 +2786,7 @@ async function runManualSync() {
   showToast("Syncing…");
   try {
     // Prices first (soft-fail); keep current balances on screen while RPC runs.
-    await fetchPrices();
+    await fetchPrices({ force: true });
     await refreshBalance({ keepUi: true });
     if (BALANCE.ok && !BALANCE.error) showToast("Synced");
     else if (BALANCE.ok && BALANCE.error)
@@ -3496,7 +3509,7 @@ async function syncPnlDelta(usd) {
 const NATIVE_CHART_CACHE = Object.create(null);
 /** In-flight fetches so rapid paintBalances calls share one CoinGecko request. */
 const NATIVE_CHART_INFLIGHT = Object.create(null);
-const NATIVE_CHART_TTL_MS = 5 * 60 * 1000;
+const NATIVE_CHART_TTL_MS = 15 * 60 * 1000;
 let nativeChartSeq = 0;
 
 function paintNativePriceLabel(chain, price, seriesMeta) {
