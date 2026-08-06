@@ -4726,11 +4726,32 @@ function resolveConnectionIconSrc(item) {
   return "";
 }
 
+function paintBalanceConnStatus(items) {
+  const el = $("balanceConnStatus");
+  const label = $("balanceConnLabel");
+  if (!el) return;
+  const rows = Array.isArray(items) ? items.filter(Boolean) : [];
+  // Active dApp / WC sessions count as connected (Jupiter, pump.fun, Uniswap, etc.).
+  const connected = rows.some((r) => r && r.status !== "pending");
+  const pendingOnly = !connected && rows.length > 0;
+  if (connected) {
+    el.dataset.state = "connected";
+    if (label) label.textContent = "Connected";
+  } else if (pendingOnly) {
+    el.dataset.state = "disconnected";
+    if (label) label.textContent = "Connecting…";
+  } else {
+    el.dataset.state = "disconnected";
+    if (label) label.textContent = "Disconnected";
+  }
+}
+
 function paintWcConnectionsList(items) {
   const list = $("wcConnectionsList");
   const empty = $("wcConnectionsEmpty");
-  if (!list) return;
   const rows = Array.isArray(items) ? items : [];
+  paintBalanceConnStatus(rows);
+  if (!list) return;
   list.innerHTML = "";
   if (!rows.length) {
     if (empty) empty.hidden = false;

@@ -12,7 +12,7 @@
       href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css?v=0.6.29" />
+    <link rel="stylesheet" href="./styles.css?v=0.6.30" />
   </head>
   <body class="is-extension">
     <div class="atmosphere" aria-hidden="true">
@@ -112,6 +112,15 @@
             </div>
             <p class="balance-value">
               <span class="currency">$</span><span id="fiatBalance">0.00</span>
+            </p>
+            <p
+              class="balance-conn"
+              id="balanceConnStatus"
+              data-state="disconnected"
+              aria-live="polite"
+            >
+              <span class="balance-conn-dot" aria-hidden="true"></span>
+              <span id="balanceConnLabel">Disconnected</span>
             </p>
             <p class="balance-receive-note" id="balanceReceiveNote" hidden>
               <span id="balanceReceiveText">Received tokens</span>
@@ -740,6 +749,6 @@
     <script src="./lib/ledger-solana.bundle.js?v=0.6.6"></script>
     <script src="./lib/ledger-eth.bundle.js?v=0.6.11"></script>
     <script src="./config.js"></script>
-    <script src="./app.js?v=0.6.29"></script>
+    <script src="./app.js?v=0.6.30"></script>
   </body>
 </html>
