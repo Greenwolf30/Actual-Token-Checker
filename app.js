@@ -2215,6 +2215,21 @@ function visibleHoldings(holdings, chain) {
   });
 }
 
+/** Highest holdings first: USD value, then token amount. */
+function sortHoldingsByAmount(rows) {
+  return (rows || []).slice().sort((a, b) => {
+    const usdA = Number(a && a.usd);
+    const usdB = Number(b && b.usd);
+    const aUsd = Number.isFinite(usdA) ? usdA : 0;
+    const bUsd = Number.isFinite(usdB) ? usdB : 0;
+    if (bUsd !== aUsd) return bUsd - aUsd;
+    const amtA = Number(a && a.amount) || 0;
+    const amtB = Number(b && b.amount) || 0;
+    if (amtB !== amtA) return amtB - amtA;
+    return String((a && a.symbol) || "").localeCompare(String((b && b.symbol) || ""));
+  });
+}
+
 async function fetchBtcBalance(address, apiBase) {
   const base = (apiBase || "https://blockstream.info/api").replace(/\/$/, "");
   const urls = [
@@ -2436,9 +2451,7 @@ async function refreshBalance(opts) {
           tokenAccount: "",
         });
       }
-      const other = spl
-        .filter((row) => row.mint !== USDC_MINT && row.amount > 0)
-        .sort((a, b) => (Number(b.usd) || 0) - (Number(a.usd) || 0));
+      const other = spl.filter((row) => row.mint !== USDC_MINT && row.amount > 0);
       const usdc = spl.find((row) => row.mint === USDC_MINT);
       const px = PRICES[chain.priceId] || 0;
       const usdcAmt = usdc ? usdc.amount : 0;
@@ -2450,21 +2463,23 @@ async function refreshBalance(opts) {
         error: "",
         chainId: chain.id,
       };
-      nextHoldings = [
-        {
-          chainId: chain.id,
-          symbol: "SOL",
-          name: "Solana",
-          mint: null,
-          amount: native,
-          decimals: 9,
-          usd: native * px,
-          kind: "native",
-          logo: "solana",
-        },
-        usdc,
-        ...other,
-      ].filter(Boolean);
+      nextHoldings = sortHoldingsByAmount(
+        [
+          {
+            chainId: chain.id,
+            symbol: "SOL",
+            name: "Solana",
+            mint: null,
+            amount: native,
+            decimals: 9,
+            usd: native * px,
+            kind: "native",
+            logo: "solana",
+          },
+          usdc,
+          ...other,
+        ].filter(Boolean)
+      );
     } else if (chain.kind === "bitcoin") {
       if (!addr) throw new Error("No Bitcoin address on this account — re-open wallet to derive keys.");
       native = await fetchBtcBalance(addr, chain.rpc);
@@ -2486,10 +2501,10 @@ async function refreshBalance(opts) {
       if (!stillCurrent()) return;
       const px = PRICES[chain.priceId] || 0;
       nextBalance = { native, usd: native * px, ok: true, error: "", chainId: chain.id };
-      nextHoldings = [
+      nextHoldings = sortHoldingsByAmount([
         nativeHoldingRow(chain, native, native * px),
         ...(suiCoins || []),
-      ];
+      ]);
     } else {
       if (!addr) throw new Error("No EVM address on this account.");
       native = await fetchEvmBalance(addr, chain.rpcs || [chain.rpc]);
@@ -2502,9 +2517,7 @@ async function refreshBalance(opts) {
         erc20 = [];
       }
       if (!stillCurrent()) return;
-      erc20 = (erc20 || [])
-        .filter((row) => Number(row.amount) > 0)
-        .sort((a, b) => (Number(b.usd) || 0) - (Number(a.usd) || 0));
+      erc20 = (erc20 || []).filter((row) => Number(row.amount) > 0);
       const px = PRICES[chain.priceId] || 0;
       const tokenUsd = erc20.reduce((s, row) => s + (Number(row.usd) || 0), 0);
       nextBalance = {
@@ -2514,7 +2527,10 @@ async function refreshBalance(opts) {
         error: "",
         chainId: chain.id,
       };
-      nextHoldings = [nativeHoldingRow(chain, native, native * px), ...erc20];
+      nextHoldings = sortHoldingsByAmount([
+        nativeHoldingRow(chain, native, native * px),
+        ...erc20,
+      ]);
     }
 
     mergeTokenCatalog(nextHoldings);
@@ -2888,7 +2904,8 @@ function paintHoldings() {
   list.innerHTML = "";
 
   // Never paint another chain's leftovers while switching; respect Manage tokens hides.
-  let rows = visibleHoldings(HOLDINGS, chain);
+  // Always show highest value/amount first.
+  let rows = sortHoldingsByAmount(visibleHoldings(HOLDINGS, chain));
   if (!rows.length) {
     if (chain.kind === "solana") {
       rows = [

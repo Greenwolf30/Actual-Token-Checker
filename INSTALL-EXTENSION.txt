@@ -7,6 +7,9 @@ PREFERRED UPDATE (keeps seed / accounts):
 4. If Chrome asks for HID / Ledger permission, Allow
 5. Click the toolbar icon once
 
+v0.6.23:
+- Holdings list always sorted most → least (USD value, then amount)
+
 v0.6.22:
 - Top address bar shifted left, wider, aligned with brand/chain; more space between dock tabs
 
