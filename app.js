@@ -5254,25 +5254,26 @@ async function ensureWalletConnect() {
       },
       onSessionDelete: async () => {
         // A duplicate prune also emits session_delete. Always resync from live
-        // sessions — never wipe the remaining connection.
+        // sessions — never wipe the remaining connection (or inject rows).
         WC_PENDING_REQUEST = null;
         hideWcApproveBar();
         // Tiny delay so WalletKit finishes removing the closed topic.
         await new Promise((r) => setTimeout(r, 50));
         const live = collectLiveWcSessions();
         await persistWcSessions(live);
-        if (live.length) {
+        // refreshWcConnections merges inject (Jupiter Wallet Standard) + WC.
+        // Do not paint WC-only lists here — that hides active inject connections.
+        const merged = await refreshWcConnections({ ensure: false });
+        if (merged && merged.length) {
           setWcStatus(
             "Connected to " +
-              (live[0].name || "dApp") +
-              (live.length > 1 ? " (+" + (live.length - 1) + ")" : "")
+              (merged[0].name || "dApp") +
+              (merged.length > 1 ? " (+" + (merged.length - 1) + ")" : "")
           );
-          paintWcConnectionsList(live);
           return;
         }
         setWcStatus("Disconnected");
         showToast("WalletConnect disconnected");
-        paintWcConnectionsList([]);
       },
       onStatus: (msg) => {
         if (msg) setWcStatus(msg);
