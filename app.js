@@ -1668,8 +1668,9 @@ function renderQR(text) {
 
 let STATE = null;
 let PRICES = { solana: 0, ethereum: 0, "matic-network": 0 };
-let BALANCE = { native: 0, usd: 0, ok: false, error: "" };
+let BALANCE = { native: 0, usd: 0, ok: false, error: "", chainId: "", accountId: "" };
 let HOLDINGS = []; // [{symbol, name, mint, amount, decimals, usd, kind}]
+let syncBusy = false;
 let MINT_META = {}; // mint -> {symbol, name}
 /** Currently open token detail page */
 let TOKEN_DETAIL = null; // { holding, chainId, range }
@@ -2247,7 +2248,45 @@ function nativeHoldingRow(chain, amount, usd) {
   };
 }
 
-async function refreshBalance() {
+function setSyncButtonsBusy(busy) {
+  ["refreshBtn", "settingsSyncBtn"].forEach((id) => {
+    const btn = $(id);
+    if (!btn) return;
+    btn.disabled = !!busy;
+    btn.classList.toggle("is-syncing", !!busy);
+    btn.setAttribute("aria-busy", busy ? "true" : "false");
+  });
+}
+
+async function runManualSync() {
+  if (syncBusy) {
+    showToast("Already syncing…");
+    return;
+  }
+  syncBusy = true;
+  setSyncButtonsBusy(true);
+  const statusEl = $("balanceStatus");
+  const chain = activeChain(STATE);
+  if (statusEl) statusEl.textContent = "Syncing " + ((chain && chain.name) || "network") + "…";
+  showToast("Syncing…");
+  try {
+    // Prices first (soft-fail); keep current balances on screen while RPC runs.
+    await fetchPrices();
+    await refreshBalance({ keepUi: true });
+    if (BALANCE.ok && !BALANCE.error) showToast("Synced");
+    else if (BALANCE.ok && BALANCE.error)
+      showToast("Sync failed · showing last balance");
+    else showToast("Sync failed");
+  } catch (err) {
+    console.warn("[manual-sync]", err);
+    showToast(String(err && err.message ? err.message : err) || "Sync failed");
+  } finally {
+    syncBusy = false;
+    setSyncButtonsBusy(false);
+  }
+}
+
+async function refreshBalance(opts) {
   const seq = ++balanceSeq;
   const chain = activeChain(STATE);
   const acc = activeAccount(STATE);
@@ -2255,24 +2294,45 @@ async function refreshBalance() {
   const addr = chainKeyAddress(acc, chain);
   const displayAddr = addressFor(acc, chain);
   const statusEl = $("balanceStatus");
+  const accountId = (acc && acc.id) || "";
   const stillCurrent = () =>
     seq === balanceSeq &&
     STATE &&
     STATE.activeChainId === chain.id &&
     STATE.activeAccountId === (acc && acc.id);
 
-  // Optimistic reset only if this is still the latest request.
+  const sameContext =
+    BALANCE &&
+    BALANCE.ok &&
+    BALANCE.chainId === chain.id &&
+    BALANCE.accountId === accountId &&
+    Array.isArray(HOLDINGS) &&
+    HOLDINGS.length > 0;
+  // Keep last good balances while re-syncing the same wallet/chain (Sync button).
+  // Only clear when switching account/chain, first load, or caller forces it.
+  const keepUi =
+    sameContext && !(opts && opts.resetUi) && !(opts && opts.keepUi === false);
+
   if (stillCurrent()) {
-    BALANCE = { native: 0, usd: 0, ok: false, error: "", chainId: chain.id };
-    HOLDINGS = [];
-    paintBalances();
-    paintHoldings();
+    if (!keepUi) {
+      BALANCE = {
+        native: 0,
+        usd: 0,
+        ok: false,
+        error: "",
+        chainId: chain.id,
+        accountId,
+      };
+      HOLDINGS = [];
+      paintBalances();
+      paintHoldings();
+    }
     if (statusEl) statusEl.textContent = "Syncing " + chain.name + "…";
   }
 
   const commit = (nextBalance, nextHoldings, statusText) => {
     if (!stillCurrent()) return false;
-    BALANCE = nextBalance;
+    BALANCE = { ...nextBalance, accountId };
     HOLDINGS = nextHoldings;
     if (statusEl && statusText) statusEl.textContent = statusText;
     paintBalances();
@@ -2285,7 +2345,14 @@ async function refreshBalance() {
   try {
     let native = 0;
     let nextHoldings = [];
-    let nextBalance = { native: 0, usd: 0, ok: false, error: "", chainId: chain.id };
+    let nextBalance = {
+      native: 0,
+      usd: 0,
+      ok: false,
+      error: "",
+      chainId: chain.id,
+      accountId,
+    };
 
     if (chain.kind === "solana") {
       if (!isValidSolanaAddress(addr)) {
@@ -2444,7 +2511,20 @@ async function refreshBalance() {
   } catch (err) {
     if (!stillCurrent()) return;
     const msg = String(err && err.message ? err.message : err);
-    const nextBalance = { native: 0, usd: 0, ok: false, error: msg, chainId: chain.id };
+    // Keep the last good numbers if this was a re-sync of the same wallet/chain.
+    if (keepUi && sameContext) {
+      BALANCE = { ...BALANCE, error: msg, chainId: chain.id, accountId };
+      if (statusEl) statusEl.textContent = "RPC error: " + msg + " · showing last balance";
+      return;
+    }
+    const nextBalance = {
+      native: 0,
+      usd: 0,
+      ok: false,
+      error: msg,
+      chainId: chain.id,
+      accountId,
+    };
     const nextHoldings =
       chain.kind === "solana"
         ? [
@@ -9098,16 +9178,25 @@ function wireLedgerSignBridge() {
 }
 
 async function refreshAll() {
-  // Drop prior-chain holdings immediately so UI never sticks on ETH/etc.
-  HOLDINGS = [];
-  BALANCE = {
-    native: 0,
-    usd: 0,
-    ok: false,
-    error: "",
-    chainId: STATE && STATE.activeChainId,
-  };
   const acc = activeAccount(STATE);
+  const chain = activeChain(STATE);
+  const sameContext =
+    BALANCE &&
+    BALANCE.ok &&
+    BALANCE.chainId === (chain && chain.id) &&
+    BALANCE.accountId === ((acc && acc.id) || "");
+  // Only blank the home balance when switching wallet/chain — not on a soft refresh.
+  if (!sameContext) {
+    HOLDINGS = [];
+    BALANCE = {
+      native: 0,
+      usd: 0,
+      ok: false,
+      error: "",
+      chainId: chain && chain.id,
+      accountId: (acc && acc.id) || "",
+    };
+  }
   if (acc && (await ensureAccountExtraKeys(acc))) {
     await storageSet(STATE);
   }
@@ -9120,7 +9209,7 @@ async function refreshAll() {
   closeAddrMenu();
   closeChainPicker();
   await Promise.all([
-    refreshBalance(),
+    refreshBalance({ keepUi: !!sameContext }),
     refreshAccountBalances(),
     refreshHistory().catch((err) => console.warn("[history refreshAll]", err)),
   ]);
@@ -9499,17 +9588,13 @@ function wire() {
             : "");
     }
   });
-  $("settingsSyncBtn")?.addEventListener("click", async () => {
-    showToast("Syncing…");
-    await fetchPrices();
-    await refreshBalance();
-    showToast(BALANCE.ok ? "Synced" : "Sync failed");
+  $("settingsSyncBtn")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    runManualSync();
   });
-  $("refreshBtn")?.addEventListener("click", async () => {
-    showToast("Syncing…");
-    await fetchPrices();
-    await refreshBalance();
-    showToast(BALANCE.ok ? "Synced" : "Sync failed");
+  $("refreshBtn")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    runManualSync();
   });
   $("copyAddrBtn")?.addEventListener("click", (e) => {
     e.preventDefault();

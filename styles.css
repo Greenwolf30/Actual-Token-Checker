@@ -1209,6 +1209,24 @@ body.is-extension .acct-drawer {
   background: rgba(184, 167, 207, 0.08);
 }
 
+.btn.is-syncing,
+.photon-chip.is-syncing {
+  opacity: 0.72;
+  pointer-events: none;
+  cursor: wait;
+}
+
+.btn.is-syncing .btn-ico {
+  display: inline-block;
+  animation: sync-spin 0.7s linear infinite;
+}
+
+@keyframes sync-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .btn-block {
   width: 100%;
 }
